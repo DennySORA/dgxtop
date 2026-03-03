@@ -1,3 +1,5 @@
+use std::ffi::OsStr;
+
 use nvml_wrapper::Nvml;
 use nvml_wrapper::enum_wrappers::device::{Clock, TemperatureSensor};
 
@@ -6,6 +8,46 @@ use crate::domain::system::SystemInfo;
 use crate::error::{DgxTopError, Result};
 
 use super::Collector;
+
+/// Try to initialize NVML by probing multiple library paths.
+/// This handles WSL, native Linux, and non-standard installations.
+pub fn init_nvml() -> Result<Nvml> {
+    // 1. Try standard init (dlopen("libnvidia-ml.so"))
+    if let Ok(nvml) = Nvml::init() {
+        return Ok(nvml);
+    }
+
+    // 2. Try versioned library name (WSL provides libnvidia-ml.so.1 only)
+    if let Ok(nvml) = Nvml::builder()
+        .lib_path(OsStr::new("libnvidia-ml.so.1"))
+        .init()
+    {
+        return Ok(nvml);
+    }
+
+    // 3. Try well-known absolute paths
+    let candidate_paths = [
+        "/usr/lib/wsl/lib/libnvidia-ml.so.1",
+        "/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1",
+        "/usr/lib64/libnvidia-ml.so.1",
+        "/usr/lib/aarch64-linux-gnu/libnvidia-ml.so.1",
+        "/usr/local/cuda/targets/x86_64-linux/lib/stubs/libnvidia-ml.so",
+    ];
+
+    for path in &candidate_paths {
+        if std::path::Path::new(path).exists()
+            && let Ok(nvml) = Nvml::builder().lib_path(OsStr::new(path)).init()
+        {
+            return Ok(nvml);
+        }
+    }
+
+    Err(DgxTopError::Gpu(
+        "NVML initialization failed: could not find libnvidia-ml.so. \
+         Ensure NVIDIA drivers are installed."
+            .to_owned(),
+    ))
+}
 
 /// Collects GPU statistics via NVML (NVIDIA Management Library).
 /// Far more reliable and performant than shelling out to nvidia-smi.
@@ -16,8 +58,7 @@ pub struct GpuCollector {
 
 impl GpuCollector {
     pub fn try_new() -> Result<Self> {
-        let nvml = Nvml::init()
-            .map_err(|e| DgxTopError::Gpu(format!("NVML initialization failed: {e}")))?;
+        let nvml = init_nvml()?;
         let device_count = nvml
             .device_count()
             .map_err(|e| DgxTopError::Gpu(format!("failed to get GPU count: {e}")))?;

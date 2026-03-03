@@ -47,22 +47,16 @@ fn main() {
         None
     };
 
-    let gpu_process_collector = gpu_collector.as_ref().and_then(|gc| {
-        let nvml = match nvml_wrapper::Nvml::init() {
-            Ok(n) => n,
-            Err(e) => {
-                eprintln!("GPU process monitoring disabled (NVML re-init failed): {e}");
-                return None;
-            }
-        };
-        match GpuProcessCollector::new(&nvml, gc.device_count()) {
-            Ok(gpc) => Some(gpc),
-            Err(e) => {
-                eprintln!("GPU process monitoring disabled: {e}");
-                None
-            }
-        }
-    });
+    let gpu_process_collector =
+        gpu_collector
+            .as_ref()
+            .and_then(|gc| match GpuProcessCollector::new(gc.device_count()) {
+                Ok(gpc) => Some(gpc),
+                Err(e) => {
+                    eprintln!("GPU process monitoring disabled: {e}");
+                    None
+                }
+            });
 
     // Gather static system info
     let system_info = gather_system_info(gpu_collector.as_ref());

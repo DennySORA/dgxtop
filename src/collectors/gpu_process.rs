@@ -5,9 +5,10 @@ use nvml_wrapper::Nvml;
 use nvml_wrapper::enums::device::UsedGpuMemory;
 
 use crate::domain::gpu::{GpuProcessStats, GpuProcessType};
-use crate::error::{DgxTopError, Result};
+use crate::error::Result;
 
 use super::Collector;
+use super::gpu::init_nvml;
 
 /// Collects GPU process information via NVML + /proc filesystem.
 pub struct GpuProcessCollector {
@@ -18,11 +19,10 @@ pub struct GpuProcessCollector {
 }
 
 impl GpuProcessCollector {
-    pub fn new(_nvml: &Nvml, device_count: u32) -> Result<Self> {
-        let nvml_clone = Nvml::init()
-            .map_err(|e| DgxTopError::Gpu(format!("NVML init for process collector: {e}")))?;
+    pub fn new(device_count: u32) -> Result<Self> {
+        let nvml = init_nvml()?;
         Ok(Self {
-            nvml: nvml_clone,
+            nvml,
             device_count,
             prev_cpu_times: HashMap::new(),
         })

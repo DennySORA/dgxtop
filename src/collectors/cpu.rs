@@ -87,11 +87,29 @@ impl CpuCollector {
     }
 
     fn read_max_frequency() -> Option<f64> {
+        // Try sysfs first (native Linux)
         let path = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq";
-        fs::read_to_string(path)
+        if let Some(freq) = fs::read_to_string(path)
             .ok()
             .and_then(|s| s.trim().parse::<f64>().ok())
             .map(|khz| khz / 1000.0)
+        {
+            return Some(freq);
+        }
+
+        // Fallback: parse /proc/cpuinfo (works on WSL and containers)
+        Self::read_frequency_from_cpuinfo()
+    }
+
+    /// Parse "cpu MHz" or "model name" from /proc/cpuinfo as frequency fallback.
+    fn read_frequency_from_cpuinfo() -> Option<f64> {
+        let content = fs::read_to_string("/proc/cpuinfo").ok()?;
+        for line in content.lines() {
+            if line.starts_with("cpu MHz") {
+                return line.split(':').nth(1)?.trim().parse::<f64>().ok();
+            }
+        }
+        None
     }
 
     fn read_cpu_temperature() -> Option<f64> {
@@ -194,15 +212,18 @@ impl Collector for CpuCollector {
             });
         }
 
-        let avg_freq = per_core_stats
-            .iter()
-            .filter_map(|c| c.frequency_mhz)
-            .sum::<f64>()
-            / per_core_stats
+        let avg_freq = {
+            let known: Vec<f64> = per_core_stats
                 .iter()
-                .filter(|c| c.frequency_mhz.is_some())
-                .count()
-                .max(1) as f64;
+                .filter_map(|c| c.frequency_mhz)
+                .collect();
+            if known.is_empty() {
+                // sysfs unavailable (e.g., WSL) — fall back to /proc/cpuinfo
+                Self::read_frequency_from_cpuinfo().unwrap_or(0.0)
+            } else {
+                known.iter().sum::<f64>() / known.len() as f64
+            }
+        };
 
         let stats = CpuStats {
             usage_percent,
