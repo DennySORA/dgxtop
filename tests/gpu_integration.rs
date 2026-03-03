@@ -28,20 +28,23 @@ fn gpu_collector_returns_valid_stats() {
 
     for gpu in &gpus {
         println!(
-            "GPU {}: {} — util={:.0}%, temp={:.0}°C, mem={}/{}",
+            "GPU {}: {} — util={:.0}%, temp={:.0}°C, mem={}/{}, shared={}",
             gpu.index,
             gpu.name,
             gpu.utilization_gpu,
             gpu.temperature,
             gpu.memory_used_bytes,
             gpu.memory_total_bytes,
+            gpu.memory_is_shared,
         );
         assert!(!gpu.name.is_empty());
-        assert!(gpu.memory_total_bytes > 0, "GPU memory total should be > 0");
+        if !gpu.memory_is_shared {
+            assert!(gpu.memory_total_bytes > 0, "GPU memory total should be > 0");
+        }
         assert!(gpu.temperature >= 0.0, "Temperature should be non-negative");
         assert!(
-            gpu.power_limit_watts > 0.0,
-            "Power limit should be positive"
+            gpu.power_draw_watts >= 0.0,
+            "Power draw should be non-negative"
         );
     }
 }

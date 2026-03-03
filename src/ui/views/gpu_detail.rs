@@ -144,13 +144,22 @@ fn render_gpu_detail_card(
     let mem_pct = gpu.memory_usage_percent();
     let mem_gib_used = gpu.memory_used_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
     let mem_gib_total = gpu.memory_total_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+    let memory_label = if gpu.memory_is_shared {
+        " Memory GPU "
+    } else {
+        " VRAM  "
+    };
+    let memory_value = if gpu.memory_total_bytes > 0 {
+        format!("{mem_gib_used:.1} / {mem_gib_total:.1} GB")
+    } else if gpu.memory_is_shared {
+        format!("{mem_gib_used:.1} GB used")
+    } else {
+        "N/A".to_owned()
+    };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(" VRAM  ", Style::default().fg(theme.text_muted)),
-            Span::styled(
-                format!("{mem_gib_used:.1} / {mem_gib_total:.1} GB"),
-                Style::default().fg(theme.text),
-            ),
+            Span::styled(memory_label, Style::default().fg(theme.text_muted)),
+            Span::styled(memory_value, Style::default().fg(theme.text)),
             Span::styled(
                 format!("  {mem_pct:.1}%"),
                 Style::default()
@@ -220,6 +229,13 @@ fn render_gpu_detail_card(
             details.push(Span::styled(
                 format!("  Fan: {fan:.0}%"),
                 Style::default().fg(theme.text_dim),
+            ));
+        }
+
+        if gpu.memory_is_shared {
+            details.push(Span::styled(
+                "  Shared Memory",
+                Style::default().fg(theme.text_muted),
             ));
         }
 

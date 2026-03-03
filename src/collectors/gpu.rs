@@ -2,6 +2,7 @@ use std::ffi::OsStr;
 
 use nvml_wrapper::Nvml;
 use nvml_wrapper::enum_wrappers::device::{Clock, TemperatureSensor};
+use nvml_wrapper::enums::device::UsedGpuMemory;
 
 use crate::domain::gpu::{GpuStats, NvLinkStats};
 use crate::domain::system::SystemInfo;
@@ -81,6 +82,49 @@ impl GpuCollector {
         (driver, cuda)
     }
 
+    fn read_system_memory_total_bytes() -> Option<u64> {
+        let content = std::fs::read_to_string("/proc/meminfo").ok()?;
+        content.lines().find_map(|line| {
+            if !line.starts_with("MemTotal:") {
+                return None;
+            }
+            line.split_whitespace()
+                .nth(1)
+                .and_then(|kb| kb.parse::<u64>().ok())
+                .map(|kb| kb * 1024)
+        })
+    }
+
+    fn collect_process_used_gpu_memory_bytes(device: &nvml_wrapper::Device<'_>) -> u64 {
+        let mut usage_by_pid: std::collections::HashMap<u32, u64> =
+            std::collections::HashMap::new();
+
+        if let Ok(compute_procs) = device.running_compute_processes() {
+            for proc_info in compute_procs {
+                let used_bytes = match proc_info.used_gpu_memory {
+                    UsedGpuMemory::Used(bytes) => bytes,
+                    UsedGpuMemory::Unavailable => 0,
+                };
+                usage_by_pid.insert(proc_info.pid, used_bytes);
+            }
+        }
+
+        if let Ok(graphics_procs) = device.running_graphics_processes() {
+            for proc_info in graphics_procs {
+                let used_bytes = match proc_info.used_gpu_memory {
+                    UsedGpuMemory::Used(bytes) => bytes,
+                    UsedGpuMemory::Unavailable => 0,
+                };
+                usage_by_pid
+                    .entry(proc_info.pid)
+                    .and_modify(|existing| *existing = (*existing).max(used_bytes))
+                    .or_insert(used_bytes);
+            }
+        }
+
+        usage_by_pid.values().copied().sum()
+    }
+
     fn collect_device(&self, index: u32) -> Result<GpuStats> {
         let device = self.nvml.device_by_index(index)?;
 
@@ -108,6 +152,20 @@ impl GpuCollector {
         let clock_mem = device.clock_info(Clock::Memory).ok().map(|c| c as f64);
 
         let memory_info = device.memory_info().ok();
+        let (memory_used_bytes, memory_total_bytes, memory_free_bytes, memory_is_shared) =
+            match memory_info {
+                Some(mem_info) if mem_info.total > 0 => {
+                    (mem_info.used, mem_info.total, mem_info.free, false)
+                }
+                _ => {
+                    // Unified/shared-memory GPUs may report FB memory as N/A.
+                    // Fallback to "sum(process used_gpu_memory) / system RAM total".
+                    let total = Self::read_system_memory_total_bytes().unwrap_or(0);
+                    let used = Self::collect_process_used_gpu_memory_bytes(&device);
+                    let free = total.saturating_sub(used);
+                    (used, total, free, true)
+                }
+            };
 
         let pcie_tx = device
             .pcie_throughput(nvml_wrapper::enum_wrappers::device::PcieUtilCounter::Send)
@@ -144,9 +202,10 @@ impl GpuCollector {
             clock_graphics_mhz: clock_graphics.unwrap_or(0.0),
             clock_max_graphics_mhz: clock_max.unwrap_or(0.0),
             clock_memory_mhz: clock_mem.unwrap_or(0.0),
-            memory_used_bytes: memory_info.as_ref().map(|m| m.used).unwrap_or(0),
-            memory_total_bytes: memory_info.as_ref().map(|m| m.total).unwrap_or(0),
-            memory_free_bytes: memory_info.as_ref().map(|m| m.free).unwrap_or(0),
+            memory_used_bytes,
+            memory_total_bytes,
+            memory_free_bytes,
+            memory_is_shared,
             pcie_tx_bytes_per_sec: pcie_tx,
             pcie_rx_bytes_per_sec: pcie_rx,
             ecc_errors_corrected: ecc_corrected,

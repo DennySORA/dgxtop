@@ -19,6 +19,8 @@ pub struct GpuStats {
     pub memory_used_bytes: u64,
     pub memory_total_bytes: u64,
     pub memory_free_bytes: u64,
+    #[serde(default)]
+    pub memory_is_shared: bool,
     pub pcie_tx_bytes_per_sec: Option<u64>,
     pub pcie_rx_bytes_per_sec: Option<u64>,
     pub ecc_errors_corrected: Option<u64>,
