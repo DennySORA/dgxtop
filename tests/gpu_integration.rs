@@ -3,6 +3,7 @@ use dgxtop::collectors::gpu::{GpuCollector, init_nvml};
 use dgxtop::collectors::gpu_process::GpuProcessCollector;
 
 #[test]
+#[ignore = "requires NVIDIA GPU with NVML drivers"]
 fn nvml_initializes_successfully() {
     let nvml = init_nvml();
     assert!(nvml.is_ok(), "NVML init failed: {:?}", nvml.err());
@@ -17,6 +18,7 @@ fn nvml_initializes_successfully() {
 }
 
 #[test]
+#[ignore = "requires NVIDIA GPU with NVML drivers"]
 fn gpu_collector_returns_valid_stats() {
     let mut collector = GpuCollector::try_new().expect("GpuCollector init failed");
     assert!(collector.is_available());
@@ -45,6 +47,7 @@ fn gpu_collector_returns_valid_stats() {
 }
 
 #[test]
+#[ignore = "requires NVIDIA GPU with NVML drivers"]
 fn gpu_process_collector_initializes() {
     let gpu_collector = GpuCollector::try_new().expect("GpuCollector init failed");
     let mut proc_collector =
