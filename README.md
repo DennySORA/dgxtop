@@ -67,16 +67,21 @@ See [Installation](#installation) for more options.
 curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
 ```
 
+The installer auto-detects your libc and picks the matching release target.
+For NVIDIA GPU metrics, glibc (`-gnu`) builds are recommended.
+
 ### Download Binary
 
 Download pre-built binaries from [GitHub Releases](https://github.com/DennySORA/dgxtop/releases):
 
 | Platform | Architecture | Download |
 |----------|--------------|----------|
-| Linux | x86_64 | `dgxtop-x86_64-unknown-linux-musl.tar.gz` |
-| Linux | x86_64 (glibc) | `dgxtop-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux | ARM64 | `dgxtop-aarch64-unknown-linux-musl.tar.gz` |
-| Linux | ARM64 (glibc) | `dgxtop-aarch64-unknown-linux-gnu.tar.gz` |
+| Linux | x86_64 (glibc, recommended) | `dgxtop-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux | x86_64 (musl, compatibility) | `dgxtop-x86_64-unknown-linux-musl.tar.gz` |
+| Linux | ARM64 (glibc, recommended) | `dgxtop-aarch64-unknown-linux-gnu.tar.gz` |
+| Linux | ARM64 (musl, compatibility) | `dgxtop-aarch64-unknown-linux-musl.tar.gz` |
+
+> Note: On some systems, musl builds may fail to load NVIDIA NVML (`libnvidia-ml.so`), resulting in missing GPU metrics.
 
 ### Build from Source
 
@@ -178,7 +183,7 @@ Collectors (called on each Tick):
 
 - **OS**: Linux (DGX systems, WSL2, containers)
 - **GPU**: NVIDIA drivers with NVML (libnvidia-ml.so)
-- **Runtime**: No additional dependencies — static musl builds available
+- **Runtime**: No additional dependencies. For GPU monitoring, prefer glibc (`-gnu`) builds.
 
 ## Security
 

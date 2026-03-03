@@ -67,16 +67,21 @@ curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | 
 curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
 ```
 
+安裝腳本會自動偵測 libc 並選擇對應目標。
+若要完整 NVIDIA GPU 指標，建議使用 glibc（`-gnu`）版本。
+
 ### 下載二進位檔
 
 從 [GitHub Releases](https://github.com/DennySORA/dgxtop/releases) 下載預建二進位檔：
 
 | 平台 | 架構 | 下載 |
 |------|------|------|
-| Linux | x86_64 | `dgxtop-x86_64-unknown-linux-musl.tar.gz` |
-| Linux | x86_64 (glibc) | `dgxtop-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux | ARM64 | `dgxtop-aarch64-unknown-linux-musl.tar.gz` |
-| Linux | ARM64 (glibc) | `dgxtop-aarch64-unknown-linux-gnu.tar.gz` |
+| Linux | x86_64（glibc，推薦） | `dgxtop-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux | x86_64（musl，相容性） | `dgxtop-x86_64-unknown-linux-musl.tar.gz` |
+| Linux | ARM64（glibc，推薦） | `dgxtop-aarch64-unknown-linux-gnu.tar.gz` |
+| Linux | ARM64（musl，相容性） | `dgxtop-aarch64-unknown-linux-musl.tar.gz` |
+
+> 注意：在部分系統上，musl 版本可能無法載入 NVIDIA NVML（`libnvidia-ml.so`），導致 GPU 指標缺失。
 
 ### 從原始碼建置
 
@@ -141,7 +146,7 @@ dgxtop -t green
 
 - **作業系統**：Linux（DGX 系統、WSL2、容器）
 - **GPU**：安裝 NVML 的 NVIDIA 驅動程式（libnvidia-ml.so）
-- **執行環境**：無額外相依性 — 提供靜態 musl 建置
+- **執行環境**：無額外相依性。若需 GPU 監控，建議使用 glibc（`-gnu`）版本。
 
 ## 授權條款
 

@@ -472,14 +472,21 @@ fn render_gpu_card(
     let mem_gib_used = gpu.memory_used_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
     let mem_gib_total = gpu.memory_total_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
 
+    let mem_metric_label = if gpu.memory_is_shared { "MGP" } else { "MEM" };
     frame.buffer_mut().set_string(
         bar_start,
         mem_line.y,
-        "MEM",
+        mem_metric_label,
         Style::default().fg(theme.text_muted),
     );
 
-    let mem_label = format!("{:.1}/{:.0}G", mem_gib_used, mem_gib_total);
+    let mem_label = if gpu.memory_total_bytes > 0 {
+        format!("{mem_gib_used:.1}/{mem_gib_total:.0}G")
+    } else if gpu.memory_is_shared {
+        format!("{mem_gib_used:.1}G used")
+    } else {
+        "N/A".to_owned()
+    };
     let mem_gauge = GradientGauge::new(mem_pct / 100.0)
         .label(&mem_label)
         .colors(theme.gauge_low, theme.gauge_mid, theme.gauge_high)
