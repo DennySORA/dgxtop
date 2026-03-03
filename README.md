@@ -1,6 +1,6 @@
 # dgxtop
 
-<!-- ![dgxtop](docs/screenshot.png) -->
+![dgxtop — Overview on DGX Spark](docs/screenshot-overview.png)
 
 [繁體中文](docs/README.zh-TW.md) | [简体中文](docs/README.zh-CN.md) | [日本語](docs/README.ja.md)
 
@@ -58,6 +58,10 @@ See [Installation](#installation) for more options.
 - **Vim Keybindings** — Navigate with `j/k`, switch tabs with `1/2/3`, GPU selection with `h/l`
 - **Process Management** — Sort by GPU mem/utilization/CPU/PID, filter by name, kill with confirmation
 - **Visual Design** — Rounded panels, gradient gauges with half-block precision, sparkline history, alternating row colors, color-coded thresholds
+
+#### Multi-GPU Overview with Active Workloads
+
+![dgxtop — Multi-GPU with active workloads](docs/screenshot-multi-gpu.png)
 
 ## Installation
 
@@ -148,7 +152,11 @@ dgxtop -t green
 
 **GPU Detail** — Per-GPU cards with detailed metrics (utilization, VRAM, power, clock, temperature, ECC, PCIe) and history sparkline charts for utilization, memory, and temperature.
 
+![dgxtop — GPU Detail view](docs/screenshot-gpu-detail.png)
+
 **Processes** — Full-screen GPU process table with sortable columns, search filter, and process kill capability. Shows PID, user, GPU device, type, GPU%, VRAM, CPU%, host memory, and command.
+
+![dgxtop — Processes view](docs/screenshot-processes.png)
 
 ## Architecture
 

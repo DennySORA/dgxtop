@@ -1,6 +1,6 @@
 # dgxtop
 
-<!-- ![dgxtop](screenshot.png) -->
+![dgxtop — DGX Spark 上的總覽畫面](screenshot-overview.png)
 
 [English](../README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
@@ -58,6 +58,10 @@ curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | 
 - **Vim 快捷鍵** — 以 `j/k` 導航、`1/2/3` 切換頁籤、`h/l` 選擇 GPU
 - **程序管理** — 依 GPU 記憶體/使用率/CPU/PID 排序、依名稱篩選、確認後終止程序
 - **視覺設計** — 圓角面板、半格精度漸層量表、走勢圖、交替列顏色、色彩編碼閾值
+
+#### 多 GPU 總覽（含執行中工作負載）
+
+![dgxtop — 多 GPU 工作負載](screenshot-multi-gpu.png)
 
 ## 安裝方式
 
@@ -141,6 +145,16 @@ dgxtop -t green
 | `e` | 切換每核心 CPU 顯示 |
 | `+` / `-` | 加快 / 減慢更新速度 |
 | `?` | 顯示/隱藏說明 |
+
+### 視圖
+
+**GPU 詳細資訊** — 每個 GPU 的詳細指標（使用率、VRAM、功耗、時脈、溫度、ECC、PCIe）以及使用率、記憶體、溫度的歷史走勢圖。
+
+![dgxtop — GPU 詳細資訊視圖](screenshot-gpu-detail.png)
+
+**程序管理** — 全螢幕 GPU 程序表格，支援可排序欄位、搜尋篩選及程序終止功能。
+
+![dgxtop — 程序管理視圖](screenshot-processes.png)
 
 ## 系統需求
 
