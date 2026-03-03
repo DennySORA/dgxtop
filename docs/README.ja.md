@@ -1,6 +1,6 @@
 # dgxtop
 
-<!-- ![dgxtop](screenshot.png) -->
+![dgxtop — DGX Sparkでの概要画面](screenshot-overview.png)
 
 [English](../README.md) | [繁體中文](README.zh-TW.md) | [简体中文](README.zh-CN.md)
 
@@ -58,6 +58,10 @@ curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | 
 - **Vimキーバインド** — `j/k`でナビゲーション、`1/2/3`でタブ切替、`h/l`でGPU選択
 - **プロセス管理** — GPUメモリ/使用率/CPU/PIDでソート、名前でフィルタリング、確認後に終了
 - **ビジュアルデザイン** — 角丸パネル、ハーフブロック精度のグラデーションゲージ、スパークライン、交互行色、カラーコード閾値
+
+#### マルチGPU概要（アクティブワークロード）
+
+![dgxtop — マルチGPUワークロード](screenshot-multi-gpu.png)
 
 ## インストール方法
 
@@ -136,6 +140,16 @@ dgxtop -t green
 | `e` | コアごとのCPU表示を切替 |
 | `+` / `-` | リフレッシュ速度を上げる / 下げる |
 | `?` | ヘルプの表示/非表示 |
+
+### ビュー
+
+**GPU詳細** — 各GPUの詳細メトリクス（使用率、VRAM、電力、クロック、温度、ECC、PCIe）と使用率・メモリ・温度の履歴スパークラインチャート。
+
+![dgxtop — GPU詳細ビュー](screenshot-gpu-detail.png)
+
+**プロセス** — フルスクリーンGPUプロセステーブル。ソート可能なカラム、検索フィルタ、プロセス終了機能を搭載。
+
+![dgxtop — プロセスビュー](screenshot-processes.png)
 
 ## システム要件
 
