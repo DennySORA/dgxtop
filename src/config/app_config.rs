@@ -32,5 +32,19 @@ impl AppConfig {
         if args.no_gpu {
             self.gpu_enabled = false;
         }
+        self.sanitize();
+    }
+
+    /// Clamp all values to safe ranges to prevent DoS via malicious config.
+    pub fn sanitize(&mut self) {
+        self.update_interval_secs = self.update_interval_secs.clamp(0.1, 10.0);
+        if !self.update_interval_secs.is_finite() {
+            self.update_interval_secs = 1.0;
+        }
+        self.history_length = self.history_length.clamp(10, 10_000);
+        self.redline_threshold = self.redline_threshold.clamp(0.0, 100.0);
+        if !self.redline_threshold.is_finite() {
+            self.redline_threshold = 80.0;
+        }
     }
 }

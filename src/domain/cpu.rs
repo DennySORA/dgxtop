@@ -41,17 +41,19 @@ pub struct CpuTimeSample {
 impl CpuTimeSample {
     pub fn total(&self) -> u64 {
         self.user
-            + self.nice
-            + self.system
-            + self.idle
-            + self.iowait
-            + self.irq
-            + self.softirq
-            + self.steal
+            .saturating_add(self.nice)
+            .saturating_add(self.system)
+            .saturating_add(self.idle)
+            .saturating_add(self.iowait)
+            .saturating_add(self.irq)
+            .saturating_add(self.softirq)
+            .saturating_add(self.steal)
     }
 
     pub fn active(&self) -> u64 {
-        self.total() - self.idle - self.iowait
+        self.total()
+            .saturating_sub(self.idle)
+            .saturating_sub(self.iowait)
     }
 }
 

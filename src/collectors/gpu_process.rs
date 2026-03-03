@@ -95,22 +95,26 @@ impl GpuProcessCollector {
 
         // Fields after the command name (which may contain spaces/parens)
         let after_comm = match content.rfind(')') {
-            Some(pos) => &content[pos + 2..],
-            None => return 0.0,
+            Some(pos) if pos + 2 < content.len() => &content[pos + 2..],
+            _ => return 0.0,
         };
 
         let fields: Vec<&str> = after_comm.split_whitespace().collect();
-        if fields.len() < 12 {
+        if fields.len() < 13 {
             return 0.0;
         }
 
         // utime (field 14, index 11 after comm) and stime (field 15, index 12)
         let utime: u64 = fields[11].parse().unwrap_or(0);
         let stime: u64 = fields[12].parse().unwrap_or(0);
-        let total_time = utime + stime;
+        let total_time = utime.saturating_add(stime);
 
-        // Read system uptime in clock ticks
-        let clock_ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as u64;
+        // Read system uptime in clock ticks.
+        // sysconf returns -1 on error; fall back to the common Linux default of 100.
+        let clock_ticks = {
+            let raw = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+            if raw <= 0 { 100 } else { raw as u64 }
+        };
         let system_time_ticks = std::fs::read_to_string("/proc/uptime")
             .ok()
             .and_then(|s| s.split_whitespace().next()?.parse::<f64>().ok())

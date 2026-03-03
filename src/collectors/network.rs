@@ -30,6 +30,10 @@ impl NetworkCollector {
 
     fn is_tracked_interface(name: &str) -> bool {
         let excluded_prefixes = ["lo", "virbr", "docker", "br-", "veth"];
+        // Reject names with path separators or null bytes to prevent path traversal
+        if name.contains('/') || name.contains('\0') {
+            return false;
+        }
         !excluded_prefixes.iter().any(|p| name.starts_with(p))
     }
 

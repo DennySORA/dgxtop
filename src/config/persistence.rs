@@ -23,9 +23,23 @@ pub fn load_config() -> AppConfig {
         Err(_) => return AppConfig::default(),
     };
 
-    match fs::read_to_string(&path) {
-        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
-        Err(_) => AppConfig::default(),
+    let contents = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return AppConfig::default(),
+    };
+
+    match serde_json::from_str::<AppConfig>(&contents) {
+        Ok(mut config) => {
+            config.sanitize();
+            config
+        }
+        Err(e) => {
+            eprintln!(
+                "Warning: failed to parse config at {}: {e} — using defaults",
+                path.display()
+            );
+            AppConfig::default()
+        }
     }
 }
 

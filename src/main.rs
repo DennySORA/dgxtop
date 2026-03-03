@@ -48,11 +48,14 @@ fn main() {
     };
 
     let gpu_process_collector = gpu_collector.as_ref().and_then(|gc| {
-        match GpuProcessCollector::new(
-            // NVML needs a separate handle for process collector
-            &nvml_wrapper::Nvml::init().unwrap_or_else(|_| panic!("NVML re-init failed")),
-            gc.device_count(),
-        ) {
+        let nvml = match nvml_wrapper::Nvml::init() {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("GPU process monitoring disabled (NVML re-init failed): {e}");
+                return None;
+            }
+        };
+        match GpuProcessCollector::new(&nvml, gc.device_count()) {
             Ok(gpc) => Some(gpc),
             Err(e) => {
                 eprintln!("GPU process monitoring disabled: {e}");

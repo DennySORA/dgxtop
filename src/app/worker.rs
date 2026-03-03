@@ -8,7 +8,7 @@ use super::event::AppEvent;
 /// Spawns the event producer thread that generates Tick and input events.
 /// Returns a receiver for AppEvents.
 pub fn spawn_event_loop(tick_rate: Duration) -> (Sender<()>, Receiver<AppEvent>) {
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let (tx, rx) = crossbeam_channel::bounded(256);
     let (stop_tx, stop_rx) = crossbeam_channel::bounded::<()>(1);
 
     std::thread::Builder::new()

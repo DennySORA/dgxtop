@@ -591,9 +591,18 @@ fn format_throughput(bytes_per_sec: f64) -> String {
 }
 
 fn truncate_str(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+    if max_len == 0 {
+        return String::new();
+    }
+    let char_count = s.chars().count();
+    if char_count <= max_len {
         s.to_owned()
     } else {
-        format!("{}…", &s[..max_len - 1])
+        let end = s
+            .char_indices()
+            .nth(max_len.saturating_sub(1))
+            .map(|(i, _)| i)
+            .unwrap_or(s.len());
+        format!("{}…", &s[..end])
     }
 }

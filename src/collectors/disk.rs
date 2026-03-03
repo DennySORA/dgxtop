@@ -118,8 +118,10 @@ impl Collector for DiskCollector {
 
                     stats.push(DiskStats {
                         device_name: name.clone(),
-                        read_bytes_per_sec: (read_sectors_delta * SECTOR_SIZE) as f64 / elapsed,
-                        write_bytes_per_sec: (write_sectors_delta * SECTOR_SIZE) as f64 / elapsed,
+                        read_bytes_per_sec: read_sectors_delta as f64 * SECTOR_SIZE as f64
+                            / elapsed,
+                        write_bytes_per_sec: write_sectors_delta as f64 * SECTOR_SIZE as f64
+                            / elapsed,
                         read_iops: read_ios_delta as f64 / elapsed,
                         write_iops: write_ios_delta as f64 / elapsed,
                         await_read_ms: await_read,

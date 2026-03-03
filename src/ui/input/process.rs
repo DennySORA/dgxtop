@@ -77,9 +77,23 @@ pub fn handle_kill(key: KeyEvent, state: &mut AppState) -> InputAction {
 }
 
 /// Send SIGTERM to a process. Only succeeds if the current user owns the process.
-fn kill_process(pid: u32) {
+/// Returns true if the signal was sent successfully.
+fn kill_process(pid: u32) -> bool {
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
 
-    let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
+    // Guard against PID overflow: PIDs exceeding i32::MAX would wrap to negative,
+    // which kill() interprets as a process group — never allow that.
+    let raw_pid = match i32::try_from(pid) {
+        Ok(p) if p > 0 => p,
+        _ => return false,
+    };
+
+    // Re-verify the process still exists before sending signal (mitigate PID recycling)
+    let proc_path = format!("/proc/{pid}/cmdline");
+    if !std::path::Path::new(&proc_path).exists() {
+        return false;
+    }
+
+    kill(Pid::from_raw(raw_pid), Signal::SIGTERM).is_ok()
 }

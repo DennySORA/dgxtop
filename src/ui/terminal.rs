@@ -100,28 +100,34 @@ fn collect_all(
     gpu: &mut Option<crate::collectors::gpu::GpuCollector>,
     gpu_process: &mut Option<crate::collectors::gpu_process::GpuProcessCollector>,
 ) {
-    if let Ok(cpu_stats) = cpu.collect() {
-        state.update_cpu(cpu_stats);
+    match cpu.collect() {
+        Ok(cpu_stats) => state.update_cpu(cpu_stats),
+        Err(e) => tracing::warn!("CPU collection failed: {e}"),
     }
-    if let Ok(mem_stats) = memory.collect() {
-        state.update_memory(mem_stats);
+    match memory.collect() {
+        Ok(mem_stats) => state.update_memory(mem_stats),
+        Err(e) => tracing::warn!("Memory collection failed: {e}"),
     }
-    if let Ok(disk_stats) = disk.collect() {
-        state.update_disks(disk_stats);
+    match disk.collect() {
+        Ok(disk_stats) => state.update_disks(disk_stats),
+        Err(e) => tracing::warn!("Disk collection failed: {e}"),
     }
-    if let Ok(net_stats) = network.collect() {
-        state.update_networks(net_stats);
+    match network.collect() {
+        Ok(net_stats) => state.update_networks(net_stats),
+        Err(e) => tracing::warn!("Network collection failed: {e}"),
     }
     if let Some(gc) = gpu.as_mut() {
-        if let Ok(gpu_stats) = gc.collect() {
-            state.update_gpus(gpu_stats);
+        match gc.collect() {
+            Ok(gpu_stats) => state.update_gpus(gpu_stats),
+            Err(e) => tracing::warn!("GPU collection failed: {e}"),
         }
         state.nvlink = gc.collect_nvlink();
     }
-    if let Some(gpc) = gpu_process.as_mut()
-        && let Ok(procs) = gpc.collect()
-    {
-        state.update_gpu_processes(procs);
+    if let Some(gpc) = gpu_process.as_mut() {
+        match gpc.collect() {
+            Ok(procs) => state.update_gpu_processes(procs),
+            Err(e) => tracing::warn!("GPU process collection failed: {e}"),
+        }
     }
 }
 

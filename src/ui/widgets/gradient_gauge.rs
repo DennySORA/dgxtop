@@ -2,6 +2,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::widgets::Widget;
+use unicode_width::UnicodeWidthStr;
 
 /// A gauge widget with gradient coloring based on value thresholds.
 /// Renders a horizontal bar with filled/empty segments.
@@ -61,7 +62,7 @@ impl Widget for GradientGauge<'_> {
         let label_width = if self.label.is_empty() {
             0
         } else {
-            self.label.len() as u16 + 1
+            self.label.width() as u16 + 1
         };
 
         let bar_area_width = area.width.saturating_sub(label_width);
