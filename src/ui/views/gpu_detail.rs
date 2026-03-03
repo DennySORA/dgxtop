@@ -2,21 +2,37 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Sparkline};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Sparkline};
 
 use crate::app::AppState;
 use crate::ui::theme::Theme;
 use crate::ui::widgets::gradient_gauge::GradientGauge;
 
-/// Render the GPU detail view — per-GPU cards with full metrics and history charts.
+/// Render the GPU detail view with per-GPU cards showing full metrics and charts.
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     if state.gpus.is_empty() {
-        let msg = Paragraph::new(" No GPUs detected").style(Style::default().fg(theme.text_dim));
-        frame.render_widget(msg, area);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(theme.border))
+            .title(Span::styled(
+                " GPUs ",
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![Span::styled(
+                "  No GPUs detected",
+                Style::default().fg(theme.text_dim),
+            )])),
+            inner,
+        );
         return;
     }
 
-    // Split into per-GPU cards
     let card_height = 10u16;
     let constraints: Vec<Constraint> = state
         .gpus
@@ -51,13 +67,14 @@ fn render_gpu_detail_card(
         theme.border
     };
 
-    let title = format!(" GPU {} — {} ", gpu.index, gpu.name,);
+    let title = format!("GPU {} — {}", gpu.index, gpu.name);
 
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color))
         .title(Span::styled(
-            title,
+            format!(" {title} "),
             Style::default()
                 .fg(if is_selected {
                     theme.primary
@@ -76,8 +93,18 @@ fn render_gpu_detail_card(
     let [metrics_area, charts_area] =
         Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(inner);
 
-    // Metrics column
-    let [util_area, mem_area, power_area, clock_area, detail_area] = Layout::vertical([
+    // ── Metrics column ──
+    let [
+        util_label,
+        util_bar,
+        mem_label,
+        mem_bar,
+        power_area,
+        clock_area,
+        detail_area,
+    ] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -86,87 +113,107 @@ fn render_gpu_detail_card(
     ])
     .areas(metrics_area);
 
-    // Utilization bar
-    let util_label = format!("{:5.1}%", gpu.utilization_gpu);
-    let gauge = GradientGauge::new(gpu.utilization_gpu / 100.0)
-        .label(&util_label)
-        .colors(theme.gauge_low, theme.gauge_mid, theme.gauge_high);
+    // Utilization
+    let util_pct = gpu.utilization_gpu;
     frame.render_widget(
-        Paragraph::new(Span::styled(" Util ", Style::default().fg(theme.text_dim))),
-        Rect::new(util_area.x, util_area.y, 6, 1),
+        Paragraph::new(Line::from(vec![
+            Span::styled(" Util  ", Style::default().fg(theme.text_muted)),
+            Span::styled(
+                format!("{util_pct:.1}%"),
+                Style::default()
+                    .fg(theme.percent_color(util_pct))
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        util_label,
     );
+    let gauge = GradientGauge::new(util_pct / 100.0)
+        .colors(theme.gauge_low, theme.gauge_mid, theme.gauge_high)
+        .bg_color(theme.gauge_bg);
     frame.render_widget(
         gauge,
         Rect::new(
-            util_area.x + 6,
-            util_area.y,
-            util_area.width.saturating_sub(14),
+            util_bar.x + 1,
+            util_bar.y,
+            util_bar.width.saturating_sub(2),
             1,
         ),
     );
 
-    // Memory bar
+    // VRAM
     let mem_pct = gpu.memory_usage_percent();
     let mem_gib_used = gpu.memory_used_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
     let mem_gib_total = gpu.memory_total_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
-    let mem_label = format!("{:.1}/{:.1}G", mem_gib_used, mem_gib_total);
-    let mem_gauge = GradientGauge::new(mem_pct / 100.0)
-        .label(&mem_label)
-        .colors(theme.gauge_low, theme.gauge_mid, theme.gauge_high);
     frame.render_widget(
-        Paragraph::new(Span::styled(" VRAM ", Style::default().fg(theme.text_dim))),
-        Rect::new(mem_area.x, mem_area.y, 6, 1),
+        Paragraph::new(Line::from(vec![
+            Span::styled(" VRAM  ", Style::default().fg(theme.text_muted)),
+            Span::styled(
+                format!("{mem_gib_used:.1} / {mem_gib_total:.1} GB"),
+                Style::default().fg(theme.text),
+            ),
+            Span::styled(
+                format!("  {mem_pct:.1}%"),
+                Style::default()
+                    .fg(theme.percent_color(mem_pct))
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        mem_label,
     );
+    let mem_gauge = GradientGauge::new(mem_pct / 100.0)
+        .colors(theme.gauge_low, theme.gauge_mid, theme.gauge_high)
+        .bg_color(theme.gauge_bg);
     frame.render_widget(
         mem_gauge,
-        Rect::new(
-            mem_area.x + 6,
-            mem_area.y,
-            mem_area.width.saturating_sub(14),
-            1,
-        ),
+        Rect::new(mem_bar.x + 1, mem_bar.y, mem_bar.width.saturating_sub(2), 1),
     );
 
     // Power
     let power_pct = gpu.power_usage_percent();
-    let power_info = Line::from(vec![
-        Span::styled(" Pwr  ", Style::default().fg(theme.text_dim)),
-        Span::styled(
-            format!(
-                "{:.0}W / {:.0}W",
-                gpu.power_draw_watts, gpu.power_limit_watts
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" Power ", Style::default().fg(theme.text_muted)),
+            Span::styled(
+                format!(
+                    "⚡ {:.0}W / {:.0}W",
+                    gpu.power_draw_watts, gpu.power_limit_watts
+                ),
+                Style::default().fg(theme.percent_color(power_pct)),
             ),
-            Style::default().fg(theme.percent_color(power_pct)),
-        ),
-        Span::styled(
-            format!("  ({:.0}%)", power_pct),
-            Style::default().fg(theme.text_dim),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(power_info), power_area);
+            Span::styled(
+                format!("  ({power_pct:.0}%)"),
+                Style::default().fg(theme.text_dim),
+            ),
+        ])),
+        power_area,
+    );
 
     // Clock
-    let clock_info = Line::from(vec![
-        Span::styled(" Clk  ", Style::default().fg(theme.text_dim)),
-        Span::styled(
-            format!(
-                "{:.0} / {:.0} MHz",
-                gpu.clock_graphics_mhz, gpu.clock_max_graphics_mhz
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" Clock ", Style::default().fg(theme.text_muted)),
+            Span::styled(
+                format!(
+                    "{:.0} / {:.0} MHz",
+                    gpu.clock_graphics_mhz, gpu.clock_max_graphics_mhz
+                ),
+                Style::default().fg(theme.text),
             ),
-            Style::default().fg(theme.text),
-        ),
-        Span::styled(
-            format!("  Mem: {:.0} MHz", gpu.clock_memory_mhz),
-            Style::default().fg(theme.text_dim),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(clock_info), clock_area);
+            Span::styled(
+                format!("  Mem: {:.0} MHz", gpu.clock_memory_mhz),
+                Style::default().fg(theme.text_dim),
+            ),
+        ])),
+        clock_area,
+    );
 
-    // Detail info (temperature, fan, ECC, PCIe)
+    // Detail
     if detail_area.height > 0 {
         let mut details = vec![Span::styled(
             format!(" Temp: {:.0}°C", gpu.temperature),
-            Style::default().fg(theme.temp_color(gpu.temperature)),
+            Style::default()
+                .fg(theme.temp_color(gpu.temperature))
+                .add_modifier(Modifier::BOLD),
         )];
 
         if let Some(fan) = gpu.fan_speed {
@@ -198,39 +245,69 @@ fn render_gpu_detail_card(
         frame.render_widget(Paragraph::new(Line::from(details)), detail_area);
     }
 
-    // Charts column
-    if charts_area.width > 5 {
-        let [util_chart, mem_chart, temp_chart] = Layout::vertical([
-            Constraint::Percentage(34),
-            Constraint::Percentage(33),
-            Constraint::Percentage(33),
+    // ── Charts column ──
+    if charts_area.width > 8 {
+        let [label1, chart1, label2, chart2, label3, chart3] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Fill(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
         ])
         .areas(charts_area);
 
         if let Some(history) = state.gpu_histories.get(index) {
-            // Utilization sparkline
+            // Utilization chart
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    " Utilization",
+                    Style::default().fg(theme.text_muted),
+                )),
+                label1,
+            );
             let util_data = history.utilization.to_sparkline_data();
-            let util_spark = Sparkline::default()
-                .data(&util_data)
-                .max(100)
-                .style(Style::default().fg(theme.primary));
-            frame.render_widget(util_spark, util_chart);
+            frame.render_widget(
+                Sparkline::default()
+                    .data(&util_data)
+                    .max(100)
+                    .style(Style::default().fg(theme.primary)),
+                chart1,
+            );
 
-            // Memory sparkline
+            // Memory chart
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    " Memory",
+                    Style::default().fg(theme.text_muted),
+                )),
+                label2,
+            );
             let mem_data = history.memory_usage.to_sparkline_data();
-            let mem_spark = Sparkline::default()
-                .data(&mem_data)
-                .max(100)
-                .style(Style::default().fg(theme.accent));
-            frame.render_widget(mem_spark, mem_chart);
+            frame.render_widget(
+                Sparkline::default()
+                    .data(&mem_data)
+                    .max(100)
+                    .style(Style::default().fg(theme.accent)),
+                chart2,
+            );
 
-            // Temperature sparkline
+            // Temperature chart
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    " Temperature",
+                    Style::default().fg(theme.text_muted),
+                )),
+                label3,
+            );
             let temp_data = history.temperature.to_sparkline_data();
-            let temp_spark = Sparkline::default()
-                .data(&temp_data)
-                .max(100)
-                .style(Style::default().fg(theme.warning));
-            frame.render_widget(temp_spark, temp_chart);
+            frame.render_widget(
+                Sparkline::default()
+                    .data(&temp_data)
+                    .max(100)
+                    .style(Style::default().fg(theme.warning)),
+                chart3,
+            );
         }
     }
 }

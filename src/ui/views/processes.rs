@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
+use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table};
 
 use crate::app::AppState;
 use crate::ui::input::InputMode;
@@ -20,9 +20,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
 fn render_summary(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme.border))
         .title(Span::styled(
-            " Process Summary ",
+            " Summary ",
             Style::default()
                 .fg(theme.primary)
                 .add_modifier(Modifier::BOLD),
@@ -35,19 +36,27 @@ fn render_summary(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme
     let total_gpu_mem_gib = total_gpu_mem as f64 / (1024.0 * 1024.0 * 1024.0);
 
     let summary = Line::from(vec![
+        Span::styled(" ", Style::default()),
         Span::styled(
-            format!(" Total: {total} processes"),
-            Style::default().fg(theme.text),
+            format!("{total}"),
+            Style::default()
+                .fg(theme.primary)
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" │ ", Style::default().fg(theme.border)),
+        Span::styled(" processes", Style::default().fg(theme.text_dim)),
+        Span::styled("    ", Style::default()),
         Span::styled(
-            format!("GPU Mem: {total_gpu_mem_gib:.1} GB"),
-            Style::default().fg(theme.primary),
+            format!("{total_gpu_mem_gib:.1} GB"),
+            Style::default()
+                .fg(theme.secondary)
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" │ ", Style::default().fg(theme.border)),
+        Span::styled(" GPU memory", Style::default().fg(theme.text_dim)),
+        Span::styled("    ", Style::default()),
+        Span::styled("sort: ", Style::default().fg(theme.text_muted)),
         Span::styled(
             format!(
-                "Sort: {} {}",
+                "{} {}",
                 state.process_sort.label(),
                 if state.process_sort_ascending {
                     "▲"
@@ -59,7 +68,7 @@ fn render_summary(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme
         ),
         if !state.process_filter.is_empty() {
             Span::styled(
-                format!(" │ Filter: \"{}\"", state.process_filter),
+                format!("    filter: \"{}\"", state.process_filter),
                 Style::default().fg(theme.accent),
             )
         } else {
@@ -77,13 +86,21 @@ fn render_table(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) 
         _ => theme.border,
     };
 
+    let title_color = match state.input_mode {
+        InputMode::ProcessSort => theme.warning,
+        InputMode::ProcessKill => theme.danger,
+        InputMode::ProcessFilter => theme.accent,
+        _ => theme.primary,
+    };
+
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color))
         .title(Span::styled(
             " GPU Processes ",
             Style::default()
-                .fg(theme.primary)
+                .fg(title_color)
                 .add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
@@ -94,13 +111,52 @@ fn render_table(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) 
     }
 
     let header = Row::new(vec![
-        "PID", "USER", "GPU", "TYPE", "GPU %", "GPU MEM", "CPU %", "HOST MEM", "COMMAND",
+        Cell::from("PID").style(
+            Style::default()
+                .fg(theme.text_dim)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("USER").style(
+            Style::default()
+                .fg(theme.text_dim)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("GPU").style(
+            Style::default()
+                .fg(theme.text_dim)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("TYPE").style(
+            Style::default()
+                .fg(theme.text_dim)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("GPU %").style(
+            Style::default()
+                .fg(theme.text_dim)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("GPU MEM").style(
+            Style::default()
+                .fg(theme.text_dim)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("CPU %").style(
+            Style::default()
+                .fg(theme.text_dim)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("HOST MEM").style(
+            Style::default()
+                .fg(theme.text_dim)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("COMMAND").style(
+            Style::default()
+                .fg(theme.text_dim)
+                .add_modifier(Modifier::BOLD),
+        ),
     ])
-    .style(
-        Style::default()
-            .fg(theme.text_dim)
-            .add_modifier(Modifier::BOLD),
-    )
     .height(1);
 
     let filtered = state.filtered_processes();
@@ -110,6 +166,12 @@ fn render_table(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) 
         .map(|(i, p)| {
             let is_selected = i == state.process_selected_index;
             let is_kill_target = state.process_kill_confirm == Some(p.pid);
+
+            let alt_bg = if i % 2 == 1 {
+                theme.row_alt_bg
+            } else {
+                theme.background
+            };
 
             let style = if is_kill_target {
                 Style::default()
@@ -121,22 +183,25 @@ fn render_table(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) 
                     .bg(theme.highlight_bg)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme.text)
+                Style::default().fg(theme.text).bg(alt_bg)
             };
 
-            let gpu_util_color = if p.gpu_utilization >= 90.0 {
-                theme.gauge_high
-            } else if p.gpu_utilization >= 50.0 {
-                theme.gauge_mid
-            } else {
-                theme.gauge_low
-            };
+            let gpu_util_color = theme.percent_color(p.gpu_utilization);
 
             Row::new(vec![
-                Cell::from(format!("{}", p.pid)),
+                Cell::from(Span::styled(
+                    format!("{}", p.pid),
+                    Style::default().fg(theme.text_dim),
+                )),
                 Cell::from(truncate_str(&p.user, 8)),
-                Cell::from(format!("{}", p.gpu_index)),
-                Cell::from(p.process_type.to_string()),
+                Cell::from(Span::styled(
+                    format!("{}", p.gpu_index),
+                    Style::default().fg(theme.secondary),
+                )),
+                Cell::from(Span::styled(
+                    p.process_type.to_string(),
+                    Style::default().fg(theme.text_dim),
+                )),
                 Cell::from(Span::styled(
                     format!("{:.0}%", p.gpu_utilization),
                     Style::default().fg(gpu_util_color),
@@ -144,7 +209,7 @@ fn render_table(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) 
                 Cell::from(format_bytes(p.gpu_memory_bytes)),
                 Cell::from(format!("{:.1}%", p.cpu_percent)),
                 Cell::from(format_bytes(p.host_memory_bytes)),
-                Cell::from(truncate_str(&p.command, 60)),
+                Cell::from(truncate_str(&p.command, 80)),
             ])
             .style(style)
         })

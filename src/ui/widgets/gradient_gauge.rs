@@ -4,16 +4,16 @@ use ratatui::style::{Color, Style};
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
-/// A gauge widget with gradient coloring based on value thresholds.
-/// Renders a horizontal bar with filled/empty segments.
+/// A polished gauge widget with smooth gradient coloring.
+/// Uses half-block characters for sub-cell precision rendering.
 pub struct GradientGauge<'a> {
     ratio: f64,
     label: &'a str,
     low_color: Color,
     mid_color: Color,
     high_color: Color,
-    bg_char: char,
-    fill_char: char,
+    bg_color: Color,
+    show_percentage: bool,
 }
 
 impl<'a> GradientGauge<'a> {
@@ -21,11 +21,11 @@ impl<'a> GradientGauge<'a> {
         Self {
             ratio: ratio.clamp(0.0, 1.0),
             label: "",
-            low_color: Color::Green,
-            mid_color: Color::Yellow,
-            high_color: Color::Red,
-            bg_char: '░',
-            fill_char: '█',
+            low_color: Color::Rgb(80, 200, 120),
+            mid_color: Color::Rgb(230, 180, 40),
+            high_color: Color::Rgb(220, 60, 60),
+            bg_color: Color::Rgb(40, 42, 46),
+            show_percentage: false,
         }
     }
 
@@ -38,6 +38,16 @@ impl<'a> GradientGauge<'a> {
         self.low_color = low;
         self.mid_color = mid;
         self.high_color = high;
+        self
+    }
+
+    pub fn bg_color(mut self, color: Color) -> Self {
+        self.bg_color = color;
+        self
+    }
+
+    pub fn show_percentage(mut self) -> Self {
+        self.show_percentage = true;
         self
     }
 
@@ -59,44 +69,60 @@ impl Widget for GradientGauge<'_> {
             return;
         }
 
-        let label_width = if self.label.is_empty() {
-            0
+        // Calculate label area
+        let pct_label = if self.show_percentage {
+            format!("{:>5.1}%", self.ratio * 100.0)
         } else {
-            self.label.width() as u16 + 1
+            String::new()
         };
 
-        let bar_area_width = area.width.saturating_sub(label_width);
-        if bar_area_width == 0 {
+        let extra_label = self.label;
+        let total_label_width = if !extra_label.is_empty() {
+            extra_label.width() as u16 + 1
+        } else if self.show_percentage {
+            pct_label.len() as u16 + 1
+        } else {
+            0
+        };
+
+        let bar_width = area.width.saturating_sub(total_label_width);
+        if bar_width == 0 {
             return;
         }
 
-        // Render label
-        if !self.label.is_empty() {
-            let label_x = area.x + bar_area_width + 1;
-            buf.set_string(
-                label_x.min(area.x + area.width - 1),
-                area.y,
-                self.label,
-                Style::default().fg(Color::White),
-            );
-        }
-
-        // Render bar
-        let filled = (bar_area_width as f64 * self.ratio).round() as u16;
+        // Render the bar with smooth half-block precision
+        let filled_f = bar_width as f64 * self.ratio;
+        let filled_full = filled_f as u16;
+        let has_half = (filled_f - filled_full as f64) >= 0.5;
         let bar_color = self.bar_color();
 
-        for x in 0..bar_area_width {
-            let ch = if x < filled {
-                self.fill_char
+        for x in 0..bar_width {
+            let (ch, style) = if x < filled_full {
+                ('█', Style::default().fg(bar_color))
+            } else if x == filled_full && has_half {
+                ('▌', Style::default().fg(bar_color))
             } else {
-                self.bg_char
-            };
-            let style = if x < filled {
-                Style::default().fg(bar_color)
-            } else {
-                Style::default().fg(Color::Indexed(238))
+                ('─', Style::default().fg(self.bg_color))
             };
             buf.set_string(area.x + x, area.y, ch.to_string(), style);
+        }
+
+        // Render label to the right of the bar
+        if !extra_label.is_empty() {
+            buf.set_string(
+                area.x + bar_width + 1,
+                area.y,
+                extra_label,
+                Style::default().fg(Color::Rgb(180, 180, 180)),
+            );
+        } else if self.show_percentage {
+            let pct_color = self.bar_color();
+            buf.set_string(
+                area.x + bar_width + 1,
+                area.y,
+                &pct_label,
+                Style::default().fg(pct_color),
+            );
         }
     }
 }
