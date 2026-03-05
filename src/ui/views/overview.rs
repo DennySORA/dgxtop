@@ -1,25 +1,71 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
+use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Sparkline, Table};
+use ratatui::widgets::{
+    Axis, Block, BorderType, Borders, Cell, Chart, Dataset, GraphType, Paragraph, Row, Sparkline,
+    Table,
+};
 
 use crate::app::AppState;
+use crate::domain::history::TimeWindowAggregator;
 use crate::ui::theme::Theme;
 use crate::ui::widgets::gradient_gauge::GradientGauge;
 
 /// Render the main overview dashboard.
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    let h = area.height;
     let gpu_count = state.gpus.len();
-    let gpu_panel_height = if gpu_count == 0 {
-        0
+
+    // GPU panel: fixed based on GPU count
+    let gpu_want = if gpu_count == 0 {
+        0u16
     } else {
         (gpu_count as u16 * 3 + 2).min(14)
     };
 
+    // CPU+Mem panel: desired height
+    let cpu_mem_want = compute_cpu_mem_want(state);
+
+    // Minimum heights before we start cutting
+    let cpu_mem_min: u16 = 7; // border(2) + info(1) + gauge(2) + stats(2)
+    let io_min: u16 = 6; // border(2) + header+1row(2) + chart(2)
+    let process_min: u16 = 4; // border(2) + header(1) + 1 row(1)
+
+    // Distribute available height
+    let fixed = gpu_want + process_min;
+    let flexible_budget = h.saturating_sub(fixed);
+
+    // Give CPU+Mem its share first, then IO gets the rest (both capped at want)
+    let io_want: u16 = 12;
+    let cpu_mem_h = if flexible_budget >= cpu_mem_want + io_want {
+        cpu_mem_want
+    } else if flexible_budget >= cpu_mem_min + io_min {
+        // Distribute proportionally between cpu_mem and io
+        let extra = flexible_budget.saturating_sub(cpu_mem_min + io_min);
+        let cpu_extra_max = cpu_mem_want.saturating_sub(cpu_mem_min);
+        let io_extra_max = io_want.saturating_sub(io_min);
+        let total_extra_want = cpu_extra_max + io_extra_max;
+        let cpu_extra = if total_extra_want > 0 {
+            (extra as u32 * cpu_extra_max as u32 / total_extra_want as u32) as u16
+        } else {
+            0
+        };
+        cpu_mem_min + cpu_extra.min(cpu_extra_max)
+    } else {
+        // Very tight — give cpu_mem at least its min
+        flexible_budget.saturating_sub(io_min).max(cpu_mem_min)
+    };
+
+    let io_h = flexible_budget
+        .saturating_sub(cpu_mem_h)
+        .min(io_want)
+        .max(io_min.min(flexible_budget.saturating_sub(cpu_mem_h)));
+
     let [top_area, mid_area, bottom_area] = Layout::vertical([
-        Constraint::Length(9),
-        Constraint::Length(gpu_panel_height),
+        Constraint::Length(cpu_mem_h),
+        Constraint::Length(gpu_want),
         Constraint::Fill(1),
     ])
     .areas(area);
@@ -30,7 +76,24 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
         render_gpu_panel(frame, mid_area, state, theme);
     }
 
-    render_bottom_section(frame, bottom_area, state, theme);
+    render_bottom_section(frame, bottom_area, state, theme, io_h);
+}
+
+fn compute_cpu_mem_want(state: &AppState) -> u16 {
+    if !state.show_per_core {
+        // border(2) + info(1) + gauge(2) + stats(1) + sparkline(2) = 10
+        // Memory: border(2) + ram(2) + swap(2) + detail(1) + stats(1) + sparkline(2) = 10
+        return 10;
+    }
+    let core_count = state.cpu.as_ref().map(|c| c.core_count).unwrap_or(0);
+    let cols = per_core_columns(core_count);
+    let core_rows = if cols == 0 {
+        0
+    } else {
+        (core_count as u16).div_ceil(cols)
+    };
+    // border(2) + info(1) + core_rows + stats(1)
+    (2 + 1 + core_rows + 1).max(10)
 }
 
 fn styled_block<'a>(title: &'a str, theme: &Theme) -> Block<'a> {
@@ -73,8 +136,33 @@ fn render_cpu_memory_row(frame: &mut Frame, area: Rect, state: &AppState, theme:
     render_memory_panel(frame, mem_area, state, theme);
 }
 
+/// Determine how many columns to use for per-core display.
+fn per_core_columns(core_count: usize) -> u16 {
+    if core_count <= 16 {
+        2
+    } else if core_count <= 64 {
+        4
+    } else {
+        8
+    }
+}
+
 fn render_cpu_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
-    let block = styled_block("CPU", theme);
+    let cpu = match &state.cpu {
+        Some(c) => c,
+        None => {
+            let block = styled_block("CPU", theme);
+            frame.render_widget(block, area);
+            return;
+        }
+    };
+
+    let title = if state.show_per_core {
+        format!("CPU ({} cores)", cpu.core_count)
+    } else {
+        "CPU".to_owned()
+    };
+    let block = styled_block(&title, theme);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -82,26 +170,122 @@ fn render_cpu_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &The
         return;
     }
 
-    let cpu = match &state.cpu {
-        Some(c) => c,
-        None => return,
-    };
-
-    let per_core_rows = if state.show_per_core {
-        cpu.core_count.min(8) as u16
+    if state.show_per_core {
+        render_cpu_per_core(frame, inner, cpu, state, theme);
     } else {
-        0
-    };
+        render_cpu_aggregate(frame, inner, cpu, state, theme);
+    }
+}
 
-    let [info_area, bar_area, core_area, sparkline_area] = Layout::vertical([
+fn render_cpu_aggregate(
+    frame: &mut Frame,
+    inner: Rect,
+    cpu: &crate::domain::cpu::CpuStats,
+    state: &AppState,
+    theme: &Theme,
+) {
+    let [info_area, bar_area, stats_area, sparkline_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(2),
-        Constraint::Length(per_core_rows),
+        Constraint::Length(1),
         Constraint::Fill(1),
     ])
     .areas(inner);
 
-    // ── Info line ──
+    render_cpu_info_line(frame, info_area, cpu, theme);
+    render_cpu_main_gauge(frame, bar_area, cpu, theme);
+
+    // ── Stats (1/6/12/24h on 1 line) ──
+    if stats_area.height > 0 {
+        let line = build_pct_stats_line(&state.cpu_history.usage_agg, theme);
+        frame.render_widget(Paragraph::new(line), stats_area);
+    }
+
+    // ── Sparkline ──
+    if sparkline_area.height > 0 {
+        let data = state.cpu_history.usage.to_sparkline_data();
+        let sparkline = Sparkline::default()
+            .data(&data)
+            .max(100)
+            .style(Style::default().fg(theme.sparkline_color));
+        frame.render_widget(sparkline, sparkline_area);
+    }
+}
+
+fn render_cpu_per_core(
+    frame: &mut Frame,
+    inner: Rect,
+    cpu: &crate::domain::cpu::CpuStats,
+    state: &AppState,
+    theme: &Theme,
+) {
+    let cols = per_core_columns(cpu.core_count);
+    let core_rows = if cols == 0 {
+        0
+    } else {
+        (cpu.core_count as u16).div_ceil(cols)
+    };
+
+    let [info_area, core_area, stats_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(core_rows),
+        Constraint::Fill(1),
+    ])
+    .areas(inner);
+
+    render_cpu_info_line(frame, info_area, cpu, theme);
+
+    // ── Per-core bars (htop-style) ──
+    if core_area.height > 0 && core_area.width > 0 {
+        let col_width = core_area.width / cols;
+        for (i, core) in cpu.cores.iter().enumerate() {
+            let col = i as u16 % cols;
+            let row = i as u16 / cols;
+            if row >= core_area.height {
+                break;
+            }
+            let x = core_area.x + col * col_width;
+            let w = col_width.saturating_sub(1);
+
+            // Core label (right-aligned index)
+            let label_width: u16 = if cpu.core_count >= 100 { 4 } else { 3 };
+            let label = format!("{:>width$}", i, width = label_width as usize);
+            frame.buffer_mut().set_string(
+                x,
+                core_area.y + row,
+                &label,
+                Style::default().fg(theme.text_muted),
+            );
+
+            // Gauge
+            let gauge_w = w.saturating_sub(label_width + 5);
+            if gauge_w > 0 {
+                let pct_label = format!("{:>3.0}%", core.usage_percent);
+                let gauge = GradientGauge::new(core.usage_percent / 100.0)
+                    .label(&pct_label)
+                    .colors(theme.gauge_low, theme.gauge_mid, theme.gauge_high)
+                    .bg_color(theme.gauge_bg);
+                frame.render_widget(
+                    gauge,
+                    Rect::new(x + label_width, core_area.y + row, gauge_w, 1),
+                );
+            }
+        }
+    }
+
+    // ── Stats ──
+    if stats_area.height > 0 {
+        let line = build_pct_stats_line(&state.cpu_history.usage_agg, theme);
+        frame.render_widget(Paragraph::new(line), stats_area);
+    }
+}
+
+fn render_cpu_info_line(
+    frame: &mut Frame,
+    area: Rect,
+    cpu: &crate::domain::cpu::CpuStats,
+    theme: &Theme,
+) {
     let temp_str = cpu
         .temperature_celsius
         .map(|t| format!("{t:.0}°C"))
@@ -117,6 +301,17 @@ fn render_cpu_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &The
         "— MHz".to_owned()
     };
 
+    let load_color = |val: f64| -> ratatui::style::Color {
+        let ratio = val / cpu.core_count.max(1) as f64;
+        if ratio >= 1.0 {
+            theme.danger
+        } else if ratio >= 0.7 {
+            theme.warning
+        } else {
+            theme.success
+        }
+    };
+
     let info = Line::from(vec![
         Span::styled(
             format!(" {:.1}%", cpu.usage_percent),
@@ -128,15 +323,36 @@ fn render_cpu_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &The
         Span::styled(format!(" {temp_str}"), Style::default().fg(temp_color)),
         Span::styled("  ", Style::default()),
         Span::styled(format!(" {freq_str}"), Style::default().fg(theme.text_dim)),
+        Span::styled("  load ", Style::default().fg(theme.text_muted)),
+        Span::styled(
+            format!("{:.2}", cpu.load_avg_1m),
+            Style::default().fg(load_color(cpu.load_avg_1m)),
+        ),
+        Span::styled(" ", Style::default()),
+        Span::styled(
+            format!("{:.2}", cpu.load_avg_5m),
+            Style::default().fg(load_color(cpu.load_avg_5m)),
+        ),
+        Span::styled(" ", Style::default()),
+        Span::styled(
+            format!("{:.2}", cpu.load_avg_15m),
+            Style::default().fg(load_color(cpu.load_avg_15m)),
+        ),
         Span::styled("  ", Style::default()),
         Span::styled(
-            format!(" {} cores", cpu.core_count),
+            format!("tasks {}/{}", cpu.tasks_running, cpu.tasks_total),
             Style::default().fg(theme.text_muted),
         ),
     ]);
-    frame.render_widget(Paragraph::new(info), info_area);
+    frame.render_widget(Paragraph::new(info), area);
+}
 
-    // ── Main gauge ──
+fn render_cpu_main_gauge(
+    frame: &mut Frame,
+    bar_area: Rect,
+    cpu: &crate::domain::cpu::CpuStats,
+    theme: &Theme,
+) {
     let gauge = GradientGauge::new(cpu.usage_percent / 100.0)
         .colors(theme.gauge_low, theme.gauge_mid, theme.gauge_high)
         .bg_color(theme.gauge_bg)
@@ -151,7 +367,6 @@ fn render_cpu_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &The
         ),
     );
 
-    // ── Breakdown ──
     if bar_area.height > 1 {
         let breakdown = Line::from(vec![
             Span::styled(" ", Style::default()),
@@ -184,58 +399,55 @@ fn render_cpu_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &The
             Rect::new(bar_area.x, bar_area.y + 1, bar_area.width, 1),
         );
     }
+}
 
-    // ── Per-core mini bars ──
-    if state.show_per_core && core_area.height > 0 {
-        let half_width = core_area.width / 2;
-        for (i, core) in cpu
-            .cores
-            .iter()
-            .take(core_area.height as usize * 2)
-            .enumerate()
-        {
-            let col = i % 2;
-            let row = i / 2;
-            if row as u16 >= core_area.height {
-                break;
-            }
-            let x = core_area.x + col as u16 * half_width;
-            let w = half_width.saturating_sub(1);
+/// Return only the time windows for which enough data has been collected.
+fn active_windows(agg: &TimeWindowAggregator) -> Vec<usize> {
+    let elapsed = agg.elapsed_hours();
+    [1, 6, 12, 24]
+        .iter()
+        .copied()
+        .filter(|&h| elapsed >= h as f64)
+        .collect()
+}
 
-            // Core label
-            let label = format!("{:>2}", i);
-            frame.buffer_mut().set_string(
-                x,
-                core_area.y + row as u16,
-                &label,
-                Style::default().fg(theme.text_muted),
-            );
+/// Build the `Xh` label like `1h` or `1/6/12/24h`.
+fn windows_label(windows: &[usize]) -> String {
+    let parts: Vec<String> = windows.iter().map(|h| h.to_string()).collect();
+    format!("{}h", parts.join("/"))
+}
 
-            // Mini gauge
-            let gauge_w = w.saturating_sub(8);
-            if gauge_w > 0 {
-                let pct_label = format!("{:>3.0}%", core.usage_percent);
-                let gauge = GradientGauge::new(core.usage_percent / 100.0)
-                    .label(&pct_label)
-                    .colors(theme.gauge_low, theme.gauge_mid, theme.gauge_high)
-                    .bg_color(theme.gauge_bg);
-                frame.render_widget(
-                    gauge,
-                    Rect::new(x + 3, core_area.y + row as u16, gauge_w, 1),
-                );
-            }
-        }
+/// Format percentage stats as `avg X/X/X/X% max X/X/X/X%` on 1 line.
+/// Only shows windows with enough elapsed time.
+fn build_pct_stats_line<'a>(agg: &TimeWindowAggregator, theme: &Theme) -> Line<'a> {
+    let windows = active_windows(agg);
+    if windows.is_empty() {
+        return Line::default();
     }
-
-    // ── Sparkline ──
-    if sparkline_area.height > 0 {
-        let data = state.cpu_history.usage.to_sparkline_data();
-        let sparkline = Sparkline::default()
-            .data(&data)
-            .max(100)
-            .style(Style::default().fg(theme.sparkline_color));
-        frame.render_widget(sparkline, sparkline_area);
-    }
+    let avgs: Vec<String> = windows
+        .iter()
+        .map(|&h| format!("{:.0}", agg.average_over_hours(h)))
+        .collect();
+    let maxs: Vec<String> = windows
+        .iter()
+        .map(|&h| format!("{:.0}", agg.max_over_hours(h)))
+        .collect();
+    Line::from(vec![
+        Span::styled(
+            format!(" {} ", windows_label(&windows)),
+            Style::default().fg(theme.text_muted),
+        ),
+        Span::styled("avg:", Style::default().fg(theme.text_dim)),
+        Span::styled(
+            format!("{}%", avgs.join("/")),
+            Style::default().fg(theme.text),
+        ),
+        Span::styled("  max:", Style::default().fg(theme.text_dim)),
+        Span::styled(
+            format!("{}%", maxs.join("/")),
+            Style::default().fg(theme.warning),
+        ),
+    ])
 }
 
 fn render_memory_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
@@ -258,8 +470,10 @@ fn render_memory_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &
         swap_label_area,
         swap_bar_area,
         detail_area,
+        stats_area,
         sparkline_area,
     ] = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -357,6 +571,12 @@ fn render_memory_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &
         ),
     ]);
     frame.render_widget(Paragraph::new(detail), detail_area);
+
+    // ── Memory stats (1/6/12/24h) ──
+    if stats_area.height > 0 {
+        let line = build_pct_stats_line(&state.memory_history.usage_agg, theme);
+        frame.render_widget(Paragraph::new(line), stats_area);
+    }
 
     // ── Sparkline ──
     if sparkline_area.height > 0 {
@@ -499,9 +719,15 @@ fn render_gpu_card(
 
 // ── Bottom Section (I/O + Processes) ──────────────────────────────────
 
-fn render_bottom_section(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+fn render_bottom_section(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    theme: &Theme,
+    io_h: u16,
+) {
     let [io_area, process_area] =
-        Layout::vertical([Constraint::Length(7), Constraint::Fill(1)]).areas(area);
+        Layout::vertical([Constraint::Length(io_h), Constraint::Fill(1)]).areas(area);
 
     render_io_row(frame, io_area, state, theme);
     render_process_table(frame, process_area, state, theme);
@@ -511,11 +737,52 @@ fn render_io_row(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
     let [disk_area, net_area] =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
 
-    // ── Disk I/O ──
-    let disk_block = styled_block("Disk I/O", theme);
-    let disk_inner = disk_block.inner(disk_area);
-    frame.render_widget(disk_block, disk_area);
+    render_disk_panel(frame, disk_area, state, theme);
+    render_network_panel(frame, net_area, state, theme);
+}
 
+fn render_disk_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    let selected_name = state
+        .disks
+        .get(state.selected_disk_index)
+        .map(|d| d.device_name.as_str())
+        .unwrap_or("—");
+    let title = format!("Disk I/O [{selected_name}] (d/D)");
+    let disk_block = styled_block(&title, theme);
+    let disk_inner = disk_block.inner(area);
+    frame.render_widget(disk_block, area);
+
+    if disk_inner.height == 0 || disk_inner.width == 0 {
+        return;
+    }
+
+    let max_visible = state.config.network_max_visible;
+    let table_rows = state.disks.len().min(max_visible) as u16;
+    let inner_h = disk_inner.height;
+    let show_chart = inner_h > (1 + table_rows + 1 + 2);
+    let show_stats = inner_h > (1 + table_rows + 1);
+
+    let mut constraints = vec![Constraint::Length(1 + table_rows)];
+    if show_chart {
+        constraints.push(Constraint::Fill(1)); // chart gets remaining
+    }
+    if show_stats {
+        constraints.push(Constraint::Length(1)); // stats 1 line (x/x/x/x format)
+    }
+    let areas = Layout::vertical(constraints).split(disk_inner);
+
+    let table_area = areas[0];
+    let (chart_area, stats_area) = if show_chart && show_stats {
+        (Some(areas[1]), Some(areas[2]))
+    } else if show_chart {
+        (Some(areas[1]), None)
+    } else if show_stats {
+        (None, Some(areas[1]))
+    } else {
+        (None, None)
+    };
+
+    // ── Disk table ──
     let disk_header = Row::new(vec![
         Cell::from("Device").style(
             Style::default()
@@ -537,33 +804,35 @@ fn render_io_row(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
                 .fg(theme.text_dim)
                 .add_modifier(Modifier::BOLD),
         ),
-        Cell::from("Await").style(
-            Style::default()
-                .fg(theme.text_dim)
-                .add_modifier(Modifier::BOLD),
-        ),
     ]);
 
     let disk_rows: Vec<Row> = state
         .disks
         .iter()
-        .take(disk_inner.height.saturating_sub(1) as usize)
+        .take(max_visible)
         .enumerate()
         .map(|(i, d)| {
-            let bg = if i % 2 == 1 {
+            let is_selected = i == state.selected_disk_index;
+            let bg = if is_selected {
+                Style::default().bg(theme.highlight_bg)
+            } else if i % 2 == 1 {
                 Style::default().bg(theme.row_alt_bg)
             } else {
                 Style::default()
             };
+            let name_color = if is_selected {
+                theme.primary
+            } else {
+                theme.secondary
+            };
             Row::new(vec![
                 Cell::from(Span::styled(
                     &d.device_name,
-                    Style::default().fg(theme.secondary),
+                    Style::default().fg(name_color),
                 )),
                 Cell::from(format_throughput(d.read_bytes_per_sec)),
                 Cell::from(format_throughput(d.write_bytes_per_sec)),
                 Cell::from(format!("{:.0}/{:.0}", d.read_iops, d.write_iops)),
-                Cell::from(format!("{:.1}ms", d.await_read_ms.max(d.await_write_ms))),
             ])
             .style(bg)
         })
@@ -576,17 +845,180 @@ fn render_io_row(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
             Constraint::Fill(1),
             Constraint::Fill(1),
             Constraint::Length(9),
-            Constraint::Length(8),
         ],
     )
     .header(disk_header);
-    frame.render_widget(disk_table, disk_inner);
+    frame.render_widget(disk_table, table_area);
 
-    // ── Network ──
-    let net_block = styled_block("Network", theme);
-    let net_inner = net_block.inner(net_area);
-    frame.render_widget(net_block, net_area);
+    // ── Disk chart + stats ──
+    if let Some(history) = selected_disk_history(state) {
+        if let Some(ca) = chart_area
+            && ca.height > 0
+            && ca.width > 4
+        {
+            let read_data = history.read_throughput.to_chart_data();
+            let write_data = history.write_throughput.to_chart_data();
+            render_dual_line_chart(
+                frame,
+                ca,
+                &DualChartConfig {
+                    data_a: &read_data,
+                    data_b: &write_data,
+                    max_y: history
+                        .read_throughput
+                        .max_value()
+                        .max(history.write_throughput.max_value())
+                        .max(1.0),
+                    color_a: theme.success,
+                    color_b: theme.warning,
+                    name_a: "R",
+                    name_b: "W",
+                },
+                theme,
+            );
+        }
 
+        if let Some(sa) = stats_area
+            && sa.height > 0
+        {
+            let line = build_disk_stats_line(
+                &history.read_agg,
+                &history.write_agg,
+                state.config.update_interval_secs,
+                theme,
+            );
+            frame.render_widget(Paragraph::new(line), sa);
+        }
+    }
+}
+
+fn selected_disk_history(state: &AppState) -> Option<&crate::domain::disk::DiskHistory> {
+    let selected = state.disks.get(state.selected_disk_index)?;
+    state.disk_histories.get(&selected.device_name)
+}
+
+fn selected_network_history(state: &AppState) -> Option<&crate::domain::network::NetworkHistory> {
+    let selected = state.networks.get(state.selected_network_index)?;
+    state.network_histories.get(&selected.name)
+}
+
+struct DualChartConfig<'a> {
+    data_a: &'a [(f64, f64)],
+    data_b: &'a [(f64, f64)],
+    max_y: f64,
+    color_a: ratatui::style::Color,
+    color_b: ratatui::style::Color,
+    name_a: &'a str,
+    name_b: &'a str,
+}
+
+fn render_dual_line_chart(frame: &mut Frame, area: Rect, cfg: &DualChartConfig, theme: &Theme) {
+    let x_bound = cfg.data_a.len().max(cfg.data_b.len()).max(1) as f64;
+
+    let dataset_a = Dataset::default()
+        .name(cfg.name_a)
+        .marker(Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(cfg.color_a))
+        .data(cfg.data_a);
+    let dataset_b = Dataset::default()
+        .name(cfg.name_b)
+        .marker(Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(cfg.color_b))
+        .data(cfg.data_b);
+
+    let chart = Chart::new(vec![dataset_a, dataset_b])
+        .x_axis(
+            Axis::default()
+                .style(Style::default().fg(theme.text_muted))
+                .bounds([0.0, x_bound]),
+        )
+        .y_axis(
+            Axis::default()
+                .style(Style::default().fg(theme.text_muted))
+                .labels(vec![
+                    Span::raw("0"),
+                    Span::raw(format_throughput_short(cfg.max_y)),
+                ])
+                .bounds([0.0, cfg.max_y]),
+        );
+    frame.render_widget(chart, area);
+}
+
+/// Format disk stats as 1 line. Only shows windows with enough elapsed time.
+fn build_disk_stats_line<'a>(
+    read_agg: &TimeWindowAggregator,
+    write_agg: &TimeWindowAggregator,
+    _interval: f64,
+    theme: &Theme,
+) -> Line<'a> {
+    let windows = active_windows(read_agg);
+    if windows.is_empty() {
+        return Line::default();
+    }
+    let r_avgs: Vec<String> = windows
+        .iter()
+        .map(|&h| format_throughput_short(read_agg.average_over_hours(h)))
+        .collect();
+    let w_avgs: Vec<String> = windows
+        .iter()
+        .map(|&h| format_throughput_short(write_agg.average_over_hours(h)))
+        .collect();
+    Line::from(vec![
+        Span::styled(
+            format!(" {} ", windows_label(&windows)),
+            Style::default().fg(theme.text_muted),
+        ),
+        Span::styled("R:", Style::default().fg(theme.text_dim)),
+        Span::styled(r_avgs.join("/"), Style::default().fg(theme.success)),
+        Span::styled(" W:", Style::default().fg(theme.text_dim)),
+        Span::styled(w_avgs.join("/"), Style::default().fg(theme.warning)),
+    ])
+}
+
+fn render_network_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    let selected_name = state
+        .networks
+        .get(state.selected_network_index)
+        .map(|n| n.name.as_str())
+        .unwrap_or("—");
+    let title = format!("Network [{selected_name}] (n/N)");
+    let net_block = styled_block(&title, theme);
+    let net_inner = net_block.inner(area);
+    frame.render_widget(net_block, area);
+
+    if net_inner.height == 0 || net_inner.width == 0 {
+        return;
+    }
+
+    let max_visible = state.config.network_max_visible;
+    let table_rows = state.networks.len().min(max_visible) as u16;
+    let inner_h = net_inner.height;
+    let show_chart = inner_h > (1 + table_rows + 1 + 2);
+    let show_stats = inner_h > (1 + table_rows + 1);
+
+    let mut constraints = vec![Constraint::Length(1 + table_rows)];
+    if show_chart {
+        constraints.push(Constraint::Fill(1));
+    }
+    if show_stats {
+        constraints.push(Constraint::Length(1)); // stats 1 line (x/x/x/x format)
+    }
+    let areas = Layout::vertical(constraints).split(net_inner);
+
+    let table_area = areas[0];
+    let (chart_area, stats_area) = if show_chart && show_stats {
+        (Some(areas[1]), Some(areas[2]))
+    } else if show_chart {
+        (Some(areas[1]), None)
+    } else if show_stats {
+        (None, Some(areas[1]))
+    } else {
+        (None, None)
+    };
+
+    // ── Network table ──
     let net_header = Row::new(vec![
         Cell::from("Interface").style(
             Style::default()
@@ -603,11 +1035,6 @@ fn render_io_row(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
                 .fg(theme.text_dim)
                 .add_modifier(Modifier::BOLD),
         ),
-        Cell::from("Pkts").style(
-            Style::default()
-                .fg(theme.text_dim)
-                .add_modifier(Modifier::BOLD),
-        ),
         Cell::from("Errors").style(
             Style::default()
                 .fg(theme.text_dim)
@@ -618,28 +1045,35 @@ fn render_io_row(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
     let net_rows: Vec<Row> = state
         .networks
         .iter()
-        .take(net_inner.height.saturating_sub(1) as usize)
+        .take(max_visible)
         .enumerate()
         .map(|(i, n)| {
+            let is_selected = i == state.selected_network_index;
             let status = if n.is_up { "●" } else { "○" };
             let status_color = if n.is_up {
                 theme.success
             } else {
                 theme.text_muted
             };
-            let bg = if i % 2 == 1 {
+            let bg = if is_selected {
+                Style::default().bg(theme.highlight_bg)
+            } else if i % 2 == 1 {
                 Style::default().bg(theme.row_alt_bg)
             } else {
                 Style::default()
             };
+            let name_color = if is_selected {
+                theme.primary
+            } else {
+                theme.text
+            };
             Row::new(vec![
                 Cell::from(Line::from(vec![
                     Span::styled(format!("{status} "), Style::default().fg(status_color)),
-                    Span::styled(&n.name, Style::default().fg(theme.text)),
+                    Span::styled(&n.name, Style::default().fg(name_color)),
                 ])),
                 Cell::from(format_throughput(n.rx_bytes_per_sec)),
                 Cell::from(format_throughput(n.tx_bytes_per_sec)),
-                Cell::from(format!("{:.0}", n.rx_packets_per_sec)),
                 Cell::from(Span::styled(
                     format!("{}", n.rx_errors + n.tx_errors),
                     Style::default().fg(if n.rx_errors + n.tx_errors > 0 {
@@ -659,12 +1093,83 @@ fn render_io_row(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
             Constraint::Length(14),
             Constraint::Fill(1),
             Constraint::Fill(1),
-            Constraint::Length(8),
             Constraint::Length(7),
         ],
     )
     .header(net_header);
-    frame.render_widget(net_table, net_inner);
+    frame.render_widget(net_table, table_area);
+
+    // ── Network chart + stats ──
+    if let Some(history) = selected_network_history(state) {
+        if let Some(ca) = chart_area
+            && ca.height > 0
+            && ca.width > 4
+        {
+            let rx_data = history.rx_throughput.to_chart_data();
+            let tx_data = history.tx_throughput.to_chart_data();
+            render_dual_line_chart(
+                frame,
+                ca,
+                &DualChartConfig {
+                    data_a: &rx_data,
+                    data_b: &tx_data,
+                    max_y: history
+                        .rx_throughput
+                        .max_value()
+                        .max(history.tx_throughput.max_value())
+                        .max(1.0),
+                    color_a: theme.success,
+                    color_b: theme.accent,
+                    name_a: "RX",
+                    name_b: "TX",
+                },
+                theme,
+            );
+        }
+
+        if let Some(sa) = stats_area
+            && sa.height > 0
+        {
+            let line = build_network_stats_line(
+                &history.rx_agg,
+                &history.tx_agg,
+                state.config.update_interval_secs,
+                theme,
+            );
+            frame.render_widget(Paragraph::new(line), sa);
+        }
+    }
+}
+
+/// Format network stats as 1 line. Only shows windows with enough elapsed time.
+fn build_network_stats_line<'a>(
+    rx_agg: &TimeWindowAggregator,
+    tx_agg: &TimeWindowAggregator,
+    interval: f64,
+    theme: &Theme,
+) -> Line<'a> {
+    let windows = active_windows(rx_agg);
+    if windows.is_empty() {
+        return Line::default();
+    }
+    let rx_tots: Vec<String> = windows
+        .iter()
+        .map(|&h| format_bytes_compact(rx_agg.sum_over_hours(h) * interval))
+        .collect();
+    let tx_tots: Vec<String> = windows
+        .iter()
+        .map(|&h| format_bytes_compact(tx_agg.sum_over_hours(h) * interval))
+        .collect();
+    Line::from(vec![
+        Span::styled(
+            format!(" {} ", windows_label(&windows)),
+            Style::default().fg(theme.text_muted),
+        ),
+        Span::styled("↓", Style::default().fg(theme.success)),
+        Span::styled(rx_tots.join("/"), Style::default().fg(theme.success)),
+        Span::styled(" ↑", Style::default().fg(theme.accent)),
+        Span::styled(tx_tots.join("/"), Style::default().fg(theme.accent)),
+    ])
 }
 
 fn render_process_table(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
@@ -816,6 +1321,33 @@ fn format_throughput(bytes_per_sec: f64) -> String {
         format!("{:.1} KB/s", bytes_per_sec / 1024.0)
     } else {
         format!("{:.0} B/s", bytes_per_sec)
+    }
+}
+
+fn format_throughput_short(bytes_per_sec: f64) -> String {
+    if bytes_per_sec >= 1024.0 * 1024.0 * 1024.0 {
+        format!("{:.1}G/s", bytes_per_sec / (1024.0 * 1024.0 * 1024.0))
+    } else if bytes_per_sec >= 1024.0 * 1024.0 {
+        format!("{:.0}M/s", bytes_per_sec / (1024.0 * 1024.0))
+    } else if bytes_per_sec >= 1024.0 {
+        format!("{:.0}K/s", bytes_per_sec / 1024.0)
+    } else {
+        format!("{:.0}B/s", bytes_per_sec)
+    }
+}
+
+fn format_bytes_compact(bytes: f64) -> String {
+    let abs = bytes.abs();
+    if abs >= 1024.0 * 1024.0 * 1024.0 * 1024.0 {
+        format!("{:.1}TB", bytes / (1024.0 * 1024.0 * 1024.0 * 1024.0))
+    } else if abs >= 1024.0 * 1024.0 * 1024.0 {
+        format!("{:.1}GB", bytes / (1024.0 * 1024.0 * 1024.0))
+    } else if abs >= 1024.0 * 1024.0 {
+        format!("{:.0}MB", bytes / (1024.0 * 1024.0))
+    } else if abs >= 1024.0 {
+        format!("{:.0}KB", bytes / 1024.0)
+    } else {
+        format!("{:.0}B", bytes)
     }
 }
 

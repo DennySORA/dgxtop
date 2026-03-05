@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::history::RingBuffer;
+use super::history::{RingBuffer, TimeWindowAggregator};
 
 /// I/O statistics for a single disk device.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,11 +38,13 @@ pub struct DiskRawCounters {
     pub weighted_io_time_ms: u64,
 }
 
-/// Per-device disk history buffers.
+/// Per-device disk history buffers and long-term aggregation.
 #[derive(Debug, Clone)]
 pub struct DiskHistory {
     pub read_throughput: RingBuffer,
     pub write_throughput: RingBuffer,
+    pub read_agg: TimeWindowAggregator,
+    pub write_agg: TimeWindowAggregator,
 }
 
 impl DiskHistory {
@@ -50,11 +52,19 @@ impl DiskHistory {
         Self {
             read_throughput: RingBuffer::new(capacity),
             write_throughput: RingBuffer::new(capacity),
+            read_agg: TimeWindowAggregator::new(),
+            write_agg: TimeWindowAggregator::new(),
         }
     }
 
     pub fn record(&mut self, stats: &DiskStats) {
-        self.read_throughput.push(stats.read_bytes_per_sec);
-        self.write_throughput.push(stats.write_bytes_per_sec);
+        let read = stats.read_bytes_per_sec;
+        let write = stats.write_bytes_per_sec;
+
+        self.read_throughput.push(read);
+        self.write_throughput.push(write);
+
+        self.read_agg.push(read);
+        self.write_agg.push(write);
     }
 }

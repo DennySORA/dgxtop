@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::history::RingBuffer;
+use super::history::{RingBuffer, TimeWindowAggregator};
 
 /// Aggregate CPU statistics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,6 +15,11 @@ pub struct CpuStats {
     pub temperature_celsius: Option<f64>,
     pub core_count: usize,
     pub cores: Vec<CoreStats>,
+    pub load_avg_1m: f64,
+    pub load_avg_5m: f64,
+    pub load_avg_15m: f64,
+    pub tasks_running: u32,
+    pub tasks_total: u32,
 }
 
 /// Per-core CPU statistics.
@@ -57,11 +62,13 @@ impl CpuTimeSample {
     }
 }
 
-/// CPU history buffers.
+/// CPU history buffers and long-term aggregation.
 #[derive(Debug, Clone)]
 pub struct CpuHistory {
     pub usage: RingBuffer,
     pub temperature: RingBuffer,
+    pub usage_agg: TimeWindowAggregator,
+    pub temperature_agg: TimeWindowAggregator,
 }
 
 impl CpuHistory {
@@ -69,13 +76,17 @@ impl CpuHistory {
         Self {
             usage: RingBuffer::new(capacity),
             temperature: RingBuffer::new(capacity),
+            usage_agg: TimeWindowAggregator::new(),
+            temperature_agg: TimeWindowAggregator::new(),
         }
     }
 
     pub fn record(&mut self, stats: &CpuStats) {
         self.usage.push(stats.usage_percent);
+        self.usage_agg.push(stats.usage_percent);
         if let Some(temp) = stats.temperature_celsius {
             self.temperature.push(temp);
+            self.temperature_agg.push(temp);
         }
     }
 }

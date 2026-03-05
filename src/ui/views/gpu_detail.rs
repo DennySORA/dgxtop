@@ -1,10 +1,12 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
+use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Sparkline};
+use ratatui::widgets::{Axis, Block, BorderType, Borders, Chart, Dataset, GraphType, Paragraph};
 
 use crate::app::AppState;
+use crate::domain::gpu::GpuHistory;
 use crate::ui::theme::Theme;
 use crate::ui::widgets::gradient_gauge::GradientGauge;
 
@@ -33,7 +35,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
         return;
     }
 
-    let card_height = 10u16;
+    let card_height = 14u16;
     let constraints: Vec<Constraint> = state
         .gpus
         .iter()
@@ -90,8 +92,12 @@ fn render_gpu_detail_card(
         return;
     }
 
+    let [top_area, stats_area] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(4)]).areas(inner);
+
     let [metrics_area, charts_area] =
-        Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(inner);
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .areas(top_area);
 
     // ── Metrics column ──
     let [
@@ -261,7 +267,7 @@ fn render_gpu_detail_card(
         frame.render_widget(Paragraph::new(Line::from(details)), detail_area);
     }
 
-    // ── Charts column ──
+    // ── Charts column (line charts with time axis) ──
     if charts_area.width > 8 {
         let [label1, chart1, label2, chart2, label3, chart3] = Layout::vertical([
             Constraint::Length(1),
@@ -274,7 +280,7 @@ fn render_gpu_detail_card(
         .areas(charts_area);
 
         if let Some(history) = state.gpu_histories.get(index) {
-            // Utilization chart
+            // Utilization line chart
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     " Utilization",
@@ -282,16 +288,17 @@ fn render_gpu_detail_card(
                 )),
                 label1,
             );
-            let util_data = history.utilization.to_sparkline_data();
-            frame.render_widget(
-                Sparkline::default()
-                    .data(&util_data)
-                    .max(100)
-                    .style(Style::default().fg(theme.primary)),
+            render_metric_chart(
+                frame,
                 chart1,
+                &history.utilization.to_chart_data(),
+                0.0,
+                100.0,
+                theme.primary,
+                theme,
             );
 
-            // Memory chart
+            // Memory line chart
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     " Memory",
@@ -299,16 +306,17 @@ fn render_gpu_detail_card(
                 )),
                 label2,
             );
-            let mem_data = history.memory_usage.to_sparkline_data();
-            frame.render_widget(
-                Sparkline::default()
-                    .data(&mem_data)
-                    .max(100)
-                    .style(Style::default().fg(theme.accent)),
+            render_metric_chart(
+                frame,
                 chart2,
+                &history.memory_usage.to_chart_data(),
+                0.0,
+                100.0,
+                theme.accent,
+                theme,
             );
 
-            // Temperature chart
+            // Temperature line chart
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     " Temperature",
@@ -316,16 +324,116 @@ fn render_gpu_detail_card(
                 )),
                 label3,
             );
-            let temp_data = history.temperature.to_sparkline_data();
-            frame.render_widget(
-                Sparkline::default()
-                    .data(&temp_data)
-                    .max(100)
-                    .style(Style::default().fg(theme.warning)),
+            let temp_max = history.temperature.max_value().max(100.0);
+            render_metric_chart(
+                frame,
                 chart3,
+                &history.temperature.to_chart_data(),
+                0.0,
+                temp_max,
+                theme.warning,
+                theme,
             );
         }
     }
+
+    // ── Stats rows (1h/6h/12h/24h) ──
+    if stats_area.height > 0
+        && let Some(history) = state.gpu_histories.get(index)
+    {
+        let lines = build_gpu_stats_lines(history, theme);
+        frame.render_widget(Paragraph::new(lines), stats_area);
+    }
+}
+
+fn render_metric_chart(
+    frame: &mut Frame,
+    area: Rect,
+    data: &[(f64, f64)],
+    y_min: f64,
+    y_max: f64,
+    color: ratatui::style::Color,
+    theme: &Theme,
+) {
+    if area.height == 0 || area.width < 4 || data.is_empty() {
+        return;
+    }
+
+    let x_bound = data.len().max(1) as f64;
+    let dataset = Dataset::default()
+        .marker(Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(color))
+        .data(data);
+
+    let chart = Chart::new(vec![dataset])
+        .x_axis(
+            Axis::default()
+                .style(Style::default().fg(theme.text_muted))
+                .bounds([0.0, x_bound]),
+        )
+        .y_axis(
+            Axis::default()
+                .style(Style::default().fg(theme.text_muted))
+                .labels(vec![
+                    Span::raw(format!("{y_min:.0}")),
+                    Span::raw(format!("{y_max:.0}")),
+                ])
+                .bounds([y_min, y_max]),
+        );
+    frame.render_widget(chart, area);
+}
+
+fn build_gpu_stats_lines<'a>(history: &GpuHistory, theme: &Theme) -> Vec<Line<'a>> {
+    let elapsed = history.utilization_agg.elapsed_hours();
+    let windows: Vec<usize> = [1, 6, 12, 24]
+        .iter()
+        .copied()
+        .filter(|&h| elapsed >= h as f64)
+        .collect();
+
+    if windows.is_empty() {
+        return vec![];
+    }
+
+    windows
+        .iter()
+        .map(|&h| {
+            let label = format!("{h:>2}h");
+            let u_avg = history.utilization_agg.average_over_hours(h);
+            let u_max = history.utilization_agg.max_over_hours(h);
+            let t_avg = history.temperature_agg.average_over_hours(h);
+            let t_max = history.temperature_agg.max_over_hours(h);
+            let p_avg = history.power_agg.average_over_hours(h);
+            let m_avg = history.memory_agg.average_over_hours(h);
+
+            Line::from(vec![
+                Span::styled(format!(" {label}"), Style::default().fg(theme.text_muted)),
+                Span::styled("  util ", Style::default().fg(theme.text_dim)),
+                Span::styled(
+                    format!("{u_avg:.0}%"),
+                    Style::default().fg(theme.percent_color(u_avg)),
+                ),
+                Span::styled(format!("/{u_max:.0}%"), Style::default().fg(theme.text_dim)),
+                Span::styled("  temp ", Style::default().fg(theme.text_dim)),
+                Span::styled(
+                    format!("{t_avg:.0}°"),
+                    Style::default().fg(theme.temp_color(t_avg)),
+                ),
+                Span::styled(
+                    format!("/{t_max:.0}°"),
+                    Style::default().fg(theme.temp_color(t_max)),
+                ),
+                Span::styled("  pwr ", Style::default().fg(theme.text_dim)),
+                Span::styled(format!("{p_avg:.0}W"), Style::default().fg(theme.text)),
+                Span::styled("  mem ", Style::default().fg(theme.text_dim)),
+                Span::styled(
+                    format!("{m_avg:.0}%"),
+                    Style::default().fg(theme.percent_color(m_avg)),
+                ),
+            ])
+        })
+        .collect()
 }
 
 fn format_rate(bytes_per_sec: f64) -> String {

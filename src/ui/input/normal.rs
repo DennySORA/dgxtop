@@ -107,6 +107,41 @@ pub fn handle(key: KeyEvent, state: &mut AppState) -> InputAction {
             InputAction::Redraw
         }
 
+        // Cycle selected network interface
+        KeyCode::Char('n') => {
+            if !state.networks.is_empty() {
+                state.selected_network_index =
+                    (state.selected_network_index + 1) % state.networks.len();
+            }
+            InputAction::Redraw
+        }
+        KeyCode::Char('N') => {
+            if !state.networks.is_empty() {
+                state.selected_network_index = state
+                    .selected_network_index
+                    .checked_sub(1)
+                    .unwrap_or(state.networks.len() - 1);
+            }
+            InputAction::Redraw
+        }
+
+        // Cycle selected disk device
+        KeyCode::Char('d') => {
+            if !state.disks.is_empty() {
+                state.selected_disk_index = (state.selected_disk_index + 1) % state.disks.len();
+            }
+            InputAction::Redraw
+        }
+        KeyCode::Char('D') => {
+            if !state.disks.is_empty() {
+                state.selected_disk_index = state
+                    .selected_disk_index
+                    .checked_sub(1)
+                    .unwrap_or(state.disks.len() - 1);
+            }
+            InputAction::Redraw
+        }
+
         _ => InputAction::Continue,
     }
 }
