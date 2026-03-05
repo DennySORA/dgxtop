@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::history::RingBuffer;
+use super::history::{RingBuffer, TimeWindowAggregator};
 
 /// Statistics for a single network interface.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,11 +32,13 @@ pub struct NetworkRawCounters {
     pub tx_dropped: u64,
 }
 
-/// Per-interface network history buffers.
+/// Per-interface network history buffers and long-term aggregation.
 #[derive(Debug, Clone)]
 pub struct NetworkHistory {
     pub rx_throughput: RingBuffer,
     pub tx_throughput: RingBuffer,
+    pub rx_agg: TimeWindowAggregator,
+    pub tx_agg: TimeWindowAggregator,
 }
 
 impl NetworkHistory {
@@ -44,11 +46,19 @@ impl NetworkHistory {
         Self {
             rx_throughput: RingBuffer::new(capacity),
             tx_throughput: RingBuffer::new(capacity),
+            rx_agg: TimeWindowAggregator::new(),
+            tx_agg: TimeWindowAggregator::new(),
         }
     }
 
     pub fn record(&mut self, stats: &NetworkInterfaceStats) {
-        self.rx_throughput.push(stats.rx_bytes_per_sec);
-        self.tx_throughput.push(stats.tx_bytes_per_sec);
+        let rx = stats.rx_bytes_per_sec;
+        let tx = stats.tx_bytes_per_sec;
+
+        self.rx_throughput.push(rx);
+        self.tx_throughput.push(tx);
+
+        self.rx_agg.push(rx);
+        self.tx_agg.push(tx);
     }
 }

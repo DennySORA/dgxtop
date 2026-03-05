@@ -10,6 +10,7 @@ pub struct AppConfig {
     pub gpu_enabled: bool,
     pub redline_threshold: f64,
     pub history_length: usize,
+    pub network_max_visible: usize,
 }
 
 impl Default for AppConfig {
@@ -19,7 +20,8 @@ impl Default for AppConfig {
             color_theme: "cyan".to_owned(),
             gpu_enabled: true,
             redline_threshold: 80.0,
-            history_length: 120,
+            history_length: 300,
+            network_max_visible: 3,
         }
     }
 }
@@ -32,6 +34,9 @@ impl AppConfig {
         if args.no_gpu {
             self.gpu_enabled = false;
         }
+        if let Some(n) = args.net_max {
+            self.network_max_visible = n;
+        }
         self.sanitize();
     }
 
@@ -42,6 +47,7 @@ impl AppConfig {
             self.update_interval_secs = 1.0;
         }
         self.history_length = self.history_length.clamp(10, 10_000);
+        self.network_max_visible = self.network_max_visible.clamp(1, 20);
         self.redline_threshold = self.redline_threshold.clamp(0.0, 100.0);
         if !self.redline_threshold.is_finite() {
             self.redline_threshold = 80.0;

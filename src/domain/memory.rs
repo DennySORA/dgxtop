@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::history::RingBuffer;
+use super::history::{RingBuffer, TimeWindowAggregator};
 
 /// System memory statistics from /proc/meminfo.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,11 +32,13 @@ impl MemoryStats {
     }
 }
 
-/// Memory history buffers.
+/// Memory history buffers and long-term aggregation.
 #[derive(Debug, Clone)]
 pub struct MemoryHistory {
     pub usage: RingBuffer,
     pub swap_usage: RingBuffer,
+    pub usage_agg: TimeWindowAggregator,
+    pub swap_agg: TimeWindowAggregator,
 }
 
 impl MemoryHistory {
@@ -44,11 +46,17 @@ impl MemoryHistory {
         Self {
             usage: RingBuffer::new(capacity),
             swap_usage: RingBuffer::new(capacity),
+            usage_agg: TimeWindowAggregator::new(),
+            swap_agg: TimeWindowAggregator::new(),
         }
     }
 
     pub fn record(&mut self, stats: &MemoryStats) {
-        self.usage.push(stats.usage_percent());
-        self.swap_usage.push(stats.swap_usage_percent());
+        let usage = stats.usage_percent();
+        let swap = stats.swap_usage_percent();
+        self.usage.push(usage);
+        self.swap_usage.push(swap);
+        self.usage_agg.push(usage);
+        self.swap_agg.push(swap);
     }
 }

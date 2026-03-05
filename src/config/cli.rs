@@ -16,6 +16,10 @@ pub struct CliArgs {
     #[arg(long, default_value_t = false)]
     pub no_gpu: bool,
 
+    /// Maximum number of network interfaces to display (1–20).
+    #[arg(long, value_name = "N")]
+    pub net_max: Option<usize>,
+
     /// Log level: error, warn, info, debug, trace.
     #[arg(long, default_value = "warn")]
     pub log_level: String,

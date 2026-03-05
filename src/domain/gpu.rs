@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::history::RingBuffer;
+use super::history::{RingBuffer, TimeWindowAggregator};
 
 /// Statistics for a single GPU device.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,13 +50,17 @@ impl GpuStats {
     }
 }
 
-/// Per-GPU history buffers for chart/sparkline rendering.
+/// Per-GPU history buffers for chart/sparkline rendering and long-term aggregation.
 #[derive(Debug, Clone)]
 pub struct GpuHistory {
     pub utilization: RingBuffer,
     pub temperature: RingBuffer,
     pub power: RingBuffer,
     pub memory_usage: RingBuffer,
+    pub utilization_agg: TimeWindowAggregator,
+    pub temperature_agg: TimeWindowAggregator,
+    pub power_agg: TimeWindowAggregator,
+    pub memory_agg: TimeWindowAggregator,
 }
 
 impl GpuHistory {
@@ -66,14 +70,28 @@ impl GpuHistory {
             temperature: RingBuffer::new(capacity),
             power: RingBuffer::new(capacity),
             memory_usage: RingBuffer::new(capacity),
+            utilization_agg: TimeWindowAggregator::new(),
+            temperature_agg: TimeWindowAggregator::new(),
+            power_agg: TimeWindowAggregator::new(),
+            memory_agg: TimeWindowAggregator::new(),
         }
     }
 
     pub fn record(&mut self, stats: &GpuStats) {
-        self.utilization.push(stats.utilization_gpu);
-        self.temperature.push(stats.temperature);
-        self.power.push(stats.power_draw_watts);
-        self.memory_usage.push(stats.memory_usage_percent());
+        let util = stats.utilization_gpu;
+        let temp = stats.temperature;
+        let power = stats.power_draw_watts;
+        let mem = stats.memory_usage_percent();
+
+        self.utilization.push(util);
+        self.temperature.push(temp);
+        self.power.push(power);
+        self.memory_usage.push(mem);
+
+        self.utilization_agg.push(util);
+        self.temperature_agg.push(temp);
+        self.power_agg.push(power);
+        self.memory_agg.push(mem);
     }
 }
 

@@ -132,7 +132,12 @@ impl Collector for DiskCollector {
             }
         }
 
-        stats.sort_by(|a, b| a.device_name.cmp(&b.device_name));
+        // Sort by total throughput descending so the busiest device is first.
+        stats.sort_by(|a, b| {
+            b.total_bytes_per_sec()
+                .partial_cmp(&a.total_bytes_per_sec())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         self.prev_counters = current;
         self.prev_time = now;

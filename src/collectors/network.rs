@@ -29,12 +29,13 @@ impl NetworkCollector {
     }
 
     fn is_tracked_interface(name: &str) -> bool {
-        let excluded_prefixes = ["lo", "virbr", "docker", "br-", "veth"];
         // Reject names with path separators or null bytes to prevent path traversal
         if name.contains('/') || name.contains('\0') {
             return false;
         }
-        !excluded_prefixes.iter().any(|p| name.starts_with(p))
+        let lower = name.to_ascii_lowercase();
+        let excluded_prefixes = ["lo", "virbr", "docker", "br-", "veth"];
+        !excluded_prefixes.iter().any(|p| lower.starts_with(p))
     }
 
     fn read_sys_stat(iface: &str, stat_name: &str) -> u64 {
@@ -94,18 +95,18 @@ impl NetworkCollector {
         result
     }
 
-    /// Sort interfaces: WiFi first, then Ethernet, then InfiniBand, then others.
-    fn interface_sort_key(name: &str) -> (u8, String) {
-        let priority = if name.starts_with("wl") {
+    /// Type priority: Ethernet first, then WiFi, then InfiniBand, then others.
+    fn interface_type_priority(name: &str) -> u8 {
+        let lower = name.to_ascii_lowercase();
+        if lower.starts_with("en") || lower.starts_with("eth") || lower.starts_with("em") {
             0
-        } else if name.starts_with("en") || name.starts_with("eth") || name.starts_with("em") {
+        } else if lower.starts_with("wl") {
             1
-        } else if name.starts_with("ib") {
+        } else if lower.starts_with("ib") {
             2
         } else {
             3
-        };
-        (priority, name.to_owned())
+        }
     }
 }
 
@@ -151,8 +152,20 @@ impl Collector for NetworkCollector {
             });
         }
 
+        // Sort: active (up) first, then by type priority, then by current
+        // throughput descending so the busiest interface is shown first.
         stats.sort_by(|a, b| {
-            Self::interface_sort_key(&a.name).cmp(&Self::interface_sort_key(&b.name))
+            b.is_up
+                .cmp(&a.is_up)
+                .then(
+                    Self::interface_type_priority(&a.name)
+                        .cmp(&Self::interface_type_priority(&b.name)),
+                )
+                .then(
+                    (b.rx_bytes_per_sec + b.tx_bytes_per_sec)
+                        .partial_cmp(&(a.rx_bytes_per_sec + a.tx_bytes_per_sec))
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                )
         });
 
         self.prev_counters = current;

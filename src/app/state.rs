@@ -72,6 +72,8 @@ pub struct AppState {
     pub selected_gpu_index: usize,
     pub process_kill_confirm: Option<u32>,
     pub show_per_core: bool,
+    pub selected_network_index: usize,
+    pub selected_disk_index: usize,
 
     // --- Config ---
     pub config: AppConfig,
@@ -110,6 +112,8 @@ impl AppState {
             selected_gpu_index: 0,
             process_kill_confirm: None,
             show_per_core: false,
+            selected_network_index: 0,
+            selected_disk_index: 0,
 
             config,
             tick_count: 0,

@@ -140,6 +140,27 @@ impl CpuCollector {
             .map(|millideg| millideg / 1000.0)
     }
 
+    /// Parse /proc/loadavg: "0.50 0.60 0.70 3/500 12345"
+    fn read_load_average() -> (f64, f64, f64, u32, u32) {
+        let content = match fs::read_to_string("/proc/loadavg") {
+            Ok(c) => c,
+            Err(_) => return (0.0, 0.0, 0.0, 0, 0),
+        };
+        let fields: Vec<&str> = content.split_whitespace().collect();
+        if fields.len() < 4 {
+            return (0.0, 0.0, 0.0, 0, 0);
+        }
+        let avg1 = fields[0].parse::<f64>().unwrap_or(0.0);
+        let avg5 = fields[1].parse::<f64>().unwrap_or(0.0);
+        let avg15 = fields[2].parse::<f64>().unwrap_or(0.0);
+        let (running, total) = if let Some((r, t)) = fields[3].split_once('/') {
+            (r.parse::<u32>().unwrap_or(0), t.parse::<u32>().unwrap_or(0))
+        } else {
+            (0, 0)
+        };
+        (avg1, avg5, avg15, running, total)
+    }
+
     fn calculate_usage(prev: &CpuTimeSample, curr: &CpuTimeSample) -> f64 {
         let total_delta = curr.total().saturating_sub(prev.total());
         if total_delta == 0 {
@@ -225,6 +246,9 @@ impl Collector for CpuCollector {
             }
         };
 
+        let (load_avg_1m, load_avg_5m, load_avg_15m, tasks_running, tasks_total) =
+            Self::read_load_average();
+
         let stats = CpuStats {
             usage_percent,
             user_percent,
@@ -236,6 +260,11 @@ impl Collector for CpuCollector {
             temperature_celsius: Self::read_cpu_temperature(),
             core_count,
             cores: per_core_stats,
+            load_avg_1m,
+            load_avg_5m,
+            load_avg_15m,
+            tasks_running,
+            tasks_total,
         };
 
         self.prev_total = Some(total);
