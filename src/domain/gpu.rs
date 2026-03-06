@@ -72,19 +72,82 @@ impl GpuStats {
     }
 
     /// Theoretical peak memory bandwidth in GB/s.
-    /// Formula: mem_clock_mhz * bus_width_bits * 2 (DDR) / 8 / 1000
+    ///
+    /// For discrete GPUs: `mem_clock_mhz * bus_width_bits * 2 (DDR) / 8 / 1000`.
+    /// For unified-memory GPUs (GH200, GB10, etc.): uses known specs lookup
+    /// since NVML does not report mem clock or bus width on these architectures.
     pub fn theoretical_mem_bandwidth_gbps(&self) -> Option<f64> {
-        let bus_width = self.memory_bus_width_bits? as f64;
-        if self.clock_memory_mhz <= 0.0 || bus_width <= 0.0 {
-            return None;
+        // Try standard formula first (discrete GPUs)
+        if let Some(bus_width) = self.memory_bus_width_bits {
+            let bw = bus_width as f64;
+            if self.clock_memory_mhz > 0.0 && bw > 0.0 {
+                return Some(self.clock_memory_mhz * bw * 2.0 / 8.0 / 1000.0);
+            }
         }
-        Some(self.clock_memory_mhz * bus_width * 2.0 / 8.0 / 1000.0)
+
+        // Unified-memory fallback: lookup by GPU name
+        if self.memory_is_shared {
+            return self.unified_memory_bandwidth_gbps();
+        }
+
+        None
     }
 
     /// Estimated actual memory bandwidth in GB/s based on utilization.
+    /// Returns None on unified-memory GPUs where NVML always reports 0%.
     pub fn actual_mem_bandwidth_gbps(&self) -> Option<f64> {
         let theoretical = self.theoretical_mem_bandwidth_gbps()?;
+        // On unified memory, NVML reports utilization_memory = 0 always.
+        // Return None so the UI knows the value is not meaningful.
+        if self.memory_is_shared && self.utilization_memory <= 0.0 {
+            return None;
+        }
         Some(theoretical * self.utilization_memory / 100.0)
+    }
+
+    /// Known memory bandwidth for unified-memory GPU models.
+    /// These GPUs use LPDDR5X shared with the CPU; NVML cannot report
+    /// mem clock or bus width, so we use published specs.
+    fn unified_memory_bandwidth_gbps(&self) -> Option<f64> {
+        let lower = self.name.to_ascii_lowercase();
+        // DGX Spark / Jetson Thor — GB10 (Blackwell) with LPDDR5X
+        if lower.contains("gb10") {
+            return Some(273.0); // 128-bit LPDDR5X-8533
+        }
+        // GH200 Grace Hopper — LPDDR5X
+        if lower.contains("gh200") || lower.contains("grace hopper") {
+            return Some(546.0); // 512 GB LPDDR5X
+        }
+        // GH100 in Grace Hopper Superchip
+        if lower.contains("gh100") {
+            return Some(546.0);
+        }
+        // Jetson AGX Orin — LPDDR5
+        if lower.contains("orin") {
+            return Some(204.8); // 256-bit LPDDR5
+        }
+        // Jetson AGX Xavier — LPDDR4x
+        if lower.contains("xavier") && !lower.contains("nx") {
+            return Some(136.5);
+        }
+        None
+    }
+
+    /// Descriptive string for the memory type.
+    pub fn memory_type_label(&self) -> &'static str {
+        if !self.memory_is_shared {
+            return "GDDR/HBM";
+        }
+        let lower = self.name.to_ascii_lowercase();
+        if lower.contains("gb10") || lower.contains("gh200") || lower.contains("gh100") {
+            "LPDDR5X (Unified)"
+        } else if lower.contains("orin") {
+            "LPDDR5 (Unified)"
+        } else if lower.contains("xavier") {
+            "LPDDR4x (Unified)"
+        } else {
+            "Unified Memory"
+        }
     }
 }
 
@@ -95,10 +158,14 @@ pub struct GpuHistory {
     pub temperature: RingBuffer,
     pub power: RingBuffer,
     pub memory_usage: RingBuffer,
+    pub pcie_tx: RingBuffer,
+    pub pcie_rx: RingBuffer,
     pub utilization_agg: TimeWindowAggregator,
     pub temperature_agg: TimeWindowAggregator,
     pub power_agg: TimeWindowAggregator,
     pub memory_agg: TimeWindowAggregator,
+    pub pcie_tx_agg: TimeWindowAggregator,
+    pub pcie_rx_agg: TimeWindowAggregator,
 }
 
 impl GpuHistory {
@@ -108,10 +175,14 @@ impl GpuHistory {
             temperature: RingBuffer::new(capacity),
             power: RingBuffer::new(capacity),
             memory_usage: RingBuffer::new(capacity),
+            pcie_tx: RingBuffer::new(capacity),
+            pcie_rx: RingBuffer::new(capacity),
             utilization_agg: TimeWindowAggregator::new(),
             temperature_agg: TimeWindowAggregator::new(),
             power_agg: TimeWindowAggregator::new(),
             memory_agg: TimeWindowAggregator::new(),
+            pcie_tx_agg: TimeWindowAggregator::new(),
+            pcie_rx_agg: TimeWindowAggregator::new(),
         }
     }
 
@@ -130,6 +201,17 @@ impl GpuHistory {
         self.temperature_agg.push(temp);
         self.power_agg.push(power);
         self.memory_agg.push(mem);
+
+        if let Some(tx) = stats.pcie_tx_bytes_per_sec {
+            let tx_f = tx as f64;
+            self.pcie_tx.push(tx_f);
+            self.pcie_tx_agg.push(tx_f);
+        }
+        if let Some(rx) = stats.pcie_rx_bytes_per_sec {
+            let rx_f = rx as f64;
+            self.pcie_rx.push(rx_f);
+            self.pcie_rx_agg.push(rx_f);
+        }
     }
 }
 

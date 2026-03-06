@@ -105,22 +105,40 @@ fn render_metrics_column(
         theme,
     ));
 
+    // Memory type (show for unified memory)
+    if gpu.memory_is_shared {
+        lines.push(metric_line(
+            "Type",
+            gpu.memory_type_label(),
+            theme.text_dim,
+            theme,
+        ));
+    }
+
     // Memory bandwidth
-    lines.push(metric_line(
-        "MemBW",
-        &format!(
-            "{:.0}% util{}",
-            gpu.utilization_memory,
-            gpu.actual_mem_bandwidth_gbps()
-                .map(|bw| format!(
-                    " ~{bw:.0}/{:.0} GB/s",
-                    gpu.theoretical_mem_bandwidth_gbps().unwrap_or(0.0)
-                ))
-                .unwrap_or_default()
-        ),
-        theme.percent_color(gpu.utilization_memory),
-        theme,
-    ));
+    let bw_str = match (
+        gpu.actual_mem_bandwidth_gbps(),
+        gpu.theoretical_mem_bandwidth_gbps(),
+    ) {
+        (Some(actual), Some(peak)) => {
+            // Discrete GPU: NVML reports real utilization
+            format!(
+                "{:.0}% util ~{actual:.0}/{peak:.0} GB/s",
+                gpu.utilization_memory
+            )
+        }
+        (None, Some(peak)) if gpu.memory_is_shared => {
+            // Unified memory: NVML cannot measure real-time bandwidth
+            format!("peak {peak:.0} GB/s (no HW counter)")
+        }
+        _ => format!("{:.0}% util", gpu.utilization_memory),
+    };
+    let bw_color = if gpu.memory_is_shared && gpu.utilization_memory <= 0.0 {
+        theme.text_dim
+    } else {
+        theme.percent_color(gpu.utilization_memory)
+    };
+    lines.push(metric_line("MemBW", &bw_str, bw_color, theme));
 
     if let (Some(used), Some(total)) = (gpu.bar1_used_bytes, gpu.bar1_total_bytes) {
         let bar1_pct = if total > 0 {
@@ -407,19 +425,24 @@ fn render_charts_column(
         None => return,
     };
 
+    // Stats: 2 lines per active window (max 4 windows = 8 lines)
+    let elapsed = history.utilization_agg.elapsed_hours();
+    let num_windows = [1, 6, 12, 24]
+        .iter()
+        .filter(|&&h| elapsed >= h as f64)
+        .count() as u16;
+    let stats_h = num_windows * 2;
+
     // Decide how many charts fit: each needs label(1) + chart(min 2) = 3
     let available = area.height;
-    let stats_h: u16 = 2; // stats at bottom
     let chart_budget = available.saturating_sub(stats_h);
     // 4 charts: util, mem, temp, power. Each gets label(1) + Fill
     let num_charts = (chart_budget / 3).min(4) as usize;
 
     if num_charts == 0 {
         // Just show stats
-        if available >= stats_h {
-            let lines = build_gpu_stats_lines(history, theme);
-            frame.render_widget(Paragraph::new(lines), area);
-        }
+        let lines = build_gpu_stats_lines(history, theme);
+        frame.render_widget(Paragraph::new(lines), area);
         return;
     }
 
@@ -569,44 +592,82 @@ fn build_gpu_stats_lines<'a>(history: &GpuHistory, theme: &Theme) -> Vec<Line<'a
         return vec![];
     }
 
-    windows
-        .iter()
-        .map(|&h| {
-            let label = format!("{h:>2}h");
-            let u_avg = history.utilization_agg.average_over_hours(h);
-            let u_max = history.utilization_agg.max_over_hours(h);
-            let t_avg = history.temperature_agg.average_over_hours(h);
-            let t_max = history.temperature_agg.max_over_hours(h);
-            let p_avg = history.power_agg.average_over_hours(h);
-            let m_avg = history.memory_agg.average_over_hours(h);
+    let has_pcie = !history.pcie_tx.is_empty();
+    let mut lines = Vec::new();
 
-            Line::from(vec![
-                Span::styled(format!(" {label}"), Style::default().fg(theme.text_muted)),
-                Span::styled("  util ", Style::default().fg(theme.text_dim)),
-                Span::styled(
-                    format!("{u_avg:.0}%"),
-                    Style::default().fg(theme.percent_color(u_avg)),
+    for &h in &windows {
+        let label = format!("{h:>2}h");
+        let u_avg = history.utilization_agg.average_over_hours(h);
+        let u_max = history.utilization_agg.max_over_hours(h);
+        let t_avg = history.temperature_agg.average_over_hours(h);
+        let t_max = history.temperature_agg.max_over_hours(h);
+        let p_avg = history.power_agg.average_over_hours(h);
+        let p_max = history.power_agg.max_over_hours(h);
+        // Energy: avg_watts * hours = Wh → kWh
+        let energy_kwh = p_avg * h as f64 / 1000.0;
+        let m_avg = history.memory_agg.average_over_hours(h);
+        let m_max = history.memory_agg.max_over_hours(h);
+
+        // Line 1: util + temp + mem
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {label}"), Style::default().fg(theme.text_muted)),
+            Span::styled("  util ", Style::default().fg(theme.text_dim)),
+            Span::styled(
+                format!("{u_avg:.0}/{u_max:.0}%"),
+                Style::default().fg(theme.percent_color(u_avg)),
+            ),
+            Span::styled("  temp ", Style::default().fg(theme.text_dim)),
+            Span::styled(
+                format!("{t_avg:.0}°"),
+                Style::default().fg(theme.temp_color(t_avg)),
+            ),
+            Span::styled(
+                format!("/{t_max:.0}°"),
+                Style::default().fg(theme.temp_color(t_max)),
+            ),
+            Span::styled("  mem ", Style::default().fg(theme.text_dim)),
+            Span::styled(
+                format!("{m_avg:.0}/{m_max:.0}%"),
+                Style::default().fg(theme.percent_color(m_avg)),
+            ),
+        ]));
+
+        // Line 2: power avg/max + energy + PCIe
+        let mut pwr_spans = vec![
+            Span::styled("    ", Style::default()),
+            Span::styled("pwr ", Style::default().fg(theme.text_dim)),
+            Span::styled(
+                format!("{p_avg:.0}/{p_max:.0}W",),
+                Style::default().fg(theme.text),
+            ),
+            Span::styled(
+                format!(" ({energy_kwh:.3}kWh)"),
+                Style::default().fg(theme.text_muted),
+            ),
+        ];
+
+        if has_pcie {
+            let tx_avg = history.pcie_tx_agg.average_over_hours(h);
+            let rx_avg = history.pcie_rx_agg.average_over_hours(h);
+            let tx_max = history.pcie_tx_agg.max_over_hours(h);
+            let rx_max = history.pcie_rx_agg.max_over_hours(h);
+            pwr_spans.push(Span::styled("  PCIe ", Style::default().fg(theme.text_dim)));
+            pwr_spans.push(Span::styled(
+                format!(
+                    "TX:{}/{} RX:{}/{}",
+                    format_rate(tx_avg),
+                    format_rate(tx_max),
+                    format_rate(rx_avg),
+                    format_rate(rx_max),
                 ),
-                Span::styled(format!("/{u_max:.0}%"), Style::default().fg(theme.text_dim)),
-                Span::styled("  temp ", Style::default().fg(theme.text_dim)),
-                Span::styled(
-                    format!("{t_avg:.0}°"),
-                    Style::default().fg(theme.temp_color(t_avg)),
-                ),
-                Span::styled(
-                    format!("/{t_max:.0}°"),
-                    Style::default().fg(theme.temp_color(t_max)),
-                ),
-                Span::styled("  pwr ", Style::default().fg(theme.text_dim)),
-                Span::styled(format!("{p_avg:.0}W"), Style::default().fg(theme.text)),
-                Span::styled("  mem ", Style::default().fg(theme.text_dim)),
-                Span::styled(
-                    format!("{m_avg:.0}%"),
-                    Style::default().fg(theme.percent_color(m_avg)),
-                ),
-            ])
-        })
-        .collect()
+                Style::default().fg(theme.text_dim),
+            ));
+        }
+
+        lines.push(Line::from(pwr_spans));
+    }
+
+    lines
 }
 
 fn format_rate(bytes_per_sec: f64) -> String {

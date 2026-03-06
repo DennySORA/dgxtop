@@ -37,9 +37,9 @@ See [Installation](#installation) for more options.
 |----------|---------|
 | **Utilization** | GPU %, Memory controller %, per-process SM utilization |
 | **Memory** | VRAM used/total/free, BAR1 usage, per-process GPU memory |
-| **Bandwidth** | Memory bandwidth utilization (actual/theoretical GB/s), PCIe TX/RX throughput |
-| **Thermal** | Temperature (with slowdown/shutdown thresholds), fan speed |
-| **Power** | Draw/limit (watts), usage %, total energy consumption (kWh) |
+| **Bandwidth** | Memory bandwidth utilization (actual/theoretical GB/s), unified-memory auto-detection (LPDDR5X), PCIe TX/RX throughput with 1/6/12/24h avg/max stats |
+| **Thermal** | Temperature (with slowdown/shutdown thresholds), fan speed, 1/6/12/24h avg/max |
+| **Power** | Draw/limit (watts), usage %, total energy consumption (kWh), 1/6/12/24h avg/max/cumulative energy |
 | **Clock** | Graphics, SM, Memory, Video frequencies (current/max MHz) |
 | **State** | Performance state (P0–P15), throttle reasons, compute mode, persistence mode |
 | **Health** | ECC errors (corrected/uncorrected), retired pages (SBE/DBE) |
@@ -59,7 +59,7 @@ See [Installation](#installation) for more options.
 ### Time-Series Analytics
 
 - **Line charts** for GPU utilization, memory, temperature, and power with Braille markers
-- **1/6/12/24h statistics** — average and max for CPU, Memory, GPU; avg R/W for Disk; cumulative ↓/↑ for Network
+- **1/6/12/24h statistics** — avg/max for CPU, Memory, GPU utilization, temperature, power (with cumulative kWh), memory, PCIe TX/RX; avg R/W for Disk; cumulative ↓/↑ for Network
 - **Progressive display** — stats windows only appear after enough data has been collected
 - **Minute-resolution aggregation** — memory-efficient 24h storage (~28KB per metric)
 
