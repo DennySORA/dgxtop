@@ -16,15 +16,37 @@ pub struct GpuStats {
     pub clock_graphics_mhz: f64,
     pub clock_max_graphics_mhz: f64,
     pub clock_memory_mhz: f64,
+    pub clock_sm_mhz: f64,
+    pub clock_video_mhz: f64,
     pub memory_used_bytes: u64,
     pub memory_total_bytes: u64,
     pub memory_free_bytes: u64,
     #[serde(default)]
     pub memory_is_shared: bool,
+    pub memory_bus_width_bits: Option<u32>,
     pub pcie_tx_bytes_per_sec: Option<u64>,
     pub pcie_rx_bytes_per_sec: Option<u64>,
+    pub pcie_gen: Option<u32>,
+    pub pcie_width: Option<u32>,
+    pub pcie_max_gen: Option<u32>,
+    pub pcie_max_width: Option<u32>,
     pub ecc_errors_corrected: Option<u64>,
     pub ecc_errors_uncorrected: Option<u64>,
+    pub bar1_used_bytes: Option<u64>,
+    pub bar1_total_bytes: Option<u64>,
+    pub performance_state: Option<String>,
+    pub throttle_reasons: Vec<String>,
+    pub compute_mode: Option<String>,
+    pub persistence_mode: Option<bool>,
+    pub uuid: Option<String>,
+    pub serial: Option<String>,
+    pub encoder_utilization: Option<f64>,
+    pub decoder_utilization: Option<f64>,
+    pub retired_pages_sbe: Option<u64>,
+    pub retired_pages_dbe: Option<u64>,
+    pub temp_shutdown: Option<f64>,
+    pub temp_slowdown: Option<f64>,
+    pub total_energy_joules: Option<f64>,
 }
 
 impl GpuStats {
@@ -47,6 +69,22 @@ impl GpuStats {
             return 0.0;
         }
         (self.clock_graphics_mhz / self.clock_max_graphics_mhz) * 100.0
+    }
+
+    /// Theoretical peak memory bandwidth in GB/s.
+    /// Formula: mem_clock_mhz * bus_width_bits * 2 (DDR) / 8 / 1000
+    pub fn theoretical_mem_bandwidth_gbps(&self) -> Option<f64> {
+        let bus_width = self.memory_bus_width_bits? as f64;
+        if self.clock_memory_mhz <= 0.0 || bus_width <= 0.0 {
+            return None;
+        }
+        Some(self.clock_memory_mhz * bus_width * 2.0 / 8.0 / 1000.0)
+    }
+
+    /// Estimated actual memory bandwidth in GB/s based on utilization.
+    pub fn actual_mem_bandwidth_gbps(&self) -> Option<f64> {
+        let theoretical = self.theoretical_mem_bandwidth_gbps()?;
+        Some(theoretical * self.utilization_memory / 100.0)
     }
 }
 
