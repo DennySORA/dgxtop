@@ -1,7 +1,10 @@
 use std::ffi::OsStr;
 
 use nvml_wrapper::Nvml;
-use nvml_wrapper::enum_wrappers::device::{Clock, TemperatureSensor};
+use nvml_wrapper::bitmasks::device::ThrottleReasons;
+use nvml_wrapper::enum_wrappers::device::{
+    Clock, RetirementCause, TemperatureSensor, TemperatureThreshold,
+};
 use nvml_wrapper::enums::device::UsedGpuMemory;
 
 use crate::domain::gpu::{GpuStats, NvLinkStats};
@@ -125,6 +128,38 @@ impl GpuCollector {
         usage_by_pid.values().copied().sum()
     }
 
+    fn throttle_reasons_to_strings(reasons: ThrottleReasons) -> Vec<String> {
+        let mut result = Vec::new();
+        if reasons.contains(ThrottleReasons::GPU_IDLE) {
+            result.push("Idle".to_owned());
+        }
+        if reasons.contains(ThrottleReasons::APPLICATIONS_CLOCKS_SETTING) {
+            result.push("AppClocks".to_owned());
+        }
+        if reasons.contains(ThrottleReasons::SW_POWER_CAP) {
+            result.push("SwPowerCap".to_owned());
+        }
+        if reasons.contains(ThrottleReasons::HW_SLOWDOWN) {
+            result.push("HwSlowdown".to_owned());
+        }
+        if reasons.contains(ThrottleReasons::SYNC_BOOST) {
+            result.push("SyncBoost".to_owned());
+        }
+        if reasons.contains(ThrottleReasons::SW_THERMAL_SLOWDOWN) {
+            result.push("SwThermal".to_owned());
+        }
+        if reasons.contains(ThrottleReasons::HW_THERMAL_SLOWDOWN) {
+            result.push("HwThermal".to_owned());
+        }
+        if reasons.contains(ThrottleReasons::HW_POWER_BRAKE_SLOWDOWN) {
+            result.push("HwPowerBrake".to_owned());
+        }
+        if reasons.contains(ThrottleReasons::DISPLAY_CLOCK_SETTING) {
+            result.push("DisplayClock".to_owned());
+        }
+        result
+    }
+
     fn collect_device(&self, index: u32) -> Result<GpuStats> {
         let device = self.nvml.device_by_index(index)?;
 
@@ -150,6 +185,8 @@ impl GpuCollector {
             .ok()
             .map(|c| c as f64);
         let clock_mem = device.clock_info(Clock::Memory).ok().map(|c| c as f64);
+        let clock_sm = device.clock_info(Clock::SM).ok().map(|c| c as f64);
+        let clock_video = device.clock_info(Clock::Video).ok().map(|c| c as f64);
 
         let memory_info = device.memory_info().ok();
         let (memory_used_bytes, memory_total_bytes, memory_free_bytes, memory_is_shared) =
@@ -190,6 +227,74 @@ impl GpuCollector {
             )
             .ok();
 
+        // Memory bus width
+        let memory_bus_width = device.memory_bus_width().ok();
+
+        // PCIe link info
+        let pcie_gen = device.current_pcie_link_gen().ok();
+        let pcie_width = device.current_pcie_link_width().ok();
+        let pcie_max_gen = device.max_pcie_link_gen().ok();
+        let pcie_max_width = device.max_pcie_link_width().ok();
+
+        // BAR1 memory
+        let bar1 = device.bar1_memory_info().ok();
+
+        // Performance state
+        let perf_state = device.performance_state().ok().map(|ps| format!("{ps:?}"));
+
+        // Throttle reasons
+        let throttle = device
+            .current_throttle_reasons()
+            .ok()
+            .map(Self::throttle_reasons_to_strings)
+            .unwrap_or_default();
+
+        // Compute mode
+        let compute_mode = device.compute_mode().ok().map(|cm| format!("{cm:?}"));
+
+        // Persistence mode
+        let persistence = device.is_in_persistent_mode().ok();
+
+        // UUID and serial
+        let uuid = device.uuid().ok();
+        let serial = device.serial().ok();
+
+        // Encoder/Decoder utilization
+        let enc_util = device
+            .encoder_utilization()
+            .ok()
+            .map(|u| u.utilization as f64);
+        let dec_util = device
+            .decoder_utilization()
+            .ok()
+            .map(|u| u.utilization as f64);
+
+        // Retired pages
+        let retired_sbe = device
+            .retired_pages(RetirementCause::MultipleSingleBitEccErrors)
+            .ok()
+            .map(|v| v.len() as u64);
+        let retired_dbe = device
+            .retired_pages(RetirementCause::DoubleBitEccError)
+            .ok()
+            .map(|v| v.len() as u64);
+
+        // Temperature thresholds
+        let temp_shutdown = device
+            .temperature_threshold(TemperatureThreshold::Shutdown)
+            .ok()
+            .map(|t| t as f64);
+        let temp_slowdown = device
+            .temperature_threshold(TemperatureThreshold::Slowdown)
+            .ok()
+            .map(|t| t as f64);
+
+        // Total energy consumption
+        let energy = device
+            .total_energy_consumption()
+            .ok()
+            .map(|mj| mj as f64 / 1000.0); // millijoules -> joules
+
         Ok(GpuStats {
             index,
             name,
@@ -202,14 +307,36 @@ impl GpuCollector {
             clock_graphics_mhz: clock_graphics.unwrap_or(0.0),
             clock_max_graphics_mhz: clock_max.unwrap_or(0.0),
             clock_memory_mhz: clock_mem.unwrap_or(0.0),
+            clock_sm_mhz: clock_sm.unwrap_or(0.0),
+            clock_video_mhz: clock_video.unwrap_or(0.0),
             memory_used_bytes,
             memory_total_bytes,
             memory_free_bytes,
             memory_is_shared,
+            memory_bus_width_bits: memory_bus_width,
             pcie_tx_bytes_per_sec: pcie_tx,
             pcie_rx_bytes_per_sec: pcie_rx,
+            pcie_gen,
+            pcie_width,
+            pcie_max_gen,
+            pcie_max_width,
             ecc_errors_corrected: ecc_corrected,
             ecc_errors_uncorrected: ecc_uncorrected,
+            bar1_used_bytes: bar1.as_ref().map(|b| b.used),
+            bar1_total_bytes: bar1.as_ref().map(|b| b.total),
+            performance_state: perf_state,
+            throttle_reasons: throttle,
+            compute_mode,
+            persistence_mode: persistence,
+            uuid,
+            serial,
+            encoder_utilization: enc_util,
+            decoder_utilization: dec_util,
+            retired_pages_sbe: retired_sbe,
+            retired_pages_dbe: retired_dbe,
+            temp_shutdown,
+            temp_slowdown,
+            total_energy_joules: energy,
         })
     }
 

@@ -35,29 +35,42 @@ See [Installation](#installation) for more options.
 
 | Category | Metrics |
 |----------|---------|
-| **Utilization** | GPU %, Memory %, per-process SM utilization |
-| **Memory** | VRAM used/total/free, per-process GPU memory |
-| **Thermal** | Temperature, fan speed |
-| **Power** | Draw/limit (watts), usage percentage |
-| **Clock** | Graphics frequency, memory frequency, max frequency |
-| **Health** | ECC errors (corrected/uncorrected), PCIe throughput |
-| **Topology** | NVLink active links, remote GPU mapping |
+| **Utilization** | GPU %, Memory controller %, per-process SM utilization |
+| **Memory** | VRAM used/total/free, BAR1 usage, per-process GPU memory |
+| **Bandwidth** | Memory bandwidth utilization (actual/theoretical GB/s), PCIe TX/RX throughput |
+| **Thermal** | Temperature (with slowdown/shutdown thresholds), fan speed |
+| **Power** | Draw/limit (watts), usage %, total energy consumption (kWh) |
+| **Clock** | Graphics, SM, Memory, Video frequencies (current/max MHz) |
+| **State** | Performance state (P0–P15), throttle reasons, compute mode, persistence mode |
+| **Health** | ECC errors (corrected/uncorrected), retired pages (SBE/DBE) |
+| **Topology** | NVLink active links with remote GPU mapping, PCIe Gen/Width |
+| **Codec** | Encoder/Decoder utilization % |
+| **Identity** | UUID, serial number |
 
 ### System Monitoring
 
 | Category | Metrics |
 |----------|---------|
-| **CPU** | Aggregate and per-core usage, user/system/iowait breakdown, temperature, frequency |
+| **CPU** | Aggregate and per-core usage (htop-style), user/system/iowait breakdown, temperature, frequency, **load average** (1/5/15m), **tasks** (running/total) |
 | **Memory** | RAM used/total, buffers, cached, available, swap usage |
-| **Disk I/O** | Per-device read/write throughput, IOPS, await latency, queue depth |
-| **Network** | Per-interface RX/TX throughput, packet rates, errors, dropped packets |
+| **Disk I/O** | Per-device read/write throughput, IOPS, await latency, sorted by throughput |
+| **Network** | Per-interface RX/TX throughput, errors, sorted by activity |
+
+### Time-Series Analytics
+
+- **Line charts** for GPU utilization, memory, temperature, and power with Braille markers
+- **1/6/12/24h statistics** — average and max for CPU, Memory, GPU; avg R/W for Disk; cumulative ↓/↑ for Network
+- **Progressive display** — stats windows only appear after enough data has been collected
+- **Minute-resolution aggregation** — memory-efficient 24h storage (~28KB per metric)
 
 ### Interactive TUI
 
-- **Three Views** — Overview dashboard, GPU detail with history charts, full-screen process table
+- **Three Views** — Overview dashboard, GPU detail (full-page per-GPU), full-screen process table
 - **Vim Keybindings** — Navigate with `j/k`, switch tabs with `1/2/3`, GPU selection with `h/l`
+- **Device Selection** — Cycle network interfaces (`n/N`), disk devices (`d/D`) with chart/stats following selection
 - **Process Management** — Sort by GPU mem/utilization/CPU/PID, filter by name, kill with confirmation
-- **Visual Design** — Rounded panels, gradient gauges with half-block precision, sparkline history, alternating row colors, color-coded thresholds
+- **Responsive Layout** — Auto-adapts to terminal size, conditionally shows charts/stats based on available space
+- **Visual Design** — Rounded panels, gradient gauges, line charts, alternating row colors, color-coded thresholds
 
 #### Multi-GPU Overview with Active Workloads
 
@@ -127,6 +140,7 @@ dgxtop -t green
 | `-i, --interval <SECS>` | Update interval in seconds (0.1–10.0) | `1.0` |
 | `-t, --theme <NAME>` | Color theme: `cyan`, `green`, `amber` | `cyan` |
 | `--no-gpu` | Disable GPU monitoring | `false` |
+| `--net-max <N>` | Max visible network interfaces / disk devices (1–20) | `3` |
 | `--log-level <LEVEL>` | Log level: `error`, `warn`, `info`, `debug` | `warn` |
 
 ### Keyboard Shortcuts
@@ -142,15 +156,17 @@ dgxtop -t green
 | `r` | Reverse sort order (in sort mode) |
 | `/` | Filter processes by name/PID/user |
 | `K` | Kill selected process (with confirmation) |
-| `e` | Toggle per-core CPU display |
+| `e` | Toggle per-core CPU view (htop-style) |
+| `n` / `N` | Cycle network interface |
+| `d` / `D` | Cycle disk device |
 | `+` / `-` | Increase / decrease refresh speed |
 | `?` | Toggle help overlay |
 
 ### Views
 
-**Overview** — Compact dashboard with CPU gauge, memory bars, GPU cards, disk I/O table, network table, and process list. All key metrics at a glance.
+**Overview** — Responsive dashboard with CPU gauge (load average, tasks, htop per-core toggle), memory bars, GPU cards, disk I/O and network panels with line charts and 1/6/12/24h statistics. Device selection highlights chart/stats for the chosen interface or disk.
 
-**GPU Detail** — Per-GPU cards with detailed metrics (utilization, VRAM, power, clock, temperature, ECC, PCIe) and history sparkline charts for utilization, memory, and temperature.
+**GPU Detail** — Full-page single-GPU view with comprehensive metrics: utilization, VRAM, **memory bandwidth** (actual/theoretical GB/s), BAR1, thermal (with thresholds), power (with energy kWh), **throttle reasons**, P-state, all clock domains (Graphics/SM/Memory/Video), PCIe info, **NVLink topology**, encoder/decoder, ECC, retired pages, compute mode, UUID — plus time-series charts and per-GPU process list.
 
 ![dgxtop — GPU Detail view](docs/screenshot-gpu-detail.png)
 
@@ -179,12 +195,19 @@ dgxtop -t green
 └─────────────────────────────────────────────────────────────────────┘
 
 Collectors (called on each Tick):
-  ├── GpuCollector        (NVML: utilization, temp, power, clock, memory, ECC, PCIe)
+  ├── GpuCollector        (NVML: utilization, temp, power, clocks, memory, bandwidth,
+  │                         ECC, PCIe, NVLink, BAR1, throttle, P-state, encoder/decoder,
+  │                         retired pages, energy, UUID, serial)
   ├── GpuProcessCollector (NVML + /proc: per-process GPU/CPU/memory stats)
-  ├── CpuCollector        (/proc/stat: per-core usage, frequency, temperature)
+  ├── CpuCollector        (/proc/stat + /proc/loadavg: per-core usage, frequency,
+  │                         temperature, load average, task count)
   ├── MemoryCollector     (/proc/meminfo: RAM, swap, buffers, cached)
   ├── DiskCollector       (/proc/diskstats: per-device throughput, IOPS, latency)
   └── NetworkCollector    (/sys/class/net: per-interface RX/TX, packets, errors)
+
+History (per metric):
+  ├── RingBuffer          (short-term: 300 samples for charts)
+  └── TimeWindowAggregator (long-term: minute-resolution buckets for 24h stats)
 ```
 
 ## Requirements

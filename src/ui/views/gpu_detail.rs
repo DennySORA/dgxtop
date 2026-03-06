@@ -6,11 +6,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Axis, Block, BorderType, Borders, Chart, Dataset, GraphType, Paragraph};
 
 use crate::app::AppState;
-use crate::domain::gpu::GpuHistory;
+use crate::domain::gpu::{GpuHistory, GpuStats};
 use crate::ui::theme::Theme;
-use crate::ui::widgets::gradient_gauge::GradientGauge;
 
-/// Render the GPU detail view with per-GPU cards showing full metrics and charts.
+/// Render the GPU detail view — single selected GPU with full metrics.
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     if state.gpus.is_empty() {
         let block = Block::default()
@@ -26,324 +25,498 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
         let inner = block.inner(area);
         frame.render_widget(block, area);
         frame.render_widget(
-            Paragraph::new(Line::from(vec![Span::styled(
+            Paragraph::new(Line::from(Span::styled(
                 "  No GPUs detected",
                 Style::default().fg(theme.text_dim),
-            )])),
+            ))),
             inner,
         );
         return;
     }
 
-    let card_height = 14u16;
-    let constraints: Vec<Constraint> = state
-        .gpus
-        .iter()
-        .map(|_| Constraint::Length(card_height))
-        .chain(std::iter::once(Constraint::Fill(1)))
-        .collect();
+    let idx = state.selected_gpu_index.min(state.gpus.len() - 1);
+    let gpu = &state.gpus[idx];
 
-    let areas = Layout::vertical(constraints).split(area);
-
-    for (i, gpu) in state.gpus.iter().enumerate() {
-        if i >= areas.len() {
-            break;
-        }
-        let is_selected = i == state.selected_gpu_index;
-        render_gpu_detail_card(frame, areas[i], gpu, state, i, is_selected, theme);
-    }
-}
-
-fn render_gpu_detail_card(
-    frame: &mut Frame,
-    area: Rect,
-    gpu: &crate::domain::gpu::GpuStats,
-    state: &AppState,
-    index: usize,
-    is_selected: bool,
-    theme: &Theme,
-) {
-    let border_color = if is_selected {
-        theme.border_active
+    // Title with GPU selector hint
+    let gpu_selector = if state.gpus.len() > 1 {
+        format!(" [{}/{}] h/l to switch ", idx + 1, state.gpus.len())
     } else {
-        theme.border
+        String::new()
     };
-
-    let title = format!("GPU {} — {}", gpu.index, gpu.name);
+    let p_state = gpu.performance_state.as_deref().unwrap_or("—");
+    let title = format!(
+        " GPU {} — {} │ P:{p_state}{gpu_selector}",
+        gpu.index, gpu.name
+    );
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color))
+        .border_style(Style::default().fg(theme.border_active))
         .title(Span::styled(
-            format!(" {title} "),
+            title,
             Style::default()
-                .fg(if is_selected {
-                    theme.primary
-                } else {
-                    theme.text
-                })
+                .fg(theme.primary)
                 .add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if inner.height < 4 || inner.width < 30 {
+    if inner.height < 4 || inner.width < 40 {
         return;
     }
 
-    let [top_area, stats_area] =
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(4)]).areas(inner);
+    // Split: metrics left, charts right
+    let [left_col, right_col] =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(inner);
 
-    let [metrics_area, charts_area] =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .areas(top_area);
+    render_metrics_column(frame, left_col, gpu, state, idx, theme);
+    render_charts_column(frame, right_col, state, idx, theme);
+}
 
-    // ── Metrics column ──
-    let [
-        util_label,
-        util_bar,
-        mem_label,
-        mem_bar,
-        power_area,
-        clock_area,
-        detail_area,
-    ] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Fill(1),
-    ])
-    .areas(metrics_area);
+// ── Left column: all metrics ─────────────────────────────────────────
 
-    // Utilization
-    let util_pct = gpu.utilization_gpu;
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(" Util  ", Style::default().fg(theme.text_muted)),
-            Span::styled(
-                format!("{util_pct:.1}%"),
-                Style::default()
-                    .fg(theme.percent_color(util_pct))
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ])),
-        util_label,
-    );
-    let gauge = GradientGauge::new(util_pct / 100.0)
-        .colors(theme.gauge_low, theme.gauge_mid, theme.gauge_high)
-        .bg_color(theme.gauge_bg);
-    frame.render_widget(
-        gauge,
-        Rect::new(
-            util_bar.x + 1,
-            util_bar.y,
-            util_bar.width.saturating_sub(2),
-            1,
-        ),
-    );
+fn render_metrics_column(
+    frame: &mut Frame,
+    area: Rect,
+    gpu: &GpuStats,
+    state: &AppState,
+    _idx: usize,
+    theme: &Theme,
+) {
+    let mut lines: Vec<Line> = Vec::new();
 
-    // VRAM
+    // ── Utilization & Memory ──
+    lines.push(section_header("Utilization & Memory", theme));
+    lines.push(metric_line(
+        "GPU ",
+        &format!("{:.1}%", gpu.utilization_gpu),
+        theme.percent_color(gpu.utilization_gpu),
+        theme,
+    ));
     let mem_pct = gpu.memory_usage_percent();
-    let mem_gib_used = gpu.memory_used_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
-    let mem_gib_total = gpu.memory_total_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
-    let memory_label = if gpu.memory_is_shared {
-        " Memory GPU "
-    } else {
-        " VRAM  "
-    };
-    let memory_value = if gpu.memory_total_bytes > 0 {
-        format!("{mem_gib_used:.1} / {mem_gib_total:.1} GB")
-    } else if gpu.memory_is_shared {
-        format!("{mem_gib_used:.1} GB used")
-    } else {
-        "N/A".to_owned()
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(memory_label, Style::default().fg(theme.text_muted)),
-            Span::styled(memory_value, Style::default().fg(theme.text)),
-            Span::styled(
-                format!("  {mem_pct:.1}%"),
-                Style::default()
-                    .fg(theme.percent_color(mem_pct))
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ])),
+    let mem_gib_used = gpu.memory_used_bytes as f64 / GIB;
+    let mem_gib_total = gpu.memory_total_bytes as f64 / GIB;
+    let mem_label = if gpu.memory_is_shared { "MGP " } else { "VRAM" };
+    lines.push(metric_line(
         mem_label,
-    );
-    let mem_gauge = GradientGauge::new(mem_pct / 100.0)
-        .colors(theme.gauge_low, theme.gauge_mid, theme.gauge_high)
-        .bg_color(theme.gauge_bg);
-    frame.render_widget(
-        mem_gauge,
-        Rect::new(mem_bar.x + 1, mem_bar.y, mem_bar.width.saturating_sub(2), 1),
-    );
+        &format!("{mem_gib_used:.1}/{mem_gib_total:.0}G ({mem_pct:.0}%)"),
+        theme.percent_color(mem_pct),
+        theme,
+    ));
 
-    // Power
+    // Memory bandwidth
+    lines.push(metric_line(
+        "MemBW",
+        &format!(
+            "{:.0}% util{}",
+            gpu.utilization_memory,
+            gpu.actual_mem_bandwidth_gbps()
+                .map(|bw| format!(
+                    " ~{bw:.0}/{:.0} GB/s",
+                    gpu.theoretical_mem_bandwidth_gbps().unwrap_or(0.0)
+                ))
+                .unwrap_or_default()
+        ),
+        theme.percent_color(gpu.utilization_memory),
+        theme,
+    ));
+
+    if let (Some(used), Some(total)) = (gpu.bar1_used_bytes, gpu.bar1_total_bytes) {
+        let bar1_pct = if total > 0 {
+            used as f64 / total as f64 * 100.0
+        } else {
+            0.0
+        };
+        lines.push(metric_line(
+            "BAR1",
+            &format!(
+                "{:.0}/{:.0}M ({bar1_pct:.0}%)",
+                used as f64 / MIB,
+                total as f64 / MIB
+            ),
+            theme.text_dim,
+            theme,
+        ));
+    }
+
+    // ── Thermal & Power ──
+    lines.push(Line::default());
+    lines.push(section_header("Thermal & Power", theme));
+
+    let temp_extra = match (gpu.temp_slowdown, gpu.temp_shutdown) {
+        (Some(slow), Some(shut)) => format!(" (slow:{slow:.0}° shut:{shut:.0}°)"),
+        _ => String::new(),
+    };
+    lines.push(metric_line(
+        "Temp",
+        &format!("{:.0}°C{temp_extra}", gpu.temperature),
+        theme.temp_color(gpu.temperature),
+        theme,
+    ));
+
+    if let Some(fan) = gpu.fan_speed {
+        lines.push(metric_line("Fan", &format!("{fan:.0}%"), theme.text, theme));
+    }
+
     let power_pct = gpu.power_usage_percent();
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(" Power ", Style::default().fg(theme.text_muted)),
-            Span::styled(
-                format!(
-                    "⚡ {:.0}W / {:.0}W",
-                    gpu.power_draw_watts, gpu.power_limit_watts
-                ),
-                Style::default().fg(theme.percent_color(power_pct)),
-            ),
-            Span::styled(
-                format!("  ({power_pct:.0}%)"),
-                Style::default().fg(theme.text_dim),
-            ),
-        ])),
-        power_area,
-    );
+    lines.push(metric_line(
+        "Power",
+        &format!(
+            "{:.0}/{:.0}W ({power_pct:.0}%)",
+            gpu.power_draw_watts, gpu.power_limit_watts
+        ),
+        theme.percent_color(power_pct),
+        theme,
+    ));
 
-    // Clock
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(" Clock ", Style::default().fg(theme.text_muted)),
-            Span::styled(
-                format!(
-                    "{:.0} / {:.0} MHz",
-                    gpu.clock_graphics_mhz, gpu.clock_max_graphics_mhz
-                ),
-                Style::default().fg(theme.text),
-            ),
-            Span::styled(
-                format!("  Mem: {:.0} MHz", gpu.clock_memory_mhz),
-                Style::default().fg(theme.text_dim),
-            ),
-        ])),
-        clock_area,
-    );
-
-    // Detail
-    if detail_area.height > 0 {
-        let mut details = vec![Span::styled(
-            format!(" Temp: {:.0}°C", gpu.temperature),
-            Style::default()
-                .fg(theme.temp_color(gpu.temperature))
-                .add_modifier(Modifier::BOLD),
-        )];
-
-        if let Some(fan) = gpu.fan_speed {
-            details.push(Span::styled(
-                format!("  Fan: {fan:.0}%"),
-                Style::default().fg(theme.text_dim),
-            ));
-        }
-
-        if gpu.memory_is_shared {
-            details.push(Span::styled(
-                "  Shared Memory",
-                Style::default().fg(theme.text_muted),
-            ));
-        }
-
-        if let Some(ecc) = gpu.ecc_errors_uncorrected {
-            let ecc_color = if ecc > 0 { theme.danger } else { theme.success };
-            details.push(Span::styled(
-                format!("  ECC: {ecc}"),
-                Style::default().fg(ecc_color),
-            ));
-        }
-
-        if let (Some(tx), Some(rx)) = (gpu.pcie_tx_bytes_per_sec, gpu.pcie_rx_bytes_per_sec) {
-            details.push(Span::styled(
-                format!(
-                    "  PCIe: ↑{} ↓{}",
-                    format_rate(tx as f64),
-                    format_rate(rx as f64)
-                ),
-                Style::default().fg(theme.text_dim),
-            ));
-        }
-
-        frame.render_widget(Paragraph::new(Line::from(details)), detail_area);
+    if let Some(energy_j) = gpu.total_energy_joules {
+        let kwh = energy_j / 3_600_000.0;
+        lines.push(metric_line(
+            "Energy",
+            &format!("{kwh:.2} kWh"),
+            theme.text_dim,
+            theme,
+        ));
     }
 
-    // ── Charts column (line charts with time axis) ──
-    if charts_area.width > 8 {
-        let [label1, chart1, label2, chart2, label3, chart3] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Fill(1),
-            Constraint::Length(1),
-            Constraint::Fill(1),
-            Constraint::Length(1),
-            Constraint::Fill(1),
-        ])
-        .areas(charts_area);
-
-        if let Some(history) = state.gpu_histories.get(index) {
-            // Utilization line chart
-            frame.render_widget(
-                Paragraph::new(Span::styled(
-                    " Utilization",
-                    Style::default().fg(theme.text_muted),
-                )),
-                label1,
-            );
-            render_metric_chart(
-                frame,
-                chart1,
-                &history.utilization.to_chart_data(),
-                0.0,
-                100.0,
-                theme.primary,
-                theme,
-            );
-
-            // Memory line chart
-            frame.render_widget(
-                Paragraph::new(Span::styled(
-                    " Memory",
-                    Style::default().fg(theme.text_muted),
-                )),
-                label2,
-            );
-            render_metric_chart(
-                frame,
-                chart2,
-                &history.memory_usage.to_chart_data(),
-                0.0,
-                100.0,
-                theme.accent,
-                theme,
-            );
-
-            // Temperature line chart
-            frame.render_widget(
-                Paragraph::new(Span::styled(
-                    " Temperature",
-                    Style::default().fg(theme.text_muted),
-                )),
-                label3,
-            );
-            let temp_max = history.temperature.max_value().max(100.0);
-            render_metric_chart(
-                frame,
-                chart3,
-                &history.temperature.to_chart_data(),
-                0.0,
-                temp_max,
-                theme.warning,
-                theme,
-            );
-        }
-    }
-
-    // ── Stats rows (1h/6h/12h/24h) ──
-    if stats_area.height > 0
-        && let Some(history) = state.gpu_histories.get(index)
+    // Throttle
+    let throttle_str = if gpu.throttle_reasons.is_empty() {
+        "None".to_owned()
+    } else {
+        gpu.throttle_reasons.join(", ")
+    };
+    let throttle_color = if gpu.throttle_reasons.is_empty()
+        || (gpu.throttle_reasons.len() == 1 && gpu.throttle_reasons[0] == "Idle")
     {
+        theme.success
+    } else {
+        theme.danger
+    };
+    lines.push(metric_line(
+        "Throttle",
+        &throttle_str,
+        throttle_color,
+        theme,
+    ));
+
+    // ── Clocks ──
+    lines.push(Line::default());
+    lines.push(section_header("Clocks", theme));
+    lines.push(metric_line(
+        "Graph",
+        &format!(
+            "{:.0}/{:.0} MHz",
+            gpu.clock_graphics_mhz, gpu.clock_max_graphics_mhz
+        ),
+        theme.text,
+        theme,
+    ));
+    lines.push(metric_line(
+        "SM",
+        &format!("{:.0} MHz", gpu.clock_sm_mhz),
+        theme.text_dim,
+        theme,
+    ));
+    lines.push(metric_line(
+        "Mem",
+        &format!("{:.0} MHz", gpu.clock_memory_mhz),
+        theme.text_dim,
+        theme,
+    ));
+    if gpu.clock_video_mhz > 0.0 {
+        lines.push(metric_line(
+            "Video",
+            &format!("{:.0} MHz", gpu.clock_video_mhz),
+            theme.text_dim,
+            theme,
+        ));
+    }
+
+    // ── PCIe & Connectivity ──
+    lines.push(Line::default());
+    lines.push(section_header("PCIe & Connectivity", theme));
+    if let (Some(cur_gen), Some(cur_width)) = (gpu.pcie_gen, gpu.pcie_width) {
+        let max_info = match (gpu.pcie_max_gen, gpu.pcie_max_width) {
+            (Some(mg), Some(mw)) if mg != cur_gen || mw != cur_width => {
+                format!(" (max: Gen{mg} x{mw})")
+            }
+            _ => String::new(),
+        };
+        lines.push(metric_line(
+            "PCIe",
+            &format!("Gen{cur_gen} x{cur_width}{max_info}"),
+            theme.text,
+            theme,
+        ));
+    }
+    if let (Some(tx), Some(rx)) = (gpu.pcie_tx_bytes_per_sec, gpu.pcie_rx_bytes_per_sec) {
+        lines.push(metric_line(
+            "Thru",
+            &format!(
+                "TX:{} RX:{}",
+                format_rate(tx as f64),
+                format_rate(rx as f64)
+            ),
+            theme.text_dim,
+            theme,
+        ));
+    }
+
+    // NVLink
+    let my_links: Vec<_> = state
+        .nvlink
+        .iter()
+        .filter(|l| l.gpu_index == gpu.index && l.is_active)
+        .collect();
+    if !my_links.is_empty() {
+        let remotes: Vec<String> = my_links
+            .iter()
+            .filter_map(|l| l.remote_gpu_index.map(|r| format!("GPU{r}")))
+            .collect();
+        let unique: Vec<String> = {
+            let mut v = remotes;
+            v.sort();
+            v.dedup();
+            v
+        };
+        lines.push(metric_line(
+            "NVLink",
+            &format!("{} links → {}", my_links.len(), unique.join(", ")),
+            theme.secondary,
+            theme,
+        ));
+    }
+
+    // Encoder/Decoder
+    if gpu.encoder_utilization.is_some() || gpu.decoder_utilization.is_some() {
+        let enc = gpu
+            .encoder_utilization
+            .map(|v| format!("{v:.0}%"))
+            .unwrap_or_else(|| "—".to_owned());
+        let dec = gpu
+            .decoder_utilization
+            .map(|v| format!("{v:.0}%"))
+            .unwrap_or_else(|| "—".to_owned());
+        lines.push(metric_line(
+            "Enc/Dec",
+            &format!("{enc} / {dec}"),
+            theme.text_dim,
+            theme,
+        ));
+    }
+
+    // ── Health ──
+    lines.push(Line::default());
+    lines.push(section_header("Health & Info", theme));
+    if let (Some(corr), Some(uncorr)) = (gpu.ecc_errors_corrected, gpu.ecc_errors_uncorrected) {
+        let ecc_color = if uncorr > 0 {
+            theme.danger
+        } else if corr > 0 {
+            theme.warning
+        } else {
+            theme.success
+        };
+        lines.push(metric_line(
+            "ECC",
+            &format!("corr:{corr} uncorr:{uncorr}"),
+            ecc_color,
+            theme,
+        ));
+    }
+    if let (Some(sbe), Some(dbe)) = (gpu.retired_pages_sbe, gpu.retired_pages_dbe) {
+        let ret_color = if dbe > 0 {
+            theme.danger
+        } else if sbe > 0 {
+            theme.warning
+        } else {
+            theme.success
+        };
+        lines.push(metric_line(
+            "Retired",
+            &format!("SBE:{sbe} DBE:{dbe}"),
+            ret_color,
+            theme,
+        ));
+    }
+    if let Some(cm) = &gpu.compute_mode {
+        lines.push(metric_line("Compute", cm, theme.text_dim, theme));
+    }
+    if let Some(persist) = gpu.persistence_mode {
+        lines.push(metric_line(
+            "Persist",
+            if persist { "On" } else { "Off" },
+            if persist {
+                theme.success
+            } else {
+                theme.text_muted
+            },
+            theme,
+        ));
+    }
+    if let Some(uuid) = &gpu.uuid {
+        let short = if uuid.len() > 20 { &uuid[..20] } else { uuid };
+        lines.push(metric_line("UUID", short, theme.text_muted, theme));
+    }
+
+    // ── Per-GPU processes ──
+    let gpu_procs: Vec<_> = state
+        .gpu_processes
+        .iter()
+        .filter(|p| p.gpu_index == gpu.index)
+        .collect();
+    if !gpu_procs.is_empty() {
+        lines.push(Line::default());
+        let proc_title = format!("Processes ({})", gpu_procs.len());
+        lines.push(section_header(&proc_title, theme));
+        for p in gpu_procs.iter().take(6) {
+            let mem_str = format_bytes(p.gpu_memory_bytes);
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {:<7}", p.pid),
+                    Style::default().fg(theme.text_dim),
+                ),
+                Span::styled(
+                    format!("{:>4.0}%", p.gpu_utilization),
+                    Style::default().fg(theme.percent_color(p.gpu_utilization)),
+                ),
+                Span::styled(format!(" {mem_str:>7}"), Style::default().fg(theme.text)),
+                Span::styled(
+                    format!(" {}", truncate_str(&p.command, 25)),
+                    Style::default().fg(theme.text_dim),
+                ),
+            ]));
+        }
+    }
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, area);
+}
+
+// ── Right column: charts + stats ─────────────────────────────────────
+
+fn render_charts_column(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    idx: usize,
+    theme: &Theme,
+) {
+    let history = match state.gpu_histories.get(idx) {
+        Some(h) => h,
+        None => return,
+    };
+
+    // Decide how many charts fit: each needs label(1) + chart(min 2) = 3
+    let available = area.height;
+    let stats_h: u16 = 2; // stats at bottom
+    let chart_budget = available.saturating_sub(stats_h);
+    // 4 charts: util, mem, temp, power. Each gets label(1) + Fill
+    let num_charts = (chart_budget / 3).min(4) as usize;
+
+    if num_charts == 0 {
+        // Just show stats
+        if available >= stats_h {
+            let lines = build_gpu_stats_lines(history, theme);
+            frame.render_widget(Paragraph::new(lines), area);
+        }
+        return;
+    }
+
+    let mut constraints: Vec<Constraint> = Vec::new();
+    for _ in 0..num_charts {
+        constraints.push(Constraint::Length(1)); // label
+        constraints.push(Constraint::Fill(1)); // chart
+    }
+    constraints.push(Constraint::Length(stats_h)); // stats
+
+    let areas = Layout::vertical(constraints).split(area);
+
+    let chart_configs: Vec<(&str, &[f64], f64, f64, ratatui::style::Color)> = vec![
+        ("Utilization (%)", &[], 0.0, 100.0, theme.primary),
+        ("Memory (%)", &[], 0.0, 100.0, theme.accent),
+        (
+            "Temperature (°C)",
+            &[],
+            0.0,
+            history.temperature.max_value().max(100.0),
+            theme.warning,
+        ),
+        (
+            "Power (W)",
+            &[],
+            0.0,
+            history.power.max_value().max(1.0),
+            theme.danger,
+        ),
+    ];
+
+    let chart_data_sources = [
+        history.utilization.to_chart_data(),
+        history.memory_usage.to_chart_data(),
+        history.temperature.to_chart_data(),
+        history.power.to_chart_data(),
+    ];
+
+    for i in 0..num_charts {
+        let label_area = areas[i * 2];
+        let chart_area = areas[i * 2 + 1];
+        let (label, _, y_min, y_max, color) = &chart_configs[i];
+
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                format!(" {label}"),
+                Style::default().fg(theme.text_muted),
+            )),
+            label_area,
+        );
+
+        render_metric_chart(
+            frame,
+            chart_area,
+            &chart_data_sources[i],
+            *y_min,
+            *y_max,
+            *color,
+            theme,
+        );
+    }
+
+    // Stats at bottom
+    let stats_area = areas[num_charts * 2];
+    if stats_area.height > 0 {
         let lines = build_gpu_stats_lines(history, theme);
         frame.render_widget(Paragraph::new(lines), stats_area);
     }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+const MIB: f64 = 1024.0 * 1024.0;
+
+fn section_header(title: &str, theme: &Theme) -> Line<'static> {
+    Line::from(Span::styled(
+        format!(" ── {title} "),
+        Style::default()
+            .fg(theme.primary)
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn metric_line(
+    label: &str,
+    value: &str,
+    value_color: ratatui::style::Color,
+    theme: &Theme,
+) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("  {label:<7} "),
+            Style::default().fg(theme.text_muted),
+        ),
+        Span::styled(value.to_owned(), Style::default().fg(value_color)),
+    ])
 }
 
 fn render_metric_chart(
@@ -443,5 +616,32 @@ fn format_rate(bytes_per_sec: f64) -> String {
         format!("{:.0}MB/s", bytes_per_sec / (1024.0 * 1024.0))
     } else {
         format!("{:.0}KB/s", bytes_per_sec / 1024.0)
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes as f64 >= GIB {
+        format!("{:.1}GB", bytes as f64 / GIB)
+    } else if bytes as f64 >= MIB {
+        format!("{:.0}MB", bytes as f64 / MIB)
+    } else {
+        format!("{:.0}KB", bytes as f64 / 1024.0)
+    }
+}
+
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if max_len == 0 {
+        return String::new();
+    }
+    let char_count = s.chars().count();
+    if char_count <= max_len {
+        s.to_owned()
+    } else {
+        let end = s
+            .char_indices()
+            .nth(max_len.saturating_sub(1))
+            .map(|(i, _)| i)
+            .unwrap_or(s.len());
+        format!("{}…", &s[..end])
     }
 }
