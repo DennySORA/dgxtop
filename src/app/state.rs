@@ -155,7 +155,13 @@ impl AppState {
     }
 
     /// Update disk data and record history.
+    /// Preserves the selected disk by name across re-sorting.
     pub fn update_disks(&mut self, disks: Vec<DiskStats>) {
+        let prev_name = self
+            .disks
+            .get(self.selected_disk_index)
+            .map(|d| d.device_name.clone());
+
         for disk in &disks {
             self.disk_histories
                 .entry(disk.device_name.clone())
@@ -163,10 +169,25 @@ impl AppState {
                 .record(disk);
         }
         self.disks = disks;
+
+        // Re-find the previously selected device in the new order
+        if let Some(name) = prev_name {
+            self.selected_disk_index = self
+                .disks
+                .iter()
+                .position(|d| d.device_name == name)
+                .unwrap_or(0);
+        }
     }
 
     /// Update network data and record history.
+    /// Preserves the selected interface by name across re-sorting.
     pub fn update_networks(&mut self, nets: Vec<NetworkInterfaceStats>) {
+        let prev_name = self
+            .networks
+            .get(self.selected_network_index)
+            .map(|n| n.name.clone());
+
         for net in &nets {
             self.network_histories
                 .entry(net.name.clone())
@@ -174,6 +195,15 @@ impl AppState {
                 .record(net);
         }
         self.networks = nets;
+
+        // Re-find the previously selected interface in the new order
+        if let Some(name) = prev_name {
+            self.selected_network_index = self
+                .networks
+                .iter()
+                .position(|n| n.name == name)
+                .unwrap_or(0);
+        }
     }
 
     /// Sort processes by current sort column.
