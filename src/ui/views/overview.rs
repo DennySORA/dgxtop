@@ -203,7 +203,10 @@ fn render_cpu_aggregate(
 
     // ── Sparkline ──
     if sparkline_area.height > 0 {
-        let data = state.cpu_history.usage.to_sparkline_data();
+        let data = state
+            .cpu_history
+            .usage
+            .to_sparkline_data(sparkline_area.width as usize);
         let sparkline = Sparkline::default()
             .data(&data)
             .max(100)
@@ -580,7 +583,10 @@ fn render_memory_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &
 
     // ── Sparkline ──
     if sparkline_area.height > 0 {
-        let data = state.memory_history.usage.to_sparkline_data();
+        let data = state
+            .memory_history
+            .usage
+            .to_sparkline_data(sparkline_area.width as usize);
         let sparkline = Sparkline::default()
             .data(&data)
             .max(100)

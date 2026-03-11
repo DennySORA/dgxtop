@@ -32,10 +32,13 @@ impl RingBuffer {
         self.data.iter().copied().collect()
     }
 
-    /// Return data as u64 values suitable for ratatui Sparkline.
-    pub fn to_sparkline_data(&self) -> Vec<u64> {
+    /// Return the most recent `max_points` values as u64 for ratatui Sparkline.
+    /// Pass the sparkline widget width to avoid displaying stale leading data.
+    pub fn to_sparkline_data(&self, max_points: usize) -> Vec<u64> {
+        let skip = self.data.len().saturating_sub(max_points);
         self.data
             .iter()
+            .skip(skip)
             .map(|v| v.round().max(0.0) as u64)
             .collect()
     }
@@ -282,7 +285,7 @@ mod tests {
         buf.push(1.4);
         buf.push(2.6);
         buf.push(-0.5);
-        assert_eq!(buf.to_sparkline_data(), vec![1, 3, 0]);
+        assert_eq!(buf.to_sparkline_data(100), vec![1, 3, 0]);
     }
 
     #[test]

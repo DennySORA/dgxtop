@@ -153,7 +153,7 @@ impl Collector for NetworkCollector {
         }
 
         // Sort: active (up) first, then by type priority, then by current
-        // throughput descending so the busiest interface is shown first.
+        // throughput descending; tie-break by name for stability.
         stats.sort_by(|a, b| {
             b.is_up
                 .cmp(&a.is_up)
@@ -166,6 +166,7 @@ impl Collector for NetworkCollector {
                         .partial_cmp(&(a.rx_bytes_per_sec + a.tx_bytes_per_sec))
                         .unwrap_or(std::cmp::Ordering::Equal),
                 )
+                .then(a.name.cmp(&b.name))
         });
 
         self.prev_counters = current;
