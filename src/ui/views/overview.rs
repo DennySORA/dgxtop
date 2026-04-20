@@ -297,6 +297,10 @@ fn render_cpu_info_line(
         .temperature_celsius
         .map(|t| theme.temp_color(t))
         .unwrap_or(theme.text_muted);
+    let power_str = cpu
+        .power_watts
+        .map(|power| format!("{power:.1} W"))
+        .unwrap_or_else(|| "— W".to_owned());
 
     let freq_str = if cpu.frequency_mhz > 0.0 {
         format!("{:.0} MHz", cpu.frequency_mhz)
@@ -324,6 +328,8 @@ fn render_cpu_info_line(
         ),
         Span::styled("  ", Style::default()),
         Span::styled(format!(" {temp_str}"), Style::default().fg(temp_color)),
+        Span::styled("  ", Style::default()),
+        Span::styled(format!(" {power_str}"), Style::default().fg(theme.text_dim)),
         Span::styled("  ", Style::default()),
         Span::styled(format!(" {freq_str}"), Style::default().fg(theme.text_dim)),
         Span::styled("  load ", Style::default().fg(theme.text_muted)),
