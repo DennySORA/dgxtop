@@ -47,7 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | 
 
 | 类别 | 指标 |
 |------|------|
-| **CPU** | 总体及每核心利用率、用户/系统/iowait 分解、温度、频率 |
+| **CPU** | 总体及每核心利用率、用户/系统/iowait 分解、温度、功率、频率 |
 | **内存** | RAM 已用/总量、缓冲区、缓存、可用、Swap 用量 |
 | **磁盘 I/O** | 每设备读写吞吐量、IOPS、await 延迟、队列深度 |
 | **网络** | 每接口 RX/TX 吞吐量、包速率、错误、丢包 |

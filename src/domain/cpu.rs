@@ -13,6 +13,8 @@ pub struct CpuStats {
     pub frequency_mhz: f64,
     pub frequency_max_mhz: f64,
     pub temperature_celsius: Option<f64>,
+    #[serde(default)]
+    pub power_watts: Option<f64>,
     pub core_count: usize,
     pub cores: Vec<CoreStats>,
     pub load_avg_1m: f64,
