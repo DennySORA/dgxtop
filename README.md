@@ -4,14 +4,14 @@
 
 [繁體中文](docs/README.zh-TW.md) | [简体中文](docs/README.zh-CN.md) | [日本語](docs/README.ja.md)
 
-> High-performance, interactive system monitor for NVIDIA DGX systems with real-time GPU, CPU, memory, disk, and network monitoring.
+> High-performance, interactive system monitor for NVIDIA DGX systems with real-time GPU, CPU, memory, disk capacity/I/O, and network monitoring.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.92%2B-orange.svg)](https://www.rust-lang.org/)
 [![CI](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml/badge.svg)](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml)
 [![Release](https://github.com/DennySORA/dgxtop/actions/workflows/release.yml/badge.svg)](https://github.com/DennySORA/dgxtop/releases)
 
-**dgxtop** is a comprehensive system monitoring tool purpose-built for NVIDIA DGX infrastructure. It provides real-time visibility into GPU utilization, VRAM, temperature, power draw, NVLink topology, and system resources — all in an interactive terminal UI. Built in Rust with direct NVML access for maximum performance and reliability.
+**dgxtop** is a comprehensive system monitoring tool purpose-built for NVIDIA DGX infrastructure. It provides real-time visibility into GPU utilization, VRAM, temperature, power draw, NVLink topology, disk usage, and system resources — all in an interactive terminal UI. Built in Rust with direct NVML access for maximum performance and reliability.
 
 ## Quick Install
 
@@ -25,7 +25,7 @@ See [Installation](#installation) for more options.
 
 - **Direct NVML Access** — Reads GPU metrics through NVIDIA Management Library, not nvidia-smi subprocess calls. Faster, more reliable, and more detailed.
 - **DGX-Optimized** — Supports multi-GPU monitoring, NVLink topology, ECC error tracking, and PCIe throughput — features critical for DGX A100/H100/B200 and DGX Spark.
-- **Full System View** — CPU per-core utilization, memory (RAM + Swap), disk I/O (IOPS, latency, throughput), and network interfaces in a single dashboard.
+- **Full System View** — CPU per-core utilization, memory (RAM + Swap), disk capacity (Used / Free / Use%) plus I/O, and network interfaces in a single dashboard.
 - **Interactive Process Management** — Sort, filter, and kill GPU processes directly from the TUI. See per-process GPU utilization, VRAM usage, and host memory.
 - **Secure by Design** — No subprocess shell-outs, PID recycling protection, config value sanitization, and UTF-8 safe rendering. Passed deep security audit.
 
@@ -53,7 +53,7 @@ See [Installation](#installation) for more options.
 |----------|---------|
 | **CPU** | Aggregate and per-core usage (htop-style), user/system/iowait breakdown, temperature, power draw, frequency, **load average** (1/5/15m), **tasks** (running/total) |
 | **Memory** | RAM used/total, buffers, cached, available, swap usage |
-| **Disk I/O** | Per-device read/write throughput, IOPS, await latency, sorted by throughput |
+| **Disk Capacity & I/O** | Filesystem usage for mounted devices (Used / Free / Use%), per-device read/write throughput, IOPS, await latency, sorted by throughput |
 | **Network** | Per-interface RX/TX throughput, errors, sorted by activity |
 
 ### Time-Series Analytics
@@ -164,7 +164,7 @@ dgxtop -t green
 
 ### Views
 
-**Overview** — Responsive dashboard with CPU gauge (temperature, power draw, load average, tasks, htop per-core toggle), memory bars, GPU cards, disk I/O and network panels with line charts and 1/6/12/24h statistics. Device selection highlights chart/stats for the chosen interface or disk.
+**Overview** — Responsive dashboard with CPU gauge (temperature, power draw, load average, tasks, htop per-core toggle), memory bars, GPU cards, disk capacity + I/O, and network panels with line charts and 1/6/12/24h statistics. The disk table shows Used / Free / Use% for mounted filesystems, with read/write throughput, IOPS, and await latency still tracked per device. Device selection highlights chart/stats for the chosen interface or disk.
 
 **GPU Detail** — Full-page single-GPU view with comprehensive metrics: utilization, VRAM, **memory bandwidth** (actual/theoretical GB/s), BAR1, thermal (with thresholds), power (with energy kWh), **throttle reasons**, P-state, all clock domains (Graphics/SM/Memory/Video), PCIe info, **NVLink topology**, encoder/decoder, ECC, retired pages, compute mode, UUID — plus time-series charts and per-GPU process list.
 
@@ -202,7 +202,8 @@ Collectors (called on each Tick):
   ├── CpuCollector        (/proc/stat + /proc/loadavg + powercap/hwmon: per-core usage,
   │                         frequency, temperature, power draw, load average, task count)
   ├── MemoryCollector     (/proc/meminfo: RAM, swap, buffers, cached)
-  ├── DiskCollector       (/proc/diskstats: per-device throughput, IOPS, latency)
+  ├── DiskCollector       (/proc/diskstats + /sys/class/block + mountinfo/statvfs:
+  │                         filesystem Used/Free/Use%, per-device throughput, IOPS, latency)
   └── NetworkCollector    (/sys/class/net: per-interface RX/TX, packets, errors)
 
 History (per metric):
