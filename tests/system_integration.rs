@@ -59,10 +59,18 @@ fn disk_collector_returns_stats_on_second_call() {
     println!("Found {} disk devices", stats.len());
     for disk in &stats {
         println!(
-            "  {} — R:{:.1} KB/s, W:{:.1} KB/s",
+            "  {} — cap:{:.1} GB, used:{:.1} GB, avail:{:.1} GB, R:{:.1} KB/s, W:{:.1} KB/s",
             disk.device_name,
+            disk.total_bytes as f64 / 1024.0 / 1024.0 / 1024.0,
+            disk.used_bytes as f64 / 1024.0 / 1024.0 / 1024.0,
+            disk.available_bytes as f64 / 1024.0 / 1024.0 / 1024.0,
             disk.read_bytes_per_sec / 1024.0,
             disk.write_bytes_per_sec / 1024.0,
+        );
+        assert!(
+            disk.total_bytes > 0,
+            "Disk {} should report capacity",
+            disk.device_name
         );
     }
 }
