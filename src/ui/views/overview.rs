@@ -754,12 +754,12 @@ fn render_io_row(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
 }
 
 fn render_disk_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
-    let selected_name = state
-        .disks
-        .get(state.selected_disk_index)
-        .map(|d| d.device_name.as_str())
-        .unwrap_or("—");
-    let title = format!("Disk I/O [{selected_name}] (d/D)");
+    let selected_disk = state.disks.get(state.selected_disk_index);
+    let selected_name = selected_disk.map(|d| d.device_name.as_str()).unwrap_or("—");
+    let selected_capacity = selected_disk
+        .map(format_disk_capacity_summary)
+        .unwrap_or_else(|| "—".to_owned());
+    let title = format!("Disk I/O [{selected_name} {selected_capacity}] (d/D)");
     let disk_block = styled_block(&title, theme);
     let disk_inner = disk_block.inner(area);
     frame.render_widget(disk_block, area);
@@ -795,28 +795,22 @@ fn render_disk_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
     };
 
     // ── Disk table ──
-    let disk_header = Row::new(vec![
-        Cell::from("Device").style(
-            Style::default()
-                .fg(theme.text_dim)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("Read").style(
-            Style::default()
-                .fg(theme.text_dim)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("Write").style(
-            Style::default()
-                .fg(theme.text_dim)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("IOPS").style(
-            Style::default()
-                .fg(theme.text_dim)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]);
+    let show_iops = table_area.width >= 52;
+    let header_style = Style::default()
+        .fg(theme.text_dim)
+        .add_modifier(Modifier::BOLD);
+    let mut header_cells = vec![
+        Cell::from("Device").style(header_style),
+        Cell::from("Used").style(header_style),
+        Cell::from("Free").style(header_style),
+        Cell::from("Use%").style(header_style),
+        Cell::from("Read").style(header_style),
+        Cell::from("Write").style(header_style),
+    ];
+    if show_iops {
+        header_cells.push(Cell::from("IOPS").style(header_style));
+    }
+    let disk_header = Row::new(header_cells);
 
     let disk_rows: Vec<Row> = state
         .disks
@@ -837,29 +831,62 @@ fn render_disk_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
             } else {
                 theme.secondary
             };
-            Row::new(vec![
+            let usage_pct = d.usage_percent();
+            let has_filesystem_capacity = d.mount_point.is_some() && d.total_bytes > 0;
+            let capacity_color = if has_filesystem_capacity {
+                theme.percent_color(usage_pct)
+            } else {
+                theme.text_dim
+            };
+            let free_color = if has_filesystem_capacity {
+                theme.success
+            } else {
+                theme.text_dim
+            };
+            let (used, free, pct) = format_disk_capacity_columns(d);
+            let mut cells = vec![
                 Cell::from(Span::styled(
                     &d.device_name,
                     Style::default().fg(name_color),
                 )),
+                Cell::from(Span::styled(used, Style::default().fg(capacity_color))),
+                Cell::from(Span::styled(free, Style::default().fg(free_color))),
+                Cell::from(Span::styled(pct, Style::default().fg(capacity_color))),
                 Cell::from(format_throughput(d.read_bytes_per_sec)),
                 Cell::from(format_throughput(d.write_bytes_per_sec)),
-                Cell::from(format!("{:.0}/{:.0}", d.read_iops, d.write_iops)),
-            ])
-            .style(bg)
+            ];
+            if show_iops {
+                cells.push(Cell::from(format!(
+                    "{:.0}/{:.0}",
+                    d.read_iops, d.write_iops
+                )));
+            }
+            Row::new(cells).style(bg)
         })
         .collect();
 
-    let disk_table = Table::new(
-        disk_rows,
-        [
+    let disk_widths = if show_iops {
+        vec![
             Constraint::Length(10),
+            Constraint::Length(8),
+            Constraint::Length(8),
+            Constraint::Length(5),
             Constraint::Fill(1),
             Constraint::Fill(1),
             Constraint::Length(9),
-        ],
-    )
-    .header(disk_header);
+        ]
+    } else {
+        vec![
+            Constraint::Length(10),
+            Constraint::Length(8),
+            Constraint::Length(8),
+            Constraint::Length(5),
+            Constraint::Fill(1),
+            Constraint::Fill(1),
+        ]
+    };
+
+    let disk_table = Table::new(disk_rows, disk_widths).header(disk_header);
     frame.render_widget(disk_table, table_area);
 
     // ── Disk chart + stats ──
@@ -1321,6 +1348,45 @@ fn format_bytes_short(bytes: u64) -> String {
         format!("{:.0}M", bytes as f64 / (1024.0 * 1024.0))
     } else {
         format!("{:.0}K", bytes as f64 / 1024.0)
+    }
+}
+
+fn format_disk_capacity_summary(disk: &crate::domain::disk::DiskStats) -> String {
+    if disk.mount_point.is_none() || disk.total_bytes == 0 {
+        return "—".to_owned();
+    }
+
+    format!(
+        "U:{} F:{} {:.0}%",
+        format_capacity_unit(disk.used_bytes),
+        format_capacity_unit(disk.available_bytes),
+        disk.usage_percent(),
+    )
+}
+
+fn format_disk_capacity_columns(disk: &crate::domain::disk::DiskStats) -> (String, String, String) {
+    if disk.mount_point.is_none() || disk.total_bytes == 0 {
+        return ("—".to_owned(), "—".to_owned(), "—".to_owned());
+    }
+
+    (
+        format_capacity_unit(disk.used_bytes),
+        format_capacity_unit(disk.available_bytes),
+        format!("{:.0}%", disk.usage_percent()),
+    )
+}
+
+fn format_capacity_unit(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 * 1024 * 1024 {
+        format!("{:.1}T", bytes as f64 / (1024.0 * 1024.0 * 1024.0 * 1024.0))
+    } else if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.0}G", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.0}M", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.0}K", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes}B")
     }
 }
 

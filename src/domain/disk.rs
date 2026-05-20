@@ -2,10 +2,18 @@ use serde::{Deserialize, Serialize};
 
 use super::history::{RingBuffer, TimeWindowAggregator};
 
-/// I/O statistics for a single disk device.
+/// I/O and capacity statistics for a single disk device.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiskStats {
     pub device_name: String,
+    /// Total device or filesystem capacity in bytes.
+    pub total_bytes: u64,
+    /// Used filesystem capacity in bytes, when the device is mounted.
+    pub used_bytes: u64,
+    /// Available filesystem capacity in bytes, when the device is mounted.
+    pub available_bytes: u64,
+    /// Mount point used for filesystem capacity, when available.
+    pub mount_point: Option<String>,
     pub read_bytes_per_sec: f64,
     pub write_bytes_per_sec: f64,
     pub read_iops: f64,
@@ -18,6 +26,13 @@ pub struct DiskStats {
 impl DiskStats {
     pub fn total_bytes_per_sec(&self) -> f64 {
         self.read_bytes_per_sec + self.write_bytes_per_sec
+    }
+
+    pub fn usage_percent(&self) -> f64 {
+        if self.total_bytes == 0 {
+            return 0.0;
+        }
+        (self.used_bytes as f64 / self.total_bytes as f64) * 100.0
     }
 }
 
