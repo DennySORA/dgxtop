@@ -4,14 +4,14 @@
 
 [English](../README.md) | [繁體中文](README.zh-TW.md) | [日本語](README.ja.md)
 
-> 专为 NVIDIA DGX 系统打造的高性能交互式系统监控工具，支持实时 GPU、CPU、内存、磁盘及网络监控。
+> 专为 NVIDIA DGX 系统打造的高性能交互式系统监控工具，支持实时 GPU、CPU、内存、磁盘容量/I/O 及网络监控。
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.92%2B-orange.svg)](https://www.rust-lang.org/)
 [![CI](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml/badge.svg)](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml)
 [![Release](https://github.com/DennySORA/dgxtop/actions/workflows/release.yml/badge.svg)](https://github.com/DennySORA/dgxtop/releases)
 
-**dgxtop** 是一款专为 NVIDIA DGX 基础设施打造的全方位系统监控工具。通过交互式终端界面，实时呈现 GPU 利用率、VRAM、温度、功耗、NVLink 拓扑及系统资源。以 Rust 开发，直接访问 NVML 以实现最佳性能与可靠性。
+**dgxtop** 是一款专为 NVIDIA DGX 基础设施打造的全方位系统监控工具。通过交互式终端界面，实时呈现 GPU 利用率、VRAM、温度、功耗、NVLink 拓扑、磁盘使用量及系统资源。以 Rust 开发，直接访问 NVML 以实现最佳性能与可靠性。
 
 ## 快速安装
 
@@ -25,7 +25,7 @@ curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | 
 
 - **直接访问 NVML** — 通过 NVIDIA Management Library 读取 GPU 指标，非 nvidia-smi 子进程调用。更快、更可靠、更详细。
 - **DGX 专属优化** — 支持多 GPU 监控、NVLink 拓扑、ECC 错误追踪、PCIe 带宽 — 这些是 DGX A100/H100/B200 和 DGX Spark 的关键功能。
-- **完整系统视野** — 单一仪表盘涵盖 CPU 每核心利用率、内存（RAM + Swap）、磁盘 I/O（IOPS、延迟、吞吐量）及网络接口。
+- **完整系统视野** — 单一仪表盘涵盖 CPU 每核心利用率、内存（RAM + Swap）、磁盘容量（已用 / 剩余 / 使用率）与 I/O，以及网络接口。
 - **交互式进程管理** — 直接在 TUI 中排序、筛选及终止 GPU 进程。可查看每个进程的 GPU 利用率、VRAM 用量及主机内存。
 - **安全设计** — 无子进程 shell 调用、PID 回收保护、配置值消毒、UTF-8 安全渲染。已通过深度安全审查。
 
@@ -49,13 +49,14 @@ curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | 
 |------|------|
 | **CPU** | 总体及每核心利用率、用户/系统/iowait 分解、温度、功率、频率 |
 | **内存** | RAM 已用/总量、缓冲区、缓存、可用、Swap 用量 |
-| **磁盘 I/O** | 每设备读写吞吐量、IOPS、await 延迟、队列深度 |
+| **磁盘容量与 I/O** | 已挂载文件系统的容量（已用 / 剩余 / 使用率）、每设备读写吞吐量、IOPS、await 延迟 |
 | **网络** | 每接口 RX/TX 吞吐量、包速率、错误、丢包 |
 
 ### 交互式 TUI
 
 - **三种视图** — 总览仪表盘、GPU 详细信息含历史图表、全屏进程表格
 - **Vim 快捷键** — 以 `j/k` 导航、`1/2/3` 切换标签页、`h/l` 选择 GPU
+- **设备选择** — 以 `n/N` 切换网络接口、`d/D` 切换磁盘设备，图表与统计会跟随选中项
 - **进程管理** — 按 GPU 显存/利用率/CPU/PID 排序、按名称筛选、确认后终止进程
 - **视觉设计** — 圆角面板、半格精度渐变仪表、趋势图、交替行颜色、色彩编码阈值
 
@@ -138,10 +139,14 @@ dgxtop -t green
 | `/` | 按名称/PID/用户筛选进程 |
 | `K` | 终止选中的进程（需确认） |
 | `e` | 切换每核心 CPU 显示 |
+| `n` / `N` | 切换网络接口 |
+| `d` / `D` | 切换磁盘设备 |
 | `+` / `-` | 加快 / 减慢刷新速度 |
 | `?` | 显示/隐藏帮助 |
 
 ### 视图
+
+**总览** — 响应式仪表盘，包含 CPU 仪表、内存条、GPU 卡片、磁盘容量 + I/O 与网络面板。磁盘表格会显示已挂载文件系统的已用 / 剩余 / 使用率，并持续追踪每设备读写吞吐量、IOPS 与 await 延迟。
 
 **GPU 详细信息** — 每个 GPU 的详细指标（利用率、VRAM、功耗、频率、温度、ECC、PCIe）以及利用率、显存、温度的历史趋势图。
 
