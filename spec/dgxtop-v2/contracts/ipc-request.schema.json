@@ -1,0 +1,99 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "protocol_version": {
+      "const": 1
+    },
+    "request_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "adapter_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "host_generation": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2147483647
+    },
+    "type": {
+      "enum": [
+        "discover",
+        "read",
+        "shutdown"
+      ]
+    },
+    "deadline_boot_ns": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "catalog_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "config_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "cycle_id": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "read_group": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "source_slots": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 2147483647
+      }
+    }
+  },
+  "required": [
+    "protocol_version",
+    "request_id",
+    "adapter_id",
+    "host_generation",
+    "type",
+    "deadline_boot_ns",
+    "catalog_revision",
+    "config_revision",
+    "cycle_id",
+    "read_group",
+    "source_slots"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "enum": [
+              "discover",
+              "shutdown"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "source_slots": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "唯讀 Adapter IPC 請求 v1"
+}

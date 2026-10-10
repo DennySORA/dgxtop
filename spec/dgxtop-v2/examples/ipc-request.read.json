@@ -1,0 +1,16 @@
+{
+  "protocol_version": 1,
+  "request_id": "22222222-2222-4222-8222-222222222222",
+  "adapter_id": "hwmon",
+  "host_generation": 1,
+  "type": "read",
+  "deadline_boot_ns": "42500000000",
+  "catalog_revision": 1,
+  "config_revision": 1,
+  "cycle_id": "42",
+  "read_group": "temperature",
+  "source_slots": [
+    0,
+    1
+  ]
+}

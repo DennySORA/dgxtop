@@ -1,0 +1,366 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "權威候選與仲裁結果 v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "snapshot_revision": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "cycle_id": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "key": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "boot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "entity_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "metric_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.]{1,127}$"
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "host_id",
+        "boot_id",
+        "entity_id",
+        "metric_id",
+        "scope"
+      ]
+    },
+    "source_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source_generation": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "unit": {
+      "type": "string",
+      "enum": [
+        "degC",
+        "watts",
+        "bytes",
+        "bytes_per_second",
+        "percent",
+        "MHz",
+        "count",
+        "count_per_second",
+        "milliseconds",
+        "joules"
+      ]
+    },
+    "value": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "f64"
+                },
+                "value": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "type",
+                "value"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "u64"
+                },
+                "value": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,19})$"
+                }
+              },
+              "required": [
+                "type",
+                "value"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sample_kind": {
+      "type": "string",
+      "enum": [
+        "measured",
+        "derived",
+        "estimated",
+        "simulated",
+        "replay"
+      ]
+    },
+    "selection_state": {
+      "type": "string",
+      "enum": [
+        "selected",
+        "degraded",
+        "conflict",
+        "unavailable"
+      ]
+    },
+    "quality": {
+      "type": "string",
+      "enum": [
+        "verified",
+        "usable",
+        "suspect",
+        "invalid",
+        "unknown"
+      ]
+    },
+    "freshness": {
+      "type": "string",
+      "enum": [
+        "fresh",
+        "stale",
+        "unknown"
+      ],
+      "description": "最近成功讀取的新鮮度；不能等同硬體量測真的更新。"
+    },
+    "observed_boot_ns": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "映射到本機 boot clock 的實際量測時間；未知或 conflict 無單一來源時為 null，不冒用讀取時間。"
+    },
+    "committed_boot_ns": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "policy_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "candidate_source_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "maxItems": 16
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 80
+      },
+      "maxItems": 32
+    },
+    "eligible_for_history": {
+      "type": "boolean"
+    },
+    "measurement_freshness": {
+      "type": "string",
+      "enum": [
+        "fresh",
+        "stale",
+        "unknown"
+      ],
+      "description": "由可驗證裝置時間戳記／更新證據判斷；沒有證據為 unknown。"
+    },
+    "read_finished_boot_ns": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    }
+  },
+  "required": [
+    "schema_version",
+    "snapshot_revision",
+    "cycle_id",
+    "key",
+    "source_id",
+    "source_generation",
+    "unit",
+    "value",
+    "sample_kind",
+    "selection_state",
+    "quality",
+    "freshness",
+    "observed_boot_ns",
+    "committed_boot_ns",
+    "policy_revision",
+    "candidate_source_ids",
+    "reason_codes",
+    "eligible_for_history",
+    "measurement_freshness",
+    "read_finished_boot_ns"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "selection_state": {
+            "enum": [
+              "conflict",
+              "unavailable"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "type": "null"
+          },
+          "source_id": {
+            "type": "null"
+          },
+          "eligible_for_history": {
+            "const": false
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "value": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "const": "f64"
+                  },
+                  "value": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "type",
+                  "value"
+                ]
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "const": "u64"
+                  },
+                  "value": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,19})$"
+                  }
+                },
+                "required": [
+                  "type",
+                  "value"
+                ]
+              }
+            ]
+          },
+          "source_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "source_generation": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "quality": {
+            "enum": [
+              "verified",
+              "usable"
+            ]
+          },
+          "freshness": {
+            "const": "fresh"
+          },
+          "measurement_freshness": {
+            "enum": [
+              "fresh",
+              "unknown"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "sample_kind": {
+            "enum": [
+              "simulated",
+              "replay"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "eligible_for_history": {
+            "const": false
+          }
+        }
+      }
+    }
+  ]
+}

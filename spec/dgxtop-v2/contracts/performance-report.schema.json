@@ -1,0 +1,377 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "kind": {
+      "enum": [
+        "measured",
+        "synthetic_example"
+      ]
+    },
+    "profile": {
+      "const": "REF"
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "config_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "architecture": {
+          "enum": [
+            "x86_64",
+            "aarch64"
+          ]
+        },
+        "os_kernel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "logical_cpus": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024
+        },
+        "ram_mib": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        },
+        "rustc": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "sqlite": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "gpu_driver": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "filesystem": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "terminal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "background_load": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "cpu",
+        "architecture",
+        "os_kernel",
+        "logical_cpus",
+        "ram_mib",
+        "rustc",
+        "sqlite",
+        "gpu_driver",
+        "filesystem",
+        "terminal",
+        "background_load"
+      ]
+    },
+    "evidence_files": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": [
+          "path",
+          "sha256"
+        ]
+      }
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "sample_counts": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "commands": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              },
+              "frames": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              },
+              "history_queries": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              }
+            },
+            "required": [
+              "commands",
+              "frames",
+              "history_queries"
+            ]
+          },
+          "metrics": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "cpu_mean_one_core_percent": {
+                "type": "number",
+                "minimum": 0
+              },
+              "rss_tree_peak_mib": {
+                "type": "number",
+                "minimum": 0
+              },
+              "managed_peak_mib": {
+                "type": "number",
+                "minimum": 0
+              },
+              "command_p95_ms": {
+                "type": "number",
+                "minimum": 0
+              },
+              "command_p99_ms": {
+                "type": "number",
+                "minimum": 0
+              },
+              "frame_p95_ms": {
+                "type": "number",
+                "minimum": 0
+              },
+              "frame_p99_ms": {
+                "type": "number",
+                "minimum": 0
+              },
+              "projection_p95_ms": {
+                "type": "number",
+                "minimum": 0
+              },
+              "history_p95_ms": {
+                "type": "number",
+                "minimum": 0
+              },
+              "coverage_percent": {
+                "type": "number",
+                "minimum": 0
+              },
+              "unexplained_drops": {
+                "type": "number",
+                "minimum": 0
+              },
+              "adaptive_throttle_events": {
+                "type": "number",
+                "minimum": 0
+              },
+              "crashes": {
+                "type": "number",
+                "minimum": 0
+              },
+              "deadlocks": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "cpu_mean_one_core_percent",
+              "rss_tree_peak_mib",
+              "managed_peak_mib",
+              "command_p95_ms",
+              "command_p99_ms",
+              "frame_p95_ms",
+              "frame_p99_ms",
+              "projection_p95_ms",
+              "history_p95_ms",
+              "coverage_percent",
+              "unexplained_drops",
+              "adaptive_throttle_events",
+              "crashes",
+              "deadlocks"
+            ]
+          }
+        },
+        "required": [
+          "duration_seconds",
+          "sample_counts",
+          "metrics"
+        ]
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "soak_runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "warmup_seconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "rss_growth_after_warmup_mib": {
+            "type": "number",
+            "minimum": 0
+          },
+          "fd_growth_after_warmup": {
+            "type": "number",
+            "minimum": 0
+          },
+          "thread_growth_after_warmup": {
+            "type": "number",
+            "minimum": 0
+          },
+          "crashes": {
+            "type": "number",
+            "minimum": 0
+          },
+          "deadlocks": {
+            "type": "number",
+            "minimum": 0
+          },
+          "unexplained_drops": {
+            "type": "number",
+            "minimum": 0
+          },
+          "scenario": {
+            "enum": [
+              "fixed",
+              "churn"
+            ]
+          }
+        },
+        "required": [
+          "duration_seconds",
+          "warmup_seconds",
+          "rss_growth_after_warmup_mib",
+          "fd_growth_after_warmup",
+          "thread_growth_after_warmup",
+          "crashes",
+          "deadlocks",
+          "unexplained_drops",
+          "scenario"
+        ]
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "series": {
+          "const": 512
+        },
+        "sources": {
+          "const": 2048
+        },
+        "processes": {
+          "const": 256
+        },
+        "process_gpu_links": {
+          "const": 1024
+        },
+        "adapter_hosts": {
+          "const": 7
+        },
+        "sampling_ms": {
+          "const": 1000
+        },
+        "terminal_columns": {
+          "const": 160
+        },
+        "terminal_rows": {
+          "const": 50
+        },
+        "sessions": {
+          "const": 1
+        },
+        "archive_enabled": {
+          "const": false
+        }
+      },
+      "required": [
+        "series",
+        "sources",
+        "processes",
+        "process_gpu_links",
+        "adapter_hosts",
+        "sampling_ms",
+        "terminal_columns",
+        "terminal_rows",
+        "sessions",
+        "archive_enabled"
+      ]
+    },
+    "config_path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    }
+  },
+  "required": [
+    "schema_version",
+    "kind",
+    "profile",
+    "source_commit",
+    "config_sha256",
+    "environment",
+    "evidence_files",
+    "runs",
+    "soak_runs",
+    "workload",
+    "config_path"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "效能驗收報告 v1（結果只能實測生成）"
+}

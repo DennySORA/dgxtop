@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "label": "設計驗收門檻，非實測",
+  "profile": "REF",
+  "limits": {
+    "cpu_mean_one_core_percent": {
+      "max": 5.0,
+      "unit": "percent"
+    },
+    "rss_tree_peak_mib": {
+      "max": 384.0,
+      "unit": "MiB"
+    },
+    "managed_peak_mib": {
+      "max": 256.0,
+      "unit": "MiB"
+    },
+    "command_p95_ms": {
+      "max": 50.0,
+      "unit": "ms"
+    },
+    "command_p99_ms": {
+      "max": 100.0,
+      "unit": "ms"
+    },
+    "frame_p95_ms": {
+      "max": 16.0,
+      "unit": "ms"
+    },
+    "frame_p99_ms": {
+      "max": 33.0,
+      "unit": "ms"
+    },
+    "projection_p95_ms": {
+      "max": 100.0,
+      "unit": "ms"
+    },
+    "history_p95_ms": {
+      "max": 100.0,
+      "unit": "ms"
+    },
+    "coverage_percent": {
+      "min": 99.9,
+      "unit": "percent"
+    },
+    "unexplained_drops": {
+      "max": 0,
+      "unit": "count"
+    },
+    "adaptive_throttle_events": {
+      "max": 0,
+      "unit": "count"
+    },
+    "crashes": {
+      "max": 0,
+      "unit": "count"
+    },
+    "deadlocks": {
+      "max": 0,
+      "unit": "count"
+    }
+  },
+  "minimum_duration_seconds": 1800,
+  "minimum_samples": {
+    "commands": 10000,
+    "frames": 1000,
+    "history_queries": 1000
+  },
+  "soak_limits": {
+    "duration_seconds": {
+      "min": 259200,
+      "unit": "s"
+    },
+    "warmup_seconds": {
+      "min": 86400,
+      "unit": "s"
+    },
+    "rss_growth_after_warmup_mib": {
+      "max": 16,
+      "unit": "MiB"
+    },
+    "fd_growth_after_warmup": {
+      "max": 0,
+      "unit": "count"
+    },
+    "thread_growth_after_warmup": {
+      "max": 0,
+      "unit": "count"
+    },
+    "crashes": {
+      "max": 0,
+      "unit": "count"
+    },
+    "deadlocks": {
+      "max": 0,
+      "unit": "count"
+    },
+    "unexplained_drops": {
+      "max": 0,
+      "unit": "count"
+    }
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "顯示模組描述 v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "module_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "api_version": {
+      "const": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "topics": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "cpu",
+          "gpu",
+          "memory",
+          "disk",
+          "network",
+          "processes",
+          "history",
+          "sources",
+          "settings",
+          "actions",
+          "health"
+        ]
+      },
+      "maxItems": 16
+    },
+    "min_columns": {
+      "type": "integer",
+      "minimum": 10,
+      "maximum": 300
+    },
+    "min_rows": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 100
+    },
+    "priority": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "slots": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "overview",
+          "detail",
+          "overlay",
+          "sidebar"
+        ]
+      },
+      "maxItems": 4
+    },
+    "enabled_by_default": {
+      "type": "boolean"
+    },
+    "supports_compact": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "module_id",
+    "api_version",
+    "title",
+    "topics",
+    "min_columns",
+    "min_rows",
+    "priority",
+    "slots",
+    "enabled_by_default",
+    "supports_compact"
+  ]
+}

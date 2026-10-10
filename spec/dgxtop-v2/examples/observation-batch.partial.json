@@ -1,0 +1,91 @@
+{
+  "protocol_version": 1,
+  "adapter_id": "hwmon",
+  "host_generation": 1,
+  "catalog_revision": 1,
+  "config_revision": 1,
+  "request_id": "22222222-2222-4222-8222-222222222222",
+  "cycle_id": "42",
+  "read_group": "temperature",
+  "started_boot_ns": "41950000000",
+  "finished_boot_ns": "42000000000",
+  "records": [
+    {
+      "schema_version": 1,
+      "cycle_id": "42",
+      "config_revision": 1,
+      "key": {
+        "host_id": "demo-host",
+        "boot_id": "demo-boot",
+        "entity_id": "cpu.package.0",
+        "metric_id": "cpu.temperature.package",
+        "scope": "package:0"
+      },
+      "provenance": {
+        "adapter_id": "hwmon",
+        "source_id": "hwmon:package0:temp1",
+        "origin_id": "sensor:package0",
+        "origin_relation": "confirmed",
+        "driver": "fixture-coretemp",
+        "device_path": "fixture:///sys/devices/platform/coretemp.0/hwmon",
+        "channel": "temp1_input",
+        "generation": 1,
+        "profile_id": "synthetic-cpu-package",
+        "profile_revision": 1
+      },
+      "sample_kind": "simulated",
+      "read_status": "ok",
+      "quality": "verified",
+      "native_unit": "mdegC",
+      "value": {
+        "type": "f64",
+        "value": 68000.0
+      },
+      "read_started_boot_ns": "41950000000",
+      "read_finished_boot_ns": "42000000000",
+      "device_sample_boot_ns": "41990000000",
+      "source_update_interval_ms": 1000,
+      "reason_codes": [
+        "SYNTHETIC_FIXTURE"
+      ]
+    },
+    {
+      "schema_version": 1,
+      "cycle_id": "42",
+      "config_revision": 1,
+      "key": {
+        "host_id": "demo-host",
+        "boot_id": "demo-boot",
+        "entity_id": "cpu.package.0",
+        "metric_id": "cpu.temperature.package",
+        "scope": "package:0"
+      },
+      "provenance": {
+        "adapter_id": "hwmon",
+        "source_id": "hwmon:package0:temp2",
+        "origin_id": "sensor:package0",
+        "origin_relation": "confirmed",
+        "driver": "fixture-coretemp",
+        "device_path": "fixture:///sys/devices/platform/coretemp.0/hwmon",
+        "channel": "temp1_input",
+        "generation": 1,
+        "profile_id": "synthetic-cpu-package",
+        "profile_revision": 1
+      },
+      "sample_kind": "simulated",
+      "read_status": "timeout",
+      "quality": "unknown",
+      "native_unit": "mdegC",
+      "value": null,
+      "read_started_boot_ns": "41950000000",
+      "read_finished_boot_ns": "42000000000",
+      "device_sample_boot_ns": null,
+      "source_update_interval_ms": 1000,
+      "reason_codes": [
+        "SYNTHETIC_HOST_TIMEOUT"
+      ]
+    }
+  ],
+  "status": "partial",
+  "error_code": "SYNTHETIC_HOST_TIMEOUT"
+}

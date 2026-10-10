@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "snapshot_revision": "10",
+  "cycle_id": "42",
+  "key": {
+    "host_id": "demo-host",
+    "boot_id": "demo-boot",
+    "entity_id": "cpu.package.0",
+    "metric_id": "cpu.temperature.package",
+    "scope": "package:0"
+  },
+  "source_id": null,
+  "source_generation": null,
+  "unit": "degC",
+  "value": null,
+  "sample_kind": "simulated",
+  "selection_state": "conflict",
+  "quality": "unknown",
+  "freshness": "fresh",
+  "observed_boot_ns": null,
+  "committed_boot_ns": "42010000000",
+  "policy_revision": 1,
+  "candidate_source_ids": [
+    "hwmon:package0:temp1",
+    "thermal:package0"
+  ],
+  "reason_codes": [
+    "SOURCE_DISAGREEMENT",
+    "SYNTHETIC_FIXTURE"
+  ],
+  "eligible_for_history": false,
+  "measurement_freshness": "unknown",
+  "read_finished_boot_ns": "42000000000"
+}

@@ -1,0 +1,19 @@
+{
+  "module_id": "cpu",
+  "api_version": 1,
+  "title": "CPU 使用率與溫度",
+  "topics": [
+    "cpu",
+    "sources",
+    "health"
+  ],
+  "min_columns": 36,
+  "min_rows": 8,
+  "priority": 80,
+  "slots": [
+    "overview",
+    "detail"
+  ],
+  "enabled_by_default": true,
+  "supports_compact": true
+}

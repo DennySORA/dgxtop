@@ -1,0 +1,78 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "api_version": {
+      "const": 1
+    },
+    "adapter_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "implementation": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "isolation": {
+      "enum": [
+        "persistent_process",
+        "in_process_replay"
+      ]
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "discover",
+          "read",
+          "shutdown"
+        ]
+      },
+      "uniqueItems": true,
+      "minItems": 1,
+      "maxItems": 3
+    },
+    "max_inflight": {
+      "const": 1
+    },
+    "runtime_library": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256
+    },
+    "minimum_sample_ms": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 60000
+    },
+    "source_limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2048
+    },
+    "sample_namespace": {
+      "enum": [
+        "live",
+        "replay"
+      ]
+    }
+  },
+  "required": [
+    "api_version",
+    "adapter_id",
+    "implementation",
+    "isolation",
+    "operations",
+    "max_inflight",
+    "runtime_library",
+    "minimum_sample_ms",
+    "source_limit",
+    "sample_namespace"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "唯讀 Adapter 註冊描述 v1"
+}

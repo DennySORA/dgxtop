@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "kind": "synthetic_workload_definition",
+  "seed": 20261004,
+  "profiles": [
+    {
+      "id": "REF",
+      "series": 512,
+      "sources": 2048,
+      "processes": 256,
+      "process_gpu_links": 1024,
+      "adapter_hosts": 7,
+      "sampling_ms": 1000,
+      "terminal_columns": 160,
+      "terminal_rows": 50,
+      "sessions": 1,
+      "archive_enabled": false,
+      "duration_seconds": 1800
+    },
+    {
+      "id": "SOAK",
+      "series": 512,
+      "sources": 2048,
+      "processes": 256,
+      "process_gpu_links": 1024,
+      "adapter_hosts": 7,
+      "sampling_ms": 1000,
+      "terminal_columns": 160,
+      "terminal_rows": 50,
+      "sessions": 1,
+      "archive_enabled": false,
+      "duration_seconds": 259200
+    },
+    {
+      "id": "OVERLOAD",
+      "series": 4096,
+      "sources": 8192,
+      "processes": 4096,
+      "process_gpu_links": 16384,
+      "adapter_hosts": 8,
+      "sampling_ms": 100,
+      "terminal_columns": 240,
+      "terminal_rows": 80,
+      "sessions": 2,
+      "archive_enabled": true,
+      "duration_seconds": 1800
+    }
+  ],
+  "faults": [
+    "host_hang",
+    "driver_partial_failure",
+    "hotplug_generation_change",
+    "history_reader_stall",
+    "disk_enospc",
+    "audit_delay",
+    "pty_reader_pause",
+    "wall_clock_step",
+    "suspend_gap",
+    "command_flood"
+  ]
+}

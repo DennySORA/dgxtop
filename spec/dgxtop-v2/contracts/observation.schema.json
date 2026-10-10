@@ -1,0 +1,350 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "原始來源觀測 v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "cycle_id": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "config_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "key": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "boot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "entity_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "metric_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.]{1,127}$"
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "host_id",
+        "boot_id",
+        "entity_id",
+        "metric_id",
+        "scope"
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "adapter_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "source_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "origin_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin_relation": {
+          "type": "string",
+          "enum": [
+            "confirmed",
+            "unknown"
+          ]
+        },
+        "driver": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "device_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "channel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "profile_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        }
+      },
+      "required": [
+        "adapter_id",
+        "source_id",
+        "origin_id",
+        "origin_relation",
+        "driver",
+        "device_path",
+        "channel",
+        "generation",
+        "profile_id",
+        "profile_revision"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "origin_relation": {
+                "const": "confirmed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "origin_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            }
+          }
+        }
+      ]
+    },
+    "sample_kind": {
+      "type": "string",
+      "enum": [
+        "measured",
+        "derived",
+        "estimated",
+        "simulated",
+        "replay"
+      ]
+    },
+    "read_status": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "unsupported",
+        "permission_denied",
+        "timeout",
+        "error",
+        "removed"
+      ]
+    },
+    "quality": {
+      "type": "string",
+      "enum": [
+        "verified",
+        "usable",
+        "suspect",
+        "invalid",
+        "unknown"
+      ]
+    },
+    "native_unit": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    },
+    "value": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "f64"
+                },
+                "value": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "type",
+                "value"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "u64"
+                },
+                "value": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,19})$"
+                }
+              },
+              "required": [
+                "type",
+                "value"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "read_started_boot_ns": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "read_finished_boot_ns": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "device_sample_boot_ns": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source_update_interval_ms": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 80
+      },
+      "maxItems": 32
+    }
+  },
+  "required": [
+    "schema_version",
+    "cycle_id",
+    "config_revision",
+    "key",
+    "provenance",
+    "sample_kind",
+    "read_status",
+    "quality",
+    "native_unit",
+    "value",
+    "read_started_boot_ns",
+    "read_finished_boot_ns",
+    "device_sample_boot_ns",
+    "source_update_interval_ms",
+    "reason_codes"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "read_status": {
+            "const": "ok"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "value": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "const": "f64"
+                  },
+                  "value": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "type",
+                  "value"
+                ]
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "const": "u64"
+                  },
+                  "value": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,19})$"
+                  }
+                },
+                "required": [
+                  "type",
+                  "value"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "value": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ]
+}

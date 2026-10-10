@@ -1,0 +1,16 @@
+{
+  "api_version": 1,
+  "adapter_id": "nvml",
+  "implementation": "NvmlAdapter",
+  "isolation": "persistent_process",
+  "operations": [
+    "discover",
+    "read",
+    "shutdown"
+  ],
+  "max_inflight": 1,
+  "runtime_library": "libnvidia-ml.so.1",
+  "minimum_sample_ms": 1000,
+  "source_limit": 2048,
+  "sample_namespace": "live"
+}

@@ -1,0 +1,113 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "request_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "status": {
+      "enum": [
+        "accepted",
+        "completed",
+        "rejected",
+        "in_progress",
+        "unknown"
+      ]
+    },
+    "code": {
+      "enum": [
+        "Ok",
+        "Busy",
+        "ValidationFailed",
+        "Conflict",
+        "Unsupported",
+        "Unavailable",
+        "PermissionDenied",
+        "CapabilityDenied",
+        "TimedOut",
+        "StaleView",
+        "SourceConflict",
+        "PinnedSourceUnavailable",
+        "CapacityExceeded",
+        "PersistFailed",
+        "RequiresRestart",
+        "ProcessExited",
+        "ProcessIdentityChanged",
+        "NamespaceMismatch",
+        "ConfirmationExpired",
+        "ConfirmationUsed",
+        "UnknownOutcome",
+        "InternalError",
+        "QueryTooLarge",
+        "Cancelled"
+      ]
+    },
+    "message": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "config_revision": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "effective_interval_ms": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 100,
+      "maximum": 60000
+    },
+    "action_state": {
+      "enum": [
+        null,
+        "prepared",
+        "intent_pending",
+        "intent_committed",
+        "sending",
+        "signal_sent",
+        "exit_observed",
+        "still_running",
+        "cancelled",
+        "rejected",
+        "unknown"
+      ]
+    },
+    "confirmation_token": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 32,
+      "maxLength": 256
+    },
+    "expires_boot_ns": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    }
+  },
+  "required": [
+    "schema_version",
+    "request_id",
+    "status",
+    "code",
+    "message",
+    "config_revision",
+    "effective_interval_ms",
+    "action_state",
+    "confirmation_token",
+    "expires_boot_ns"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "命令回覆 v2"
+}

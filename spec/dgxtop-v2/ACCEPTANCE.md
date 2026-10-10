@@ -1,0 +1,486 @@
+# 可量測接受條件
+
+狀態分開記：規格已定義；下面是**待Rust實作執行的驗收**，不是本包已跑過結果。Python model/契約/工具檢查只能證明規格範例與檢查器相符。每個AT需要實際 test命令、commit、環境、退出碼、log相對路徑與SHA256。
+
+共通release命令：cargo fmt --all -- --check；cargo check --workspace --all-targets --all-features --locked；cargo clippy --workspace --all-targets --all-features --locked -- -D warnings；cargo test --workspace --all-features --locked。硬體測試只在受控環境執行，pidfd tests只對自己建立的可丟棄子程序。
+
+可用狀態：PASS、FAIL、NOT_RUN、BLOCKED。PASS需證據；功能已寫不代表PASS；硬體或時間不足不是假PASS理由。
+
+<a id="at01"></a>
+## AT01｜R01 Adapter 的讀寫介面隔離
+
+**成功路徑：**構建時Collector只有TelemetryPort；七liveAdapter都能discover/read，ProcessActionPort只給ProcessService。
+
+**失敗／邊界：**依賴圖注入action/store權限到Collector必被boundary檢查拒絕；無NVML時系統指標仍可用。
+
+**測試層：**Rust邊界＋fixture＋硬體。實作工作：T04。規範：[ARCHITECTURE.md](ARCHITECTURE.md)。
+
+證據：實作測試報告中以 `AT01` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at02"></a>
+## AT02｜R02 型別化識別、單位、時間與來源
+
+**成功路徑：**u64最大值roundtrip精確，ProcessKey/MetricKey各欄不同時不相等；mdegC轉degC為68。
+
+**失敗／邊界：**u64溢位、NaN/Inf、未知單位、PID≤0或>i32::MAX拒絕；不把異scope合併。
+
+**測試層：**Rust property＋JSON。實作工作：T02。規範：[contracts/INTERFACES.md](contracts/INTERFACES.md)。
+
+證據：實作測試報告中以 `AT02` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at03"></a>
+## AT03｜R03 同語意多來源仲裁與去重
+
+**成功路徑：**同package兩confirmed origin在容差內穩定選擇；alias只算一源；healthy source切換遵守3次及5s。
+
+**失敗／邊界：**68°C package和42°C SoC分開；同key異origin衝突value=null；pin不能覆蓋fault/conflict。
+
+**測試層：**Rust仲裁＋fixture。實作工作：T05。規範：[ARCHITECTURE.md](ARCHITECTURE.md)。
+
+證據：實作測試報告中以 `AT03` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at04"></a>
+## AT04｜R04 缺值／品質／種類／新鮮度分離
+
+**成功路徑：**ok的真0保持0；device timestamp缺失時read fresh但measurement unknown。
+
+**失敗／邊界：**timeout/fault/unsupported/stale皆不補0；alarm高溫不當故障；replay不進livehistory。
+
+**測試層：**Rust domain＋契約。實作工作：T05。規範：[contracts/INTERFACES.md](contracts/INTERFACES.md)。
+
+證據：實作測試報告中以 `AT04` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at05"></a>
+## AT05｜R05 Manager 模組化與單一邏輯寫入
+
+**成功路徑：**同一commit含canonical/history/state_delta，Ack後Collector基準前進；Manager服務僅持必要ports。
+
+**失敗／邊界：**epoch/base revision stale整批拒絕；批次重送不重複history；UI不持StoreWriter。
+
+**測試層：**Rust service＋boundary。實作工作：T08。規範：[RUNTIME.md](RUNTIME.md)。
+
+證據：實作測試報告中以 `AT05` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at06"></a>
+## AT06｜R06 Store 分區與局部持久化故障
+
+**成功路徑：**快照、候選、歷史、audit/config/archive配額各自可查，archive停用不影響HotStore。
+
+**失敗／邊界：**archive ENOSPC時current仍刷新；audit不能持久化則禁止signal；不得拖住Manager。
+
+**測試層：**Rust fault injection。實作工作：T07。規範：[STORAGE.md](STORAGE.md)。
+
+證據：實作測試報告中以 `AT06` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at07"></a>
+## AT07｜R07 真實時間歷史、counter 與 coverage
+
+**成功路徑：**1000→1300bytes於3s產生100B/s，total300bytes；採樣率修改不改舊total；coverage精確。
+
+**失敗／邊界：**reset、generation改變、UTC倒退與boot不同不產生錯誤delta；兩小時缺口不混入最近1h。
+
+**測試層：**Rust fakeclock/property。實作工作：T06。規範：[STORAGE.md](STORAGE.md)。
+
+證據：實作測試報告中以 `AT07` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at08"></a>
+## AT08｜R08 設定優先序、CAS 與動態週期生效
+
+**成功路徑：**CLI僅顯式參數覆寫；CAS current→current+1，scheduler新epoch且effective interval可見。
+
+**失敗／邊界：**舊revision回Conflict；persist失敗不回成功；restart-only回RequiresRestart；latebatch不污染新epoch。
+
+**測試層：**Rust config＋filesystem。實作工作：T07。規範：[contracts/CONFIG.md](contracts/CONFIG.md)。
+
+證據：實作測試報告中以 `AT08` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at09"></a>
+## AT09｜R09 ProcessKey 主機採樣一次／多 GPU 關聯
+
+**成功路徑：**同一ProcessKey跨兩GPU列的host CPU/RSS一致、每cycle只讀一次主機資料。
+
+**失敗／邊界：**同PID新startticks不承接CPU基準；Graphics/Compute合併不雙計RSS；過程退出標unavailable。
+
+**測試層：**Rust fakeproc＋多GPU。實作工作：T05。規範：[contracts/METRICS.md](contracts/METRICS.md)。
+
+證據：實作測試報告中以 `AT09` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at10"></a>
+## AT10｜R10 程序終止的授權、穩定身分與稽核
+
+**成功路徑：**自建同UID子程序heldpidfd且有效確認後一筆durableintent→最多一個SIGTERM→sent/exit各自顯示。
+
+**失敗／邊界：**根UID、跨UID/namespace、PIDreuse、expired、readonly、無pidfd/audit均零signal；拒絕barePIDfallback。
+
+**測試層：**Rust disposable integration。實作工作：T09。規範：[SECURITY.md](SECURITY.md)。
+
+證據：實作測試報告中以 `AT10` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at11"></a>
+## AT11｜R11 Controller 只轉換輸入意圖
+
+**成功路徑：**按鍵模式/文字輸入/滑鼠僅形成typed Command；j/k選穩定entity，q/取消可達。
+
+**失敗／邊界：**filter編輯時K當文字不kill；舊HitMap不得作用到另一列；Controller不得直接call syscall。
+
+**測試層：**Rust input＋PTY。實作工作：T10。規範：[UI.md](UI.md)。
+
+證據：實作測試報告中以 `AT11` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at12"></a>
+## AT12｜R12 Viewer 排版與模組擴充
+
+**成功路徑：**10個模組全部可用並可註冊第11fixture模組；>=120/80/<80/<40尺寸都有合法畫面。
+
+**失敗／邊界：**duplicateID/API不符拒絕；無GPU模組顯示不支援但不卡啟動；窄畫面仍有退出及確認。
+
+**測試層：**Ratatui TestBackend＋PTY。實作工作：T10。規範：[UI.md](UI.md)。
+
+證據：實作測試報告中以 `AT12` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at13"></a>
+## AT13｜R13 不可變快照、穩定選取與過期 frame
+
+**成功路徑：**投影immutable，last-only1+active1，沒有dirty不畫；保留同一ProcessKey選取。
+
+**失敗／邊界：**慢consumer持舊Arc仍計帳；排程/清單重排後destructive frame失效拒絕；不能累積全量快照。
+
+**測試層：**Rust ownership＋PTY。實作工作：T10。規範：[RUNTIME.md](RUNTIME.md)。
+
+證據：實作測試報告中以 `AT13` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at14"></a>
+## AT14｜R14 worker 隔離、timeout、背壓與回收上限
+
+**成功路徑：**故障host停止回覆時其他host與commands持續；timeout標stale與breaker。
+
+**失敗／邊界：**不可reap子程序進quarantine，該backend不無限restart，總≤8；無thread-per-tick；deadline不當abort。
+
+**測試層：**Rust host integration。實作工作：T03。規範：[RUNTIME.md](RUNTIME.md)。
+
+證據：實作測試報告中以 `AT14` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at15"></a>
+## AT15｜R15 探索／熱插拔／capability 的局部更新
+
+**成功路徑：**catalog generation熱插拔1000輪、有device再連接正確新incarnation；未變staticmetadata不重查。
+
+**失敗／邊界：**半頁discovery失敗不刪整個catalog；消失device只使自己stale；source上限拒絕而不OOM。
+
+**測試層：**Rust fakefs＋hotplug。實作工作：T04。規範：[ARCHITECTURE.md](ARCHITECTURE.md)。
+
+證據：實作測試報告中以 `AT15` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at16"></a>
+## AT16｜R16 來源診斷、age 與例外可見
+
+**成功路徑：**sources頁可查選中/排除/同源/衝突理由、age、effective interval、policyr；動作狀態清楚。
+
+**失敗／邊界：**unknown不以success色或0顯示；固定數值只能suspect診斷，不直接假資料；history gap可见。
+
+**測試層：**snapshot＋UI semantics。實作工作：T10。規範：[UI.md](UI.md)。
+
+證據：實作測試報告中以 `AT16` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at17"></a>
+## AT17｜R17 可觀測性、隱私與容量／效能目標
+
+**成功路徑：**輸出有界labels與全部queue/latency/quota/coveragemetrics，cmdline/環境秘密不落盤。
+
+**失敗／邊界：**10萬短命PID不建立10萬label或無界resultcache；控制字元escaped；debuglog滿有dropcounter。
+
+**測試層：**Rust diagnostics/privacy。實作工作：T11。規範：[PERFORMANCE.md](PERFORMANCE.md)。
+
+證據：實作測試報告中以 `AT17` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at18"></a>
+## AT18｜R18 分階段遷移與可回復程式／設定
+
+**成功路徑：**legacy dry-run完整映射，apply只寫v2；binary/config回滾可啟動舊版本，v2DB保存。
+
+**失敗／邊界：**checksum損壞、未知schema、diskfull、切換中斷保持可恢復檔；rollback不宣稱撤回signal。
+
+**測試層：**installer/config integration。實作工作：T14。規範：[OPERATIONS.md](OPERATIONS.md)。
+
+證據：實作測試報告中以 `AT18` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at19"></a>
+## AT19｜R19 保留既有規則與真實驗證紀錄
+
+**成功路徑：**既有CLAUDE/AGENTS規則被保留且無循環import；真實命令/退出碼記錄。
+
+**失敗／邊界：**不把Python合成PASS說成Rust硬體PASS；不得以spec放寬user安全/commit授權。
+
+**測試層：**人工核對＋package lint。實作工作：T01。規範：[AGENTS.md](AGENTS.md)。
+
+證據：實作測試報告中以 `AT19` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at20"></a>
+## AT20｜R20 可重現構建／版本／安裝完整性
+
+**成功路徑：**--version/manifest/tag一致，Cargo.lock追蹤，--locked build可重現依賴；checksum驗證。
+
+**失敗／邊界：**missinglock、versionmismatch、checksumwrong、GNU/musl自動錯退均使release/installer失敗。
+
+**測試層：**CI＋shell隔離。實作工作：T14。規範：[OPERATIONS.md](OPERATIONS.md)。
+
+證據：實作測試報告中以 `AT20` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at21"></a>
+## AT21｜R21 全域配置與佇列雙重配額
+
+**成功路徑：**所有配置先拿BytePermit；queue數量32且總8MiB雙限制；最大單batch5MiB wire+decoded可容納。
+
+**失敗／邊界：**多批不大也可能超bytes時拒絕；釋放/移交/pinned都不漏記；超額peak不可先配置再補檢。
+
+**測試層：**Rust allocation/property。實作工作：T02。規範：[RUNTIME.md](RUNTIME.md)。
+
+證據：實作測試報告中以 `AT21` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at22"></a>
+## AT22｜R22 多速率排程、Broker去重與epoch
+
+**成功路徑：**1s快資料、5s慢資料、10sdiscovery、60sunsupported；同readgroup同cycle重用一次。
+
+**失敗／邊界：**clock跳過多個deadline只安排下個未來時槽；oldgeneration/epoch回覆拒絕，不補跑風暴。
+
+**測試層：**Rust fakeclock/Broker。實作工作：T03。規範：[RUNTIME.md](RUNTIME.md)。
+
+證據：實作測試報告中以 `AT22` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at23"></a>
+## AT23｜R23 固定worker與公平控制迴圈
+
+**成功路徑：**固定worker數與control slice≤2ms；8completion/8command/4ingest循環保持timer公平。
+
+**失敗／邊界：**commands flood不餓死freshness；accepted預留回覆槽；滿額即Busy；shutdown不排最後。
+
+**測試層：**Rust scheduler stress。實作工作：T08。規範：[RUNTIME.md](RUNTIME.md)。
+
+證據：實作測試報告中以 `AT23` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at24"></a>
+## AT24｜R24 阻塞host與quarantine總量界線
+
+**成功路徑：**NVML整host卡住只標此backend所有GPU不可用，CPU/Network仍更新；reap後才新generation。
+
+**失敗／邊界：**D-state或不可收回child不無限替換、不洩漏fd；僅對自建host可TERM/KILL。
+
+**測試層：**Rust host fault＋OS。實作工作：T03。規範：[RUNTIME.md](RUNTIME.md)。
+
+證據：實作測試報告中以 `AT24` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at25"></a>
+## AT25｜R25 增量投影與有限快照生命週期
+
+**成功路徑：**只為可見/訂閱topic建有限projection；每session≤1pending+1active，每projection≤1MiB。
+
+**失敗／邊界：**2session慢讀都不使retiredArc無界；module拿不到整個history/Store；history取消丟lateview。
+
+**測試層：**Rust memory/interaction。實作工作：T10。規範：[RUNTIME.md](RUNTIME.md)。
+
+證據：實作測試報告中以 `AT25` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at26"></a>
+## AT26｜R26 非阻塞terminal與背壓
+
+**成功路徑：**非阻塞PTY正常輸出完整ANSIframe，部分write恢復正確diff基準。
+
+**失敗／邊界：**PTY reader停30s仍可處理q；buffer≤1MiB、不畫下一frame直到前者flush；無拼接半幀。
+
+**測試層：**Rust PTY execution。實作工作：T10。規範：[UI.md](UI.md)。
+
+證據：實作測試報告中以 `AT26` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at27"></a>
+## AT27｜R27 歷史窗口精確性與跨桶counter
+
+**成功路徑：**59.5→60.5s的counter增量跨分鐘保存bridge；完整interval查總量精確只計一次。
+
+**失敗／邊界：**查邊界且raw已淘汰不按比例假精確；缺段顯boundary_gap；時間字串排序2<10<100。
+
+**測試層：**Rust＋SQLite fixture。實作工作：T06。規範：[STORAGE.md](STORAGE.md)。
+
+證據：實作測試報告中以 `AT27` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at28"></a>
+## AT28｜R28 預設REF效能與覆蓋率門檻
+
+**成功路徑：**3次REF各1800s全部指標過bench/budgets，滿足樣本量且原始證據hash可驗。
+
+**失敗／邊界：**kind=synthetic_example、缺proof、coverage<99.9或throttle>0即不通過；不可只挑最好run。
+
+**測試層：**受控release benchmark。實作工作：T12。規範：[PERFORMANCE.md](PERFORMANCE.md)。
+
+證據：實作測試報告中以 `AT28` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at29"></a>
+## AT29｜R29 72小時穩定性與來源churn
+
+**成功路徑：**固定來源與churn各72h，24h後RSSgrowth≤16MiB且FD/thread不持續成長，零crash/deadlock。
+
+**失敗／邊界：**注入熱插拔、restart、processreuse仍bounded；fakeclock72h不能作真實soak證據。
+
+**測試層：**真實72h執行。實作工作：T13。規範：[PERFORMANCE.md](PERFORMANCE.md)。
+
+證據：實作測試報告中以 `AT29` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at30"></a>
+## AT30｜R30 超載狀態機與可觀測降級
+
+**成功路徑：**queue75%連3次進pressure，mem90%進throttle，健康30s逐級復原，effective/gap可見。
+
+**失敗／邊界：**flap不每tick切換；overload可拒絕但不OOM/無界retry；不能丟controlaudit換telemetry。
+
+**測試層：**Rust state machine/stress。實作工作：T11。規範：[RUNTIME.md](RUNTIME.md)。
+
+證據：實作測試報告中以 `AT30` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at31"></a>
+## AT31｜R31 SQLite版本、WAL與磁碟上限
+
+**成功路徑：**實際linkedSQLite≥3.51.3，auditFULL/archiveNORMAL，writer自管checkpoint，檔案總量可查。
+
+**失敗／邊界：**舊版SQLite禁止初始化；reader卡/WAL16MiB audit拒新intent；磁碟低水位/ENOSPC不發signal。
+
+**測試層：**SQLite fault＋runtime gate。實作工作：T07。規範：[STORAGE.md](STORAGE.md)。
+
+證據：實作測試報告中以 `AT31` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at32"></a>
+## AT32｜R32 晚到audit結果／取消／至多一次動作
+
+**成功路徑：**token只用一次，send與cancel線性化；validdurableAck後再檢查activeTTLpolicy才send。
+
+**失敗／邊界：**audit晚ACK、取消、policychange、crash重啟，未send不補送；unknown不retry；sent不等exit。
+
+**測試層：**Rust action race model＋child。實作工作：T09。規範：[SECURITY.md](SECURITY.md)。
+
+證據：實作測試報告中以 `AT32` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at33"></a>
+## AT33｜R33 IPC長度、深度、世代與解碼上限
+
+**成功路徑：**IPC允許分段長度/UTF8，schema+generation通過才解碼commit；256records與depth32限額。
+
+**失敗／邊界：**超長prefix/depth、EOF半幀、錯host/gen/actionoperation拒絕；不能先allocate宣告巨量。
+
+**測試層：**Rust parser fuzz/property。實作工作：T03。規範：[contracts/INTERFACES.md](contracts/INTERFACES.md)。
+
+證據：實作測試報告中以 `AT33` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at34"></a>
+## AT34｜R34 Catalog快取與unsupported探測節流
+
+**成功路徑：**相同metadatahandle快取直到generation變；capability不支援最多60s探測一次。
+
+**失敗／邊界：**一次API錯誤不永久封鎖硬體；driverrestart清cache；nvidia-smi常駐subprocess不是讀取捷徑。
+
+**測試層：**Rust call-count fixtures。實作工作：T04。規範：[contracts/METRICS.md](contracts/METRICS.md)。
+
+證據：實作測試報告中以 `AT34` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at35"></a>
+## AT35｜R35 可重放fixture與benchmark證據
+
+**成功路徑：**相同seed fixture輸出byte-identical，包含全部metric類型與分離namespace；證據raw可重跑。
+
+**失敗／邊界：**synthetic輸入標記不能偽裝measured；benchmark少host/series或wrongconfig拒絕結果。
+
+**測試層：**Python工具＋Rust harness。實作工作：T12。規範：[bench/scenarios.json](bench/scenarios.json)。
+
+證據：實作測試報告中以 `AT35` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at36"></a>
+## AT36｜R36 版本化設定持久化的不確定結果
+
+**成功路徑：**stage成功後原子write/rename與dirsync，Ack對應有效epoch；relaunch載入磁碟完整版本。
+
+**失敗／邊界：**rename完成但dirfsync失敗報commit_uncertain並重載，不宣稱舊檔未變；hash/CAS不可並行覆蓋。
+
+**測試層：**Rust failpoint filesystem。實作工作：T07。規範：[contracts/CONFIG.md](contracts/CONFIG.md)。
+
+證據：實作測試報告中以 `AT36` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at37"></a>
+## AT37｜R37 release gate與硬體證據分離
+
+**成功路徑：**normalCI與hardwaregates分離；release僅對有證據之GNU平台聲明validated。
+
+**失敗／邊界：**沒有硬體/soak報告標BLOCKED；交叉編譯PASS不能變GPU支援PASS；來源版本不一致拒絕。
+
+**測試層：**CI證據核對。實作工作：T14。規範：[OPERATIONS.md](OPERATIONS.md)。
+
+證據：實作測試報告中以 `AT37` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at38"></a>
+## AT38｜R38 限制高基數、query與NSS成本
+
+**成功路徑：**query≤2000points/200k掃描/4MiB、2workers4jobs；UID lookup不在control/UI，可退numeric。
+
+**失敗／邊界：**病態大query回QueryTooLarge/Busy；NSS卡住不令畫面卡死；歷史長reader不pin全記憶體。
+
+**測試層：**Rust bounded query/NSS。實作工作：T11。規範：[RUNTIME.md](RUNTIME.md)。
+
+證據：實作測試報告中以 `AT38` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at39"></a>
+## AT39｜R39 錯誤分層與安全停機
+
+**成功路徑：**readfail局部、Manager不變量錯fail-stop，terminal還原嘗試≤250ms，控制shutdown≤3s。
+
+**失敗／邊界：**host不能reap時退出警告而不等待無限；audit未知/State錯不能仍送signal；disk輸出卡不鎖loop。
+
+**測試層：**Rust panic/signal/PTY。實作工作：T11。規範：[SECURITY.md](SECURITY.md)。
+
+證據：實作測試報告中以 `AT39` 索引；本次軟體驗收狀態 **NOT_RUN**。
+
+
+<a id="at40"></a>
+## AT40｜R40 具體效能證據與完整規格驗證
+
+**成功路徑：**40項都有task/AT/實作證據狀態；ZIPCRC/hash/links/schema/HTML測試完整。
+
+**失敗／邊界：**missing/空file、orphanID、錯hash或未測卻標PASS均拒絕封版；spec驗收與software驗收分開。
+
+**測試層：**package validator＋人工驗收。實作工作：T15。規範：[VALIDATION.md](VALIDATION.md)。
+
+證據：實作測試報告中以 `AT40` 索引；本次軟體驗收狀態 **NOT_RUN**。

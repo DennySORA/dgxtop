@@ -1,0 +1,106 @@
+{
+  "schema_version": 2,
+  "revision": 1,
+  "sampling": {
+    "interval_ms": 1000,
+    "discovery_interval_ms": 10000,
+    "read_deadline_ms": 500,
+    "stale_factor": 3,
+    "max_adapters": 8,
+    "failure_threshold": 3,
+    "max_backoff_ms": 60000,
+    "gpu_enabled": true,
+    "capacity_interval_ms": 5000,
+    "slow_health_interval_ms": 5000,
+    "unsupported_probe_ms": 60000
+  },
+  "quality": {
+    "switch_successes": 3,
+    "switch_min_hold_ms": 5000,
+    "temperature_disagreement_deg_c": 8.0,
+    "alignment_tolerance_ms": 250,
+    "allow_suspect_as_canonical": false,
+    "excluded_sources": [],
+    "pinned_sources": []
+  },
+  "store": {
+    "raw_candidate_seconds": 60,
+    "raw_history_seconds": 300,
+    "aggregate_seconds": 60,
+    "aggregate_retention_hours": 24,
+    "memory_limit_mib": 256,
+    "max_series": 512,
+    "max_sources": 2048,
+    "max_candidates_per_series": 4,
+    "max_history_points": 2000,
+    "archive_enabled": false,
+    "archive_retention_days": 7,
+    "archive_limit_mib": 1024,
+    "audit_retention_days": 30,
+    "audit_limit_mib": 128,
+    "max_processes": 256,
+    "max_process_gpu_links": 1024,
+    "max_query_scan_records": 200000
+  },
+  "actions": {
+    "enabled": true,
+    "read_only": false,
+    "same_uid_only": true,
+    "allow_force": false,
+    "confirmation_ttl_ms": 10000,
+    "max_pending_confirmations": 8,
+    "deny_root_session": true
+  },
+  "viewer": {
+    "fps": 4,
+    "max_sessions": 2,
+    "theme": "dark",
+    "enabled_modules": [
+      "cpu",
+      "gpu",
+      "memory",
+      "disk",
+      "network",
+      "processes",
+      "history",
+      "sources",
+      "settings",
+      "actions"
+    ],
+    "network_max_visible": 3,
+    "redline_threshold_percent": 80.0
+  },
+  "queues": {
+    "commands": 128,
+    "collection_batches": 32,
+    "max_batch_bytes": 1048576,
+    "ingress_bytes": 8388608,
+    "max_decoded_batch_bytes": 4194304,
+    "max_records_per_batch": 256,
+    "collector_jobs": 8,
+    "history_requests": 4,
+    "archive_bytes": 8388608,
+    "log_bytes": 1048576
+  },
+  "privacy": {
+    "persist_full_command_line": false
+  },
+  "runtime": {
+    "compute_workers": 2,
+    "history_workers": 2,
+    "control_slice_ms": 2,
+    "history_deadline_ms": 200,
+    "audit_intent_deadline_ms": 1000,
+    "child_grace_ms": 200,
+    "child_term_ms": 200,
+    "child_reap_ms": 1000,
+    "max_pending_requests": 128,
+    "result_cache_entries": 4096,
+    "result_cache_ttl_ms": 600000,
+    "max_projection_bytes": 1048576,
+    "max_history_result_bytes": 4194304,
+    "adaptive_enabled": true,
+    "pressure_samples": 3,
+    "recovery_ms": 30000
+  }
+}

@@ -1,0 +1,182 @@
+[
+  {
+    "id": "S01",
+    "title": "目前原始碼基準",
+    "url": "https://github.com/DennySORA/dgxtop/tree/b4b5a8d87d3c148cedacf91daf6f926719694a18",
+    "type": "官方／倉庫原始碼",
+    "source_date": "2026-05-20",
+    "retrieved_date": "2026-10-04",
+    "note": "本次GitHub連接工具重新核對main；架構語意沿用前次已讀實碼，不宣稱重跑全repo稽核。"
+  },
+  {
+    "id": "S02",
+    "title": "依賴與套件版本",
+    "url": "https://github.com/DennySORA/dgxtop/blob/b4b5a8d87d3c148cedacf91daf6f926719694a18/Cargo.toml",
+    "type": "官方／倉庫原始碼",
+    "source_date": "2026-05-20",
+    "retrieved_date": "2026-10-04",
+    "note": "本次實讀；0.1.0/edition2024與現有依賴僅是重寫起點。"
+  },
+  {
+    "id": "S03",
+    "title": "既有開發規則",
+    "url": "https://github.com/DennySORA/dgxtop/blob/b4b5a8d87d3c148cedacf91daf6f926719694a18/CLAUDE.md",
+    "type": "官方／倉庫規則",
+    "source_date": "2026-05-20",
+    "retrieved_date": "2026-10-04",
+    "note": "完整實讀，blob58557cdc7bb5a9605826e87016b3fefe5399bbcd；作資料保留，不授權git或外部操作。"
+  },
+  {
+    "id": "S04",
+    "title": "hwmon語意",
+    "url": "https://docs.kernel.org/hwmon/sysfs-interface.html",
+    "type": "官方文件",
+    "source_date": null,
+    "retrieved_date": "2026-10-04",
+    "note": "optional channel、temperature unit、fault/alarm；不能只靠檔名判可信。"
+  },
+  {
+    "id": "S05",
+    "title": "thermal來源",
+    "url": "https://docs.kernel.org/driver-api/thermal/sysfs-api.html",
+    "type": "官方文件",
+    "source_date": null,
+    "retrieved_date": "2026-10-04",
+    "note": "thermal zone與hwmon可暴露相同來源，scope/origin需證據。"
+  },
+  {
+    "id": "S06",
+    "title": "proc欄位",
+    "url": "https://docs.kernel.org/filesystems/proc.html",
+    "type": "官方文件",
+    "source_date": null,
+    "retrieved_date": "2026-10-04",
+    "note": "CPU/process/memory欄位；VmRSS成本與精度需區別。"
+  },
+  {
+    "id": "S07",
+    "title": "diskstats",
+    "url": "https://docs.kernel.org/admin-guide/iostats.html",
+    "type": "官方文件",
+    "source_date": null,
+    "retrieved_date": "2026-10-04",
+    "note": "counter/sector/讀寫時間語意。"
+  },
+  {
+    "id": "S08",
+    "title": "Powercap",
+    "url": "https://docs.kernel.org/power/powercap/powercap.html",
+    "type": "官方文件",
+    "source_date": null,
+    "retrieved_date": "2026-10-04",
+    "note": "energy_uj與maxenergy、能量不等瞬時功率。"
+  },
+  {
+    "id": "S09",
+    "title": "pidfd_open",
+    "url": "https://man7.org/linux/man-pages/man2/pidfd_open.2.html",
+    "type": "官方手冊",
+    "source_date": null,
+    "retrieved_date": "2026-10-04",
+    "note": "穩定程序descriptor，仍需對照原選取identity。"
+  },
+  {
+    "id": "S10",
+    "title": "pidfd_send_signal",
+    "url": "https://man7.org/linux/man-pages/man2/pidfd_send_signal.2.html",
+    "type": "官方手冊",
+    "source_date": "2026-02-08",
+    "retrieved_date": "2026-10-04",
+    "note": "仍受權限檢查，避免barePIDreuse；本版flags=0。"
+  },
+  {
+    "id": "S11",
+    "title": "時鐘",
+    "url": "https://man7.org/linux/man-pages/man2/clock_gettime.2.html",
+    "type": "官方手冊",
+    "source_date": null,
+    "retrieved_date": "2026-10-04",
+    "note": "BOOTTIME納入suspend，UTC可跳動；歷史區間不可用UI間隔。"
+  },
+  {
+    "id": "S12",
+    "title": "crossbeam bounded",
+    "url": "https://docs.rs/crossbeam-channel/latest/crossbeam_channel/fn.bounded.html",
+    "type": "官方API文件",
+    "source_date": null,
+    "retrieved_date": "2026-10-04",
+    "note": "bounded元素數不等bytes budget；latest為閱讀日文件。"
+  },
+  {
+    "id": "S13",
+    "title": "blocking呼叫取消界線",
+    "url": "https://docs.rs/tokio/latest/tokio/task/fn.spawn_blocking.html",
+    "type": "官方API文件",
+    "source_date": null,
+    "retrieved_date": "2026-10-04",
+    "note": "已執行blocking task不能靠abort停止；本版未採Tokio。"
+  },
+  {
+    "id": "S14",
+    "title": "SQLite WAL與修正",
+    "url": "https://www.sqlite.org/wal.html",
+    "type": "官方文件",
+    "source_date": "2026-08-25",
+    "retrieved_date": "2026-10-04",
+    "note": "WAL-reset修復≥3.51.3；共享文件/長reader影響checkpoint。本版不採更舊版本的backport例外。"
+  },
+  {
+    "id": "S15",
+    "title": "SQLite durability",
+    "url": "https://www.sqlite.org/pragma.html#pragma_synchronous",
+    "type": "官方文件",
+    "source_date": "2026-06-04",
+    "retrieved_date": "2026-10-04",
+    "note": "FULL/NORMAL差異、cache/WAL上限不能只靠pragma猜。"
+  },
+  {
+    "id": "S16",
+    "title": "rusqlite 0.40.2",
+    "url": "https://docs.rs/rusqlite/0.40.2/rusqlite/",
+    "type": "官方API文件",
+    "source_date": null,
+    "retrieved_date": "2026-10-04",
+    "note": "版本已見；本次未編譯它與全依賴組合，實際SQLite仍需runtime gate。"
+  },
+  {
+    "id": "S17",
+    "title": "Cargo lockfile",
+    "url": "https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html",
+    "type": "官方文件",
+    "source_date": null,
+    "retrieved_date": "2026-10-04",
+    "note": "依賴lockfile是應用程式可重現依賴解析的必要交付。"
+  },
+  {
+    "id": "S18",
+    "title": "Rust 1.92.0",
+    "url": "https://blog.rust-lang.org/2025/12/11/Rust-1.92.0/",
+    "type": "官方發布",
+    "source_date": "2025-12-11",
+    "retrieved_date": "2026-10-04",
+    "note": "初始固定工具鏈候選，並非本次已驗過完整依賴MSRV。"
+  },
+  {
+    "id": "S19",
+    "title": "Claude Code檔案載入與匯入",
+    "url": "https://code.claude.com/docs/en/memory",
+    "type": "官方文件",
+    "source_date": null,
+    "retrieved_date": "2026-10-04",
+    "note": "@path相對於匯入檔；本包薄CLAUDE→AGENTS；coding session須自行確認實際載入。"
+  },
+  {
+    "id": "S20",
+    "title": "Codex AGENTS.md",
+    "url": "https://developers.openai.com/codex/guides/agents-md/",
+    "type": "官方文件",
+    "source_date": null,
+    "retrieved_date": "2026-10-04",
+    "note": "閱讀日重導至官方learn.chatgpt.com；沿repo階層規則，不能覆蓋既有規範。"
+  }
+]

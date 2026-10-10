@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "request_id": "11111111-2222-4333-8444-555555555555",
+  "key": {
+    "host_id": "demo-host",
+    "boot_id": "demo-boot",
+    "entity_id": "cpu.package.0",
+    "metric_id": "cpu.temperature.package",
+    "scope": "package:0"
+  },
+  "start_boot_ns": "0",
+  "end_boot_ns": "4000000000",
+  "covered_ns": "2000000000",
+  "coverage_ratio": 0.5,
+  "truncated": false,
+  "points": [
+    {
+      "start_boot_ns": "0",
+      "end_boot_ns": "1000000000",
+      "value": {
+        "type": "f64",
+        "value": 68
+      },
+      "covered_ns": "1000000000",
+      "method": "time_weighted_step",
+      "source_ids": [
+        "fixture:cpu:1"
+      ],
+      "reason": "SYNTHETIC_FIXTURE"
+    },
+    {
+      "start_boot_ns": "1000000000",
+      "end_boot_ns": "3000000000",
+      "value": null,
+      "covered_ns": "0",
+      "method": "gap",
+      "source_ids": [],
+      "reason": "SYNTHETIC_TIMEOUT"
+    },
+    {
+      "start_boot_ns": "3000000000",
+      "end_boot_ns": "4000000000",
+      "value": {
+        "type": "f64",
+        "value": 69
+      },
+      "covered_ns": "1000000000",
+      "method": "time_weighted_step",
+      "source_ids": [
+        "fixture:cpu:1"
+      ],
+      "reason": "SYNTHETIC_FIXTURE"
+    }
+  ],
+  "source_changes": [],
+  "clock_discontinuities": [],
+  "snapshot_revision": "10",
+  "next_start_boot_ns": null
+}

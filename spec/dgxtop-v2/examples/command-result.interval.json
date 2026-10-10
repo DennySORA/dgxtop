@@ -1,0 +1,12 @@
+{
+  "schema_version": 2,
+  "request_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+  "status": "completed",
+  "code": "Ok",
+  "message": "採樣設定已套用；各來源仍遵守能力下限。",
+  "config_revision": 2,
+  "effective_interval_ms": 1000,
+  "action_state": null,
+  "confirmation_token": null,
+  "expires_boot_ns": null
+}
