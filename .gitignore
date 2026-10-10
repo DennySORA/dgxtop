@@ -6,3 +6,5 @@
 __pycache__/
 # Validation evidence is part of the repository.
 !docs/validation/evidence/*.log
+# The specification copy must stay byte-identical to dgxtop-spec-v2.zip.
+!spec/dgxtop-v2/**/*.log
