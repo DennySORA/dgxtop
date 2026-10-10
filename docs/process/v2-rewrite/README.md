@@ -46,7 +46,7 @@ filtered to one GPU while the selection survives refresh. It is part of T10 acce
   and reran the owner gates on the integrated workspace. The integration suites
   (`tests/action_disposable`, `tests/fault_injection`), the benchmark harness and a read-only
   AT01–AT40 evidence map were produced the same way and reviewed before adoption.
-- Decisions that refine the specification: [DECISIONS.md](DECISIONS.md) (D-01 … D-55).
+- Decisions that refine the specification: [DECISIONS.md](DECISIONS.md) (D-01 … D-57).
 - Defects found by the evidence map and the fault-injection suite and fixed with a failing test
   first: terminal hang-up spin (D-15), Manager fail-stop and dead-Manager sessions (D-19), event
   ring evicting control events for telemetry (AT30), ingress bytes ignored by the pressure
@@ -158,6 +158,10 @@ filtered to one GPU while the selection survives refresh. It is part of T10 acce
   checkpoint threshold, so after the first checkpoint the WAL file stays at the threshold and the
   status reported the archive (and could report the audit) as degraded for good. The check
   now counts the frames readers keep from the checkpoint, as write admission already did.
+- History without peak bands (D-57, 2026-10-10): the grey band behind each column's mean first
+  floated with a dark gap, which a failing test reproduced and a fix closed. The owner still saw
+  grey blocks, worst on bursty DGX loads, so the strips now draw the means only. Rate pairs
+  scale to their tallest column, and the legend keeps the window's peak.
 - Agent work: three worker agents for the remaining acceptance gaps were stopped by the owner
   before delivering. Their partial snapshots were not integrated, and the gaps they targeted
   are listed in `docs/validation/VALIDATION.md`.

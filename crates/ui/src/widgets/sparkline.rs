@@ -2,16 +2,13 @@
 //! sample is never drawn as a zero bar. A real zero still shows the lowest
 //! bar to stay distinguishable from a gap. One column is one sample, the
 //! newest at the right edge; columns can take the gauge colors of their
-//! level, so a busy stretch reads red at a glance (D-41). Optional peaks
-//! (each column's maximum) draw dimmed above the column, so a short spike
-//! inside a long bucket stays visible (D-46), or in a style of their own,
-//! a neutral band behind the colored means (D-50). The top quarter of the
-//! top row stays empty, so a chart under load never touches the bar or the
-//! chart above it (D-52).
+//! level, so a busy stretch reads red at a glance (D-41). The top quarter of
+//! the top row stays empty, so a chart under load never touches the bar or
+//! the chart above it (D-52).
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::widgets::Widget;
 
 use crate::num::{saturate_u16, scaled_round};
@@ -25,8 +22,6 @@ const HEADROOM_EIGHTHS: u16 = 2;
 #[derive(Debug, Clone)]
 pub struct GapSparkline<'a> {
     points: &'a [Option<f64>],
-    peaks: Option<&'a [Option<f64>]>,
-    peak_style: Option<Style>,
     max: Option<f64>,
     style: Style,
     levels: Option<&'a ThemePalette>,
@@ -37,8 +32,6 @@ impl<'a> GapSparkline<'a> {
     pub fn new(points: &'a [Option<f64>], style: Style) -> Self {
         Self {
             points,
-            peaks: None,
-            peak_style: None,
             max: None,
             style,
             levels: None,
@@ -54,12 +47,6 @@ impl<'a> GapSparkline<'a> {
         self
     }
 
-    /// Draws the peaks in `style` instead of their column's dimmed color.
-    pub fn peak_style(mut self, style: Style) -> Self {
-        self.peak_style = Some(style);
-        self
-    }
-
     /// Fixed scale maximum (e.g. 100 for percentages); otherwise the visible maximum.
     pub fn max(mut self, max: Option<f64>) -> Self {
         self.max = max.filter(|value| value.is_finite() && *value > 0.0);
@@ -72,23 +59,10 @@ impl<'a> GapSparkline<'a> {
         self
     }
 
-    /// Each point's maximum, aligned with the points, drawn dimmed above the
-    /// point's column.
-    pub fn peaks(mut self, peaks: &'a [Option<f64>]) -> Self {
-        self.peaks = Some(peaks);
-        self
-    }
-
-    /// The largest finite visible point or peak (the scale when none is
-    /// fixed).
+    /// The largest finite visible point (the scale when none is fixed).
     pub fn peak(&self, width: u16) -> Option<f64> {
-        let peaks = self
-            .peaks
-            .map(|peaks| visible(peaks, width))
-            .unwrap_or_default();
         visible(self.points, width)
             .iter()
-            .chain(peaks)
             .flatten()
             .copied()
             .filter(|value| value.is_finite())
@@ -122,10 +96,6 @@ impl Widget for GapSparkline<'_> {
             return;
         }
         let points = visible(self.points, area.width);
-        let peaks = self
-            .peaks
-            .map(|peaks| visible(peaks, area.width))
-            .unwrap_or_default();
         let scale = self.scale(area.width);
         let offset = area.width.saturating_sub(saturate_u16(points.len()));
         let ratio_of = |value: f64| (value / scale).clamp(0.0, 1.0);
@@ -134,17 +104,6 @@ impl Widget for GapSparkline<'_> {
                 continue;
             };
             let x = area.x + offset + saturate_u16(index);
-            let peak = peaks
-                .get(index)
-                .copied()
-                .flatten()
-                .filter(|peak| peak.is_finite() && *peak > value);
-            if let Some(peak) = peak {
-                let style = self
-                    .peak_style
-                    .unwrap_or_else(|| self.style_for(ratio_of(peak)).add_modifier(Modifier::DIM));
-                draw_column(buf, area, x, ratio_of(peak), style);
-            }
             draw_column(
                 buf,
                 area,

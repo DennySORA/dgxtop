@@ -58,11 +58,12 @@ network, and when", in the overview's order, so the overview and the history rea
   - a gutter: the scale's top and `0`, or the strip's label and scale;
   - the plot: each column the mean over its time in block glyphs, coloured by its share of the
     scale (rates in the overview's colours), its peak as a neutral band above it; a dotted base
-    where nothing was recorded;
+    where nothing was recorded. D-57 dropped the peak band: at minute resolution the band
+    turned short bursts into large grey blocks, and the legend keeps the window's peak;
   - a legend: now, mean and max over the window (and for GPU power the energy).
 - **Scales.** Utilization 100 %; memory the RAM total or each GPU's framebuffer (on unified
   memory the RAM); temperature 100 °C; power each GPU's limit; a rate pair the larger peak of
-  the two.
+  the two (since D-57 its tallest column).
 - **Time axis.** Under each column of panels, ticks about six to a window (every minute of
   5 m, every 10 minutes of 1 h, every hour of 6 h, every 2 h of 12 h, every 4 h of 24 h),
   `-1h` to `now`. History lives on the boot clock, so a window reaching back before boot is

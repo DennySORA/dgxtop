@@ -4,7 +4,7 @@
 //! the GPUs' utilization, memory in use, temperature and power (a strip per
 //! GPU, each against its own scale); the disk's read and write and the
 //! interface's receive and transmit rates (two strips on one scale, the
-//! larger peak of the pair, so their heights compare).
+//! tallest column of the pair, so their heights compare).
 
 use dgxtop_core::view::{HistoryChartKind, HistoryChartView, HistoryView};
 
@@ -29,7 +29,8 @@ pub(super) struct Strip<'a> {
     /// in a panel of one.
     pub(super) label: String,
     pub(super) chart: &'a HistoryChartView,
-    /// Top of the scale; `None` while a rate pair has no data.
+    /// Top of the scale; `None` for a rate, whose pair is scaled when it
+    /// is drawn ([`Panel::is_rate`]).
     pub(super) scale: Option<f64>,
     pub(super) paint: Paint,
 }
@@ -39,6 +40,13 @@ pub(super) struct Strip<'a> {
 pub(super) struct Panel<'a> {
     pub(super) title: String,
     pub(super) strips: Vec<Strip<'a>>,
+}
+
+impl Panel<'_> {
+    /// Whether the panel draws a device's rates, scaled to what they draw.
+    pub(super) fn is_rate(&self) -> bool {
+        self.strips.iter().any(|strip| strip.paint != Paint::Levels)
+    }
 }
 
 /// The GPU panels: their series and titles.
@@ -142,24 +150,20 @@ fn gpu_label(subject: &str) -> String {
         .map_or_else(|| subject.clone(), str::to_owned)
 }
 
-/// A device's two rates on one scale: the larger peak of the two.
+/// A device's two rates on one scale, set when they are drawn: the tallest
+/// column of the two (D-57), so their heights compare.
 fn rate_panel<'a>(history: &'a HistoryView, pair: [Rate; 2], title: &str) -> Option<Panel<'a>> {
     let charts = pair.map(|(kind, label, paint)| {
         let chart = history.charts.iter().find(|chart| chart.kind == kind);
         (chart, label, paint)
     });
-    let scale = charts
-        .iter()
-        .filter_map(|(chart, _, _)| chart.and_then(|chart| chart.peak))
-        .filter(|peak| peak.is_finite() && *peak > 0.0)
-        .reduce(f64::max);
     let strips: Vec<Strip<'a>> = charts
         .into_iter()
         .filter_map(|(chart, label, paint)| {
             Some(Strip {
                 label: label.to_owned(),
                 chart: chart?,
-                scale,
+                scale: None,
                 paint,
             })
         })
@@ -227,11 +231,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![Some(80.0 * 1_073_741_824.0), Some(64.0 * 1_073_741_824.0)]
         );
-        // A rate pair shares the larger peak, so its heights compare.
+        // A rate pair is scaled when drawn, to its tallest column.
         let disk = &panels[6];
-        let peaks: Vec<Option<f64>> = disk.strips.iter().map(|strip| strip.chart.peak).collect();
-        let larger = peaks.iter().flatten().copied().reduce(f64::max);
-        assert!(disk.strips.iter().all(|strip| strip.scale == larger));
+        assert!(disk.is_rate() && !panels[5].is_rate());
+        assert!(disk.strips.iter().all(|strip| strip.scale.is_none()));
         assert_eq!(
             disk.strips
                 .iter()

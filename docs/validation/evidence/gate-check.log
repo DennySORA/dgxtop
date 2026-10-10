@@ -1,16 +1,15 @@
 # evidence: gate-check
 # command: cargo check --workspace --all-targets --all-features --locked
-# started_utc: 2026-10-10T13:12:22Z
-# git_commit: b4b5a8d87d3c148cedacf91daf6f926719694a18 (working tree modified)
+# started_utc: 2026-10-10T14:32:44Z
+# git_commit: 32037716aca2cd1fd195baaf7e23b439916dd79c (working tree modified)
 # host: Linux 6.12.111+deb13-amd64 x86_64
 # cpu: 13th Gen Intel(R) Core(TM) i9-13900K
 # rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
 # ---- output ----
    Compiling dgxtop v0.2.0 (/mnt/DennySORA_SSD/Code/Github/dgxtop/crates/dgxtop)
-    Checking dgxtop-adapters v0.2.0 (/mnt/DennySORA_SSD/Code/Github/dgxtop/crates/adapters)
     Checking dgxtop-ui v0.2.0 (/mnt/DennySORA_SSD/Code/Github/dgxtop/crates/ui)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.48s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.11s
 # ---- end ----
-# finished_utc: 2026-10-10T13:12:22Z
+# finished_utc: 2026-10-10T14:32:46Z
 # exit_code: 0
 # redacted: GPU UUIDs and hardware serial numbers

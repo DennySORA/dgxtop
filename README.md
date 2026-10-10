@@ -104,10 +104,10 @@ exited, unknown) as a notice.
 - **History.** The overview's resources over a longer window (5 minutes to 24 hours, `w`/`W`),
   laid out like a monitoring dashboard: panels in pairs, CPU and memory, the GPUs' utilization
   and memory, their temperature and power (a strip per GPU), and the read/write and
-  receive/transmit rates of the busiest disk and interface (each pair on one scale). Every strip
-  shows its scale, block columns of the window (the mean coloured by level, the peak as a band
-  above it, a dotted base where nothing was recorded) and a legend with the value now, the mean
-  and the peak. A time axis runs under each column of panels. The history is kept on disk
+  receive/transmit rates of the busiest disk and interface (each pair on one scale, its tallest
+  column). Every strip shows its scale, block columns of the window (the mean coloured by level,
+  a dotted base where nothing was recorded) and a legend with the value now, the mean and the
+  peak of the window. A time axis runs under each column of panels. The history is kept on disk
   (`history.sqlite3`, on by default): earlier runs and boots are read back and charted on the
   same axis, and the window bar says how much of a window is recorded (only while dgxtop runs).
   Under the axis, each GPU's last 1, 6, 12

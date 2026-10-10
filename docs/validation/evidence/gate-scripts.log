@@ -1,7 +1,7 @@
 # evidence: gate-scripts
 # command: env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_*.py -v
-# started_utc: 2026-10-10T13:12:44Z
-# git_commit: b4b5a8d87d3c148cedacf91daf6f926719694a18 (working tree modified)
+# started_utc: 2026-10-10T14:33:09Z
+# git_commit: 32037716aca2cd1fd195baaf7e23b439916dd79c (working tree modified)
 # host: Linux 6.12.111+deb13-amd64 x86_64
 # cpu: 13th Gen Intel(R) Core(TM) i9-13900K
 # rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
@@ -32,9 +32,9 @@ test_member_paths_outside_the_package_root_are_rejected (test_verify_spec_copy.V
 Ran 18 tests in 0.007s
 
 OK
-check_validation: /tmp/tmpmbubxme_/VALIDATION.md is consistent with /tmp/tmpmbubxme_/evidence
-verify_spec_copy: 3 members, CRC ok, byte-identical to /tmp/tmp9ebao29e/spec, MANIFEST hashes ok
+check_validation: /tmp/tmpxsj3ewvy/VALIDATION.md is consistent with /tmp/tmpxsj3ewvy/evidence
+verify_spec_copy: 3 members, CRC ok, byte-identical to /tmp/tmppmccph8q/spec, MANIFEST hashes ok
 # ---- end ----
-# finished_utc: 2026-10-10T13:12:44Z
+# finished_utc: 2026-10-10T14:33:09Z
 # exit_code: 0
 # redacted: GPU UUIDs and hardware serial numbers

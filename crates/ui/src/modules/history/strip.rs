@@ -2,10 +2,11 @@
 //!
 //! - the gutter: in a panel of one series the scale's top and its zero, in a
 //!   panel of several the strip's label and its scale;
-//! - the plot: each column the mean over its time in block glyphs, its peak
-//!   dimmed above it, colored by its share of the scale (or for a rate by
-//!   its direction, as on the overview); a dotted base where nothing was
-//!   recorded, so a gap never reads as zero;
+//! - the plot: each column the mean over its time in block glyphs, colored
+//!   by its share of the scale (or for a rate by its direction, as on the
+//!   overview); a dotted base where nothing was recorded, so a gap never
+//!   reads as zero. Peaks are not drawn (D-57): the legend gives the
+//!   window's peak;
 //! - the legend: the value now, the mean and the peak over the window (and
 //!   for power the energy), as many as the strip has rows.
 
@@ -143,7 +144,7 @@ fn render_plot(
     if plot.is_empty() {
         return;
     }
-    let (means, peaks) = columns_of(
+    let means = columns_of(
         &strip.chart.points,
         (window.start_ns, window.end_ns),
         plot.width,
@@ -155,10 +156,7 @@ fn render_plot(
         Paint::Write => theme.warning,
         Paint::Transmit => theme.accent,
     };
-    let mut sparkline = GapSparkline::new(&means, Style::new().fg(color))
-        .peaks(&peaks)
-        .peak_style(theme.muted_style())
-        .max(strip.scale);
+    let mut sparkline = GapSparkline::new(&means, Style::new().fg(color)).max(strip.scale);
     if strip.paint == Paint::Levels {
         sparkline = sparkline.level_colors(theme);
     }
@@ -287,28 +285,26 @@ fn binary_compact(value: f64, suffix: &str) -> String {
 }
 
 /// `width` columns of the window `(start, end)`: per column the
-/// time-weighted mean of the points it overlaps and their largest maximum;
-/// `None` where no point with a value overlaps it, so a gap stays blank.
+/// time-weighted mean of the points it overlaps; `None` where no point
+/// with a value overlaps it, so a gap stays blank.
 pub(super) fn columns_of(
     points: &[HistoryPointView],
     (start, end): (u64, u64),
     width: u16,
-) -> (Vec<Option<f64>>, Vec<Option<f64>>) {
+) -> Vec<Option<f64>> {
     let columns = usize::from(width);
     let span = u128::from(end.saturating_sub(start));
     if columns == 0 || span == 0 {
-        return (Vec::new(), Vec::new());
+        return Vec::new();
     }
     let edge = |column: usize| -> u128 {
         u128::from(start) + span * u128::try_from(column).unwrap_or(u128::MAX) / u128::from(width)
     };
     let mut sums = vec![(0.0_f64, 0.0_f64); columns];
-    let mut peaks: Vec<Option<f64>> = vec![None; columns];
     for point in points {
         let Some(mean) = point.mean.filter(|mean| mean.is_finite()) else {
             continue;
         };
-        let peak = point.max.filter(|max| max.is_finite()).unwrap_or(mean);
         let (from, to) = (u128::from(point.start_utc_ns), u128::from(point.end_utc_ns));
         for column in column_range(from, to, (u128::from(start), span), columns) {
             let overlap = to
@@ -318,14 +314,23 @@ pub(super) fn columns_of(
             let weight = overlap.max(1) as f64;
             sums[column].0 += mean * weight;
             sums[column].1 += weight;
-            peaks[column] = Some(peaks[column].map_or(peak, |current| current.max(peak)));
         }
     }
-    let means = sums
-        .into_iter()
+    sums.into_iter()
         .map(|(sum, weight)| (weight > 0.0).then(|| sum / weight))
-        .collect();
-    (means, peaks)
+        .collect()
+}
+
+/// The tallest column any of `strips` draws in a plot `width` columns
+/// wide: the shared scale of a rate pair, so its heights compare and its
+/// busiest stretch reaches the top.
+pub(super) fn tallest_column(strips: &[Strip<'_>], window: Window, width: u16) -> Option<f64> {
+    strips
+        .iter()
+        .flat_map(|strip| columns_of(&strip.chart.points, (window.start_ns, window.end_ns), width))
+        .flatten()
+        .filter(|mean| mean.is_finite() && *mean > 0.0)
+        .reduce(f64::max)
 }
 
 /// Columns `[from, to)` overlaps among `columns` over `(start, span)`.
@@ -418,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn columns_follow_time_and_keep_gaps_and_peaks() {
+    fn columns_follow_time_and_keep_gaps() {
         // Four 10 s points over 40 s in four columns: one point each.
         let points = [
             point(0, 10, Some(10.0), Some(12.0)),
@@ -426,26 +431,38 @@ mod tests {
             point(20, 30, Some(30.0), Some(90.0)),
             point(30, 40, Some(40.0), None),
         ];
-        let (means, peaks) = columns_of(&points, (0, 40 * SECOND), 4);
+        let means = columns_of(&points, (0, 40 * SECOND), 4);
         assert_eq!(means, vec![Some(10.0), None, Some(30.0), Some(40.0)]);
-        assert_eq!(peaks, vec![Some(12.0), None, Some(90.0), Some(40.0)]);
         // Two columns merge two points each, time-weighted; the gap only
         // narrows the weight, it never counts as zero.
-        let (means, peaks) = columns_of(&points, (0, 40 * SECOND), 2);
+        let means = columns_of(&points, (0, 40 * SECOND), 2);
         assert_eq!(means, vec![Some(10.0), Some(35.0)]);
-        assert_eq!(peaks, vec![Some(12.0), Some(90.0)]);
         // Eight columns: a point covers two; points before the window are
         // left out.
         let late = [
             point(0, 10, Some(5.0), None),
             point(40, 50, Some(7.0), None),
         ];
-        let (means, _) = columns_of(&late, (40 * SECOND, 80 * SECOND), 8);
+        let means = columns_of(&late, (40 * SECOND, 80 * SECOND), 8);
         assert_eq!(
             means,
             vec![Some(7.0), Some(7.0), None, None, None, None, None, None]
         );
-        assert_eq!(columns_of(&points, (0, 0), 4).0, Vec::new());
+        assert_eq!(columns_of(&points, (0, 0), 4), Vec::new());
+    }
+
+    #[test]
+    fn a_rate_pair_scales_to_its_tallest_column() {
+        let history = history_view();
+        let panels = panels(&history);
+        let disk = &panels[6];
+        // One column a minute: the read's last minute averages 59 KiB/s,
+        // the tallest column of the pair, below its 64 KiB/s window peak.
+        assert_eq!(
+            tallest_column(&disk.strips, hour(), 60),
+            Some(59.0 * 1024.0)
+        );
+        assert_eq!(tallest_column(&disk.strips, hour(), 0), None);
     }
 
     #[test]

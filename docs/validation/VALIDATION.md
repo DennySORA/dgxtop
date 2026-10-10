@@ -71,35 +71,35 @@ GPU UUIDs and serial numbers are masked before the file is hashed.
 
 | Evidence | Command | Exit | SHA-256 |
 |---|---|---|---|
-| `gate-fmt` | `cargo fmt --all -- --check` | 0 | `0781aae44344d37d15e1137355f9b178ced00b53dbe0845b052c530257e6b4dd` |
-| `gate-check` | `cargo check --workspace --all-targets --all-features --locked` | 0 | `a7daf2048a1410a9d1f76336b7f4091043a58cd096451fb40977bf43d1c0bcb5` |
-| `gate-clippy` | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | 0 | `a3f2d0458784d9217a4a661f239b6bcab2def2e6db88a2709b7d55f90bc4177a` |
-| `gate-test` | `cargo test --workspace --all-features --locked --no-fail-fast` | 0 | `c5f347d770e83a47e018fa444f6c51151ea58e25bf3fce7906a36d1bd61dfbc2` |
-| `gate-boundaries` | `bash -c mkdir -p target && cargo metadata --format-version 1 --locked > target/metadata.json && python3 spe…` | 0 | `96030e724e23c847530b02cd6645ebb0cc4aedae2800c84164e35170370947c9` |
-| `gate-scripts` | `env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_*.py -v` | 0 | `06d8d98a97d7e8f2c5f84b1874ef14a1f16cb220603065d624e49c789ee30003` |
-| `rules-preserved` | `bash -c git ls-files --error-unmatch CLAUDE.md && git diff --exit-code HEAD -- CLAUDE.md && echo "CLAUDE.md…` | 0 | `155bded4c4e8dbdb5c85167666a68b1f8cfba59d28a450086b76e7bf7da3245e` |
+| `gate-fmt` | `cargo fmt --all -- --check` | 0 | `f04c7f8a7881870114b88bfdca27ef55dbd1c329159281d131c00a56cf1b195d` |
+| `gate-check` | `cargo check --workspace --all-targets --all-features --locked` | 0 | `ebc8ee3d70de1fa2b53d8c8007c46c8e594fbd658d435959182f0b80e1ef6063` |
+| `gate-clippy` | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | 0 | `62cdd382fa5cafed0f8364d2d59d935e8b39d8f44bbe71eff08d66a4c20deeb7` |
+| `gate-test` | `cargo test --workspace --all-features --locked --no-fail-fast` | 0 | `12817eb932a4763017cb4af75e77300326f8c954bfd2ac498095e681662b51dd` |
+| `gate-boundaries` | `bash -c mkdir -p target && cargo metadata --format-version 1 --locked > target/metadata.json && python3 spe…` | 0 | `47973e6e0c76e4fca5a508378eb48c1a2743c9d4b3599477c01f1076a6f5c3d4` |
+| `gate-scripts` | `env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_*.py -v` | 0 | `26922695ceda2c650f1c1f2f649548303935132d67859d059d7741b199cb7c88` |
+| `rules-preserved` | `bash -c git ls-files --error-unmatch CLAUDE.md && git diff --exit-code HEAD -- CLAUDE.md && echo "CLAUDE.md…` | 0 | `10d20c4b02eeb02c3626e428cda14d58bee135961263e944fac01811cc5a5b5d` |
 | `hardware-suites` | `cargo test --workspace --all-features --locked -- --ignored hardware_ --test-threads=1` | 0 | `b3ca9c8fede1cf34e8e1e303cd8bf2f2a631b77e2cdb0739d3b4abac6f38edbd` |
 | `spec-package-validation` | `/tmp/claude-1000/-mnt-DennySORA-SSD-Code-Github-dgxtop/32efa81a-0f25-482f-b209-eb95f51fb786/scratchpad/run_…` | 0 | `d28c5098c16fe2aa732aa9c1f556b2be374a1e6604997f65d14c33e61f00d817` |
-| `spec-copy-verification` | `python3 scripts/verify_spec_copy.py dgxtop-spec-v2.zip spec/dgxtop-v2` | 0 | `071fb3d363aff58c1ede7e4e5f2d921a1f5c1fa8716c7bde328e4f600d17ae20` |
+| `spec-copy-verification` | `python3 scripts/verify_spec_copy.py dgxtop-spec-v2.zip spec/dgxtop-v2` | 0 | `5eadbf5e336d3d815a750f0773d3bf11d8059aaa2536f0fe852d5a4292bdb372` |
 | `bench-ref-smoke-60s` | `env DGXTOP_BENCH_SMOKE_SECONDS=60 cargo bench -p dgxtop --locked --offline --bench ref -- --smoke` | 0 | `143f3c76df9e0bb87417d7dc2328148f5542ef76ec22708f6398337c520d24f8` |
 | `bench-projection-smoke` | `cargo bench -p dgxtop --locked --offline --bench projection -- --smoke` | 0 | `6ab122ad7947c1456c8c4c38b870fcaa8e3b4937099a38ba303f0e5d379af276` |
 | `bench-history-smoke` | `cargo bench -p dgxtop --locked --offline --bench history -- --smoke` | 0 | `2a00d13024a416b9a27091f74c540f4f7b07d372ba05239d7dea27881f71aefd` |
 | `bench-arbitration-smoke` | `cargo bench -p dgxtop --locked --offline --bench arbitration -- --smoke` | 0 | `72fde55c2f27d1f865a7c50addf7cacf87c8fded76ce414137f4706887779ad0` |
-| `release-build` | `cargo build --release --locked` | 0 | `177e1ca2e59245ea65eed61c8e2e4a00baaac49b6a29e104ba768162f3e283e6` |
-| `release-version-verbose` | `target/release/dgxtop --version --verbose` | 0 | `477f73c0867df13fd7d43cd07124a1df68eb2d803dad4ae93a7b7cd0cbbb9634` |
+| `release-build` | `cargo build --release --locked` | 0 | `3d2341bc73f4fdbd0f37653b1af3e3e7a7d876ad7a9824b4b616588a8e824371` |
+| `release-version-verbose` | `target/release/dgxtop --version --verbose` | 0 | `735abf29f3dcdac25aa2a0f565f9e50fc782458823092bfc2f8b4f2530b4a111` |
 | `gate-fmt-gb10` | `cargo fmt --all -- --check` | 0 | `5f569412cb303198e81f4207e2dd2868bc36118665dff64ecae4c8fb8aecb7cb` |
 | `gate-check-gb10` | `cargo check --workspace --all-targets --all-features --locked` | 0 | `54754b35c5a2076ac4f2ba19ccdd6710291d1907601c4454a648ef5075b86fe7` |
 | `gate-clippy-gb10` | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | 0 | `2fc1582d50e36e760184001d1431c768c12484ad3c6df93830192ba892223ee4` |
 | `gate-test-gb10` | `cargo test --workspace --all-features --locked --no-fail-fast` | 0 | `9ad8192d6dc334a813b0967bec0e96438479b9da0608c812226b6773a1c40067` |
-| `gate-boundaries-gb10` | `bash -c mkdir -p target && cargo metadata --format-version 1 --locked > target/metadata.json && pyth…` | 0 | `9ff7f26c3a8adfbdd1c4b721dee1ba83056dd6f192f35aaa646d13e70fb368b2` |
+| `gate-boundaries-gb10` | `bash -c mkdir -p target && cargo metadata --format-version 1 --locked > target/metadata.json && python3 spe…` | 0 | `9ff7f26c3a8adfbdd1c4b721dee1ba83056dd6f192f35aaa646d13e70fb368b2` |
 | `gate-scripts-gb10` | `env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_*.py -v` | 0 | `42a9f92b49f4ba016cd96b2c2348748e97ba7aa340d1709fdefb86a36215bd24` |
-| `rules-preserved-gb10` | `bash -c git ls-files --error-unmatch CLAUDE.md && git diff --exit-code HEAD -- CLAUDE.md && echo "CL…` | 0 | `e298f794eef3f2ebe9c35c74be0dc12138eeddcadd1f69bc3a8fe0e98e7ffd6b` |
+| `rules-preserved-gb10` | `bash -c git ls-files --error-unmatch CLAUDE.md && git diff --exit-code HEAD -- CLAUDE.md && echo "CLAUDE.md…` | 0 | `e298f794eef3f2ebe9c35c74be0dc12138eeddcadd1f69bc3a8fe0e98e7ffd6b` |
 | `spec-copy-verification-gb10` | `python3 scripts/verify_spec_copy.py dgxtop-spec-v2.zip spec/dgxtop-v2` | 0 | `ae8fe867a1d521670e581ca26056a474a18cb0ad9243988a8cebe4e52e5e18e7` |
 | `hardware-suites-gb10` | `cargo test --workspace --all-features --locked -- --ignored hardware_ --test-threads=1` | 0 | `7fdce046c815034f4f7ab5e9c5d5aecd9a856e45398253e0b86d0884fd6aabc0` |
 | `release-build-gb10` | `cargo build --release --locked` | 0 | `c11483ac1e9ae85c67aa6888bdf1fc810aced7adaa43ee3f7fb847777283a1e9` |
 | `release-version-verbose-gb10` | `target/release/dgxtop --version --verbose` | 0 | `36fc2e78e3506c7b4164bb548e889ac0e46a7b0e05650828d92e301ffabcd292` |
 | `gpm-probe-gb10` | `nvidia-smi dmon --gpm-metrics 1,2,3,10 -c 3` | 0 | `42f3a548c475373840b015cc361181a7ab69be8b4c10e4ccf7d2f3d1ef1470b6` |
-| `hwmon-probe-gb10` | `bash -c for h in /sys/class/hwmon/hwmon*; do echo "$h name=$(cat $h/name)"; ls $h | grep -E "^(power…` | 0 | `37720f845629dcc81b42e2add2216f2d4fae55f02443f7247302f9598f50077d` |
+| `hwmon-probe-gb10` | `bash -c for h in /sys/class/hwmon/hwmon*; do echo "$h name=$(cat $h/name)"; ls $h \| grep -E "^(power\|ener…` | 0 | `37720f845629dcc81b42e2add2216f2d4fae55f02443f7247302f9598f50077d` |
 
 ## Acceptance status
 

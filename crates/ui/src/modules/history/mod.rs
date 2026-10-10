@@ -25,11 +25,11 @@ use ratatui::text::{Line, Span};
 
 use self::axis::render_axis;
 use self::layout::{HistoryLayout, plan};
-use self::panels::{Panel, panels};
+use self::panels::{Panel, Strip, panels};
 use self::stats::{
     GpuStats, gpu_stats, nanos_to_seconds, recorded_text, render_gpu_stats, stats_labels,
 };
-use self::strip::{Window, plot_width, render_strip, strip_text};
+use self::strip::{Window, plot_width, render_strip, strip_text, tallest_column};
 use super::ModuleBuildError;
 use super::common::{
     ManifestSpec, Output, RowCursor, build_manifest, draw_caption, draw_line, gap, message,
@@ -207,11 +207,19 @@ fn render_panel(
         );
     }
     let alone = panel.strips.len() == 1;
+    let rate_scale = panel
+        .is_rate()
+        .then(|| tallest_column(&panel.strips, window, plot_width(area.width)))
+        .flatten();
     for strip in &panel.strips {
         let Some(strip_area) = rows.take(strip_rows) else {
             break;
         };
-        render_strip(frame, strip_area, (strip, alone), window, context);
+        let strip = Strip {
+            scale: rate_scale.or(strip.scale),
+            ..strip.clone()
+        };
+        render_strip(frame, strip_area, (&strip, alone), window, context);
     }
 }
 
