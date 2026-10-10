@@ -1,0 +1,332 @@
+# evidence: hardware-suites-gb10
+# command: cargo test --workspace --all-features --locked -- --ignored hardware_ --test-threads=1
+# started_utc: 2026-10-10T14:04:22Z
+# git_commit: d662f0abd751ca56ac8902805bdda61137f9023c (working tree modified)
+# host: Linux 6.17.0-1014-nvidia aarch64
+# cpu: 
+# rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
+# ---- output ----
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (target/debug/deps/dgxtop-3570c44bddc935d3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/dgxtop-d59feed47ffe41f9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running ../../tests/action_disposable/main.rs (target/debug/deps/action_disposable-fa81d3f2c216c891)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+
+     Running ../../tests/cli/main.rs (target/debug/deps/cli-de93b5ad3ee20a8c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.00s
+
+     Running ../../tests/contracts/main.rs (target/debug/deps/contracts-8b82afeefdc8fe43)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 35 filtered out; finished in 0.00s
+
+     Running ../../tests/fault_injection/main.rs (target/debug/deps/fault_injection-c672673120c89a49)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s
+
+     Running ../../tests/hardware/main.rs (target/debug/deps/hardware-dbfc96b0a1471eaf)
+
+running 1 test
+test hardware_every_live_adapter_discovers_and_reads_through_isolated_hosts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+     Running ../../tests/pty/main.rs (target/debug/deps/pty-3ecd2b3c354a70c5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running ../../tests/replay/main.rs (target/debug/deps/replay-4f7ffca93150f34a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/dgxtop_adapters-175fb043d4b323d1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 84 filtered out; finished in 0.00s
+
+     Running tests/adapters_a_catalog.rs (target/debug/deps/adapters_a_catalog-56cf92bd84c2f2f2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/adapters_a_filesystem.rs (target/debug/deps/adapters_a_filesystem-ac5d9c1aabbd4c44)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/adapters_a_hardware.rs (target/debug/deps/adapters_a_hardware-6d8a65e7b0a204c9)
+
+running 3 tests
+test hardware_filesystem_smoke ... ok
+test hardware_network_smoke ... ok
+test hardware_procfs_smoke ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/adapters_a_network.rs (target/debug/deps/adapters_a_network-1a214beb1842dc8b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/adapters_a_process.rs (target/debug/deps/adapters_a_process-516c0d85c22702d0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running tests/adapters_a_procfs.rs (target/debug/deps/adapters_a_procfs-fb81fe2cfe4d3aad)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+     Running tests/adapters_a_registry.rs (target/debug/deps/adapters_a_registry-e8741a8b089c608f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/adapters_b_nvml.rs (target/debug/deps/adapters_b_nvml-edee24cc905de196)
+
+running 1 test
+test hardware_nvml_smoke ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.17s
+
+     Running tests/adapters_b_process_action.rs (target/debug/deps/adapters_b_process_action-f0862e657e3fc137)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out; finished in 0.00s
+
+     Running tests/adapters_c_hardware.rs (target/debug/deps/adapters_c_hardware-f0a425122b9bae3d)
+
+running 3 tests
+test hardware_hwmon_smoke ... ok
+test hardware_powercap_smoke ... ok
+test hardware_thermal_smoke ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/adapters_c_hwmon.rs (target/debug/deps/adapters_c_hwmon-8dbf9b5ba3d66cf0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 25 filtered out; finished in 0.00s
+
+     Running tests/adapters_c_powercap.rs (target/debug/deps/adapters_c_powercap-b6b48678c7185ffb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/adapters_c_replay.rs (target/debug/deps/adapters_c_replay-fef0f38d44d251ba)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+
+     Running tests/adapters_c_thermal.rs (target/debug/deps/adapters_c_thermal-a162fd296a1efd70)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/dgxtop_collectors-b640086ad443b20a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 122 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/dgxtop_core-d88d490410fa2cab)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 101 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/dgxtop_manager-6afe515ed1d1ec0c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 232 filtered out; finished in 0.00s
+
+     Running tests/control_thread.rs (target/debug/deps/control_thread-7cc2aef02b6c650f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/dgxtop_runtime-27c0e02c802b5a52)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 102 filtered out; finished in 0.00s
+
+     Running tests/supervisor_hosts.rs (target/debug/deps/supervisor_hosts-7069edd87d9f89bb)
+
+running 0 supervisor host tests
+
+test result: ok. 0 passed; 0 failed; finished in 0.00s
+     Running unittests src/lib.rs (target/debug/deps/dgxtop_store-198dc8019ae5657a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 137 filtered out; finished in 0.00s
+
+     Running tests/store_hot_commit.rs (target/debug/deps/store_hot_commit-a0705fae64fbceb3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s
+
+     Running tests/store_hot_history.rs (target/debug/deps/store_hot_history-193df6b96c99fad3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running tests/store_hot_memory.rs (target/debug/deps/store_hot_memory-712c73ac6df6bc0f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/store_hot_properties.rs (target/debug/deps/store_hot_properties-5d5c30a9a8faf0a4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/store_hot_query_limits.rs (target/debug/deps/store_hot_query_limits-18e5579e0b4cc84b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/store_hot_support.rs (target/debug/deps/store_hot_support-22044fd131a4a51a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/store_persist_archive.rs (target/debug/deps/store_persist_archive-2cc3da04630595f5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s
+
+     Running tests/store_persist_archive_read.rs (target/debug/deps/store_persist_archive_read-f015e503e1aa53ad)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/store_persist_audit.rs (target/debug/deps/store_persist_audit-a59d0ab24e492aec)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.00s
+
+     Running tests/store_persist_config.rs (target/debug/deps/store_persist_config-76c13e69b61c5683)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.00s
+
+     Running tests/store_persist_paths_lock.rs (target/debug/deps/store_persist_paths_lock-cc3a04d3f2a4285b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/store_persist_sqlite.rs (target/debug/deps/store_persist_sqlite-d730cdff1677ae76)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/dgxtop_ui-20c63f2d87f21a37)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 186 filtered out; finished in 0.00s
+
+   Doc-tests dgxtop
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests dgxtop_adapters
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests dgxtop_collectors
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests dgxtop_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests dgxtop_manager
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests dgxtop_runtime
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests dgxtop_store
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests dgxtop_ui
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+# ---- end ----
+# finished_utc: 2026-10-10T14:04:25Z
+# exit_code: 0
+# redacted: GPU UUIDs and hardware serial numbers

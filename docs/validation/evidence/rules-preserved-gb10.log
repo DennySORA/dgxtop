@@ -1,0 +1,14 @@
+# evidence: rules-preserved-gb10
+# command: bash -c git ls-files --error-unmatch CLAUDE.md && git diff --exit-code HEAD -- CLAUDE.md && echo "CLAUDE.md is tracked and identical to HEAD"
+# started_utc: 2026-10-10T14:04:22Z
+# git_commit: d662f0abd751ca56ac8902805bdda61137f9023c (working tree modified)
+# host: Linux 6.17.0-1014-nvidia aarch64
+# cpu: 
+# rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
+# ---- output ----
+CLAUDE.md
+CLAUDE.md is tracked and identical to HEAD
+# ---- end ----
+# finished_utc: 2026-10-10T14:04:22Z
+# exit_code: 0
+# redacted: GPU UUIDs and hardware serial numbers

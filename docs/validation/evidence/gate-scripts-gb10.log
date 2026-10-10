@@ -1,0 +1,40 @@
+# evidence: gate-scripts-gb10
+# command: env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_*.py -v
+# started_utc: 2026-10-10T14:04:22Z
+# git_commit: d662f0abd751ca56ac8902805bdda61137f9023c (working tree modified)
+# host: Linux 6.17.0-1014-nvidia aarch64
+# cpu: 
+# rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
+# ---- output ----
+test_a_consistent_report_passes (test_check_validation.CheckValidationTests.test_a_consistent_report_passes) ... ok
+test_custom_harness_lines_with_a_duration_count_as_passing (test_check_validation.CheckValidationTests.test_custom_harness_lines_with_a_duration_count_as_passing) ... ok
+test_every_case_needs_a_section (test_check_validation.CheckValidationTests.test_every_case_needs_a_section) ... ok
+test_missing_duplicate_and_orphan_ids_are_rejected (test_check_validation.CheckValidationTests.test_missing_duplicate_and_orphan_ids_are_rejected) ... ok
+test_pass_must_not_cite_a_failed_log (test_check_validation.CheckValidationTests.test_pass_must_not_cite_a_failed_log) ... ok
+test_pass_needs_every_cited_test_to_have_passed (test_check_validation.CheckValidationTests.test_pass_needs_every_cited_test_to_have_passed) ... ok
+test_unknown_status_and_pass_without_evidence_are_rejected (test_check_validation.CheckValidationTests.test_unknown_status_and_pass_without_evidence_are_rejected) ... ok
+test_wrong_hash_wrong_exit_and_missing_logs_are_rejected (test_check_validation.CheckValidationTests.test_wrong_hash_wrong_exit_and_missing_logs_are_rejected) ... ok
+test_bundled_sqlite_is_marked (test_sbom.SbomTests.test_bundled_sqlite_is_marked) ... ok
+test_declared_licenses_are_added_as_spdx_expressions (test_sbom.SbomTests.test_declared_licenses_are_added_as_spdx_expressions) ... ok
+test_missing_license_data_is_left_out_instead_of_guessed (test_sbom.SbomTests.test_missing_license_data_is_left_out_instead_of_guessed) ... ok
+test_registry_packages_carry_checksums_and_workspace_members_are_excluded (test_sbom.SbomTests.test_registry_packages_carry_checksums_and_workspace_members_are_excluded) ... ok
+test_the_document_is_deterministic_for_a_tag (test_sbom.SbomTests.test_the_document_is_deterministic_for_a_tag) ... ok
+test_a_wrong_manifest_count_is_reported (test_verify_spec_copy.VerifySpecCopyTests.test_a_wrong_manifest_count_is_reported) ... ok
+test_an_edited_copy_fails_both_the_package_and_the_manifest_check (test_verify_spec_copy.VerifySpecCopyTests.test_an_edited_copy_fails_both_the_package_and_the_manifest_check) ... verify_spec_copy: differs from the package: SPEC.md
+verify_spec_copy: SPEC.md: 15 bytes, MANIFEST says 7
+verify_spec_copy: SPEC.md: SHA-256 differs from MANIFEST
+ok
+test_an_identical_copy_passes (test_verify_spec_copy.VerifySpecCopyTests.test_an_identical_copy_passes) ... ok
+test_extra_and_missing_files_are_reported (test_verify_spec_copy.VerifySpecCopyTests.test_extra_and_missing_files_are_reported) ... ok
+test_member_paths_outside_the_package_root_are_rejected (test_verify_spec_copy.VerifySpecCopyTests.test_member_paths_outside_the_package_root_are_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 18 tests in 0.012s
+
+OK
+check_validation: /tmp/tmpmx_x41gd/VALIDATION.md is consistent with /tmp/tmpmx_x41gd/evidence
+verify_spec_copy: 3 members, CRC ok, byte-identical to /tmp/tmp5t6anqgb/spec, MANIFEST hashes ok
+# ---- end ----
+# finished_utc: 2026-10-10T14:04:22Z
+# exit_code: 0
+# redacted: GPU UUIDs and hardware serial numbers

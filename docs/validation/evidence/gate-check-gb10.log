@@ -1,0 +1,21 @@
+# evidence: gate-check-gb10
+# command: cargo check --workspace --all-targets --all-features --locked
+# started_utc: 2026-10-10T14:03:40Z
+# git_commit: d662f0abd751ca56ac8902805bdda61137f9023c (working tree modified)
+# host: Linux 6.17.0-1014-nvidia aarch64
+# cpu: 
+# rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
+# ---- output ----
+    Checking dgxtop-core v0.2.0 (/home/dennysora-dgx/Code/Github/dgxtop/crates/core)
+    Checking dgxtop-adapters v0.2.0 (/home/dennysora-dgx/Code/Github/dgxtop/crates/adapters)
+    Checking dgxtop-store v0.2.0 (/home/dennysora-dgx/Code/Github/dgxtop/crates/store)
+    Checking dgxtop-runtime v0.2.0 (/home/dennysora-dgx/Code/Github/dgxtop/crates/runtime)
+    Checking dgxtop-manager v0.2.0 (/home/dennysora-dgx/Code/Github/dgxtop/crates/manager)
+    Checking dgxtop-collectors v0.2.0 (/home/dennysora-dgx/Code/Github/dgxtop/crates/collectors)
+    Checking dgxtop-ui v0.2.0 (/home/dennysora-dgx/Code/Github/dgxtop/crates/ui)
+    Checking dgxtop v0.2.0 (/home/dennysora-dgx/Code/Github/dgxtop/crates/dgxtop)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.84s
+# ---- end ----
+# finished_utc: 2026-10-10T14:03:46Z
+# exit_code: 0
+# redacted: GPU UUIDs and hardware serial numbers

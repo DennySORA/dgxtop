@@ -1,0 +1,18 @@
+# evidence: hwmon-probe-gb10
+# command: bash -c for h in /sys/class/hwmon/hwmon*; do echo "$h name=$(cat $h/name)"; ls $h | grep -E "^(power|energy|curr|in)[0-9]+_(input|label|average)$" || echo "  no power/energy/current/voltage channels"; done; ls /sys/class/powercap 2>&1
+# started_utc: 2026-10-10T13:40:28Z
+# git_commit: d662f0abd751ca56ac8902805bdda61137f9023c (working tree modified)
+# host: Linux 6.17.0-1014-nvidia aarch64
+# cpu: 
+# rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
+# ---- output ----
+/sys/class/hwmon/hwmon0 name=acpitz
+  no power/energy/current/voltage channels
+/sys/class/hwmon/hwmon1 name=nvme
+  no power/energy/current/voltage channels
+/sys/class/hwmon/hwmon2 name=mt7925_phy0
+  no power/energy/current/voltage channels
+# ---- end ----
+# finished_utc: 2026-10-10T13:40:28Z
+# exit_code: 0
+# redacted: GPU UUIDs and hardware serial numbers

@@ -1,0 +1,17 @@
+# evidence: gate-boundaries-gb10
+# command: bash -c mkdir -p target && cargo metadata --format-version 1 --locked > target/metadata.json && python3 spec/dgxtop-v2/tools/check_boundaries.py target/metadata.json
+# started_utc: 2026-10-10T14:04:22Z
+# git_commit: d662f0abd751ca56ac8902805bdda61137f9023c (working tree modified)
+# host: Linux 6.17.0-1014-nvidia aarch64
+# cpu: 
+# rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
+# ---- output ----
+{
+  "status": "PASS",
+  "errors": [],
+  "limitations": "只檢查直接production dependency，不代替Rust trait權限與非法std::fs/process程式碼審核"
+}
+# ---- end ----
+# finished_utc: 2026-10-10T14:04:22Z
+# exit_code: 0
+# redacted: GPU UUIDs and hardware serial numbers

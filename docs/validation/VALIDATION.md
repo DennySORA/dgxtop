@@ -87,6 +87,19 @@ GPU UUIDs and serial numbers are masked before the file is hashed.
 | `bench-arbitration-smoke` | `cargo bench -p dgxtop --locked --offline --bench arbitration -- --smoke` | 0 | `72fde55c2f27d1f865a7c50addf7cacf87c8fded76ce414137f4706887779ad0` |
 | `release-build` | `cargo build --release --locked` | 0 | `177e1ca2e59245ea65eed61c8e2e4a00baaac49b6a29e104ba768162f3e283e6` |
 | `release-version-verbose` | `target/release/dgxtop --version --verbose` | 0 | `477f73c0867df13fd7d43cd07124a1df68eb2d803dad4ae93a7b7cd0cbbb9634` |
+| `gate-fmt-gb10` | `cargo fmt --all -- --check` | 0 | `5f569412cb303198e81f4207e2dd2868bc36118665dff64ecae4c8fb8aecb7cb` |
+| `gate-check-gb10` | `cargo check --workspace --all-targets --all-features --locked` | 0 | `54754b35c5a2076ac4f2ba19ccdd6710291d1907601c4454a648ef5075b86fe7` |
+| `gate-clippy-gb10` | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | 0 | `2fc1582d50e36e760184001d1431c768c12484ad3c6df93830192ba892223ee4` |
+| `gate-test-gb10` | `cargo test --workspace --all-features --locked --no-fail-fast` | 0 | `9ad8192d6dc334a813b0967bec0e96438479b9da0608c812226b6773a1c40067` |
+| `gate-boundaries-gb10` | `bash -c mkdir -p target && cargo metadata --format-version 1 --locked > target/metadata.json && pyth…` | 0 | `9ff7f26c3a8adfbdd1c4b721dee1ba83056dd6f192f35aaa646d13e70fb368b2` |
+| `gate-scripts-gb10` | `env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_*.py -v` | 0 | `42a9f92b49f4ba016cd96b2c2348748e97ba7aa340d1709fdefb86a36215bd24` |
+| `rules-preserved-gb10` | `bash -c git ls-files --error-unmatch CLAUDE.md && git diff --exit-code HEAD -- CLAUDE.md && echo "CL…` | 0 | `e298f794eef3f2ebe9c35c74be0dc12138eeddcadd1f69bc3a8fe0e98e7ffd6b` |
+| `spec-copy-verification-gb10` | `python3 scripts/verify_spec_copy.py dgxtop-spec-v2.zip spec/dgxtop-v2` | 0 | `ae8fe867a1d521670e581ca26056a474a18cb0ad9243988a8cebe4e52e5e18e7` |
+| `hardware-suites-gb10` | `cargo test --workspace --all-features --locked -- --ignored hardware_ --test-threads=1` | 0 | `7fdce046c815034f4f7ab5e9c5d5aecd9a856e45398253e0b86d0884fd6aabc0` |
+| `release-build-gb10` | `cargo build --release --locked` | 0 | `c11483ac1e9ae85c67aa6888bdf1fc810aced7adaa43ee3f7fb847777283a1e9` |
+| `release-version-verbose-gb10` | `target/release/dgxtop --version --verbose` | 0 | `36fc2e78e3506c7b4164bb548e889ac0e46a7b0e05650828d92e301ffabcd292` |
+| `gpm-probe-gb10` | `nvidia-smi dmon --gpm-metrics 1,2,3,10 -c 3` | 0 | `42f3a548c475373840b015cc361181a7ab69be8b4c10e4ccf7d2f3d1ef1470b6` |
+| `hwmon-probe-gb10` | `bash -c for h in /sys/class/hwmon/hwmon*; do echo "$h name=$(cat $h/name)"; ls $h | grep -E "^(power…` | 0 | `37720f845629dcc81b42e2add2216f2d4fae55f02443f7247302f9598f50077d` |
 
 ## Acceptance status
 

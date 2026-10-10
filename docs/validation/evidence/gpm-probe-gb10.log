@@ -1,0 +1,17 @@
+# evidence: gpm-probe-gb10
+# command: nvidia-smi dmon --gpm-metrics 1,2,3,10 -c 3
+# started_utc: 2026-10-10T13:40:26Z
+# git_commit: d662f0abd751ca56ac8902805bdda61137f9023c (working tree modified)
+# host: Linux 6.17.0-1014-nvidia aarch64
+# cpu: 
+# rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
+# ---- output ----
+# gpu    pwr  gtemp  mtemp     sm    mem    enc    dec    jpg    ofa   mclk   pclk      gract     smutil      smocc       dram 
+# Idx      W      C      C      %      %      %      %      %      %    MHz    MHz      GPM:%      GPM:%      GPM:%      GPM:% 
+    0     65     81      -     93      0      0      0      0      0      -   2463          -          -          -          - 
+    0     69     82      -     96      0      0      0      0      0      -   2463          -          -          -          - 
+    0     67     77      -     96      0      0      0      0      0      -   2470          -          -          -          - 
+# ---- end ----
+# finished_utc: 2026-10-10T13:40:28Z
+# exit_code: 0
+# redacted: GPU UUIDs and hardware serial numbers
