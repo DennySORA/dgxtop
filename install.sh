@@ -1,159 +1,204 @@
 #!/usr/bin/env bash
+# dgxtop installer.
+#
+#   curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
+#   ./install.sh --version v0.2.0
+#   ./install.sh --rollback
+#
+# Safety properties (spec/dgxtop-v2/OPERATIONS.md §4):
+# * downloads into a temporary directory on the SAME filesystem as the target,
+# * verifies the archive against SHA256SUMS and the expected target triple,
+# * accepts an archive containing exactly one regular file named `dgxtop`
+#   (no absolute paths, no `..`, no links),
+# * runs `dgxtop --version --verbose` to prove the binary loads on this host,
+# * replaces the installed binary with an atomic rename and keeps the previous
+#   binary as `dgxtop.previous` for rollback,
+# * never falls back from a GNU to a musl build.
+# Rollback restores the previous binary only: configuration and state stay
+# untouched, and signals already sent to processes cannot be rolled back.
 set -euo pipefail
-
-# DGXTop installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
 
 REPO="DennySORA/dgxtop"
 BINARY="dgxtop"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+VERSION=""
+BASE_URL=""
+ROLLBACK=0
+STAGING=""
 
-info() { printf "\033[1;34m[info]\033[0m %s\n" "$1"; }
-warn() { printf "\033[1;33m[warn]\033[0m %s\n" "$1"; }
-error() { printf "\033[1;31m[error]\033[0m %s\n" "$1" >&2; exit 1; }
+cleanup() {
+    if [ -n "$STAGING" ] && [ -d "$STAGING" ]; then
+        rm -rf -- "$STAGING"
+    fi
+}
+trap cleanup EXIT
 
-detect_os() {
-    case "$(uname -s)" in
-        Linux*)  echo "linux" ;;
-        Darwin*) error "dgxtop is designed for Linux (NVIDIA DGX systems). macOS is not supported." ;;
-        *)       error "Unsupported operating system: $(uname -s)" ;;
-    esac
+info() { printf '\033[1;34m[info]\033[0m %s\n' "$1"; }
+warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$1" >&2; }
+fail() { printf '\033[1;31m[error]\033[0m %s\n' "$1" >&2; exit 1; }
+
+usage() {
+    cat <<'EOF'
+Usage: install.sh [--version vX.Y.Z] [--install-dir DIR] [--base-url URL] [--rollback]
+
+  --version      release tag to install (default: latest release)
+  --install-dir  target directory (default: $INSTALL_DIR or ~/.local/bin)
+  --base-url     directory URL holding the release assets (default: GitHub release)
+  --rollback     restore the previously installed binary (dgxtop.previous)
+EOF
 }
 
-detect_arch() {
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --version) VERSION="${2:?--version needs a value}"; shift 2 ;;
+            --install-dir) INSTALL_DIR="${2:?--install-dir needs a value}"; shift 2 ;;
+            --base-url) BASE_URL="${2:?--base-url needs a value}"; shift 2 ;;
+            --rollback) ROLLBACK=1; shift ;;
+            -h|--help) usage; exit 0 ;;
+            *) fail "unknown argument: $1" ;;
+        esac
+    done
+}
+
+require() {
+    command -v "$1" >/dev/null 2>&1 || fail "required tool not found: $1"
+}
+
+detect_target() {
+    [ "$(uname -s)" = "Linux" ] || fail "dgxtop supports Linux only (found $(uname -s))"
+    local arch
     case "$(uname -m)" in
-        x86_64|amd64)   echo "x86_64" ;;
-        aarch64|arm64)   echo "aarch64" ;;
-        *)               error "Unsupported architecture: $(uname -m)" ;;
+        x86_64|amd64) arch="x86_64" ;;
+        aarch64|arm64) arch="aarch64" ;;
+        *) fail "unsupported architecture: $(uname -m)" ;;
     esac
-}
-
-detect_libc() {
-    # Prefer ldd signature when available.
-    if command -v ldd &>/dev/null; then
-        local ldd_out
-        ldd_out="$(ldd --version 2>&1 || true)"
-        if echo "$ldd_out" | grep -qi "musl"; then
-            echo "musl"
-            return
-        fi
-        if echo "$ldd_out" | grep -qiE "glibc|gnu libc"; then
-            echo "gnu"
-            return
-        fi
+    if ldd --version 2>&1 | grep -qi musl || [ -f /etc/alpine-release ]; then
+        fail "musl libc detected: only GNU builds are published (no musl fallback)"
     fi
-
-    # Alpine is musl by default.
-    if [ -f /etc/alpine-release ]; then
-        echo "musl"
-        return
-    fi
-
-    # Default to glibc on mainstream Linux distros.
-    echo "gnu"
+    echo "${arch}-unknown-linux-gnu"
 }
 
-get_target() {
-    if [ -n "${TARGET:-}" ]; then
-        echo "$TARGET"
-        return
-    fi
-
-    local os arch libc
-    os=$(detect_os)
-    arch=$(detect_arch)
-    libc=$(detect_libc)
-
-    echo "${arch}-unknown-${os}-${libc}"
-}
-
-fallback_target() {
-    local target="$1"
-    case "$target" in
-        *-gnu)  echo "${target%-gnu}-musl" ;;
-        *-musl) echo "${target%-musl}-gnu" ;;
-        *)      echo "" ;;
-    esac
-}
-
-download_tarball() {
-    local version="$1" target="$2" dest="$3"
-    local url="https://github.com/${REPO}/releases/download/${version}/${BINARY}-${target}.tar.gz"
-    info "Downloading ${url}..."
-    curl -fsSL "$url" -o "$dest"
-}
-
-get_latest_version() {
-    if [ -n "${VERSION:-}" ]; then
+resolve_version() {
+    if [ -n "$VERSION" ]; then
         echo "$VERSION"
         return
     fi
+    local tag
+    tag="$(curl -fsSL --proto '=https' --tlsv1.2 "https://api.github.com/repos/${REPO}/releases/latest" \
+        | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)"
+    [ -n "$tag" ] || fail "could not determine the latest release; pass --version"
+    echo "$tag"
+}
 
-    local version
-    version=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-        | grep '"tag_name"' \
-        | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
+fetch() {
+    local url="$1" destination="$2"
+    case "$url" in
+        file://*) cp -- "${url#file://}" "$destination" ;;
+        https://*) curl -fsSL --proto '=https' --tlsv1.2 -o "$destination" "$url" ;;
+        *) fail "refusing non-https URL: $url" ;;
+    esac
+}
 
-    if [ -z "$version" ]; then
-        error "Failed to fetch latest version from GitHub. Set VERSION env var to install a specific version."
+verify_checksum() {
+    local archive="$1" sums="$2" name expected actual
+    name="$(basename "$archive")"
+    expected="$(awk -v file="$name" '$2 == file || $2 == "*" file { print $1 }' "$sums" | head -n 1)"
+    [ -n "$expected" ] || fail "SHA256SUMS has no entry for $name"
+    actual="$(sha256sum "$archive" | awk '{ print $1 }')"
+    [ "$expected" = "$actual" ] || fail "checksum mismatch for $name (expected $expected, got $actual)"
+}
+
+verify_archive_layout() {
+    local archive="$1" listing entries
+    listing="$(tar -tzvf "$archive")" || fail "archive is unreadable"
+    entries="$(printf '%s\n' "$listing" | grep -c . || true)"
+    [ "$entries" = "1" ] || fail "archive must contain exactly one entry (found $entries)"
+    case "$(printf '%s' "$listing" | cut -c1)" in
+        -) ;;
+        *) fail "archive entry is not a regular file" ;;
+    esac
+    local entry
+    entry="$(tar -tzf "$archive")"
+    case "$entry" in
+        "$BINARY"|"./$BINARY") ;;
+        *) fail "unexpected archive entry: $entry" ;;
+    esac
+}
+
+verify_binary() {
+    local candidate="$1" version="$2" target="$3" report
+    report="$("$candidate" --version --verbose 2>&1)" || fail "new binary does not run on this host: $report"
+    # Whole-line fixed strings: v0.2 must not accept 0.2.0, nor '.' any byte.
+    printf '%s\n' "$report" | grep -qxF "dgxtop ${version#v}" || fail "binary version does not match ${version}"
+    printf '%s\n' "$report" | grep -qxF "target: ${target}" || fail "binary target does not match ${target}"
+}
+
+install_release() {
+    require curl
+    require tar
+    require sha256sum
+    local target version base archive_name
+    target="$(detect_target)"
+    version="$(resolve_version)"
+    base="${BASE_URL:-https://github.com/${REPO}/releases/download/${version}}"
+    archive_name="${BINARY}-${version}-${target}.tar.gz"
+
+    mkdir -p "$INSTALL_DIR"
+    STAGING="$(mktemp -d "${INSTALL_DIR}/.${BINARY}-install.XXXXXX")"
+    local staging="$STAGING"
+
+    info "downloading ${archive_name}"
+    fetch "${base}/${archive_name}" "${staging}/${archive_name}"
+    fetch "${base}/SHA256SUMS" "${staging}/SHA256SUMS"
+    verify_checksum "${staging}/${archive_name}" "${staging}/SHA256SUMS"
+    verify_archive_layout "${staging}/${archive_name}"
+
+    mkdir "${staging}/extract"
+    tar -xzf "${staging}/${archive_name}" -C "${staging}/extract" --no-same-owner --no-same-permissions
+    local candidate="${staging}/extract/${BINARY}"
+    [ -f "$candidate" ] && [ ! -L "$candidate" ] || fail "extracted binary missing or not a regular file"
+    chmod 0755 "$candidate"
+    verify_binary "$candidate" "$version" "$target"
+
+    local destination="${INSTALL_DIR}/${BINARY}"
+    if [ -f "$destination" ]; then
+        cp -p -- "$destination" "${staging}/${BINARY}.previous"
+        mv -f -- "${staging}/${BINARY}.previous" "${destination}.previous"
+        info "previous binary kept as ${destination}.previous"
     fi
+    mv -f -- "$candidate" "$destination"
+    info "installed ${BINARY} ${version} (${target}) to ${destination}"
 
-    echo "$version"
+    case ":${PATH}:" in
+        *":${INSTALL_DIR}:"*) ;;
+        *) warn "${INSTALL_DIR} is not in PATH" ;;
+    esac
+}
+
+rollback() {
+    local destination="${INSTALL_DIR}/${BINARY}" previous="${INSTALL_DIR}/${BINARY}.previous"
+    [ -f "$previous" ] || fail "no previous binary at ${previous}"
+    "$previous" --version >/dev/null 2>&1 || warn "previous binary did not report a version"
+    STAGING="$(mktemp -d "${INSTALL_DIR}/.${BINARY}-rollback.XXXXXX")"
+    local staging="$STAGING"
+    if [ -f "$destination" ]; then
+        cp -p -- "$destination" "${staging}/${BINARY}.rolled-back"
+    fi
+    mv -f -- "$previous" "$destination"
+    if [ -f "${staging}/${BINARY}.rolled-back" ]; then
+        mv -f -- "${staging}/${BINARY}.rolled-back" "$previous"
+    fi
+    info "restored the previous binary; configuration and state were not modified"
+    info "signals already sent to processes cannot be rolled back"
 }
 
 main() {
-    info "Installing ${BINARY}..."
-
-    local target fallback version tmp_dir tarball
-    target=$(get_target)
-    version=$(get_latest_version)
-
-    info "Version:  ${version}"
-    info "Target:   ${target}"
-    info "Location: ${INSTALL_DIR}"
-
-    tmp_dir=$(mktemp -d)
-    trap "rm -rf '$tmp_dir'" EXIT
-    tarball="${tmp_dir}/${BINARY}.tar.gz"
-
-    if ! download_tarball "$version" "$target" "$tarball"; then
-        fallback=$(fallback_target "$target")
-        if [ -n "$fallback" ]; then
-            warn "No release artifact for '${target}'. Trying '${fallback}'..."
-            download_tarball "$version" "$fallback" "$tarball" \
-                || error "Download failed for both '${target}' and '${fallback}' on version '${version}'."
-            target="$fallback"
-        else
-            error "Download failed. Check that version '${version}' exists and has a build for '${target}'."
-        fi
-    fi
-
-    if [[ "$target" == *-musl ]]; then
-        warn "Using musl build (${target})."
-        warn "If GPU metrics are missing, install a glibc build instead (TARGET='${target%-musl}-gnu')."
-    fi
-
-    info "Extracting..."
-    tar xzf "$tarball" -C "$tmp_dir"
-
-    info "Installing to ${INSTALL_DIR}..."
-    mkdir -p "$INSTALL_DIR"
-    mv "${tmp_dir}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
-    chmod +x "${INSTALL_DIR}/${BINARY}"
-
-    # Check PATH
-    if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
-        warn "${INSTALL_DIR} is not in your PATH."
-        warn "Add the following to your shell profile (~/.bashrc, ~/.zshrc, etc.):"
-        warn "  export PATH=\"${INSTALL_DIR}:\$PATH\""
-    fi
-
-    info "Successfully installed ${BINARY} ${version} to ${INSTALL_DIR}/${BINARY}"
-
-    # Check for NVIDIA drivers
-    if ! command -v nvidia-smi &>/dev/null; then
-        warn "NVIDIA drivers not detected. GPU monitoring requires NVIDIA drivers with NVML."
-        warn "Install NVIDIA drivers or run with --no-gpu for system-only monitoring."
+    parse_args "$@"
+    if [ "$ROLLBACK" = "1" ]; then
+        rollback
+    else
+        install_release
     fi
 }
 

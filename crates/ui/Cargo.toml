@@ -1,0 +1,22 @@
+[package]
+name = "dgxtop-ui"
+description = "dgxtop viewer and controller: Ratatui display modules, layout, keymap and non-blocking terminal output"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+dgxtop-core.workspace = true
+crossterm.workspace = true
+ratatui.workspace = true
+thiserror.workspace = true
+unicode-width.workspace = true
+
+[dev-dependencies]
+dgxtop-core = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

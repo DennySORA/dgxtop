@@ -1,0 +1,886 @@
+//! Immutable view projections produced by the Manager's PresentationService
+//! and consumed by the Viewer. A projection is a small, bounded, already
+//! arbitrated sub-view: the Viewer only formats it and never recomputes
+//! authoritative values, queries a store or samples hardware.
+
+use std::sync::{Arc, Mutex, PoisonError};
+
+use serde::{Deserialize, Serialize};
+
+use crate::action::{ActionState, PersistenceStatus, Signal};
+use crate::budget::BytePermit;
+use crate::canonical::GpuUsageKind;
+use crate::commands::{SortKey, ViewKind};
+use crate::config::{Theme, ValueOrigin};
+use crate::history::HistoryMethod;
+use crate::identity::{EntityId, MetricKey, ModuleId, ProcessKey, SessionId};
+use crate::metric::{CanonicalUnit, Scalar};
+use crate::quality::{Freshness, Quality, SampleKind, SelectionState};
+
+/// Why a cell has (or lacks) a value; always rendered as text, never only color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CellState {
+    /// Selected healthy source.
+    Ok,
+    /// Valid fallback source in use.
+    Degraded,
+    /// Capability reported as unsupported.
+    Unsupported,
+    /// Read failed (timeout/error/removed).
+    ReadFailed,
+    PermissionDenied,
+    /// Independent sources disagree beyond tolerance.
+    Conflict,
+    /// Last value is stale; not authoritative.
+    Stale,
+    /// Counter-derived metric waiting for a second sample.
+    Warmup,
+    /// No eligible candidate / not reported.
+    Unavailable,
+}
+
+impl CellState {
+    pub const fn has_value(self) -> bool {
+        matches!(self, Self::Ok | Self::Degraded)
+    }
+
+    /// Human label used when there is no value.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Degraded => "fallback",
+            Self::Unsupported => "unsupported",
+            Self::ReadFailed => "read failed",
+            Self::PermissionDenied => "permission denied",
+            Self::Conflict => "source conflict",
+            Self::Stale => "stale",
+            Self::Warmup => "warming up",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+/// Conflict details for one cell (e.g. "A 68°C / B 42°C").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConflictView {
+    pub entries: Vec<(String, Scalar)>,
+}
+
+/// Last good annotation, displayed next to (not instead of) the current state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LastGoodView {
+    pub value: Scalar,
+    pub age_ms: u64,
+}
+
+/// Rows of each overview GPU's utilization chart (D-43).
+pub const OVERVIEW_GPU_CHART_ROWS: u16 = 2;
+/// Overview GPU panel geometry (D-38, D-43), shared so the Viewer lays the
+/// panel out and the Manager sizes the copied process window from the same
+/// rows: per GPU a headline, the utilization bar with its chart under it,
+/// and the memory bar.
+pub const OVERVIEW_GPU_ROWS: u16 = 3 + OVERVIEW_GPU_CHART_ROWS;
+
+/// One displayable metric value with its evidence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetricCell {
+    pub value: Option<Scalar>,
+    pub unit: CanonicalUnit,
+    pub state: CellState,
+    pub kind: SampleKind,
+    pub quality: Quality,
+    pub age_ms: Option<u64>,
+    /// Short source label, e.g. "package 0 · hwmon".
+    pub source_label: Option<String>,
+    pub conflict: Option<ConflictView>,
+    pub last_good: Option<LastGoodView>,
+}
+
+impl MetricCell {
+    /// A cell with no value in the given state.
+    pub fn missing(unit: CanonicalUnit, state: CellState) -> Self {
+        Self {
+            value: None,
+            unit,
+            state,
+            kind: SampleKind::Measured,
+            quality: Quality::Unknown,
+            age_ms: None,
+            source_label: None,
+            conflict: None,
+            last_good: None,
+        }
+    }
+
+    pub fn value_f64(&self) -> Option<f64> {
+        if self.state.has_value() {
+            self.value.map(Scalar::to_f64_lossy)
+        } else {
+            None
+        }
+    }
+}
+
+/// Trend points for sparklines; `None` is a gap and is drawn as a break.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct Trend {
+    pub points: Vec<Option<f64>>,
+    pub step_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CoreView {
+    pub core_id: String,
+    pub utilization: MetricCell,
+    pub frequency: MetricCell,
+    pub temperature: MetricCell,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LabeledCell {
+    pub label: String,
+    pub cell: MetricCell,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CpuView {
+    pub model: Option<String>,
+    pub total: MetricCell,
+    pub user: MetricCell,
+    pub system: MetricCell,
+    pub iowait: MetricCell,
+    pub steal: MetricCell,
+    pub cores: Vec<CoreView>,
+    pub frequency_max: MetricCell,
+    pub package_temperatures: Vec<LabeledCell>,
+    pub soc_temperatures: Vec<LabeledCell>,
+    pub power: Vec<LabeledCell>,
+    pub load: [MetricCell; 3],
+    pub tasks_running: MetricCell,
+    pub tasks_total: MetricCell,
+    pub utilization_trend: Trend,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GpuCard {
+    pub entity_id: EntityId,
+    /// Display label (NVML index as shown by the driver); identity is `entity_id`.
+    pub label: String,
+    pub name: String,
+    pub uuid: Option<String>,
+    /// The GPU allocates from system RAM (unified memory, e.g. DGX Spark):
+    /// it has no framebuffer of its own, and its allocations are RAM use.
+    pub unified_memory: bool,
+    pub utilization: MetricCell,
+    pub memory_busy: MetricCell,
+    pub temperature: MetricCell,
+    pub power_draw: MetricCell,
+    pub power_limit: MetricCell,
+    pub clocks: Vec<LabeledCell>,
+    pub fan: MetricCell,
+    pub framebuffer_used: MetricCell,
+    pub framebuffer_free: MetricCell,
+    pub framebuffer_total: MetricCell,
+    pub framebuffer_reserved: MetricCell,
+    pub process_allocated: MetricCell,
+    pub pcie_tx: MetricCell,
+    pub pcie_rx: MetricCell,
+    pub energy: MetricCell,
+    pub ecc_corrected: MetricCell,
+    pub ecc_uncorrected: MetricCell,
+    pub retired_single: MetricCell,
+    pub retired_double: MetricCell,
+    pub encoder: MetricCell,
+    pub decoder: MetricCell,
+    pub nvlink_active: MetricCell,
+    /// Performance state, 0 (maximum performance) to 15 (D-47).
+    pub performance_state: MetricCell,
+    /// Clock-limit reason bits ([`crate::gpu_state::THROTTLE_REASONS`]).
+    pub throttle_reasons: MetricCell,
+    /// The device's own slowdown and shutdown temperatures.
+    pub temperature_slowdown: MetricCell,
+    pub temperature_shutdown: MetricCell,
+    /// The PCIe link now (it trains down at idle) and at its best.
+    pub pcie_generation: MetricCell,
+    pub pcie_width: MetricCell,
+    pub pcie_generation_max: MetricCell,
+    pub pcie_width_max: MetricCell,
+    /// Deep data of the card the GPU view shows (D-48); `None` elsewhere,
+    /// so the overview carries none of it.
+    pub details: Option<Box<GpuDetails>>,
+    /// The device was removed: its values are the last ones read and no
+    /// longer refresh.
+    pub removed: bool,
+    pub metadata: Vec<(String, String)>,
+    pub utilization_trend: Trend,
+    pub temperature_trend: Trend,
+    pub power_trend: Trend,
+    /// Used framebuffer bytes, or on a unified-memory GPU the RAM its
+    /// processes hold (the VRAM chart, D-40).
+    pub memory_trend: Trend,
+}
+
+/// What the GPU view shows of one GPU beyond its card (D-48): its
+/// capabilities, slow health, bandwidths, identity and software stack.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GpuDetails {
+    /// Per-direction capacity of the PCIe link now and at its best, from
+    /// its generation and width (derived, theoretical).
+    pub pcie_bandwidth: MetricCell,
+    pub pcie_bandwidth_max: MetricCell,
+    /// The driver's PCIe throughput in its own "KB/s" while that unit is
+    /// not verified (D-11); `None` once the canonical value exists.
+    pub pcie_tx_driver_kb: Option<f64>,
+    pub pcie_rx_driver_kb: Option<f64>,
+    pub pcie_replays: MetricCell,
+    /// CUDA cores and the width of the memory bus in bits.
+    pub cores: MetricCell,
+    pub memory_bus_width: MetricCell,
+    /// Peak device-memory bandwidth from the maximum memory clock and the
+    /// bus width (derived, theoretical; never a measurement of traffic).
+    pub memory_bandwidth_max: MetricCell,
+    pub bar1_used: MetricCell,
+    pub bar1_total: MetricCell,
+    pub power_limit_default: MetricCell,
+    pub power_limit_minimum: MetricCell,
+    pub power_limit_maximum: MetricCell,
+    /// The limit set for the GPU; other limiters may lower it to the
+    /// enforced one (D-54).
+    pub power_limit_requested: MetricCell,
+    /// The driver's instantaneous reading beside the averaged draw (D-54).
+    pub power_instant: MetricCell,
+    /// Each fan's speed, in fan order (`fan 0`, `fan 1`, ...).
+    pub fans: Vec<LabeledCell>,
+    /// Hottest the GPU runs before it may drop below its base clock, and
+    /// the temperature its fans aim for.
+    pub temperature_max_operating: MetricCell,
+    pub temperature_target: MetricCell,
+    pub encoder_sessions: MetricCell,
+    pub encoder_fps: MetricCell,
+    pub encoder_latency: MetricCell,
+    /// Time the clocks were held back since the driver loaded, per cause
+    /// (`power`, `thermal`, ...).
+    pub throttle_time: Vec<LabeledCell>,
+    /// Identity, firmware and the driver and CUDA stack, by attribute key
+    /// (`dgxtop_core::naming::attributes`).
+    pub attributes: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GpuView {
+    pub cards: Vec<GpuCard>,
+    pub selected: Option<EntityId>,
+    /// Why no GPU data is shown (disabled, NVML unavailable, quarantined ...).
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryView {
+    pub total: MetricCell,
+    pub available: MetricCell,
+    pub used: MetricCell,
+    pub buffers: MetricCell,
+    pub cached: MetricCell,
+    pub swap_total: MetricCell,
+    pub swap_used: MetricCell,
+    /// RAM held by GPU allocations on unified-memory GPUs (part of `used`);
+    /// `None` when no GPU shares system RAM.
+    pub gpu_resident: Option<MetricCell>,
+    pub used_trend: Trend,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiskDeviceView {
+    pub entity_id: EntityId,
+    pub name: String,
+    pub read_bps: MetricCell,
+    pub write_bps: MetricCell,
+    pub read_iops: MetricCell,
+    pub write_iops: MetricCell,
+    pub await_ms: MetricCell,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FilesystemView {
+    pub entity_id: EntityId,
+    pub mount_point: String,
+    pub device: String,
+    /// The listed block device this filesystem lives on (same device
+    /// number), so the disk table can show capacity beside its I/O.
+    pub block_device: Option<EntityId>,
+    pub fs_type: String,
+    pub total: MetricCell,
+    pub used: MetricCell,
+    pub free: MetricCell,
+    pub available: MetricCell,
+    pub use_percent: MetricCell,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiskView {
+    pub devices: Vec<DiskDeviceView>,
+    pub filesystems: Vec<FilesystemView>,
+    /// Read rate trend of the first (busiest) device, for the panel chart.
+    pub read_trend: Trend,
+    /// Write rate trend of the first (busiest) device.
+    pub write_trend: Trend,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InterfaceView {
+    pub entity_id: EntityId,
+    pub name: String,
+    pub state: Option<String>,
+    pub rx_bps: MetricCell,
+    pub tx_bps: MetricCell,
+    pub rx_packets: MetricCell,
+    pub tx_packets: MetricCell,
+    pub rx_errors: MetricCell,
+    pub tx_errors: MetricCell,
+    pub rx_drops: MetricCell,
+    pub tx_drops: MetricCell,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NetworkView {
+    pub interfaces: Vec<InterfaceView>,
+    pub max_visible: u32,
+    /// Receive rate trend of the first (busiest) interface, for the panel chart.
+    pub rx_trend: Trend,
+    /// Transmit rate trend of the first (busiest) interface.
+    pub tx_trend: Trend,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcessGpuView {
+    pub gpu_entity_id: EntityId,
+    pub gpu_label: String,
+    /// Compute, graphics or both contexts on the GPU (D-54).
+    pub usage: GpuUsageKind,
+    pub utilization_percent: Option<f64>,
+    pub memory_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcessRowView {
+    pub key: ProcessKey,
+    pub name: String,
+    /// Numeric uid, or a cached user name when resolution already happened off the hot path.
+    pub user: String,
+    pub state: Option<char>,
+    pub cpu_percent: Option<f64>,
+    pub rss_bytes: Option<u64>,
+    pub missing_reason: Option<String>,
+    pub gpus: Vec<ProcessGpuView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcessesView {
+    /// Visible window (plus small overscan), not the full table.
+    pub rows: Vec<ProcessRowView>,
+    pub window_start: u32,
+    pub total_rows: u32,
+    pub truncated: bool,
+    pub sort: SortKey,
+    pub ascending: bool,
+    pub filter: String,
+    pub gpu_filter: Option<(EntityId, String)>,
+    pub gpu_choices: Vec<(EntityId, String)>,
+    pub selected: Option<ProcessKey>,
+    pub selected_index: Option<u32>,
+    /// The session's selected process is no longer in the process table (it
+    /// exited): its values are unavailable (AT09). A selection hidden by a
+    /// filter is not missing.
+    pub selected_missing: Option<ProcessKey>,
+}
+
+/// One point of a history chart on the wall clock (D-51): this run's
+/// points come from the boot clock, earlier runs' and boots' from the
+/// archive's UTC stamps, so every boot shares the chart's time axis.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HistoryPointView {
+    pub start_utc_ns: u64,
+    pub end_utc_ns: u64,
+    pub mean: Option<f64>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub method: HistoryMethod,
+}
+
+/// Columns of the history view its panels do not take (the panel border)
+/// (D-46).
+pub const HISTORY_CHART_MARGIN_COLUMNS: u16 = 2;
+/// Width inside the border from which the history view's panels stand two
+/// side by side (D-50).
+pub const HISTORY_TWO_COLUMN_WIDTH: u16 = 150;
+/// Columns between two history panels side by side.
+pub const HISTORY_PANEL_GAP: u16 = 3;
+/// The label gutter at the left of a history chart (`GPU 0`, `100%`).
+pub const HISTORY_GUTTER_COLUMNS: u16 = 7;
+/// The legend at the right of a history chart (`max 98.0%`), with the space
+/// before it.
+pub const HISTORY_LEGEND_COLUMNS: u16 = 17;
+
+/// Columns of a history chart's plot on a terminal `columns` wide (D-50):
+/// the panel's width, half the inside when panels stand side by side, less
+/// the gutter and the legend. Shared so the Manager queries as many points
+/// as a plot has columns.
+pub fn history_plot_columns(columns: u16) -> u16 {
+    let inside = columns.saturating_sub(HISTORY_CHART_MARGIN_COLUMNS);
+    let panel = if inside >= HISTORY_TWO_COLUMN_WIDTH {
+        (inside - HISTORY_PANEL_GAP) / 2
+    } else {
+        inside
+    };
+    panel.saturating_sub(HISTORY_GUTTER_COLUMNS + HISTORY_LEGEND_COLUMNS)
+}
+
+/// What a history chart shows (D-46); the Viewer picks its words and colors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HistoryChartKind {
+    CpuUtilization,
+    MemoryUsed,
+    GpuUtilization,
+    DiskRead,
+    DiskWrite,
+    NetworkReceive,
+    NetworkTransmit,
+    /// Each GPU's memory, temperature and power: charted (D-50) and
+    /// summarized over 1 h to 24 h (D-48).
+    GpuMemory,
+    GpuTemperature,
+    GpuPower,
+}
+
+/// One GPU series over one window of the history view's statistics (D-48):
+/// its mean and peak and, for power, the energy measured over the covered
+/// time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HistoryWindowSummary {
+    pub kind: HistoryChartKind,
+    /// The device summarized (`GPU 0 · NVIDIA GB10`).
+    pub subject: String,
+    pub window_label: String,
+    pub unit: CanonicalUnit,
+    /// Time-weighted mean over the covered part of the window.
+    pub mean: Option<f64>,
+    pub peak: Option<f64>,
+    pub coverage_ratio: Option<f64>,
+    /// Time the history holds in the window, from memory and the archive
+    /// (D-51). Without the archive a window reaching back before boot is
+    /// answered from boot on, so its ratio is of the time since boot; this
+    /// stays the time recorded (D-50).
+    pub covered_ns: Option<u64>,
+    /// Mean times covered time (joules for power); `None` for other series.
+    pub integral: Option<f64>,
+    pub pending: bool,
+}
+
+/// One chart of the history view: a series over the requested window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HistoryChartView {
+    pub kind: HistoryChartKind,
+    /// The device charted (`GPU 0 · NVIDIA GB10`, `nvme0n1`); empty for the
+    /// host's CPU and memory.
+    pub subject: String,
+    pub series: MetricKey,
+    pub unit: CanonicalUnit,
+    /// Fixed top of the scale (100 %, the RAM total); `None` scales the
+    /// chart to its peak.
+    pub scale_max: Option<f64>,
+    pub points: Vec<HistoryPointView>,
+    /// Time-weighted mean over the covered part of the window.
+    pub mean: Option<f64>,
+    /// Largest value in the window (from the bucket maxima when buckets
+    /// merge several samples).
+    pub peak: Option<f64>,
+    pub coverage_ratio: Option<f64>,
+    /// Time the history holds in the window (see
+    /// [`HistoryWindowSummary::covered_ns`]).
+    pub covered_ns: Option<u64>,
+    pub truncated: bool,
+    pub display_downsampled: bool,
+    pub pending: bool,
+    pub error: Option<String>,
+}
+
+/// Where the history before this run comes from (D-51).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiskHistory {
+    /// No archive: the history starts with dgxtop.
+    Off,
+    /// Earlier runs and boots are read back from the archive on disk.
+    On,
+    /// The archive could not be read; why.
+    Failed(String),
+}
+
+/// The history view (D-46): the overview's charts over a longer window, one
+/// below the other on one time axis.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HistoryView {
+    pub window_label: String,
+    pub requested_span_ns: u64,
+    /// The time axis every chart shares, on the wall clock (D-51):
+    /// `[start_utc_ns, end_utc_ns)`. It is the requested window, or without
+    /// the archive the part of it since boot.
+    pub start_utc_ns: u64,
+    pub end_utc_ns: u64,
+    pub charts: Vec<HistoryChartView>,
+    /// Each GPU's statistics over the last 1 h, 6 h, 12 h and 24 h (D-48).
+    pub summaries: Vec<HistoryWindowSummary>,
+    pub disk: DiskHistory,
+    /// Why there is nothing to chart (no history service, no series yet).
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CandidateView {
+    pub source_id: String,
+    pub adapter_id: String,
+    pub value: Option<Scalar>,
+    pub unit: Option<CanonicalUnit>,
+    pub native: String,
+    pub quality: Quality,
+    pub kind: SampleKind,
+    pub freshness: Freshness,
+    pub measurement_freshness: Freshness,
+    pub age_ms: Option<u64>,
+    pub origin: String,
+    pub rank: u16,
+    /// "selected", "standby", "alias of X", "conflicting", "rejected: reason".
+    pub disposition: String,
+    pub suspect_reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SourceMetricView {
+    pub key: MetricKey,
+    pub label: String,
+    pub selection_state: SelectionState,
+    pub selected_source: Option<String>,
+    pub pinned_source: Option<String>,
+    pub policy_revision: u32,
+    pub conflict_spread: Option<f64>,
+    pub tolerance: Option<f64>,
+    pub candidates: Vec<CandidateView>,
+    pub switch_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostState {
+    Starting,
+    Healthy,
+    Degraded,
+    CircuitOpen,
+    Quarantined,
+    Disabled,
+    Unavailable,
+}
+
+impl HostState {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Healthy => "healthy",
+            Self::Degraded => "degraded",
+            Self::CircuitOpen => "circuit open",
+            Self::Quarantined => "quarantined (requires intervention)",
+            Self::Disabled => "disabled",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+/// Runtime status of one adapter host (also used by the supervisor port).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostStatus {
+    pub adapter_id: String,
+    pub state: HostState,
+    pub generation: u32,
+    pub pid: Option<i32>,
+    pub last_success_boot_ns: Option<u64>,
+    pub timeouts_total: u64,
+    pub consecutive_failures: u32,
+    pub restarts_total: u64,
+    pub backoff_until_boot_ns: Option<u64>,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntervalView {
+    pub adapter_id: String,
+    pub read_group: String,
+    pub configured_ms: u32,
+    pub effective_ms: u32,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SourcesView {
+    pub metrics: Vec<SourceMetricView>,
+    pub hosts: Vec<HostStatus>,
+    pub intervals: Vec<IntervalView>,
+    pub policy_revision: u32,
+    pub selected: Option<String>,
+    pub filter: String,
+    pub unclassified: Vec<CandidateView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SettingField {
+    pub path: String,
+    pub saved: String,
+    pub effective: String,
+    pub origin: ValueOrigin,
+    pub restart_required: bool,
+    /// Overload multiplier note for sampling fields, if any.
+    pub overload_note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SettingsView {
+    pub revision: u32,
+    pub pending: Option<String>,
+    pub last_result: Option<String>,
+    pub fields: Vec<SettingField>,
+    pub modules: Vec<(ModuleId, bool)>,
+    pub config_status: PersistenceStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfirmationView {
+    pub request_id: uuid::Uuid,
+    pub target: ProcessKey,
+    pub uid: u32,
+    pub basename: String,
+    pub signal: Signal,
+    pub expires_in_ms: u64,
+    pub warning: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActionRecordView {
+    pub request_id: uuid::Uuid,
+    pub target: String,
+    pub signal: Signal,
+    pub state: ActionState,
+    pub result: String,
+    pub age_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActionsView {
+    pub confirmation: Option<ConfirmationView>,
+    pub recent: Vec<ActionRecordView>,
+    pub audit: PersistenceStatus,
+    pub actions_available: bool,
+    pub unavailable_reason: Option<String>,
+    pub unknown_outcomes: u32,
+}
+
+/// Overload state machine (`RUNTIME.md` §7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverloadState {
+    Normal,
+    Pressured,
+    Throttled,
+    Recovering,
+}
+
+impl OverloadState {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Pressured => "pressured",
+            Self::Throttled => "throttled",
+            Self::Recovering => "recovering",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BannerLevel {
+    Info,
+    Warning,
+    Error,
+    /// Pending destructive confirmation: never clipped.
+    Confirmation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Banner {
+    pub level: BannerLevel,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HeaderView {
+    pub host_name: String,
+    pub kernel: Option<String>,
+    pub uptime_s: Option<u64>,
+    pub version: String,
+    pub namespace_label: Option<String>,
+    pub overload: OverloadState,
+    pub configured_interval_ms: u32,
+    pub effective_interval_ms: u32,
+    pub hosts_healthy: u32,
+    pub hosts_total: u32,
+    pub read_only: bool,
+    pub theme: Theme,
+}
+
+/// Per-session view state; the single authoritative copy lives in the Manager.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionState {
+    pub session_id: SessionId,
+    pub view: ViewKind,
+    pub selected_entity_id: Option<EntityId>,
+    pub selected_process: Option<ProcessKey>,
+    pub filter: String,
+    pub sort: SortKey,
+    pub ascending: bool,
+}
+
+/// Module-level sub-projections (only subscribed/visible topics are filled).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct ModuleViews {
+    pub cpu: Option<Arc<CpuView>>,
+    pub gpu: Option<Arc<GpuView>>,
+    pub memory: Option<Arc<MemoryView>>,
+    pub disk: Option<Arc<DiskView>>,
+    pub network: Option<Arc<NetworkView>>,
+    pub processes: Option<Arc<ProcessesView>>,
+    pub history: Option<Arc<HistoryView>>,
+    pub sources: Option<Arc<SourcesView>>,
+    pub settings: Option<Arc<SettingsView>>,
+    pub actions: Option<Arc<ActionsView>>,
+}
+
+/// One immutable projection for one session.
+#[derive(Debug, Serialize)]
+pub struct ViewModel {
+    pub frame_revision: u64,
+    pub snapshot_revision: u64,
+    pub generated_boot_ns: u64,
+    pub header: HeaderView,
+    pub session: SessionState,
+    pub modules: ModuleViews,
+    pub banners: Vec<Banner>,
+    pub enabled_modules: Vec<ModuleId>,
+    /// Bytes accounted in the presentation partition while this projection lives.
+    #[serde(skip)]
+    pub permit: Option<BytePermit>,
+}
+
+impl ViewModel {
+    pub fn estimated_bytes(&self) -> usize {
+        serde_json::to_vec(self).map_or(usize::MAX, |encoded| encoded.len())
+    }
+}
+
+/// Latest-only projection slot: at most one pending projection per session;
+/// the renderer holds the active one. Publishing replaces the pending one.
+#[derive(Debug, Default)]
+pub struct ProjectionSlot {
+    pending: Mutex<Option<Arc<ViewModel>>>,
+}
+
+impl ProjectionSlot {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Replaces the pending projection; the older pending one is dropped
+    /// (its bytes are released when the last reference goes away).
+    pub fn publish(&self, projection: Arc<ViewModel>) {
+        let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
+        *pending = Some(projection);
+    }
+
+    /// Takes the pending projection, if any.
+    pub fn take(&self) -> Option<Arc<ViewModel>> {
+        self.pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+    }
+
+    pub fn has_pending(&self) -> bool {
+        self.pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::budget::{ByteLedger, Partition};
+
+    fn view_model(revision: u64, permit: Option<BytePermit>) -> ViewModel {
+        ViewModel {
+            frame_revision: revision,
+            snapshot_revision: revision,
+            generated_boot_ns: 0,
+            header: HeaderView {
+                host_name: "h".into(),
+                kernel: None,
+                uptime_s: None,
+                version: "0".into(),
+                namespace_label: None,
+                overload: OverloadState::Normal,
+                configured_interval_ms: 1000,
+                effective_interval_ms: 1000,
+                hosts_healthy: 0,
+                hosts_total: 0,
+                read_only: false,
+                theme: Theme::Dark,
+            },
+            session: SessionState {
+                session_id: SessionId::new("s").unwrap(),
+                view: ViewKind::Overview,
+                selected_entity_id: None,
+                selected_process: None,
+                filter: String::new(),
+                sort: SortKey::GpuMemory,
+                ascending: false,
+            },
+            modules: ModuleViews::default(),
+            banners: Vec::new(),
+            enabled_modules: Vec::new(),
+            permit,
+        }
+    }
+
+    #[test]
+    fn slot_keeps_only_latest_and_releases_bytes() {
+        let ledger = ByteLedger::for_memory_limit_mib(64);
+        let slot = ProjectionSlot::new();
+        for revision in 0..10u64 {
+            let permit = ledger.try_reserve(Partition::Presentation, 1000).unwrap();
+            slot.publish(Arc::new(view_model(revision, Some(permit))));
+        }
+        // Only the newest pending projection is alive.
+        assert_eq!(ledger.used(Partition::Presentation), 1000);
+        let active = slot.take().unwrap();
+        assert_eq!(active.frame_revision, 9);
+        assert!(slot.take().is_none());
+        // A slow renderer still holding the active projection keeps it accounted.
+        assert_eq!(ledger.used(Partition::Presentation), 1000);
+        drop(active);
+        assert_eq!(ledger.used(Partition::Presentation), 0);
+    }
+
+    #[test]
+    fn missing_cells_have_no_value() {
+        let cell = MetricCell::missing(CanonicalUnit::DegC, CellState::Unsupported);
+        assert_eq!(cell.value_f64(), None);
+        assert_eq!(cell.state.label(), "unsupported");
+    }
+}

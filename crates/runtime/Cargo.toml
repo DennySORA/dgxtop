@@ -1,0 +1,36 @@
+[package]
+name = "dgxtop-runtime"
+description = "dgxtop execution mechanics: adapter-host supervision, IPC framing, broker, bounded workers, terminal transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+dgxtop-core.workspace = true
+crossbeam-channel.workspace = true
+getrandom.workspace = true
+libc.workspace = true
+nix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+dgxtop-core = { workspace = true, features = ["test-support"] }
+proptest.workspace = true
+
+[lints]
+workspace = true
+
+# Real child-process supervisor tests. The test binary doubles as the adapter
+# host it supervises; libtest would print "running N tests" to stdout before
+# any test body runs and corrupt the IPC stream, so this target has its own
+# `main` (harness = false).
+[[test]]
+name = "supervisor_hosts"
+path = "tests/supervisor_hosts.rs"
+harness = false

@@ -1,6 +1,8 @@
 /target
-Cargo.lock
 *.swp
 *.swo
 .env
 *.log
+__pycache__/
+# Validation evidence is part of the repository.
+!docs/validation/evidence/*.log

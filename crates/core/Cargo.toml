@@ -1,0 +1,26 @@
+[package]
+name = "dgxtop-core"
+description = "dgxtop cross-layer contracts: identities, metrics, quality axes, commands, ports and byte budgets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+# Deterministic fakes (clock, ports) shared by every crate's unit tests.
+test-support = []
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

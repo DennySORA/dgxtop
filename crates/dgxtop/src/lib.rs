@@ -1,0 +1,20 @@
+//! # dgxtop (composition root)
+//!
+//! Assembles the six components of the v2 architecture (spec/dgxtop-v2/):
+//! adapter hosts, collectors, the Manager, the stores, the Viewer and the
+//! Controller. Only this crate depends on every concrete implementation.
+
+pub mod audit_unavailable;
+pub mod cli;
+pub mod control_ops;
+pub mod diagnostics;
+pub mod fail_stop;
+pub mod host_mode;
+pub mod modes;
+pub mod monitor;
+pub mod perf;
+#[cfg(test)]
+mod provenance;
+pub mod replay_unavailable;
+pub mod startup;
+pub mod version;

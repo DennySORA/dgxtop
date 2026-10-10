@@ -1,0 +1,27 @@
+[package]
+name = "dgxtop-store"
+description = "dgxtop storage: hot snapshot store, bounded history, config repository, SQLite audit and optional archive"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+dgxtop-core.workspace = true
+libc.workspace = true
+nix.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+dgxtop-core = { workspace = true, features = ["test-support"] }
+proptest.workspace = true
+
+[lints]
+workspace = true

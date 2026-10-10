@@ -1,0 +1,96 @@
+[package]
+name = "dgxtop"
+description = "Stable, efficient local system monitor for NVIDIA DGX and GPU Linux hosts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+build = "build.rs"
+autotests = false
+autobenches = false
+
+[lib]
+name = "dgxtop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dgxtop"
+path = "src/main.rs"
+
+[dependencies]
+dgxtop-core.workspace = true
+dgxtop-runtime.workspace = true
+dgxtop-adapters.workspace = true
+dgxtop-collectors.workspace = true
+dgxtop-store.workspace = true
+dgxtop-manager.workspace = true
+dgxtop-ui.workspace = true
+clap.workspace = true
+crossbeam-channel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+dgxtop-core = { workspace = true, features = ["test-support"] }
+jsonschema.workspace = true
+nix.workspace = true
+libc.workspace = true
+proptest.workspace = true
+
+# Integration suites live at the repository root (spec/dgxtop-v2/IMPLEMENTATION_LAYOUT.md);
+# the composition root owns them so they may assemble several concrete crates
+# without adding production dependency edges.
+[[test]]
+name = "contracts"
+path = "../../tests/contracts/main.rs"
+
+[[test]]
+name = "cli"
+path = "../../tests/cli/main.rs"
+
+[[test]]
+name = "replay"
+path = "../../tests/replay/main.rs"
+
+[[test]]
+name = "pty"
+path = "../../tests/pty/main.rs"
+
+[[test]]
+name = "action_disposable"
+path = "../../tests/action_disposable/main.rs"
+
+[[test]]
+name = "fault_injection"
+path = "../../tests/fault_injection/main.rs"
+
+[[test]]
+name = "hardware"
+path = "../../tests/hardware/main.rs"
+
+[[bench]]
+name = "ref"
+path = "../../benches/ref/main.rs"
+harness = false
+
+[[bench]]
+name = "history"
+path = "../../benches/history/main.rs"
+harness = false
+
+[[bench]]
+name = "arbitration"
+path = "../../benches/arbitration/main.rs"
+harness = false
+
+[[bench]]
+name = "projection"
+path = "../../benches/projection/main.rs"
+harness = false
+
+[lints]
+workspace = true

@@ -1,47 +1,84 @@
-[package]
-name = "dgxtop"
-version = "0.1.0"
+[workspace]
+resolver = "3"
+members = [
+    "crates/core",
+    "crates/runtime",
+    "crates/adapters",
+    "crates/collectors",
+    "crates/store",
+    "crates/manager",
+    "crates/ui",
+    "crates/dgxtop",
+]
+
+[workspace.package]
+version = "0.2.0"
 edition = "2024"
-description = "A high-performance, interactive system monitor for NVIDIA DGX systems"
+rust-version = "1.92"
 license = "Apache-2.0"
 repository = "https://github.com/DennySORA/dgxtop"
-keywords = ["nvidia", "dgx", "gpu", "monitor", "tui"]
-categories = ["command-line-utilities", "hardware-support"]
 
-[dependencies]
-# TUI
-ratatui = { version = "0.30", features = ["crossterm"] }
-crossterm = "0.29"
+[workspace.dependencies]
+# Workspace crates. Only the `dgxtop` composition root may depend on more than
+# `dgxtop-core`; spec/dgxtop-v2/tools/check_boundaries.py enforces this.
+dgxtop-core = { path = "crates/core", version = "0.2.0" }
+dgxtop-runtime = { path = "crates/runtime", version = "0.2.0" }
+dgxtop-adapters = { path = "crates/adapters", version = "0.2.0" }
+dgxtop-collectors = { path = "crates/collectors", version = "0.2.0" }
+dgxtop-store = { path = "crates/store", version = "0.2.0" }
+dgxtop-manager = { path = "crates/manager", version = "0.2.0" }
+dgxtop-ui = { path = "crates/ui", version = "0.2.0" }
 
-# GPU monitoring
-nvml-wrapper = "0.12"
+# DTO / serialization (allowed in core).
+serde = { version = "1.0.229", features = ["derive", "rc"] }
+serde_json = "1.0.151"
+uuid = { version = "1.27.0", features = ["v4", "serde"] }
+thiserror = "2.0.21"
+sha2 = "0.11.0"
 
-# CLI & Config
-clap = { version = "4", features = ["derive"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-dirs = "6"
+# Runtime mechanics.
+crossbeam-channel = "0.5.17"
+getrandom = "0.4.3"
+libc = "0.2.180"
+nix = { version = "0.31.3", features = ["fs", "poll", "process", "signal", "time", "term", "user", "resource"] }
 
-# Concurrency
-crossbeam-channel = "0.5"
+# Drivers and persistence.
+nvml-wrapper = "0.12.1"
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
 
-# System
-nix = { version = "0.31", features = ["signal", "process", "user"] }
-libc = "0.2"
+# Terminal UI.
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "underline-color"] }
+crossterm = "0.29.0"
+unicode-width = "0.2.2"
 
-# Error handling
-thiserror = "2"
+# CLI.
+clap = { version = "4.6.7", features = ["derive"] }
 
-# Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tracing-appender = "0.2"
+# Test-only.
+proptest = "1.11.0"
+jsonschema = { version = "0.58.5", default-features = false }
 
-# Utilities
-unicode-width = "0.2"
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_sign_loss = "warn"
 
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+# Identity, quota and counter arithmetic must stay checked in release builds.
+overflow-checks = true
+panic = "unwind"
+
+[profile.dev]
+overflow-checks = true

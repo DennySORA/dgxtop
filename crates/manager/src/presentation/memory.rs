@@ -1,0 +1,198 @@
+//! Memory module projection: system RAM and swap (never GPU framebuffer),
+//! plus the RAM held by GPU allocations when a GPU shares system RAM.
+
+use dgxtop_core::metric::{Scalar, ids};
+use dgxtop_core::naming::entity;
+use dgxtop_core::quality::SampleKind;
+use dgxtop_core::view::{CellState, MemoryView, MetricCell};
+
+use super::gpu_directory::GpuDirectory;
+use super::reader::MetricReader;
+
+/// Source label of the summed GPU allocations: only processes the driver
+/// lists are counted, so driver-internal memory is not included.
+const GPU_RESIDENT_SOURCE: &str = "GPU processes visible to the driver";
+
+pub(crate) fn build_memory_view(
+    reader: &MetricReader<'_>,
+    directory: &GpuDirectory<'_>,
+    trend_width: usize,
+) -> MemoryView {
+    let cell = |metric: &str| reader.cell(metric, entity::MEMORY, entity::SCOPE_SYSTEM);
+    MemoryView {
+        total: cell(ids::MEMORY_TOTAL),
+        available: cell(ids::MEMORY_AVAILABLE),
+        used: cell(ids::MEMORY_USED),
+        buffers: cell(ids::MEMORY_BUFFERS),
+        cached: cell(ids::MEMORY_CACHED),
+        swap_total: cell(ids::MEMORY_SWAP_TOTAL),
+        swap_used: cell(ids::MEMORY_SWAP_USED),
+        gpu_resident: unified_gpu_resident(reader, directory),
+        used_trend: reader.trend_preferring(
+            ids::MEMORY_USED,
+            entity::MEMORY,
+            entity::SCOPE_SYSTEM,
+            trend_width,
+        ),
+    }
+}
+
+/// RAM held by the allocations of unified-memory GPUs: the sum of their
+/// `gpu.memory.process_allocated` values. `None` when no GPU shares system
+/// RAM (a discrete GPU's memory is its own VRAM). Any GPU without a value
+/// makes the sum unknown, never a partial total shown as complete.
+fn unified_gpu_resident(
+    reader: &MetricReader<'_>,
+    directory: &GpuDirectory<'_>,
+) -> Option<MetricCell> {
+    let cells: Vec<MetricCell> = directory
+        .gpus()
+        .iter()
+        .filter(|gpu| gpu.has_unified_memory())
+        .map(|gpu| {
+            reader.cell_preferring(
+                ids::GPU_MEMORY_PROCESS_ALLOCATED,
+                gpu.entity_id.as_str(),
+                entity::SCOPE_GPU,
+            )
+        })
+        .collect();
+    let first = cells.first()?;
+    if let Some(missing) = cells.iter().find(|cell| cell.value.is_none()) {
+        return Some(missing.clone());
+    }
+    let degraded = cells.iter().any(|cell| cell.state != CellState::Ok);
+    Some(MetricCell {
+        value: summed(&cells),
+        unit: first.unit,
+        state: if degraded {
+            CellState::Degraded
+        } else {
+            CellState::Ok
+        },
+        kind: SampleKind::Derived,
+        quality: cells
+            .iter()
+            .map(|cell| cell.quality)
+            .max()
+            .unwrap_or(first.quality),
+        age_ms: cells.iter().filter_map(|cell| cell.age_ms).max(),
+        source_label: Some(GPU_RESIDENT_SOURCE.to_owned()),
+        conflict: None,
+        last_good: None,
+    })
+}
+
+/// Exact sum when every value is an exact byte count, else a float sum.
+fn summed(cells: &[MetricCell]) -> Option<Scalar> {
+    let exact = cells.iter().try_fold(0u64, |sum, cell| {
+        cell.value
+            .and_then(Scalar::as_u64)
+            .map(|value| sum.saturating_add(value))
+    });
+    match exact {
+        Some(total) => Some(Scalar::from_u64(total)),
+        None => Scalar::from_f64(cells.iter().filter_map(MetricCell::value_f64).sum()).ok(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::presentation::index::SampleIndex;
+    use crate::presentation::testkit::{Fixture, NOW, entity_record, sample};
+    use dgxtop_core::naming::attributes;
+    use dgxtop_core::observation::EntityKind;
+
+    const UNIFIED_A: &str = "gpu:GPU-aaaa";
+    const UNIFIED_B: &str = "gpu:GPU-bbbb";
+    const DISCRETE: &str = "gpu:GPU-cccc";
+
+    fn add_gpu(fixture: &mut Fixture, id: &str, index: &str, memory_model: Option<&str>) {
+        let mut attributes = vec![(attributes::NVML_INDEX, index)];
+        if let Some(model) = memory_model {
+            attributes.push((attributes::MEMORY_MODEL, model));
+        }
+        fixture.add_entity(entity_record(id, EntityKind::Gpu, "GPU", &attributes));
+    }
+
+    fn allocated(fixture: &mut Fixture, id: &str, bytes: u64) {
+        fixture.add(
+            "gpu",
+            sample("gpu.memory.process_allocated", id, "gpu").u64(bytes),
+        );
+    }
+
+    fn resident(fixture: &Fixture) -> Option<MetricCell> {
+        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
+        let index = SampleIndex::new(&fixture.snapshot);
+        let directory = GpuDirectory::new(&fixture.catalog, &index);
+        build_memory_view(&reader, &directory, 30).gpu_resident
+    }
+
+    #[test]
+    fn unified_gpus_report_the_ram_their_processes_hold() {
+        let mut fixture = Fixture::new();
+        add_gpu(&mut fixture, UNIFIED_A, "0", Some("unified"));
+        add_gpu(&mut fixture, UNIFIED_B, "1", Some("Unified"));
+        add_gpu(&mut fixture, DISCRETE, "2", Some("dedicated"));
+        allocated(&mut fixture, UNIFIED_A, 6 << 30);
+        allocated(&mut fixture, UNIFIED_B, 4 << 30);
+        allocated(&mut fixture, DISCRETE, 30 << 30);
+        let cell = resident(&fixture).unwrap();
+        // The discrete GPU's VRAM is not system RAM and is left out.
+        assert_eq!(cell.value.unwrap().as_u64(), Some(10 << 30));
+        assert_eq!(cell.state, CellState::Ok);
+        assert_eq!(cell.kind, SampleKind::Derived);
+        assert_eq!(cell.source_label.as_deref(), Some(GPU_RESIDENT_SOURCE));
+    }
+
+    #[test]
+    fn a_unified_gpu_without_a_value_makes_the_sum_unknown() {
+        let mut fixture = Fixture::new();
+        add_gpu(&mut fixture, UNIFIED_A, "0", Some("unified"));
+        add_gpu(&mut fixture, UNIFIED_B, "1", Some("unified"));
+        allocated(&mut fixture, UNIFIED_A, 6 << 30);
+        fixture.add(
+            "gpu",
+            sample("gpu.memory.process_allocated", UNIFIED_B, "gpu")
+                .unavailable()
+                .reason("NVML_PROCESS_LIST_PARTIAL"),
+        );
+        let cell = resident(&fixture).unwrap();
+        assert_eq!(
+            cell.value, None,
+            "a partial sum is never shown as the total"
+        );
+        assert!(!cell.state.has_value());
+    }
+
+    #[test]
+    fn memory_cells_keep_zero_swap_and_missing_cached_apart() {
+        let mut fixture = Fixture::new();
+        fixture.add(
+            "memory",
+            sample("memory.total", "memory", "system").u64(128 << 30),
+        );
+        fixture.add(
+            "memory",
+            sample("memory.swap_total", "memory", "system").u64(0),
+        );
+        fixture.add(
+            "memory",
+            sample("memory.cached", "memory", "system")
+                .unavailable()
+                .reason("TIMEOUT"),
+        );
+        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
+        let index = SampleIndex::new(&fixture.snapshot);
+        let directory = GpuDirectory::new(&fixture.catalog, &index);
+        let view = build_memory_view(&reader, &directory, 30);
+        assert_eq!(view.total.value.unwrap().as_u64(), Some(128 << 30));
+        assert_eq!(view.swap_total.value_f64(), Some(0.0));
+        assert_eq!(view.cached.state, CellState::ReadFailed);
+        assert_eq!(view.cached.value, None);
+        assert_eq!(view.used.state, CellState::Unavailable);
+        assert!(view.used_trend.points.is_empty());
+    }
+}
