@@ -1,0 +1,31 @@
+# evidence: bench-arbitration-smoke
+# command: cargo bench -p dgxtop --locked --offline --bench arbitration -- --smoke
+# started_utc: 2026-10-09T18:42:51Z
+# git_commit: b4b5a8d87d3c148cedacf91daf6f926719694a18 (working tree modified)
+# host: Linux 6.12.111+deb13-amd64 x86_64
+# cpu: 13th Gen Intel(R) Core(TM) i9-13900K
+# rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
+# ---- output ----
+   Compiling dgxtop v0.2.0 (/mnt/DennySORA_SSD/Code/Github/dgxtop/crates/dgxtop)
+    Finished `bench` profile [optimized] target(s) in 34.74s
+     Running ../../benches/arbitration/main.rs (target/release/deps/arbitration-b9aec92c96bd57bf)
+== dgxtop bench arbitration (smoke) ==
+run 1: 1.3 s, samples: commands 0 frames 0 history 0
+run 2: 1.3 s, samples: commands 0 frames 0 history 0
+run 3: 1.3 s, samples: commands 0 frames 0 history 0
+report kind: synthetic_example (not acceptance evidence)
+  blocker: smoke mode: shortened warm-up and measurement, never acceptance
+  blocker: run 1: not measured: cpu_mean_one_core_percent, rss_tree_peak_mib, managed_peak_mib, command_p95_ms, command_p99_ms, frame_p95_ms, frame_p99_ms, projection_p95_ms, history_p95_ms, coverage_percent, unexplained_drops, adaptive_throttle_events, crashes, deadlocks
+  blocker: run 2: not measured: cpu_mean_one_core_percent, rss_tree_peak_mib, managed_peak_mib, command_p95_ms, command_p99_ms, frame_p95_ms, frame_p99_ms, projection_p95_ms, history_p95_ms, coverage_percent, unexplained_drops, adaptive_throttle_events, crashes, deadlocks
+  blocker: run 3: not measured: cpu_mean_one_core_percent, rss_tree_peak_mib, managed_peak_mib, command_p95_ms, command_p99_ms, frame_p95_ms, frame_p99_ms, projection_p95_ms, history_p95_ms, coverage_percent, unexplained_drops, adaptive_throttle_events, crashes, deadlocks
+  blocker: soak_runs not measured (72 h fixed + churn soak, AT29); zero-length placeholders
+  blocker: source commit not identifiable (build commit "b4b5a8d87d3c148cedacf91daf6f926719694a18-dirty", dirty tree)
+  blocker: micro benchmark: measures collector arbitration only; no REF report metric is measured here
+  note: worst per-cycle collect p95 8.425 ms (component of projection_p95_ms, budget 100 ms)
+  note: fixture generated with simulated_latency_us=0: host read latency does not affect in-process collection
+report:   /mnt/DennySORA_SSD/Code/Github/dgxtop/target/perf/arbitration-smoke.json
+evidence: /mnt/DennySORA_SSD/Code/Github/dgxtop/target/perf/arbitration-smoke
+# ---- end ----
+# finished_utc: 2026-10-09T18:43:31Z
+# exit_code: 0
+# redacted: GPU UUIDs and hardware serial numbers

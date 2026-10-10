@@ -1,0 +1,37 @@
+# evidence: bench-history-smoke
+# command: cargo bench -p dgxtop --locked --offline --bench history -- --smoke
+# started_utc: 2026-10-09T18:42:06Z
+# git_commit: b4b5a8d87d3c148cedacf91daf6f926719694a18 (working tree modified)
+# host: Linux 6.12.111+deb13-amd64 x86_64
+# cpu: 13th Gen Intel(R) Core(TM) i9-13900K
+# rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
+# ---- output ----
+   Compiling dgxtop v0.2.0 (/mnt/DennySORA_SSD/Code/Github/dgxtop/crates/dgxtop)
+    Finished `bench` profile [optimized] target(s) in 31.29s
+     Running ../../benches/history/main.rs (target/release/deps/history-7f12bcfe7e9d41ed)
+== dgxtop bench history (smoke) ==
+run 1: 4.0 s, samples: commands 0 frames 0 history 800
+    history_p95_ms                          0.123 <= 100       Pass
+    minimum_samples.history_queries       800.000 >= 1000      Fail
+run 2: 4.0 s, samples: commands 0 frames 0 history 800
+    history_p95_ms                          0.127 <= 100       Pass
+    minimum_samples.history_queries       800.000 >= 1000      Fail
+run 3: 4.0 s, samples: commands 0 frames 0 history 800
+    history_p95_ms                          0.123 <= 100       Pass
+    minimum_samples.history_queries       800.000 >= 1000      Fail
+report kind: synthetic_example (not acceptance evidence)
+  blocker: smoke mode: shortened warm-up and measurement, never acceptance
+  blocker: run 1: not measured: cpu_mean_one_core_percent, rss_tree_peak_mib, managed_peak_mib, command_p95_ms, command_p99_ms, frame_p95_ms, frame_p99_ms, projection_p95_ms, coverage_percent, unexplained_drops, adaptive_throttle_events, crashes, deadlocks
+  blocker: run 2: not measured: cpu_mean_one_core_percent, rss_tree_peak_mib, managed_peak_mib, command_p95_ms, command_p99_ms, frame_p95_ms, frame_p99_ms, projection_p95_ms, coverage_percent, unexplained_drops, adaptive_throttle_events, crashes, deadlocks
+  blocker: run 3: not measured: cpu_mean_one_core_percent, rss_tree_peak_mib, managed_peak_mib, command_p95_ms, command_p99_ms, frame_p95_ms, frame_p99_ms, projection_p95_ms, coverage_percent, unexplained_drops, adaptive_throttle_events, crashes, deadlocks
+  blocker: soak_runs not measured (72 h fixed + churn soak, AT29); zero-length placeholders
+  blocker: source commit not identifiable (build commit "b4b5a8d87d3c148cedacf91daf6f926719694a18-dirty", dirty tree)
+  blocker: meso benchmark: measures history queries/appends only; other REF metrics are not measured here
+  note: history_p95_ms is measured over every query of the run (failed queries included, counted under errors)
+  note: bulk history is committed at a 60 s cadence (same rollups/bridges/segments as 1 s sampling), the newest 300 s at 1 s
+report:   /mnt/DennySORA_SSD/Code/Github/dgxtop/target/perf/history-smoke.json
+evidence: /mnt/DennySORA_SSD/Code/Github/dgxtop/target/perf/history-smoke
+# ---- end ----
+# finished_utc: 2026-10-09T18:42:51Z
+# exit_code: 0
+# redacted: GPU UUIDs and hardware serial numbers

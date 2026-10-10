@@ -1,0 +1,1713 @@
+# evidence: gate-test
+# command: cargo test --workspace --all-features --locked --no-fail-fast
+# started_utc: 2026-10-10T13:12:24Z
+# git_commit: b4b5a8d87d3c148cedacf91daf6f926719694a18 (working tree modified)
+# host: Linux 6.12.111+deb13-amd64 x86_64
+# cpu: 13th Gen Intel(R) Core(TM) i9-13900K
+# rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
+# ---- output ----
+   Compiling dgxtop-adapters v0.2.0 (/mnt/DennySORA_SSD/Code/Github/dgxtop/crates/adapters)
+   Compiling dgxtop-ui v0.2.0 (/mnt/DennySORA_SSD/Code/Github/dgxtop/crates/ui)
+   Compiling dgxtop v0.2.0 (/mnt/DennySORA_SSD/Code/Github/dgxtop/crates/dgxtop)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.23s
+     Running unittests src/lib.rs (target/debug/deps/dgxtop-68a4b3613734930d)
+
+running 53 tests
+test audit_unavailable::tests::every_operation_fails_closed ... ok
+test control_ops::tests::a_fail_stop_refuses_every_later_send ... ok
+test control_ops::tests::a_send_at_or_after_the_deadline_never_reaches_the_port ... ok
+test control_ops::tests::a_send_before_the_deadline_reaches_the_port_once ... ok
+test fail_stop::tests::a_healthy_run_returns_its_value_and_halts_nothing ... ok
+test fail_stop::tests::a_fail_stop_before_the_connection_requests_shutdown_when_connected ... ok
+test fail_stop::tests::a_panic_halts_requests_shutdown_and_keeps_the_first_reason ... ok
+test fail_stop::tests::reasons_are_sanitized ... ok
+test cli::tests::absent_flags_produce_no_overrides ... ok
+test cli::tests::replay_forces_read_only ... ok
+test cli::tests::explicit_flags_override ... ok
+test perf::environment::tests::commits_are_reported_only_when_known ... ok
+test perf::environment::tests::cpuinfo_and_meminfo_are_parsed ... ok
+test perf::coverage::tests::every_scheduled_slot_delivered_is_full_coverage ... ok
+test perf::coverage::tests::missing_reads_lower_coverage_and_extra_reads_never_raise_it ... ok
+test perf::coverage::tests::nothing_scheduled_claims_no_coverage_and_old_reads_are_forgotten ... ok
+test perf::coverage::tests::a_window_report_is_final_only_once_its_last_reads_could_commit ... ok
+test perf::evidence::tests::files_are_fingerprinted_and_confined ... ok
+test perf::latency::tests::projection_latency_includes_waiting_for_the_next_frame ... ok
+test perf::latency::tests::pending_requests_match_and_stay_bounded ... ok
+test perf::latency::tests::projection_tracker_counts_skew_and_bounds_memory ... ok
+test perf::latency::tests::summary_uses_nearest_rank_over_all_samples ... ok
+test perf::report::tests::records_reject_unknown_or_non_finite_metrics ... ok
+test perf::report::tests::gates_cover_limits_duration_and_sample_minimums ... ok
+test perf::report::tests::any_adaptive_throttle_event_fails_its_gate ... ok
+test perf::report::tests::only_exactly_three_runs_of_the_reference_workload_can_be_measured ... ok
+test perf::report::tests::only_a_complete_full_report_is_measured ... ok
+test perf::report::tests::missing_metrics_unsampled_metrics_and_unknown_commits_block_measured ... ok
+test perf::scenarios::tests::reference_profile_is_the_schema_workload ... ok
+test perf::tests::latency_series_is_bounded_and_counts_drops ... ok
+test perf::tests::cpu_percent_uses_one_core_denominator ... ok
+test perf::threads::tests::stat_lines_with_odd_names_are_parsed ... ok
+test perf::scenarios::tests::unknown_profiles_and_bad_files_are_errors ... ok
+test perf::tests::budgets_gate_runs_from_the_spec_file ... ok
+test perf::evidence::tests::evidence_count_is_bounded_by_the_schema ... ok
+test provenance::tests::unstaged_edits_and_branch_moves_re_run_the_build_script ... ok
+test perf::verdict::tests::measured_values_pass_or_fail_on_the_spec_bounds ... ok
+test provenance::tests::untracked_and_modified_files_make_the_build_dirty ... ok
+test perf::threads::tests::thread_names_and_ticks_are_parsed ... ok
+test perf::verdict::tests::nothing_passes_without_samples ... ok
+test version::tests::verbose_report_contains_installer_markers ... ok
+test perf::environment::tests::probing_this_host_fills_every_schema_field ... ok
+test startup::tests::origins_mark_defaults_saved_and_overrides ... ok
+test cli::tests::invalid_values_are_rejected ... ok
+test perf::history_load::tests::outage_series_show_a_gap_and_only_eligible_keys_are_kept ... ok
+test perf::history_load::tests::preload_commits_every_batch_and_answers_window_queries ... ok
+test monitor::tests::an_unset_flag_gives_up_at_the_deadline ... ok
+test perf::fixture::tests::written_fixture_matches_its_fingerprint ... ok
+test perf::fixture::tests::host_slices_are_written_per_family_and_reload ... ok
+test perf::fixture::tests::reference_fixture_contains_every_metric_class_in_the_replay_namespace ... ok
+test monitor::tests::shutdown_waits_share_one_deadline ... ok
+test perf::fixture::tests::same_seed_gives_byte_identical_fixtures ... ok
+test perf::pipeline::tests::reference_fixture_flows_through_every_collector ... ok
+
+test result: ok. 53 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+     Running unittests src/main.rs (target/debug/deps/dgxtop-4ce25632d8cc09a0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running ../../tests/action_disposable/main.rs (target/debug/deps/action_disposable-f0f8fcb31b7b7bb8)
+
+running 16 tests
+test at10::at10_bare_pid_targets_cannot_be_expressed_as_commands ... ok
+test at10::at10_unavailable_audit_store_sends_nothing ... ok
+test at10::at10_target_in_another_pid_namespace_sends_nothing ... ok
+test at10::at10_target_listed_under_another_uid_sends_nothing ... ok
+test at10::at10_without_pidfd_support_nothing_is_sent_and_there_is_no_pid_fallback ... ok
+test at10::at10_reused_pid_with_another_start_time_sends_nothing ... ok
+test at10::at10_root_session_sends_nothing ... ok
+test at10::at10_process_of_another_user_is_refused_by_the_kernel_identity_check ... ok
+test at10::at10_target_gone_after_prepare_is_never_signalled_through_its_pidfd ... ok
+test at10::at10_expired_confirmation_sends_nothing ... ok
+test at10::at10_audit_refusing_the_intent_sends_nothing ... ok
+test at32::at32_token_is_single_use_across_sessions_concurrency_and_replays ... ok
+test at10::at10_read_only_or_disabled_actions_send_nothing ... ok
+test at32::at32_signal_sent_is_reported_without_waiting_for_exit ... ok
+test at10::at10_confirmed_sigterm_reaches_only_the_disposable_child_after_one_durable_intent ... ok
+test at32::at32_crash_after_a_durable_intent_is_unknown_after_restart_and_never_resent ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+     Running ../../tests/cli/main.rs (target/debug/deps/cli-bb6a0c1064b98e0b)
+
+running 17 tests
+test installer::rollback_without_a_previous_binary_fails_cleanly ... ok
+test future_schema_is_refused_and_never_rewritten ... ok
+test import_legacy_requires_an_explicit_mode ... ok
+test invalid_saved_config_is_reported_with_location ... ok
+test version_verbose_lists_build_metadata_and_sqlite_gate ... ok
+test check_config_writes_nothing_and_shows_explicit_overrides_only ... ok
+test invalid_command_line_values_exit_with_status_two ... ok
+test legacy_import_dry_run_writes_nothing_and_apply_writes_private_v2_once ... ok
+test saved_value_survives_absent_cli_flags ... ok
+test installer::plain_http_release_urls_are_refused ... ok
+test installer::musl_hosts_are_refused_without_a_fallback ... ok
+test installer::a_checksum_mismatch_is_refused_and_the_installed_binary_is_kept ... ok
+test installer::an_archive_without_a_checksum_entry_is_refused ... ok
+test installer::an_archive_with_more_than_the_binary_is_refused ... ok
+test installer::a_requested_version_that_only_prefixes_the_binary_version_is_refused ... ok
+test installer::a_binary_reporting_another_version_is_refused ... ok
+test installer::installs_a_verified_release_keeps_the_previous_binary_and_rolls_back ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.41s
+
+     Running ../../tests/contracts/main.rs (target/debug/deps/contracts-ac7868cb0cae453a)
+
+running 35 tests
+test every_error_code_is_a_schema_result_code ... ok
+test canonical_units_match_schema_enum ... ok
+test structure::implementation_crates_depend_on_no_workspace_crate_but_core ... ok
+test structure::core_and_the_viewer_carry_no_system_or_driver_dependencies ... ok
+test structure::the_release_gate_matches_version_and_target_lines_exactly_and_checks_sqlite ... ok
+test structure::the_lock_file_exists_is_not_ignored_and_the_toolchain_is_pinned_like_ci ... ok
+test structure::workflows_pin_actions_by_commit_and_build_from_the_lock_file ... ok
+test view_and_sort_enums_match_command_schema ... ok
+test example_adapter_manifest ... ok
+test display_module_example_matches_schema ... ok
+test example_command_result ... ok
+test example_ipc_request ... ok
+test ipc_requests_for_every_kind_are_schema_valid ... ok
+test u64_values_are_decimal_strings_up_to_max ... ok
+test performance_report_schema_rejects_synthetic_shape_gaps ... ok
+test failed_reads_carry_null_values_in_both_layers ... ok
+test example_history_query ... ok
+test embedded_default_config_is_schema_valid ... ok
+test command_results_are_schema_valid ... ok
+test example_canonical_conflict ... ok
+test example_history_result ... ok
+test example_observation_cpu_package ... ok
+test unknown_fields_are_rejected_by_rust_and_schema ... ok
+test example_observation_conflicting ... ok
+test example_command_prepare ... ok
+test example_observation_batch ... ok
+test example_config_default ... ok
+test invalid_pids_are_rejected_by_rust_and_schema ... ok
+test canonical_samples_follow_schema_conditionals ... ok
+test example_event_gap ... ok
+test every_schema_compiles ... ok
+test every_command_variant_is_schema_valid ... ok
+test every_event_kind_is_schema_valid ... ok
+test structure::collectors_manager_and_viewer_never_touch_files_processes_or_sockets ... ok
+test structure::only_the_supervisor_launches_processes_and_nothing_runs_nvidia_smi ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running ../../tests/fault_injection/main.rs (target/debug/deps/fault_injection-701b532248cca59f)
+
+running 13 tests
+test blocked_hosts::at24_at39_unreapable_host_is_quarantined_never_respawned_and_shutdown_stays_bounded ... ignored, fault-injection run (opt-in): cargo test --test fault_injection -- --ignored
+test blocked_hosts::at24_hung_gpu_host_is_isolated_restarted_only_after_reap_and_leaks_nothing ... ignored, fault-injection run (opt-in): cargo test --test fault_injection -- --ignored
+test blocked_hosts::at24_values_of_a_hung_backend_stop_being_shown_as_current ... ignored, fault-injection run (opt-in): cargo test --test fault_injection -- --ignored
+test config_uncertainty::at36_uncertain_commit_adopts_the_disk_version_and_cas_blocks_concurrent_writers ... ignored, fault-injection run (opt-in): cargo test --test fault_injection -- --ignored
+test config_uncertainty::at36_uncertain_commit_that_cannot_be_reloaded_never_claims_the_old_file ... ignored, fault-injection run (opt-in): cargo test --test fault_injection -- --ignored
+test overload::at30_ingress_bytes_at_75_percent_for_three_samples_enter_pressure ... ignored, fault-injection run (opt-in): cargo test --test fault_injection -- --ignored
+test overload::at30_overload_escalates_recovers_one_level_per_30s_and_keeps_control_flowing ... ignored, fault-injection run (opt-in): cargo test --test fault_injection -- --ignored
+test safe_shutdown::at39_manager_invariant_failure_fails_stop_and_never_sends ... ignored, fault-injection run (opt-in): cargo test --test fault_injection -- --ignored
+test safe_shutdown::at39_shutdown_with_hung_config_and_audit_storage_is_bounded_and_honest ... ignored, fault-injection run (opt-in): cargo test --test fault_injection -- --ignored
+test store_partitions::at06_at31_audit_below_low_water_refuses_actions_before_the_action_worker ... ignored, fault-injection run (opt-in): cargo test --test fault_injection -- --ignored
+test store_partitions::at06_at31_low_water_after_prepare_refuses_the_intent_and_recovers ... ignored, fault-injection run (opt-in): cargo test --test fault_injection -- --ignored
+test store_partitions::at06_at39_stuck_audit_times_out_the_intent_and_its_late_receipt_never_sends ... ignored, fault-injection run (opt-in): cargo test --test fault_injection -- --ignored
+test store_partitions::at06_stuck_then_full_archive_never_stalls_hot_store_commits ... ignored, fault-injection run (opt-in): cargo test --test fault_injection -- --ignored
+
+test result: ok. 0 passed; 0 failed; 13 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running ../../tests/hardware/main.rs (target/debug/deps/hardware-f157719c13f04db8)
+
+running 1 test
+test hardware_every_live_adapter_discovers_and_reads_through_isolated_hosts ... ignored, hardware: reads this machine's real procfs/sysfs/NVML through isolated hosts
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running ../../tests/pty/main.rs (target/debug/deps/pty-5b4c879974ed8360)
+
+running 7 tests
+test ctrl_c_quits_even_in_filter_mode_where_q_is_text ... ignored, end-to-end PTY run (opt-in): cargo test --test pty -- --ignored
+test hangup_of_the_terminal_ends_the_process ... ignored, end-to-end PTY run (opt-in): cargo test --test pty -- --ignored
+test live_mode_without_gpu_starts_isolated_hosts_and_quits ... ignored, end-to-end PTY run (opt-in): cargo test --test pty -- --ignored
+test replay_starts_shows_simulated_label_and_quits_with_q ... ignored, end-to-end PTY run (opt-in): cargo test --test pty -- --ignored
+test resize_churn_keeps_running_and_quits ... ignored, end-to-end PTY run (opt-in): cargo test --test pty -- --ignored
+test stalled_reader_for_thirty_seconds_does_not_block_quit ... ignored, end-to-end PTY run (opt-in): cargo test --test pty -- --ignored
+test tiny_terminal_shows_size_notice_and_still_quits ... ignored, end-to-end PTY run (opt-in): cargo test --test pty -- --ignored
+
+test result: ok. 0 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running ../../tests/replay/main.rs (target/debug/deps/replay-0cdd512cb5ba9643)
+
+running 3 tests
+test package_temperature_alias_counts_once_and_soc_stays_separate ... ok
+test independent_sources_beyond_tolerance_are_a_conflict_without_value ... ok
+test replay_values_are_never_live_or_history_eligible ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (target/debug/deps/dgxtop_adapters-aa744265c8d06887)
+
+running 83 tests
+test common::tests::exact_conversion_rejects_huge_values ... ok
+test common::tests::probe_throttle_limits_reprobes ... ok
+test common::tests::io_errors_map_to_statuses ... ok
+test common::tests::interner_never_reuses_slots ... ok
+test filesystem::capacity::tests::missing_mount_points_fail_with_not_found ... ok
+test filesystem::capacity::tests::statvfs_of_the_root_filesystem_is_consistent ... ok
+test common::tests::rooted_files_read_fake_tree ... ok
+test filesystem::mountinfo::tests::octal_escapes_cover_space_tab_newline_and_backslash ... ok
+test filesystem::mountinfo::tests::path_containment_is_component_wise ... ok
+test filesystem::mountinfo::tests::classification_skips_network_pseudo_and_squashfs ... ok
+test filesystem::mountinfo::tests::mountinfo_fields_and_escapes_decode ... ok
+test filesystem::tests::figures_multiply_with_overflow_detection ... ok
+test hwmon::profile::tests::amd_multi_socket_is_unproven ... ok
+test filesystem::mountinfo::tests::shadowing_and_network_paths_are_detected ... ok
+test hwmon::profile::tests::coretemp_without_package_label_stays_diagnostic ... ok
+test hwmon::profile::tests::package_labels_parse_both_spellings ... ok
+test hwmon::reader::tests::counters_stay_exact ... ok
+test hwmon::reader::tests::garbage_and_huge_values_fail_instead_of_becoming_numbers ... ok
+test hwmon::reader::tests::signed_gauges_keep_zero_and_negative_values ... ok
+test hwmon::scan::tests::alarm_suffixes_map_to_reasons ... ok
+test hwmon::scan::tests::attributes_split_into_type_index_suffix ... ok
+test hwmon::scan::tests::channels_group_companions_and_split_power_semantics ... ok
+test hwmon::sysfs::tests::collisions_get_index_suffix_only_when_shared ... ok
+test hwmon::sysfs::tests::device_keys_use_path_below_sys_devices ... ok
+test hwmon::sysfs::tests::labels_are_sanitized_and_empty_is_none ... ok
+test hwmon::sysfs::tests::numbered_entries_require_digits ... ok
+test hwmon::sysfs::tests::long_keys_are_bounded_and_distinct ... ok
+test network::interfaces::tests::interface_names_are_validated ... ok
+test nvml::backend::tests::failures_map_to_distinct_statuses ... ok
+test nvml::backend::tests::reason_codes_are_bounded_and_clean ... ok
+test nvml::capabilities::tests::unknown_until_probed_and_clear_forgets ... ok
+test nvml::catalog::tests::missing_fans_and_unified_framebuffer_are_unsupported ... ok
+test nvml::catalog::tests::entity_uses_uuid_and_sanitized_attributes ... ok
+test nvml::catalog::tests::unavailable_capabilities_cover_every_metric ... ok
+test nvml::channels::tests::channel_names_are_unique_per_device ... ok
+test nvml::channels::tests::scopes_follow_naming_contract ... ok
+test nvml::channels::tests::fans_are_bounded_and_groups_assigned ... ok
+test nvml::inventory::tests::memory_model_follows_framebuffer_capability ... ok
+test nvml::inventory::tests::uuid_validation_rejects_separators_and_controls ... ok
+test nvml::channels::tests::every_metric_id_is_catalogued_with_matching_kind ... ok
+test nvml::library::tests::capability_gaps_are_not_faults ... ok
+test nvml::library::tests::init_failures_are_classified ... ok
+test nvml::library::tests::lost_and_reloaded_driver_are_classified ... ok
+test nvml::processes::tests::newest_sample_per_pid_wins ... ok
+test nvml::stack::tests::the_kernel_module_names_its_flavor_and_compiler ... ok
+test nvml::stack::tests::nothing_installed_is_an_empty_stack ... ok
+test nvml::tests::manifest_matches_spec_example ... ok
+test nvml::topology::tests::masks_become_linux_lists ... ok
+test nvml::tests::settings_are_clamped_to_safe_minimums ... ok
+test process_action::pidfd::tests::open_reports_errno_for_missing_process ... ok
+test process_action::pidfd::tests::own_process_is_running_and_descriptor_is_cloexec ... ok
+test process_action::policy::tests::allowed_target_passes ... ok
+test process_action::policy::tests::protected_targets_are_refused ... ok
+test process_action::policy::tests::rules_apply_in_fixed_order ... ok
+test process_action::proc_files::tests::fdinfo_target_distinguishes_exit_and_namespace ... ok
+test process_action::proc_files::tests::malformed_stat_is_rejected ... ok
+test process_action::proc_files::tests::stat_parses_after_last_parenthesis ... ok
+test process_action::proc_files::tests::uids_come_from_the_uid_line ... ok
+test process_action::proc_files::tests::host_files_read_own_process ... ok
+test process_action::tests::send_errnos_are_classified ... ok
+test process_action::tests::summary_is_sanitized ... ok
+test process_action::verify::tests::vanished_proc_entries_mean_exited ... ok
+test procfs::cpu::tests::compile_time_identities_are_valid ... ok
+test procfs::disk::tests::sysfs_names_cannot_escape_the_block_class ... ok
+test procfs::host::tests::attributes_skip_unknown_values ... ok
+test procfs::host::tests::compile_time_identities_are_valid ... ok
+test procfs::mechanics::tests::error_codes_are_deduplicated_and_bounded ... ok
+test procfs::memory::tests::compile_time_identities_are_valid ... ok
+test procfs::parse::tests::cpu_lines_use_labels_and_keep_absent_columns_absent ... ok
+test procfs::parse::tests::diskstats_modern_legacy_and_malformed_lines ... ok
+test procfs::parse::tests::loadavg_fields_parse_and_garbage_is_invalid ... ok
+test procfs::parse::tests::meminfo_requires_kb_and_reports_missing_fields_absent ... ok
+test procfs::parse::tests::pid_stat_comm_may_contain_spaces_and_parentheses ... ok
+test procfs::parse::tests::pid_stat_without_identity_is_rejected ... ok
+test procfs::parse::tests::u64_max_counter_survives ... ok
+test registry::tests::source_limit_and_page_size_are_clamped ... ok
+test replay::adapter::tests::slice_bounds_reject_invalid_partitions ... ok
+test replay::generator::tests::overload_plan_fits_sample_budget ... ok
+test replay::generator::tests::plan_clamps_to_fixture_bounds ... ok
+test replay::generator::tests::reference_plan_matches_scenarios_numbers ... ok
+test procfs::mechanics::tests::retain_and_forget_keep_the_gate_bounded ... ok
+test nvml::processes::tests::invalid_pids_are_dropped_and_lists_are_bounded ... ok
+test nvml::discovery::tests::tombstones_are_bounded_unique_and_revivable ... ok
+
+test result: ok. 83 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/adapters_a_catalog.rs (target/debug/deps/adapters_a_catalog-c6c9ed59b50d8be8)
+
+running 10 tests
+test discovery_guards_reject_wrong_adapter_and_expired_deadline ... ok
+test half_page_discovery_never_deletes ... ok
+test transient_read_errors_are_retried_every_cycle ... ok
+test discovery_pages_without_a_snapshot_are_rejected ... ok
+test slots_whose_removal_is_pending_read_as_removed ... ok
+test source_limit_keeps_host_wide_sources_and_reports_the_rest ... ok
+test reconnected_device_is_a_new_incarnation_with_a_fresh_slot ... ok
+test static_metadata_is_read_once_per_generation ... ok
+test sticky_read_failures_are_reprobed_at_most_once_per_interval ... ok
+test thousand_hotplug_cycles_keep_the_catalog_bounded_and_never_reuse_slots ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+
+     Running tests/adapters_a_filesystem.rs (target/debug/deps/adapters_a_filesystem-196335b9af0d4b02)
+
+running 10 tests
+test manifest_uses_the_capacity_cadence ... ok
+test missing_mount_namespace_is_unavailable ... ok
+test unreadable_mountinfo_keeps_the_catalog_and_fails_reads_without_values ... ok
+test discovery_lists_disk_mounts_and_flags_network_mounts ... ok
+test capacities_are_fragments_times_fragment_size ... ok
+test overflowing_capacity_is_an_error_record ... ok
+test changed_mount_is_not_probed_and_becomes_a_new_generation ... ok
+test unmounted_filesystem_only_removes_itself ... ok
+test shadowed_mounts_and_mounts_below_network_filesystems_are_not_probed ... ok
+test denied_statvfs_is_reprobed_at_most_once_per_interval ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/adapters_a_hardware.rs (target/debug/deps/adapters_a_hardware-f15978e29540b2d8)
+
+running 3 tests
+test hardware_filesystem_smoke ... ignored, reads the real host
+test hardware_network_smoke ... ignored, reads the real host
+test hardware_procfs_smoke ... ignored, reads the real host
+
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/adapters_a_network.rs (target/debug/deps/adapters_a_network-000e42227f59ebc8)
+
+running 10 tests
+test missing_namespace_or_class_directory_is_unavailable ... ok
+test unreadable_counter_has_no_value ... ok
+test manifest_and_guards ... ok
+test counters_are_exact_u64_values ... ok
+test permission_bits_are_honored ... ok
+test operstate_change_is_an_attribute_update_not_a_new_incarnation ... ok
+test transient_ifindex_failure_keeps_the_interface ... ok
+test removed_interface_only_removes_itself ... ok
+test recreated_interface_never_continues_the_old_counter ... ok
+test many_interfaces_are_paged ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/adapters_a_process.rs (target/debug/deps/adapters_a_process-7e462bb289266ba2)
+
+running 9 tests
+test missing_pid_namespace_fails_the_process_group ... ok
+test hostile_command_names_are_sanitized ... ok
+test overflowing_values_become_error_records ... ok
+test process_records_carry_identity_basename_and_values ... ok
+test unknown_page_size_is_unsupported_not_zero ... ok
+test vanished_and_unparsable_processes_are_not_error_records ... ok
+test paging_is_consistent_within_a_cycle_and_resnapshots_the_next_cycle ... ok
+test process_scan_stops_at_the_deadline ... ok
+test process_scan_is_bounded ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+     Running tests/adapters_a_procfs.rs (target/debug/deps/adapters_a_procfs-18ebc07da9649495)
+
+running 18 tests
+test manifest_matches_the_contract ... ok
+test missing_proc_stat_makes_the_adapter_unavailable_but_keeps_other_groups ... ok
+test stat_sources_follow_the_naming_contract ... ok
+test denied_proc_stat_reports_permission_denied_availability ... ok
+test unreadable_file_permission_bits_yield_permission_denied ... ok
+test removed_disk_only_removes_its_own_sources ... ok
+test memory_fields_are_native_kib_and_missing_available_is_unsupported ... ok
+test unreadable_enumeration_file_keeps_previous_devices ... ok
+test offline_cpu_only_affects_itself ... ok
+test cpufreq_sources_exist_only_where_supported ... ok
+test missing_columns_are_unsupported_and_garbage_is_an_error ... ok
+test explicit_slots_read_only_those_sources_and_flag_unknown_ones ... ok
+test guards_reject_unservable_plans ... ok
+test diskstats_scopes_partitions_and_skips_loop_and_ram ... ok
+test the_cached_maximum_is_served_with_each_reads_time_and_never_reread ... ok
+test cpu_read_emits_counters_load_and_frequencies ... ok
+test u64_max_counter_survives_the_wire ... ok
+test renamed_block_device_is_a_new_generation ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/adapters_a_registry.rs (target/debug/deps/adapters_a_registry-8455fe7d62cf5d0c)
+
+running 4 tests
+test live_adapter_list_is_the_naming_contract ... ok
+test unknown_and_replay_ids_are_rejected ... ok
+test every_live_manifest_is_valid_and_kernel_adapters_follow_the_contract ... ok
+test every_live_adapter_can_be_built_with_its_options ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/adapters_b_nvml.rs (target/debug/deps/adapters_b_nvml-d9f449557a7bad5e)
+
+running 32 tests
+test hardware_nvml_smoke ... ignored, needs the real NVIDIA driver and GPUs (run with --ignored)
+test init_failure_reports_unavailable_with_every_capability_unsupported ... ok
+test no_gpu_reports_unavailable ... ok
+test permission_denied_init_is_reported_as_such ... ok
+test pcie_throughput_is_marked_unverified ... ok
+test expired_deadline_fails_without_driver_calls ... ok
+test compute_and_graphics_of_one_pid_are_one_association ... ok
+test process_utilization_uses_samples_since_the_last_timestamp ... ok
+test unavailable_process_memory_is_unsupported_not_zero ... ok
+test enumeration_failure_keeps_the_catalog_and_is_not_available ... ok
+test unknown_read_group_is_rejected ... ok
+test performance_state_throttle_reasons_link_and_thresholds_are_reported ... ok
+test unsupported_process_utilization_is_reported_per_association ... ok
+test shutdown_releases_the_backend ... ok
+test reinit_attempts_are_throttled_to_once_per_minute ... ok
+test transient_errors_are_retried_every_cycle ... ok
+test source_slot_filter_reads_only_requested_sources ... ok
+test healthy_gpu_reports_native_values_with_uuid_identity ... ok
+test capabilities_and_slow_health_values_are_reported_in_native_units ... ok
+test unified_memory_gpu_never_substitutes_system_ram ... ok
+test unsupported_metrics_are_unsupported_records_never_zero ... ok
+test lost_gpu_only_affects_its_own_records ... ok
+test session_loss_drops_the_backend_and_reconnects_at_once ... ok
+test two_gpus_with_the_same_pid_are_two_associations ... ok
+test nvlink_counts_active_links_without_throughput ... ok
+test driver_reload_starts_a_new_generation ... ok
+test topology_names_the_nearest_cpus_and_the_path_to_each_other_gpu ... ok
+test hot_unplug_removes_only_that_gpu_and_keeps_slots_stable ... ok
+test metadata_is_cached_until_the_generation_changes ... ok
+test unsupported_capability_is_reprobed_at_most_once_per_minute ... ok
+test catalog_discovery_is_paged_and_complete_only_at_the_end ... ok
+test paging_serves_one_consistent_snapshot ... ok
+
+test result: ok. 31 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/adapters_b_process_action.rs (target/debug/deps/adapters_b_process_action-b46aebe34a73b1e9)
+
+running 21 tests
+test double_release_is_safe_and_unknown_handles_fail_closed ... ok
+test pid_one_and_own_pid_are_protected ... ok
+test identity_change_before_send_is_refused_without_a_send ... ok
+test kernels_without_pidfd_are_unsupported ... ok
+test foreign_namespace_host_or_boot_is_refused ... ok
+test managed_pids_are_protected ... ok
+test proc_read_failure_rejects_and_closes_the_descriptor ... ok
+test other_users_process_is_uid_mismatch ... ok
+test read_only_and_disabled_sessions_are_refused ... ok
+test root_session_is_refused ... ok
+test pidfd_naming_another_target_is_rejected ... ok
+test sigkill_requires_allow_force ... ok
+test verified_command_name_stays_raw_for_the_audit_and_the_summary_is_clean ... ok
+test send_errnos_are_classified_without_pid_fallback ... ok
+test leaked_handles_expire_after_the_hold_limit ... ok
+test held_handles_are_bounded ... ok
+test prepare_send_sigterm_and_observe_exit ... ok
+test send_refuses_a_different_signal_or_a_stale_receipt ... ok
+test wrong_start_time_is_identity_changed_and_child_is_untouched ... ok
+test exited_child_is_reported_exited_at_prepare ... ok
+test send_after_the_process_exited_reports_exited ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+     Running tests/adapters_c_hardware.rs (target/debug/deps/adapters_c_hardware-3fecb338fccec66b)
+
+running 3 tests
+test hardware_hwmon_smoke ... ignored, reads the real host's /sys/class/hwmon
+test hardware_powercap_smoke ... ignored, reads the real host's /sys/class/powercap
+test hardware_thermal_smoke ... ignored, reads the real host's /sys/class/thermal
+
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/adapters_c_hwmon.rs (target/debug/deps/adapters_c_hwmon-c60f52a13e65393a)
+
+running 25 tests
+test manifest_is_a_valid_live_host_process ... ok
+test missing_hwmon_class_is_unavailable_and_empty ... ok
+test labels_are_sanitized ... ok
+test gb10_profile_needs_both_cluster_labels ... ok
+test amd_tctl_is_usable_fallback_without_tdie ... ok
+test garbage_values_fail_without_numbers ... ok
+test alarm_flag_keeps_high_reading_and_quality ... ok
+test invalid_requests_fail_without_records ... ok
+test coretemp_package_and_cores_map_to_cpu_metrics_with_confirmed_origins ... ok
+test interrupted_discovery_never_removes_sources ... ok
+test fault_flag_keeps_value_but_marks_quality_invalid ... ok
+test paging_bounds_catalog_pages_and_read_batches ... ok
+test gb10_labels_map_clusters_and_platform_power ... ok
+test power_and_energy_channels_keep_native_units ... ok
+test unreadable_class_directory_keeps_the_previous_catalog ... ok
+test amd_tdie_maps_on_single_socket_and_tctl_is_only_a_fallback ... ok
+test plans_with_slots_read_only_those_sources ... ok
+test zero_celsius_is_kept_as_a_valid_reading ... ok
+test renumbered_hwmon_keeps_source_ids_and_slots_and_bumps_generation ... ok
+test unsupported_channel_is_reprobed_at_most_once_per_interval ... ok
+test reprobe_recovers_a_channel_after_the_interval ... ok
+test source_limit_keeps_profile_proven_sources_first ... ok
+test vanished_device_reads_removed_then_is_removed_from_the_catalog ... ok
+test unclassified_sensors_are_diagnostics_with_unknown_origin ... ok
+test hotplug_churn_keeps_identity_and_generations_monotonic ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/adapters_c_powercap.rs (target/debug/deps/adapters_c_powercap-9f7901d5436bd964)
+
+running 8 tests
+test manifest_is_a_valid_live_host_process ... ok
+test zones_without_energy_counters_are_skipped ... ok
+test counters_stay_exact_u64 ... ok
+test mmio_duplicates_and_die_domains_stay_diagnostics ... ok
+test permission_denied_energy_is_reported_never_zero ... ok
+test package_and_psys_are_distinct_metrics_and_subdomains_are_diagnostics ... ok
+test denied_energy_is_reprobed_at_most_once_per_interval ... ok
+test counter_modulus_comes_from_max_energy_range ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/adapters_c_replay.rs (target/debug/deps/adapters_c_replay-f7645573e6f4ab98)
+
+running 16 tests
+test fixture_values_round_trip_numbers_and_decimal_strings ... ok
+test adapter_ids_and_manifests_stay_in_the_replay_namespace ... ok
+test records_are_labelled_replay_and_stamped_with_the_current_clock ... ok
+test failed_samples_have_no_value_and_absent_samples_have_no_record ... ok
+test validation_rejects_live_sample_kinds ... ok
+test removed_source_reads_removed_then_leaves_the_catalog ... ok
+test generation_change_bumps_generations_once_per_cycle ... ok
+test cycles_wrap_and_counters_keep_increasing_across_loops ... ok
+test slot_selection_and_invalid_plans ... ok
+test validation_rejects_unknown_metric_ids ... ok
+test large_groups_are_paged_consistently ... ok
+test same_seed_produces_identical_bytes_and_other_seeds_differ ... ok
+test validation_rejects_oversize_inputs ... ok
+test shipped_demo_fixture_loads_and_shows_package_soc_and_conflict ... ok
+test overload_fixture_stays_within_bounds ... ok
+test reference_fixture_is_byte_identical_and_matches_the_ref_workload ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.37s
+
+     Running tests/adapters_c_thermal.rs (target/debug/deps/adapters_c_thermal-94b85d624bc70dfb)
+
+running 10 tests
+test manifest_is_a_valid_live_host_process ... ok
+test unknown_topology_does_not_prove_a_package ... ok
+test zone_identity_survives_renumbering_when_a_device_link_exists ... ok
+test arm_cpu_thermal_is_usable_rank_two_on_one_package ... ok
+test disabled_zone_is_unsupported_and_reprobed_with_throttling ... ok
+test zero_and_negative_zone_temperatures_are_kept ... ok
+test soc_zone_is_soc_temperature_not_cpu_package ... ok
+test trip_points_are_bounded_entity_attributes_not_series ... ok
+test other_zones_are_diagnostics_with_unknown_origin ... ok
+test x86_pkg_temp_maps_to_package_with_the_coretemp_origin ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/dgxtop_collectors-7d6961903d88a7ae)
+
+running 122 tests
+test arbitration::hysteresis::tests::slow_rounds_still_need_three_wins ... ok
+test arbitration::hysteresis::tests::challenger_needs_three_wins_and_five_seconds ... ok
+test arbitration::hysteresis::tests::unhealthy_current_switches_immediately ... ok
+test arbitration::hysteresis::tests::interrupted_streak_restarts ... ok
+test arbitration::tests::alarm_keeps_the_hot_reading ... ok
+test arbitration::tests::candidates_beyond_the_limit_are_dropped_by_priority ... ok
+test arbitration::tests::catalog_mapping_mismatch_and_unproven_purpose_are_rejected ... ok
+test arbitration::tests::agreeing_independent_sources_select_by_profile_rank ... ok
+test arbitration::tests::confirmed_alias_is_counted_once_and_keeps_an_inconsistency_hint ... ok
+test arbitration::tests::an_unchanged_reading_is_only_a_suspect_diagnostic_never_fake_data ... ok
+test arbitration::tests::counters_are_never_compared ... ok
+test arbitration::tests::device_time_decides_alignment_when_both_report_it ... ok
+test arbitration::tests::excluded_source_keeps_its_evidence_and_reason ... ok
+test arbitration::tests::faulted_fallback_is_excluded_and_the_valid_source_selected ... ok
+test arbitration::tests::failed_reads_and_stale_values_are_never_zero ... ok
+test arbitration::tests::faulted_preferred_source_degrades_to_the_same_key_fallback ... ok
+test arbitration::tests::independent_disagreement_is_a_conflict_never_an_average ... ok
+test arbitration::tests::live_measured_values_of_history_metrics_are_history_eligible ... ok
+test arbitration::tests::missing_device_timestamp_means_read_fresh_measurement_unknown ... ok
+test arbitration::tests::healthy_source_switches_only_after_three_wins_and_five_seconds ... ok
+test arbitration::tests::non_temperature_gauges_use_relative_tolerance ... ok
+test arbitration::tests::package_never_falls_back_to_a_soc_reading ... ok
+test arbitration::tests::quality_grade_orders_before_profile_rank ... ok
+test arbitration::tests::pin_never_hides_a_conflict ... ok
+test arbitration::tests::sensor_channels_never_become_canonical ... ok
+test arbitration::tests::replay_is_rejected_by_a_live_policy_and_accepted_by_a_replay_policy ... ok
+test arbitration::tests::soc_scope_is_a_different_key_and_never_competes ... ok
+test arbitration::tests::true_zero_is_a_value_not_a_missing_sentinel ... ok
+test arbitration::tests::unaligned_independent_sources_are_not_compared ... ok
+test arbitration::tests::suspect_and_unknown_quality_are_not_canonical ... ok
+test arbitration::tests::unknown_and_unverified_units_are_rejected_not_guessed ... ok
+test arbitration::tests::unknown_origins_never_conflict_but_leave_uncertainty ... ok
+test context::tests::static_period_group_matches_naming_contract ... ok
+test counter::tests::already_consumed_detects_the_committed_reading ... ok
+test arbitration::tests::valid_pin_overrides_the_ranking ... ok
+test counter::tests::bytes_1000_to_1300_over_3s_is_100_per_second_and_300_total ... ok
+test counter::tests::declared_modulus_allows_exactly_one_wrap ... ok
+test counter::tests::empty_interval_has_no_rate ... ok
+test arbitration::tests::unusable_pin_is_unavailable_and_never_silently_replaced ... ok
+test counter::tests::micro_joules_become_fractional_joules ... ok
+test counter::tests::near_u64_max_deltas_stay_exact ... ok
+test counter::tests::reset_generation_boot_and_interval_changes_are_gaps ... ok
+test counter::tests::sector_conversion_overflow_is_not_representable ... ok
+test cpu::tests::architecture_example_independent_sources_conflict_without_value ... ok
+test cpu::tests::architecture_example_soc_scope_is_published_separately ... ok
+test cpu::tests::architecture_example_alias_counts_once_and_fault_is_excluded ... ok
+test cpu::tests::platform_power_never_masquerades_as_package_power ... ok
+test cpu::tests::gb10_formula_needs_both_components ... ok
+test cpu::tests::package_power_from_energy_counter_rate ... ok
+test cpu::tests::retained_reading_expires_once_as_stale ... ok
+test gpu::tests::failed_process_list_is_never_a_zero_sum ... ok
+test gpu::tests::bandwidth_estimate_is_never_produced ... ok
+test disk::tests::empty_filesystem_capacity_has_no_use_percent ... ok
+test gpu::tests::exited_processes_from_an_older_list_are_not_summed ... ok
+test cpu::tests::breakdown_follows_the_formulas_and_never_adds_guest ... ok
+test gpu::tests::pcie_with_unverified_unit_has_no_value ... ok
+test cpu::tests::a_field_moving_backwards_is_warmup_never_a_huge_negative ... ok
+test gpu::tests::incomplete_process_lists_flag_the_sum_as_partial ... ok
+test cpu::tests::value_returning_after_a_conflict_is_published_again ... ok
+test gpu::tests::gauges_are_normalized_and_true_zero_is_kept ... ok
+test disk::tests::partitions_and_devices_are_separate_scopes ... ok
+test gpu::tests::process_allocations_are_summed_per_gpu_and_deduplicated_by_pid ... ok
+test disk::tests::sector_rates_iops_and_await_from_exact_deltas ... ok
+test cpu::tests::candidates_of_different_batches_are_arbitrated_together ... ok
+test cpu::tests::gb10_package_power_is_the_sum_of_both_clusters ... ok
+test gpu::tests::unsupported_metric_is_unavailable_not_zero ... ok
+test network::tests::candidate_byte_counters_publish_each_rate_key_once ... ok
+test disk::tests::filesystem_used_and_df_use_percent ... ok
+test gpu::tests::static_values_use_the_discovery_period_for_freshness ... ok
+test gpu::tests::energy_is_cumulative_joules_with_exact_intervals_and_reset_warmup ... ok
+test memory::tests::retained_inputs_are_not_republished_without_new_evidence ... ok
+test memory::tests::used_is_total_minus_available_in_exact_bytes ... ok
+test gpu::tests::unknown_process_allocations_are_flagged_never_counted_as_zero ... ok
+test memory::tests::available_above_total_has_no_value_and_a_reason ... ok
+test memory::tests::missing_available_never_falls_back_to_free ... ok
+test process::tests::gpu_entry_of_an_older_instance_is_not_linked_to_a_reused_pid ... ok
+test cpu::tests::energy_and_hwmon_power_of_one_origin_are_aliases ... ok
+test network::tests::byte_rate_uses_actual_elapsed_time_and_emits_exact_interval ... ok
+test disk::tests::await_without_completed_io_is_unavailable_not_a_division_by_zero ... ok
+test process::tests::cpu_percent_counts_cores_and_may_exceed_100 ... ok
+test output::tests::failures_are_deduplicated_and_bounded ... ok
+test output::tests::invalid_canonical_value_is_dropped_with_a_failure ... ok
+test cpu::tests::paged_fields_are_combined_into_one_sample_set ... ok
+test cpu::tests::per_core_identity_comes_from_the_entity_not_record_order ... ok
+test network::tests::replayed_counters_feed_no_live_interval ... ok
+test process::tests::no_procfs_batch_means_no_table_update ... ok
+test process::tests::incomplete_gpu_process_list_is_reported ... ok
+test process::tests::missing_clk_tck_is_never_defaulted ... ok
+test reasons::tests::bounded_deduplicates_and_caps ... ok
+test reasons::tests::every_code_respects_the_schema_bounds ... ok
+test process::tests::merged_compute_and_graphics_association_is_one_link ... ok
+test network::tests::counter_reset_is_never_a_negative_or_zero_rate ... ok
+test network::tests::recreated_interface_restarts_from_warmup ... ok
+test reasons::tests::unverified_vendor_unit_is_named_separately ... ok
+test process::tests::association_without_usage_marker_is_unknown_usage ... ok
+test process::tests::reused_pid_with_new_start_time_never_inherits_the_old_base ... ok
+test process::tests::unreadable_rss_is_missing_not_zero ... ok
+test process::tests::gpu_list_from_an_earlier_job_is_joined ... ok
+test process::tests::one_process_on_two_gpus_is_one_host_row_with_two_links ... ok
+test process::tests::unavailable_gpu_memory_is_none_not_zero ... ok
+test state_bounds::tests::oldest_counters_are_evicted_first ... ok
+test cpu::tests::idle_interval_without_ticks_is_unavailable ... ok
+test tests::plan_addressed_to_another_collector_is_refused ... ok
+test registry::tests::registry_holds_the_six_collectors_by_id ... ok
+test registry::tests::consumption_follows_the_naming_routing_table ... ok
+test state_bounds::tests::touched_selections_survive_eviction ... ok
+test tests::unknown_and_unhandled_metrics_and_failed_batches_are_reported ... ok
+test values::tests::candidate_ids_are_deduplicated_and_capped ... ok
+test values::tests::derived_value_from_live_inputs_is_history_eligible_and_valid ... ok
+test values::tests::derived_value_from_replay_inputs_stays_replay_and_out_of_history ... ok
+test values::tests::difference_is_exact_and_never_negative ... ok
+test tests::boot_change_restarts_counters_at_warmup ... ok
+test values::tests::sum_is_checked ... ok
+test values::tests::unavailable_value_carries_reasons_but_no_value ... ok
+test tests::every_collector_leaves_the_plan_state_untouched_and_carries_plan_identity ... ok
+test process::tests::truncation_keeps_gpu_processes_then_busiest ... ok
+test cpu::tests::replayed_inputs_never_publish_into_the_live_namespace ... ok
+test counter::tests::wrapped_delta_matches_modular_arithmetic ... ok
+test counter::tests::delta_is_exact_and_never_negative ... ok
+test arbitration::tests::outcome_is_independent_of_candidate_order ... ok
+test tests::state_stays_bounded_under_ten_thousand_churned_sources ... ok
+test process::tests::bases_stay_bounded_under_heavy_process_churn ... ok
+
+test result: ok. 122 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+     Running unittests src/lib.rs (target/debug/deps/dgxtop_core-1cd660a9321b4049)
+
+running 101 tests
+test action::tests::action_errors_map_to_spec_codes ... ok
+test action::tests::sent_is_not_exit ... ok
+test budget::tests::partitions_scale_exactly_and_sum_to_total ... ok
+test action::tests::token_is_validated_and_redacted ... ok
+test budget::tests::queue_gate_enforces_items_and_bytes_together ... ok
+test budget::tests::reserve_release_and_never_overcommit ... ok
+test canonical::tests::conflict_and_unavailable_carry_no_value ... ok
+test canonical::tests::fresh_deadline_uses_max_of_period_and_update_interval ... ok
+test canonical::tests::periods_are_matched_exactly_even_when_adapter_ids_share_a_prefix ... ok
+test budget::tests::transfer_split_merge_keep_totals ... ok
+test canonical::tests::replay_values_are_not_history_eligible ... ok
+test clock::tests::backoff_doubles_to_cap_with_bounded_jitter ... ok
+test canonical::tests::selected_value_rules ... ok
+test clock::tests::next_due_skips_missed_slots_without_replay ... ok
+test clock::tests::phase_is_stable_and_bounded ... ok
+test clock::tests::utc_formatting_is_fixed_width_and_ordered ... ok
+test canonical::tests::spec_conflict_example_round_trips ... ok
+test commands::tests::syntax_rejections ... ok
+test commands::tests::payload_digest_detects_changes ... ok
+test commands::tests::uncertain_commits_stay_recognizable_in_the_closed_result_schema ... ok
+test commands::tests::spec_interval_result_example_parses ... ok
+test commands::tests::unknown_command_type_is_rejected ... ok
+test commands::tests::spec_prepare_signal_example_parses ... ok
+test config::tests::cli_overrides_only_touch_explicit_fields ... ok
+test config::tests::cross_field_capacity_rules ... ok
+test config::tests::legacy_mapping_reports_every_field ... ok
+test config::tests::legacy_out_of_range_values_keep_defaults ... ok
+test config::tests::non_finite_and_out_of_range_numbers_are_rejected ... ok
+test config::tests::query_and_worker_defaults_match_the_runtime_limits ... ok
+test config::tests::safety_constants_cannot_be_disabled ... ok
+test config::tests::the_built_in_defaults_keep_history_on_disk_and_the_reference_stays_the_spec ... ok
+test config::tests::restart_only_fields_are_detected ... ok
+test config::tests::pins_must_not_duplicate_or_overlap_exclusions ... ok
+test config::tests::defaults_round_trip_json ... ok
+test errors::tests::result_code_serializes_ok_and_errors ... ok
+test diagnostics::tests::histogram_quantiles ... ok
+test gpu_bandwidth::tests::memory_peaks_match_the_published_figures ... ok
+test gpu_bandwidth::tests::pcie_links_follow_their_generation_and_lanes ... ok
+test gpu_state::tests::bits_decode_to_reasons_in_order ... ok
+test gpu_state::tests::the_worst_reason_sets_the_severity ... ok
+test gpu_state::tests::peers_round_trip_and_bad_entries_are_skipped ... ok
+test history::tests::coverage_ratio_is_clamped ... ok
+test history::tests::archive_queries_span_whole_minutes_on_a_utc_grid ... ok
+test event::tests::spec_gap_example_round_trips ... ok
+test identity::tests::bounded_identity_rejects_empty_long_and_control ... ok
+test identity::tests::confirmed_origin_requires_id ... ok
+test identity::tests::different_scope_is_different_key ... ok
+test history::tests::query_validation ... ok
+test diagnostics::tests::labels_are_sanitized ... ok
+test config::tests::unknown_keys_and_missing_fields_are_rejected ... ok
+test digest::tests::known_vector ... ok
+test budget::tests::concurrent_reservations_never_exceed_limit ... ok
+test errors::tests::enospc_maps_to_disk_full ... ok
+test identity::tests::every_metric_key_field_participates_in_equality ... ok
+test diagnostics::tests::non_finite_gauges_are_ignored ... ok
+test identity::tests::metric_id_syntax ... ok
+test errors::tests::error_messages_are_sanitized_and_bounded ... ok
+test identity::tests::pid_range_is_enforced ... ok
+test identity::tests::process_key_entity_id_round_trips ... ok
+test errors::tests::unknown_outcome_is_not_retryable ... ok
+test identity::tests::process_key_fields_all_matter ... ok
+test history::tests::spec_examples_round_trip ... ok
+test identity::tests::process_key_json_uses_decimal_start_time ... ok
+test identity::tests::series_selector_round_trips ... ok
+test metric::tests::driver_microseconds_and_nanoseconds_become_milliseconds ... ok
+test metric::tests::exact_u64_conversion_and_overflow ... ok
+test metric::tests::deep_gpu_metrics_are_catalogued_and_never_history ... ok
+test metric::tests::millidegrees_convert_to_68_degrees ... ok
+test metric::tests::non_finite_scalars_are_rejected ... ok
+test metric::tests::unknown_and_unverified_units_are_rejected ... ok
+test metric::tests::scalar_decoding_accepts_either_key_order_and_rejects_mismatches ... ok
+test metric::tests::scalar_json_shape_matches_schema ... ok
+test metric::tests::catalog_ids_are_unique_and_valid ... ok
+test naming::tests::entity_spellings_are_valid_identities ... ok
+test naming::tests::routing_covers_every_collector ... ok
+test observation::tests::a_gpu_entity_keeps_up_to_thirty_two_attributes ... ok
+test observation::tests::page_encoding_round_trips ... ok
+test observation::tests::ipc_request_rejects_slots_on_discover_and_duplicates ... ok
+test observation::tests::failed_read_with_value_is_rejected ... ok
+test quality::tests::replay_kinds_are_never_live ... ok
+test observation::tests::spec_ipc_request_and_manifest_parse ... ok
+test quality::tests::serde_names_match_schema ... ok
+test quality::tests::suspect_is_not_canonical ... ok
+test text::tests::audit_command_names_drop_paths_but_keep_kernel_slashes ... ok
+test text::tests::audit_escapes_are_bounded_without_splitting_an_escape ... ok
+test text::tests::audit_escapes_keep_hostile_bytes_visible_and_unambiguous ... ok
+test observation::tests::spec_batch_example_parses_with_null_failure_value ... ok
+test text::tests::strips_c0_c1_and_bidi_controls ... ok
+test text::tests::strips_csi_and_osc_sequences ... ok
+test observation::tests::spec_observation_example_parses_and_validates ... ok
+test text::tests::truncates_on_utf8_boundary ... ok
+test text::tests::unterminated_escape_consumes_rest ... ok
+test view::tests::missing_cells_have_no_value ... ok
+test view::tests::slot_keeps_only_latest_and_releases_bytes ... ok
+test wire::tests::decimal_formatting_matches_to_string_at_the_edges ... ok
+test wire::tests::fixed_width_orders_lexically_like_numbers ... ok
+test wire::tests::max_u64_round_trips_exactly ... ok
+test wire::tests::rejects_overflow_sign_and_leading_zero ... ok
+test budget::tests::random_reserve_release_balances ... ok
+test wire::tests::decimal_round_trip ... ok
+test diagnostics::tests::labels_are_bounded ... ok
+
+test result: ok. 101 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running unittests src/lib.rs (target/debug/deps/dgxtop_manager-2bb90f1ab3a63b06)
+
+running 228 tests
+test archive::tests::committed_journals_report_the_archive_status_without_gaps ... ok
+test archive::tests::nothing_is_shown_before_the_archive_reports ... ok
+test archive::tests::gaps_are_counted_by_bounded_cause_and_made_visible ... ok
+test catalog::tests::invalid_or_foreign_pages_are_rejected ... ok
+test catalog::tests::abandoned_rounds_forget_buffered_removals ... ok
+test catalog::tests::pages_merge_and_removals_wait_for_the_complete_page ... ok
+test config::tests::pinning_covers_every_restart_only_field ... ok
+test config::tests::restart_only_changes_require_restart_without_persisting ... ok
+test config::tests::old_revision_conflicts_and_pending_change_is_busy ... ok
+test config::tests::interval_change_applies_only_after_the_durable_receipt ... ok
+test config::tests::uncertain_commit_without_on_disk_copy_keeps_the_old_configuration ... ok
+test config::tests::persist_timeout_answers_and_late_receipt_is_still_adopted ... ok
+test catalog::tests::sources_and_tombstones_are_bounded ... ok
+test config::tests::uncertain_commit_adopts_the_on_disk_configuration ... ok
+test error::tests::errors_map_to_wire_codes ... ok
+test events::tests::telemetry_is_evicted_before_control ... ok
+test config::tests::adopted_restart_only_values_wait_for_a_restart ... ok
+test history::tests::a_failed_archive_read_shows_and_is_asked_again_next_round ... ok
+test history::tests::every_chart_queries_one_window_at_a_bounded_resolution ... ok
+test config::tests::replace_validates_revision_schema_registry_and_pins ... ok
+test history::tests::a_new_series_restarts_the_queries_and_a_new_scale_only_redraws ... ok
+test history::tests::archive_reads_run_two_at_a_time_and_time_out ... ok
+test history::tests::archived_minutes_lead_the_chart_on_the_wall_clock ... ok
+test history::tests::without_an_archive_the_window_starts_at_boot_and_nothing_is_read ... ok
+test history::view::tests::archived_minutes_come_first_and_join_this_runs_numbers ... ok
+test history::tests::timeouts_and_errors_show_on_their_chart_and_leaving_cancels ... ok
+test history::tests::results_give_points_mean_peak_and_coverage_and_late_ones_are_dropped ... ok
+test history::view::tests::the_boot_clock_meets_the_wall_clock_at_the_pairing ... ok
+test history::tests::new_statistics_restart_only_their_queries_and_other_views_query_nothing ... ok
+test history::view::tests::without_any_answer_nothing_is_covered ... ok
+test hosts::tests::dispatchability_and_health_mapping ... ok
+test history::view::tests::points_are_in_time_order_and_never_overlap_at_this_runs_start ... ok
+test hosts::tests::placeholders_until_reported_then_updates ... ok
+test hosts::tests::unknown_adapters_and_old_generations_are_ignored ... ok
+test ingestion::pages::tests::abandon_reports_what_was_dropped ... ok
+test history::tests::the_time_before_this_run_is_read_from_the_archive_once_a_generation ... ok
+test control::tests::at13_absent_or_unselected_targets_are_rejected_and_never_retargeted ... ok
+test ingestion::pages::tests::out_of_order_pages_drop_the_cycle ... ok
+test config::tests::cli_overrides_stay_effective_only_and_explicit_changes_supersede_them ... ok
+test control::tests::at08_persist_failure_keeps_the_running_configuration ... ok
+test control::tests::at08_restart_only_and_stale_revisions_never_persist ... ok
+test ingestion::pages::tests::pages_accumulate_until_the_final_page ... ok
+test ingestion::tests::a_cycle_of_pages_becomes_one_job_per_consuming_collector ... ok
+test control::tests::at10_managed_host_pids_are_protected_targets ... ok
+test history::tests::the_history_view_summarizes_each_gpu_over_four_windows_once_a_minute ... ok
+test ingestion::tests::backlog_is_bounded_and_overflow_is_a_gap ... ok
+test control::tests::at10_full_action_path_through_commands_sends_once ... ok
+test ingestion::tests::stale_and_unknown_completions_are_ignored ... ok
+test ingestion::trends::tests::vanished_series_are_dropped_and_step_change_restarts ... ok
+test manager::tests::a_fresh_slice_serves_at_most_the_category_batch ... ok
+test ingestion::trends::tests::records_only_new_reads_of_tracked_series ... ok
+test control::tests::at39_clean_shutdown_finishes_at_once ... ok
+test ingestion::tests::old_epoch_inputs_never_reach_a_job_and_expired_ones_become_gaps ... ok
+test manager::tests::a_spent_slice_still_serves_one_item_per_category_and_yields ... ok
+test ingestion::tests::store_refusal_drops_the_batch_as_gaps ... ok
+test overload::tests::alternating_spikes_never_flap ... ok
+test ingestion::tests::the_wait_for_a_busy_adapter_is_bounded ... ok
+test overload::tests::pressure_needs_consecutive_samples_and_three_seconds ... ok
+test control::tests::invalid_setups_and_session_limits_are_rejected ... ok
+test overload::tests::ingress_bytes_at_three_quarters_are_pressure_like_any_queue ... ok
+test ingestion::tests::failures_and_timeouts_free_the_collector ... ok
+test overload::tests::unhealthy_sample_restarts_the_recovery_window ... ok
+test policy::tests::revision_moves_only_on_content_change ... ok
+test overload::tests::service_overrun_counts_as_pressure_and_blocks_recovery ... ok
+test ingestion::tests::stale_base_rejection_retries_with_the_fresh_base ... ok
+test presentation::banners::tests::a_failed_history_archive_is_visible_and_live_monitoring_continues ... ok
+test control::tests::a_refused_read_dispatch_is_deferred_and_retried_never_counted_as_a_drop ... ok
+test ingestion::tests::busy_pool_keeps_inputs_and_retries ... ok
+test presentation::budget::tests::halving_keeps_the_most_recent_points ... ok
+test control::tests::at39_shutdown_waits_at_most_three_seconds_and_reports_unfinished_work ... ok
+test presentation::budget::tests::steps_report_whether_they_changed_anything ... ok
+test presentation::banners::tests::persistence_failures_are_errors_and_degradation_warnings ... ok
+test presentation::cell::tests::a_value_past_its_stale_deadline_is_stale_and_kept_only_as_last_good ... ok
+test control::tests::history_view_queries_and_drops_stale_generations ... ok
+test ingestion::tests::one_job_in_flight_and_backlog_coalesces_into_the_next_job ... ok
+test presentation::cell::tests::conflict_lists_both_readings_without_a_value ... ok
+test presentation::cell::tests::degraded_keeps_value_and_age_comes_from_sample_time ... ok
+test presentation::cell::tests::missing_cells_use_catalog_units ... ok
+test presentation::banners::tests::nvml_warning_respects_gpu_setting_and_banners_are_bounded ... ok
+test overload::tests::memory_critical_throttles_then_escalates_and_recovers_one_level_per_30s ... ok
+test control::tests::at23_iteration_is_fair_8_control_8_commands_4_ingestion ... ok
+test presentation::cell::tests::selected_without_value_is_never_shown_as_value ... ok
+test presentation::banners::tests::confirmation_sorts_first_then_errors_warnings_info ... ok
+test presentation::cell::tests::stale_and_warmup_and_plain_unavailable ... ok
+test presentation::cell::tests::last_good_annotates_missing_values_only ... ok
+test presentation::cell::tests::true_zero_is_a_value_not_missing ... ok
+test ingestion::tests::service_time_p95_detects_overrun_and_stop_releases_backlog ... ok
+test presentation::cpu::tests::aggregate_load_tasks_and_true_zero ... ok
+test presentation::disk::tests::a_filesystem_links_to_the_block_device_with_its_device_number ... ok
+test presentation::disk::tests::devices_sort_by_throughput_then_name_with_missing_last ... ok
+test presentation::disk::tests::idle_zero_device_ranks_above_unreadable_device ... ok
+test presentation::cpu::tests::topology_maps_physical_core_temperature_to_logical_cpu ... ok
+test presentation::cpu::tests::cores_are_sorted_numerically_with_matching_temperatures_only ... ok
+test presentation::gpu::tests::a_removed_gpu_is_marked_removed ... ok
+test presentation::disk::tests::the_busiest_device_carries_its_read_and_write_trends ... ok
+test presentation::gpu_derived::tests::a_missing_input_keeps_its_state_and_an_unknown_link_has_no_value ... ok
+test presentation::gpu::tests::an_unverified_pcie_unit_is_never_zeroed ... ok
+test presentation::history::tests::buckets_keep_min_max_and_time_weighted_mean ... ok
+test presentation::history::tests::gaps_and_discontinuities_are_never_bridged ... ok
+test presentation::history::tests::small_results_are_shared_unchanged ... ok
+test presentation::gpu::tests::the_driver_pcie_reading_shows_while_its_unit_is_unverified ... ok
+test presentation::gpu_directory::tests::gpus_are_ordered_by_nvml_index_but_identified_by_uuid ... ok
+test presentation::gpu::tests::the_memory_trend_follows_the_framebuffer_or_the_unified_allocations ... ok
+test presentation::gpu::tests::cards_are_labeled_by_nvml_index_and_identified_by_entity ... ok
+test presentation::index::tests::duplicate_coordinates_keep_the_newest_commit ... ok
+test presentation::history_charts::tests::every_gpu_is_summarized_by_the_series_it_reports ... ok
+test presentation::labels::tests::age_saturates_for_future_instants ... ok
+test presentation::history_charts::tests::nothing_reported_gives_no_charts ... ok
+test presentation::history_charts::tests::each_gpu_charts_its_four_series_against_their_scales ... ok
+test presentation::labels::tests::bounded_list_reports_hidden_items ... ok
+test presentation::gpu::tests::unsupported_fields_stay_unsupported_and_cards_carry_no_notes ... ok
+test presentation::labels::tests::native_text_never_invents_zero ... ok
+test presentation::gpu::tests::details_carry_each_fan_in_order_the_power_readings_and_the_topology ... ok
+test presentation::labels::tests::untrusted_text_is_stripped_and_bounded ... ok
+test presentation::index::tests::key_resolver_prefers_samples_then_catalog ... ok
+test presentation::gpu::tests::reasons_when_gpu_data_is_absent ... ok
+test presentation::index::tests::lookups_by_coordinates_and_metric_ranges ... ok
+test presentation::history_charts::tests::the_history_view_charts_the_overview_series ... ok
+test presentation::gpu::tests::bandwidths_are_derived_from_clock_bus_and_link ... ok
+test presentation::ordering::tests::missing_sorts_last_and_larger_first ... ok
+test presentation::ordering::tests::non_finite_counts_as_missing ... ok
+test presentation::ordering::tests::sum_keeps_missing_distinct_from_zero ... ok
+test presentation::plan::tests::every_view_shows_registered_modules_only ... ok
+test presentation::memory::tests::a_unified_gpu_without_a_value_makes_the_sum_unknown ... ok
+test presentation::memory::tests::memory_cells_keep_zero_swap_and_missing_cached_apart ... ok
+test presentation::network::tests::the_busiest_interface_carries_its_receive_and_transmit_trends ... ok
+test presentation::plan::tests::layout_defaults_and_chart_widths ... ok
+test presentation::network::tests::interfaces_sort_by_activity_hide_loopback_and_respect_max_visible ... ok
+test presentation::memory::tests::unified_gpus_report_the_ram_their_processes_hold ... ok
+test presentation::processes::tests::a_selection_hidden_by_a_filter_is_not_reported_as_exited ... ok
+test control::tests::at22_host_restart_drops_the_request_records_a_gap_and_rediscovers ... ok
+test presentation::plan::tests::pending_confirmation_always_carries_actions ... ok
+test presentation::reader::tests::cells_and_values_follow_selection_state ... ok
+test presentation::processes::tests::sort_keys_use_link_sums_maxima_and_put_missing_last ... ok
+test presentation::processes::tests::gpu_filter_and_text_filter_compose ... ok
+test presentation::processes::tests::rows_carry_gpu_labels_numeric_users_and_sanitized_names ... ok
+test presentation::processes::tests::only_processes_using_a_gpu_are_listed ... ok
+test presentation::processes::tests::window_always_contains_the_selection_and_reaches_both_ends ... ok
+test control::tests::at05_pages_accumulate_into_one_job_and_state_advances_only_after_the_ack ... ok
+test presentation::processes::tests::selection_follows_the_process_key_when_rows_reorder ... ok
+test presentation::sources::tests::conflicting_and_quality_dispositions_are_named ... ok
+test presentation::sources::tests::empty_snapshot_yields_an_empty_bounded_view ... ok
+test control::tests::at22_at08_late_reply_of_the_old_epoch_is_dropped_after_a_config_change ... ok
+test presentation::sources::tests::candidates_show_dispositions_origin_and_evidence ... ok
+test presentation::tests::pending_confirmation_is_first_and_carries_action_details_on_any_view ... ok
+test presentation::settings::tests::every_leaf_is_a_field_with_saved_and_effective_values ... ok
+test process::capability::tests::target_checks_cover_force_namespace_protection_and_uid ... ok
+test process::record::tests::confirmation_view_hides_the_token_and_counts_down ... ok
+test process::capability::tests::context_carries_real_identity_and_protected_pids ... ok
+test process::tests::a_refused_intent_is_audited_as_an_attempt_not_as_an_outcome_of_a_missing_intent ... ok
+test process::tests::busy_action_worker_at_send_time_means_not_sent ... ok
+test process::tests::a_confirmation_from_another_session_is_audited_and_the_token_stays_valid ... ok
+test process::record::tests::registry_keeps_bounded_terminal_history ... ok
+test process::tests::audit_trouble_fails_closed ... ok
+test process::tests::an_uncertain_intent_commit_is_closed_with_a_not_sent_outcome ... ok
+test process::tests::cancel_of_a_prepared_token_closes_the_descriptor ... ok
+test process::tests::cancel_before_send_wins_over_a_later_durable_intent ... ok
+test process::tests::cancel_after_sending_is_too_late ... ok
+test process::tests::failed_recovery_blocks_actions_and_is_retried ... ok
+test process::tests::expired_tokens_are_rejected_and_release_the_descriptor ... ok
+test process::tests::confirmations_are_bound_to_their_session ... ok
+test process::tests::happy_path_sends_exactly_once_after_the_durable_intent ... ok
+test process::tests::expiry_is_audited_as_its_own_attempt_naming_the_prepare ... ok
+test process::tests::exit_not_observed_within_ten_seconds_is_still_running ... ok
+test process::tests::missing_send_report_is_unknown_and_never_retried ... ok
+test process::capability::tests::availability_fails_closed ... ok
+test process::tests::intent_write_failure_never_sends ... ok
+test process::tests::pending_confirmations_and_inflight_actions_are_bounded ... ok
+test process::tests::late_audit_receipt_after_the_intent_deadline_never_sends ... ok
+test process::tests::refused_confirmations_are_audited_under_their_own_request ... ok
+test process::tests::session_closing_before_the_receipt_prevents_the_send ... ok
+test process::tests::forbidden_requests_are_rejected_before_the_worker_sees_them ... ok
+test process::tests::policy_change_revokes_tokens_that_have_not_reached_sending ... ok
+test process::tests::receipt_arriving_after_the_deadline_but_before_a_tick_does_not_send ... ok
+test process::tests::shutdown_revokes_and_reports_unfinished_work ... ok
+test process::tests::signal_failures_are_not_sent_with_specific_codes ... ok
+test process::tests::sigkill_is_allowed_only_with_allow_force ... ok
+test projection::tests::a_ledger_without_room_for_a_full_projection_skips_the_frame_before_building ... ok
+test process::tests::policy_revocation_of_an_unconfirmed_token_is_audited_as_its_own_attempt ... ok
+test projection::tests::a_full_projection_budget_is_reserved_before_building_and_shrunk_after ... ok
+test presentation::tests::history_is_shared_when_small_and_downsampled_to_the_chart_width ... ok
+test process::tests::the_intent_carries_the_verified_command_name_unchanged_for_the_audit ... ok
+test results::tests::capacity_evicts_oldest_completed_but_never_pending ... ok
+test projection::tests::published_projection_holds_its_bytes_until_dropped ... ok
+test results::tests::completed_entries_expire_after_ttl ... ok
+test results::tests::completing_twice_keeps_the_first_result ... ok
+test process::tests::ttl_passing_between_ticks_is_still_enforced_at_confirm ... ok
+test results::tests::same_payload_replays_and_different_payload_conflicts ... ok
+test process::tests::ten_concurrent_confirms_of_one_token_send_exactly_once ... ok
+test process::tests::unknown_outcomes_from_recovery_are_surfaced_and_never_resent ... ok
+test scheduler::tests::a_busy_worker_defers_the_due_read_until_the_retry_instant ... ok
+test process::tests::worker_answers_are_checked_and_late_descriptors_released ... ok
+test scheduler::tests::busy_host_records_skipped_due_and_never_sends_a_second_request ... ok
+test scheduler::tests::refused_dispatches_are_deferrals_labelled_by_reason ... ok
+test scheduler::tests::effective_period_respects_minimum_multiplier_and_cap ... ok
+test scheduler::tests::early_discovery_is_rate_limited_and_recovery_triggers_it ... ok
+test scheduler::tests::gpu_disabled_skips_nvml_and_replay_mirrors_live_groups ... ok
+test scheduler::tests::clock_jump_schedules_only_the_next_future_slot ... ok
+test scheduler::tests::paged_group_requests_the_next_page_of_the_same_cycle_immediately ... ok
+test session::tests::accepted_commands_reserve_slots_and_full_queue_is_busy ... ok
+test session::tests::closed_inbox_rejects_with_unavailable ... ok
+test session::tests::outstanding_limit_rejects_even_with_queue_space ... ok
+test scheduler::tests::replies_of_old_epochs_and_generations_are_stale ... ok
+test session::tests::dropping_last_handle_closes_session_and_releases_slots ... ok
+test time_format::tests::formats_known_instants ... ok
+test session::tests::syntax_size_and_session_are_validated_before_acceptance ... ok
+test shutdown::tests::first_reason_wins_and_wakes ... ok
+test session::tests::shutdown_is_out_of_band_and_never_busy_on_full_queue ... ok
+test time_format::tests::instants_outside_four_digit_years_are_clamped ... ok
+test scheduler::tests::round_robin_keeps_every_group_served_on_one_host ... ok
+test scheduler::tests::unavailable_host_reports_missed_slots_and_expired_requests ... ok
+test views::tests::frames_are_rate_limited_and_viewport_changes_mark_dirty ... ok
+test views::tests::destructive_targets_must_exist_and_match_the_selection ... ok
+test views::tests::session_limit_and_reaping ... ok
+test views::tests::selection_survives_recent_frames_and_stale_missing_selection_is_rejected ... ok
+test views::tests::view_specific_semantics_are_validated ... ok
+test scheduler::tests::unsupported_adapter_is_never_read_and_probed_every_60_s ... ok
+test presentation::tests::each_view_fills_only_its_visible_topics ... ok
+test projection::tests::oversized_or_unadmitted_projections_are_skipped ... ok
+test presentation::settings::tests::restart_only_fields_match_core_semantics ... ok
+test presentation::sources::tests::filter_selection_and_window_bound_the_list ... ok
+test scheduler::tests::groups_of_one_adapter_share_its_phase_and_adapters_stay_spread ... ok
+test scheduler::tests::cadences_follow_period_classes_and_discovery_interval ... ok
+test presentation::tests::processes_view_copies_only_the_window ... ok
+test presentation::tests::sources_view_is_bounded_on_reference_load ... ok
+test presentation::tests::reference_load_projection_stays_under_one_mebibyte ... ok
+test presentation::tests::small_budget_is_respected_and_announced ... ok
+test control::tests::at23_command_flood_is_busy_without_blocking_timers_and_shutdown_still_run ... ok
+
+test result: ok. 228 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+     Running tests/control_thread.rs (target/debug/deps/control_thread-fc76de290bd7476e)
+
+running 3 tests
+test at39_a_control_thread_that_panics_still_tells_every_session_to_stop ... ok
+test at23_flood_from_another_thread_is_busy_and_every_accepted_command_is_answered ... ok
+test at39_run_shuts_down_within_three_seconds_despite_a_hung_config_worker ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.01s
+
+     Running unittests src/lib.rs (target/debug/deps/dgxtop_runtime-bfe5b6ab3fdfb663)
+
+running 102 tests
+test broker::tests::in_flight_entries_are_never_purged_by_time ... ok
+test broker::tests::failures_are_shared_without_per_requester_retry ... ok
+test broker::tests::identical_concurrent_reads_are_dispatched_once_and_share_the_result ... ok
+test broker::tests::completed_results_are_served_until_the_deadline_then_expire ... ok
+test broker::tests::different_cycle_generation_epoch_or_group_never_hit ... ok
+test broker::tests::abandon_and_fail_all ... ok
+test broker::tests::table_and_joiners_are_bounded ... ok
+test clock::tests::effective_uid_matches_proc_self_owner ... ok
+test clock::tests::pid_namespace_of_self_and_invalid_pids ... ok
+test clock::tests::host_identity_hashes_machine_id_without_exposing_it ... ok
+test clock::tests::host_name_and_release_are_sanitized ... ok
+test clock::tests::missing_boot_id_is_an_error_not_a_default ... ok
+test clock::tests::host_identity_falls_back_to_dbus_then_hostname ... ok
+test host::tests::nonce_validation ... ok
+test host::tests::contract_violating_adapter_output_becomes_a_failed_batch ... ok
+test host::tests::adapter_panic_sends_a_failed_reply_and_exits ... ok
+test host::tests::discover_pages_and_previous_generation_are_forwarded ... ok
+test host::tests::malformed_truncated_and_oversized_input_end_the_host ... ok
+test host::tests::expired_deadline_fails_without_calling_the_driver ... ok
+test host::tests::wrong_generation_or_adapter_is_a_protocol_violation ... ok
+test host::tests::too_many_slots_in_a_request_are_rejected ... ok
+test ipc::decode::tests::catalog_and_shutdown_replies_decode ... ok
+test host::tests::hello_then_discover_read_and_shutdown ... ok
+test ipc::decode::tests::depth_limit_is_exact ... ok
+test ipc::decode::tests::decimal_u64_overflow_in_a_batch_is_malformed ... ok
+test ipc::decode::tests::invalid_utf8_is_rejected ... ok
+test ipc::decode::tests::hello_identity_is_verified ... ok
+test ipc::decode::tests::structure_scan_ignores_brackets_commas_and_escapes_inside_strings ... ok
+test ipc::error::tests::messages_are_sanitized_and_map_to_protocol_errors ... ok
+test ipc::frame::tests::blocking_reader_stops_at_frame_boundaries ... ok
+test ipc::frame::tests::body_allocation_is_exactly_the_declared_length ... ok
+test ipc::decode::tests::request_validation_rejects_slots_on_discover_and_too_many_slots ... ok
+test ipc::frame::tests::decodes_back_to_back_frames_in_one_chunk ... ok
+test ipc::decode::tests::spec_examples_decode ... ok
+test ipc::frame::tests::eof_inside_prefix_or_body_is_an_error ... ok
+test ipc::frame::tests::oversize_prefix_is_rejected_without_allocating ... ok
+test ipc::frame::tests::skipped_bodies_are_discarded_without_allocation ... ok
+test ipc::frame::tests::zero_length_frames_are_rejected ... ok
+test ipc::decode::tests::unknown_message_types_are_rejected ... ok
+test ipc::limits::tests::limits_never_exceed_hard_caps ... ok
+test logger::coalesce::tests::different_targets_or_messages_are_independent_and_bounded ... ok
+test logger::coalesce::tests::repeats_inside_the_window_are_suppressed_and_summarized ... ok
+test ipc::frame::tests::encode_frame_round_trips_and_respects_the_cap ... ok
+test logger::format::tests::utc_formatting_matches_reference_dates ... ok
+test logger::stderr::tests::lines_are_sanitized_bounded_and_rate_limited ... ok
+test logger::file::tests::symlinked_paths_are_refused ... ok
+test stats::tests::corrupt_stat_lines_are_rejected ... ok
+test supervisor::circuit::tests::opens_after_the_threshold_and_resets_on_success ... ok
+test supervisor::circuit::tests::schedule_doubles_to_the_cap_within_ten_percent ... ok
+test supervisor::circuit::tests::the_seed_makes_the_schedule_deterministic_per_adapter ... ok
+test supervisor::config::tests::defaults_follow_the_spec_and_validate ... ok
+test supervisor::credit::tests::frame_and_discover_credit ... ok
+test supervisor::config::tests::invalid_values_are_rejected ... ok
+test stats::tests::missing_or_invalid_pids_are_reported_not_zeroed ... ok
+test supervisor::credit::tests::whole_group_plans_reserve_the_bounded_worst_case ... ok
+test supervisor::outbox::tests::bounded_and_counts_drops ... ok
+test stats::tests::fake_tree_is_parsed_exactly ... ok
+test supervisor::outbox::tests::full_channel_keeps_items_until_there_is_room ... ok
+test supervisor::requests::tests::discover_requests_carry_page_and_previous_generation ... ok
+test supervisor::requests::tests::supervisor_requests_validate ... ok
+test supervisor::launch::tests::missing_program_is_a_launch_error ... ok
+test supervisor::requests::tests::read_plans_map_to_requests_and_pages_must_agree ... ok
+test supervisor::stderr_drain::tests::lines_split_across_reads_are_reassembled_and_sanitized ... ok
+test ipc::decode::tests::too_many_elements_are_rejected_before_decoding ... ok
+test supervisor::stderr_drain::tests::long_lines_are_truncated_and_floods_are_rate_limited ... ok
+test clock::tests::boot_clock_is_monotonic_and_has_a_boot_id ... ok
+test supervisor::tests::start_rejects_too_many_or_duplicate_hosts ... ok
+test terminal::tests::closed_reader_reports_broken_pipe ... ok
+test terminal::tests::hang_up_bits_win_over_readable ... ok
+test terminal::tests::duplicates_are_close_on_exec ... ok
+test terminal::tests::closed_writer_reports_hang_up ... ok
+test terminal::tests::flags_are_restored_explicitly_idempotently_and_on_drop ... ok
+test logger::file::tests::broad_directory_permissions_are_tightened ... ok
+test terminal::tests::invalid_descriptors_are_rejected ... ok
+test terminal::tests::poll_timeouts_round_up_and_saturate ... ok
+test host::tests::diagnostics_are_sanitized_and_bounded ... ok
+test logger::file::tests::files_rotate_by_size_and_keep_n_files ... ok
+test ipc::frame::tests::any_declared_length_over_the_limit_never_allocates ... ok
+test logger::file::tests::pressure_drops_low_priority_first_and_counts_errors_separately ... ok
+test queues::tests::actor_owns_its_state_and_survives_panics ... ok
+test supervisor::tests::invalid_stale_and_expired_jobs_are_answered_with_failures ... ok
+test supervisor::tests::crashed_host_is_restarted_with_a_new_generation ... ok
+test queues::tests::panics_are_isolated_and_reported ... ok
+test queues::tests::threads_are_fixed_and_reused ... ok
+test queues::tests::busy_when_the_queue_is_full_and_never_blocks ... ok
+test ipc::decode::tests::decoded_budget_is_enforced ... ok
+test ipc::size::tests::decoded_estimate_stays_within_three_times_the_wire_size ... ok
+test ipc::decode::tests::arbitrary_bytes_never_panic ... ok
+test ipc::decode::tests::more_than_256_records_are_rejected ... ok
+test terminal::tests::closing_the_pty_master_hangs_up_the_terminal ... ok
+test terminal::tests::hang_up_wait_ignores_pending_input ... ok
+test terminal::tests::full_pipe_returns_zero_instead_of_blocking ... ok
+test terminal::tests::pending_bytes_make_the_gate_readable_without_consuming_them ... ok
+test logger::file::tests::writes_sanitized_lines_to_a_private_file ... ok
+test stats::tests::sample_size_is_bounded ... ok
+test queues::tests::stop_never_hangs_on_a_stuck_job ... ok
+test ipc::frame::tests::random_chunking_preserves_every_frame ... ok
+test supervisor::tests::identical_reads_are_joined_and_served_from_the_recycle_area ... ok
+test supervisor::tests::busy_while_in_flight_and_capacity_when_credit_is_missing ... ok
+test supervisor::tests::in_process_round_trip_accounts_and_releases_ingress_bytes ... ok
+test supervisor::tests::timeout_reports_failure_and_discards_the_late_reply ... ok
+test supervisor::tests::hung_in_process_host_can_only_be_quarantined ... ok
+
+test result: ok. 102 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+     Running tests/supervisor_hosts.rs (target/debug/deps/supervisor_hosts-ebe79bd5373f000a)
+
+running 0 supervisor host tests
+
+test result: ok. 0 passed; 0 failed; 14 ignored (end-to-end, opt-in: --ignored)
+     Running unittests src/lib.rs (target/debug/deps/dgxtop_store-0ec50df29a177c8c)
+
+running 137 tests
+test archive::limits::tests::defaults_match_the_storage_policy_table ... ok
+test archive::limits::tests::inconsistent_limits_are_rejected ... ok
+test archive::sink::tests::an_oversized_row_gets_its_own_chunk ... ok
+test archive::sink::tests::chunks_respect_row_and_byte_limits ... ok
+test archive::rows::tests::converts_every_table_in_foreign_key_order ... ok
+test archive::rows::tests::gap_ids_are_stable_and_distinct ... ok
+test audit::limits::tests::defaults_match_the_storage_policy_table ... ok
+test archive::rows::tests::rejects_rows_the_schema_or_spec_forbid ... ok
+test audit::limits::tests::inconsistent_limits_are_rejected ... ok
+test archive::sink::tests::version_gate_failure_disables_the_archive_without_creating_it ... ok
+test audit::records::tests::attempts_derive_their_state_from_the_result_code ... ok
+test audit::records::tests::intent_rows_keep_an_escaped_command_name_with_its_slashes ... ok
+test audit::records::tests::outcome_rows_map_states_and_sanitize_detail ... ok
+test audit::records::tests::intent_row_keeps_only_identity_uid_and_basename ... ok
+test audit::records::tests::status_only_moves_forward ... ok
+test audit::records::tests::recovery_event_is_unknown_outcome ... ok
+test audit::records::tests::intent_validation_rejects_bad_fields ... ok
+test audit::repository::tests::relative_paths_and_bad_limits_are_argument_errors ... ok
+test audit::repository::tests::version_gate_failure_fails_closed_without_touching_disk ... ok
+test config::document::tests::future_schema_is_detected_even_with_unknown_fields ... ok
+test candidates::tests::readings_are_retained_with_conversion_and_failures_stay_null ... ok
+test candidates::tests::duplicates_old_and_replay_readings_are_not_retained ... ok
+test config::document::tests::syntax_errors_carry_line_and_column ... ok
+test config::repository::tests::only_our_temporary_names_match ... ok
+test config::document::tests::nan_and_unknown_keys_are_rejected ... ok
+test fs::failpoint::tests::directory_sync_fails_only_after_a_successful_rename ... ok
+test config::document::tests::old_schema_versions_are_validation_errors ... ok
+test fs::failpoint::tests::write_failure_leaves_a_partial_file_and_reports_enospc ... ok
+test config::repository::tests::revision_never_wraps ... ok
+test fs::failpoint::tests::rename_failure_does_not_rename ... ok
+test history::accounted::tests::account_split_moves_bytes ... ok
+test fs::tests::directory_lock_is_exclusive_until_dropped ... ok
+test history::accounted::tests::deque_capacity_is_reserved_before_growth ... ok
+test fs::tests::create_refuses_a_planted_symlink ... ok
+test history::chunk::tests::failed_reservation_leaves_log_unchanged ... ok
+test history::chunk::tests::evicted_chunk_stays_accounted_while_pinned ... ok
+test history::accounted::tests::failed_growth_leaves_deque_unchanged ... ok
+test fs::tests::list_directory_is_bounded ... ok
+test fs::tests::private_file_is_exclusive_and_0600 ... ok
+test history::chunk::tests::push_reserves_whole_chunks_and_seals ... ok
+test fs::tests::read_limited_enforces_kind_symlink_and_size ... ok
+test history::chunk::tests::pin_includes_neighbours_and_never_has_holes ... ok
+test history::chunk::tests::slices_seek_count_and_neighbours ... ok
+test history::gaps::tests::adjacent_same_reason_gaps_merge ... ok
+test fs::tests::link_new_never_replaces_an_existing_file ... ok
+test history::gaps::tests::settled_gaps_are_not_extended_and_lists_are_bounded ... ok
+test history::records::tests::bucket_alignment ... ok
+test fs::tests::private_dir_is_exactly_0700_and_not_recreated ... ok
+test history::records::tests::gauge_bucket_tracks_extremes ... ok
+test history::records::tests::integral_totals_stay_exact_and_floats_are_flagged ... ok
+test history::pin::tests::unknown_keys_and_full_query_partitions_pin_nothing ... ok
+test history::records::tests::u128_overflow_is_detected_not_wrapped ... ok
+test history::rollup::tests::crossing_interval_becomes_a_bridge_exactly_once ... ok
+test history::rollup::tests::steps_are_clipped_to_the_finalized_range ... ok
+test history::rollup::tests::steps_split_at_bucket_boundaries_and_segments ... ok
+test history::segment::tests::identity_change_cuts_a_segment_and_methods_are_tracked_apart ... ok
+test history::segment::tests::retired_ordinals_never_resolve_again ... ok
+test history::series::tests::intervals_must_not_overlap_or_end_in_finalized_time ... ok
+test history::series::tests::overhead_is_accounted_and_released ... ok
+test history::slots::tests::exhausted_generation_retires_the_index ... ok
+test history::slots::tests::freed_slot_gets_a_new_generation ... ok
+test history::state::tests::empty_series_are_reclaimed_with_a_new_generation ... ok
+test history::steps::tests::limit_caps_the_open_step ... ok
+test history::series::tests::finalization_rolls_up_completed_minutes_and_rejects_late_samples ... ok
+test history::state::tests::future_late_and_duplicate_samples_are_dropped ... ok
+test history::series::tests::raw_floor_never_passes_finalized_and_keeps_a_carry ... ok
+test history::state::tests::series_limit_rejects_new_series_visibly ... ok
+test history::steps::tests::predecessor_or_carry_provides_the_crossing_step ... ok
+test history::steps::tests::steps_end_at_next_sample_deadline_or_cut ... ok
+test history::pin::tests::chunks_pinned_by_a_running_query_stay_accounted_after_eviction ... ok
+test history::gaps::tests::reasons_are_sanitized_bounded_and_interned ... ok
+test hot::archive::tests::every_journal_carries_its_segments_and_is_accounted ... ok
+test hot::archive::tests::take_is_bounded_and_float_bridges_are_not_posed_as_exact ... ok
+test hot::dedup::tests::duplicates_return_the_original_ack_and_conflicts_are_detected ... ok
+test hot::dedup::tests::remembered_batches_are_bounded_by_count_and_bytes ... ok
+test hot::retained::tests::permit_lives_as_long_as_any_reader ... ok
+test hot::snapshot::tests::committed_values_carry_the_stale_deadline_of_their_source ... ok
+test hot::wall_clock::tests::steps_cut_segments_and_slewing_does_not ... ok
+test hot::ingest::tests::periods_follow_read_groups_and_update_intervals ... ok
+test hot::wall_clock::tests::utc_formatting_matches_known_instants ... ok
+test hot::validate::tests::interval_units_integrate_rates_or_keep_counter_units ... ok
+test hot::settings::tests::defaults_give_a_grace_covering_the_slowest_group ... ok
+test history::series::tests::capacity_eviction_targets_oldest_finalized_raw_then_rollups ... ok
+test lock::tests::lock_file_is_private_and_loose_modes_are_tightened ... ok
+test lock::tests::missing_state_dir_is_an_io_error ... ok
+test paths::tests::home_is_required_and_absolute_when_needed ... ok
+test paths::tests::missing_or_empty_xdg_falls_back_to_home ... ok
+test lock::tests::symlinked_lock_file_is_refused ... ok
+test paths::tests::overrides_must_be_absolute ... ok
+test lock::tests::second_acquire_is_already_running_until_release ... ok
+test paths::tests::relative_xdg_is_ignored_with_a_note ... ok
+test hot::snapshot::tests::recent_gaps_merge_repeats_and_stay_bounded ... ok
+test paths::tests::replay_namespace_uses_a_separate_root ... ok
+test paths::tests::xdg_values_win_over_home ... ok
+test query::guard::tests::budget_and_estimate_are_enforced ... ok
+test query::guard::tests::cancellation_wins_over_deadline ... ok
+test query::guard::tests::deadline_is_checked_while_scanning ... ok
+test query::plan::tests::cells_are_absolute_and_clipped ... ok
+test query::plan::tests::crossing_interval_moves_the_boundary ... ok
+test query::plan::tests::evicted_raw_edges_become_boundary_gaps ... ok
+test query::plan::tests::grids_fit_the_point_cap ... ok
+test query::plan::tests::raw_fills_buckets_before_a_shortened_rollup_floor ... ok
+test query::plan::tests::raw_window_is_a_single_raw_region ... ok
+test query::plan::tests::window_spanning_floors_has_every_kind_in_order ... ok
+test query::points::tests::contiguous_gaps_merge_and_cap_records_overflow ... ok
+test query::points::tests::source_sets_are_bounded_and_distinct ... ok
+test query::tests::point_cap_respects_request_config_and_bytes ... ok
+test sqlite::capacity::tests::a_checkpointed_wal_left_at_its_size_limit_is_not_near_a_threshold ... ok
+test sqlite::capacity::tests::a_fully_checkpointed_wal_counts_as_truncated ... ok
+test sqlite::capacity::tests::a_pinned_wal_counts_toward_the_total ... ok
+test sqlite::capacity::tests::a_write_larger_than_the_wal_budget_is_refused ... ok
+test sqlite::capacity::tests::checkpoint_backlog_counts_frame_headers ... ok
+test sqlite::capacity::tests::free_pages_are_reused_before_the_file_grows ... ok
+test sqlite::capacity::tests::low_disk_and_wal_backlog_refuse_only_new_records ... ok
+test sqlite::capacity::tests::new_records_keep_the_reserve_but_outcomes_may_use_it ... ok
+test sqlite::capacity::tests::page_cap_leaves_room_for_wal_and_shm ... ok
+test sqlite::errors::tests::descriptions_are_sanitized ... ok
+test audit::repository::tests::writer_connection_is_wal_full_with_manual_checkpoints ... ok
+test sqlite::errors::tests::maps_primary_result_codes ... ok
+test sqlite::free_space::tests::statvfs_failure_is_an_infra_error ... ok
+test sqlite::free_space::tests::statvfs_reports_space_for_an_existing_directory ... ok
+test sqlite::schema::tests::classification_covers_every_version_case ... ok
+test sqlite::schema::tests::ddl_is_the_spec_text ... ok
+test sqlite::time::tests::accepts_only_zulu_rfc3339 ... ok
+test sqlite::time::tests::cutoff_subtracts_whole_days ... ok
+test sqlite::time::tests::formats_known_instants ... ok
+test sqlite::time::tests::formatted_text_sorts_like_time ... ok
+test sqlite::time::tests::parses_what_the_archive_stores_back_to_the_instant ... ok
+test sqlite::version::tests::floor_is_exactly_3_51_3 ... ok
+test sqlite::connection::tests::extension_loading_and_symlinks_are_refused ... ok
+test archive::sink::tests::writer_connection_is_wal_normal_with_manual_checkpoints ... ok
+test sqlite::transaction::tests::commits_and_aborts ... ok
+test hot::archive::tests::full_queue_drops_oldest_and_reports_overflow ... ok
+test sqlite::schema::tests::ddl_applies_idempotently_in_memory ... ok
+test candidates::tests::retention_per_source_and_source_caps_hold ... ok
+test candidates::tests::full_partition_evicts_oldest_readings_and_never_overcommits ... ok
+test sqlite::transaction::tests::busy_writer_times_out_at_the_deadline ... ok
+
+test result: ok. 137 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests/store_hot_commit.rs (target/debug/deps/store_hot_commit-e6d7784f66421d56)
+
+running 15 tests
+test at05_replay_store_rejects_live_values ... ok
+test at05_same_batch_id_with_different_content_is_a_conflict ... ok
+test at05_commit_applies_samples_history_and_state_atomically ... ok
+test at05_invalid_namespace_unit_and_unknown_metrics_reject_the_whole_batch ... ok
+test at05_duplicate_batch_returns_the_original_ack_without_duplicate_history ... ok
+test at05_stale_epoch_rejects_the_whole_batch_and_changes_nothing ... ok
+test at05_stale_base_rejects_the_whole_batch ... ok
+test missing_values_never_refresh_last_good ... ok
+test at06_partition_usage_is_visible_in_store_health ... ok
+test recorded_gaps_are_visible_and_invalid_gaps_are_counted ... ok
+test keys_are_owned_by_one_collector_and_process_tables_are_replaced ... ok
+test a_sustained_outage_is_one_merged_gap ... ok
+test at05_capacity_rejection_leaves_no_partial_state ... ok
+test at06_archive_disabled_does_not_affect_the_hot_store ... ok
+test at06_archive_enabled_gets_finished_rows_and_at27_keys_sort_numerically ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/store_hot_history.rs (target/debug/deps/store_hot_history-a12f9bb2b78a3c45)
+
+running 9 tests
+test at07_open_step_is_not_extended_into_the_future ... ok
+test at07_counter_interval_total_is_exact ... ok
+test at07_generation_changes_cut_segments_and_utc_steps_are_discontinuities ... ok
+test at07_other_boots_are_separate_series_and_unknown_boots_are_empty ... ok
+test at07_changing_the_sampling_interval_keeps_old_totals ... ok
+test at07_coverage_is_exact_and_gaps_are_never_zero_filled ... ok
+test at27_cross_minute_interval_is_a_bridge_counted_exactly_once ... ok
+test at27_boundary_without_raw_is_a_boundary_gap_never_proportional ... ok
+test at07_two_hour_gap_does_not_leak_into_the_last_hour ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/store_hot_memory.rs (target/debug/deps/store_hot_memory-6921ee738892b8af)
+
+running 7 tests
+test series_over_the_cap_are_rejected_visibly_without_touching_the_snapshot ... ok
+test idle_process_keys_and_orphan_explanations_leave_the_snapshot ... ok
+test series_slots_are_never_reused_for_another_series_after_churn ... ok
+test at13_snapshots_held_by_a_slow_reader_stay_accounted ... ok
+test relieving_pressure_sheds_raw_candidates_then_raw_history ... ok
+test at25_the_store_retains_only_the_latest_snapshot ... ok
+test eviction_under_a_tiny_budget_never_exceeds_partitions_and_reports_truncation ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+     Running tests/store_hot_properties.rs (target/debug/deps/store_hot_properties-d16dfe4a58c31772)
+
+running 3 tests
+test gauge_time_weighted_mean_matches_the_reference ... ok
+test totals_of_disjoint_windows_add_up_to_their_union ... ok
+test rollups_agree_with_raw_history_on_minute_windows ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+
+     Running tests/store_hot_query_limits.rs (target/debug/deps/store_hot_query_limits-e22387b7e5739dd3)
+
+running 8 tests
+test source_filter_keeps_only_the_selected_source ... ok
+test invalid_queries_are_validation_failures ... ok
+test query_memory_is_reserved_up_front_and_released ... ok
+test at38_raw_results_are_truncated_and_paged_never_sampled ... ok
+test at38_aggregates_beyond_max_points_use_coarser_buckets ... ok
+test at38_deadline_returns_timed_out ... ok
+test at38_scan_budget_returns_query_too_large_with_a_coarser_suggestion ... ok
+test at38_two_history_workers_query_while_commits_continue ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running tests/store_hot_support.rs (target/debug/deps/store_hot_support-7ca46e68e9774f70)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/store_persist_archive.rs (target/debug/deps/store_persist_archive-e61363b0bae4cf3a)
+
+running 11 tests
+test corrupt_and_future_archives_are_kept_and_reported ... ok
+test batch_insert_writes_every_table_in_bounded_transactions ... ok
+test invalid_journals_are_rejected_without_writing ... ok
+test wal_pinned_by_a_reader_pauses_archive_writes ... ok
+test re_appending_a_journal_is_idempotent ... ok
+test low_free_disk_refuses_appends_and_recovers ... ok
+test fixed_width_keys_sort_numerically ... ok
+test counter_totals_are_exact_decimal_text ... ok
+test retention_deletes_old_data_and_cascades_to_empty_segments ... ok
+test eviction_never_deletes_a_segment_the_append_writes_into ... ok
+test budget_evicts_the_oldest_minutes_first_and_refuses_what_cannot_fit ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/store_persist_archive_read.rs (target/debug/deps/store_persist_archive_read-8a4400d802a4b536)
+
+running 8 tests
+test a_missing_or_unready_archive_answers_with_no_points ... ok
+test a_schema_this_build_does_not_know_is_refused_and_left_alone ... ok
+test the_point_cap_keeps_the_newest_points_and_says_so ... ok
+test a_point_weighs_its_minutes_by_covered_time_and_keeps_the_peak ... ok
+test a_read_stops_when_cancelled_or_past_its_deadline_and_rejects_bad_windows ... ok
+test every_boot_of_a_series_is_read_back_on_the_wall_clock ... ok
+test other_units_series_and_hosts_are_never_merged ... ok
+test a_window_keeps_only_the_minutes_that_started_in_it ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/store_persist_audit.rs (target/debug/deps/store_persist_audit-01156a37638efe99)
+
+running 20 tests
+test missing_parent_directory_fails_closed ... ok
+test symlinked_or_shared_database_files_are_refused ... ok
+test garbage_file_is_failed_and_preserved ... ok
+test failed_backup_aborts_the_migration_and_keeps_the_file ... ok
+test future_user_version_is_a_read_only_diagnostic ... ok
+test unknown_schema_versions_and_foreign_objects_are_kept_untouched ... ok
+test database_files_are_private ... ok
+test attempts_are_idempotent_by_request_id ... ok
+test low_free_disk_refuses_new_intents_but_records_outcomes ... ok
+test retention_deletes_only_rows_older_than_the_retention_window ... ok
+test duplicate_request_with_identical_payload_returns_the_existing_receipt ... ok
+test receipt_exists_only_after_a_committed_full_transaction ... ok
+test wal_backlog_pinned_by_a_reader_stops_new_intents_until_released ... ok
+test different_payload_or_progressed_intent_conflicts ... ok
+test outcomes_are_idempotent_by_event_id_and_only_move_status_forward ... ok
+test migration_of_pre_v2_content_backs_up_first ... ok
+test recover_unknown_marks_unresolved_intents_and_never_returns_them_as_sendable ... ok
+test damaged_pages_behind_a_valid_header_are_detected_and_kept ... ok
+test size_cap_refuses_intents_but_still_records_outcomes ... ok
+test no_receipt_and_no_row_when_the_writer_is_busy_past_the_deadline ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+     Running tests/store_persist_config.rs (target/debug/deps/store_persist_config-d979992d354ccde4)
+
+running 19 tests
+test legacy_input_errors_are_reported ... ok
+test legacy_dry_run_maps_everything_and_writes_nothing ... ok
+test missing_file_loads_defaults_and_writes_nothing ... ok
+test crash_after_persist_before_activation_reloads_the_new_version ... ok
+test legacy_apply_writes_v2_once_and_refuses_an_existing_v2 ... ok
+test group_writable_or_foreign_files_and_directories_are_refused ... ok
+test future_schema_is_reported_and_never_rewritten ... ok
+test unknown_keys_and_nan_are_rejected_with_a_location ... ok
+test invalid_candidates_and_the_revision_ceiling_are_rejected_without_writing ... ok
+test external_concurrent_modification_conflicts ... ok
+test symlinked_config_is_refused_and_its_target_untouched ... ok
+test cas_success_increments_revision_with_private_modes ... ok
+test failed_legacy_publish_leaves_no_v2_file ... ok
+test oversized_file_is_rejected ... ok
+test directory_fsync_failure_after_rename_is_uncertain_with_the_new_content ... ok
+test stale_revision_conflicts ... ok
+test two_repositories_cannot_both_commit_the_same_revision ... ok
+test a_failure_before_the_rename_keeps_the_old_file ... ok
+test another_process_holding_the_commit_lock_times_out_cleanly ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/store_persist_paths_lock.rs (target/debug/deps/store_persist_paths_lock-591c850c7c201e1b)
+
+running 4 tests
+test ensure_private_dir_creates_every_missing_level_with_0700 ... ok
+test ensure_private_dir_refuses_directories_owned_by_another_uid ... ok
+test ensure_private_dir_refuses_unsafe_final_components ... ok
+test startup_order_paths_lock_config_then_audit ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/store_persist_sqlite.rs (target/debug/deps/store_persist_sqlite-266de5b2f507bcf1)
+
+running 4 tests
+test older_runtimes_and_mismatched_builds_are_refused ... ok
+test ddl_is_the_spec_contract_verbatim ... ok
+test bundled_sqlite_passes_the_runtime_gate ... ok
+test both_partitions_initialize_once_and_reopen_idempotently ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/dgxtop_ui-2d7602ce85a001e0)
+
+running 178 tests
+test controller::confirmation::tests::active_tokens_expire_and_waiting_requests_time_out ... ok
+test controller::confirmation::tests::a_token_activates_confirm_mode_and_is_consumed_once ... ok
+test controller::filter::tests::control_characters_are_rejected ... ok
+test controller::filter::tests::the_256_byte_limit_is_enforced_in_utf8_bytes ... ok
+test controller::filter::tests::editing_moves_the_cursor_on_char_boundaries ... ok
+test controller::confirmation::tests::unrelated_and_failed_results ... ok
+test controller::keymap::tests::q_quits_except_in_filter_mode_where_ctrl_c_still_quits ... ok
+test controller::keymap::tests::confirm_keys_only_exist_in_confirm_mode ... ok
+test controller::keymap::tests::release_events_are_ignored ... ok
+test controller::keymap::tests::terminate_only_binds_in_process_views_in_normal_mode ... ok
+test controller::navigation::tests::list_steps_are_clamped ... ok
+test controller::notices::tests::notices_are_bounded_deduplicated_and_expire ... ok
+test controller::requests::tests::cancel_reports_too_late_when_past_the_point_of_no_return ... ok
+test controller::requests::tests::an_uncertain_commit_is_never_reported_as_unchanged ... ok
+test controller::requests::tests::pending_requests_are_bounded_and_expire ... ok
+test controller::requests::tests::signal_sent_is_reported_as_sent_not_terminated ... ok
+test controller::requests::tests::stale_view_rejections_ask_to_reselect ... ok
+test controller::requests::tests::unknown_outcomes_and_rejections_are_errors ... ok
+test controller::session::tests::fields_become_an_update_view_session_command ... ok
+test controller::session::tests::acknowledged_drafts_yield_to_the_next_projection_and_rejections_drop_them ... ok
+test controller::session::tests::staged_then_pending_then_projection ... ok
+test format::age::tests::countdown_rounds_up ... ok
+test format::age::tests::ages ... ok
+test format::cell::tests::conflict_shows_both_values_and_symbol ... ok
+test format::cell::tests::missing_states_render_their_labels_never_zero ... ok
+test format::cell::tests::ok_state_without_value_is_unavailable_not_zero ... ok
+test format::units::tests::negative_values_keep_their_sign ... ok
+test format::cell::tests::last_good_is_annotation_for_read_failures ... ok
+test format::cell::tests::verified_quality_has_no_word_and_zero_is_shown ... ok
+test format::units::tests::non_finite_and_missing_values_are_not_zero ... ok
+test format::units::tests::percent_and_counts ... ok
+test format::cell::tests::sample_kind_tags_and_fallback ... ok
+test format::text::tests::truncation_respects_display_width ... ok
+test format::units::tests::bytes_use_binary_prefixes ... ok
+test format::cell::tests::stale_shows_last_value_with_advancing_age ... ok
+test format::units::tests::energy_uses_si_prefixes ... ok
+test format::units::tests::temperatures_power_and_clocks ... ok
+test format::cell::tests::untrusted_labels_are_cleaned ... ok
+test format::text::tests::clean_removes_terminal_injection ... ok
+test modules::actions::tests::confirmation_lines_have_identity_and_countdown_but_no_token ... ok
+test modules::actions::tests::header_lines_warn_about_unknown_outcomes_and_unavailable_actions ... ok
+test modules::actions::tests::signal_sent_is_never_called_terminated ... ok
+test modules::common::tests::split_columns_handles_tiny_areas ... ok
+test modules::common::tests::a_value_wider_than_its_column_is_never_cut ... ok
+test modules::common::tests::the_chart_under_a_bar_colors_every_column_by_its_level ... ok
+test modules::common::tests::rate_rows_scale_to_their_own_peak_and_name_it ... ok
+test modules::disk::tests::devices_carry_the_capacity_of_the_filesystem_they_hold ... ok
+test modules::disk::tests::iops_show_both_directions_or_their_state ... ok
+test modules::gpu::facts::tests::unsupported_and_unreported_values_are_left_out ... ok
+test modules::gpu::columns::tests::a_short_panel_fills_its_columns_in_order_and_leaves_the_rest_out ... ok
+test modules::gpu::view::tests::a_short_panel_shows_the_blocks_that_fit_without_a_separator ... ok
+test modules::gpu::view::tests::the_selector_names_the_sections_a_short_panel_leaves_out ... ok
+test modules::history::axis::tests::each_window_gets_about_six_ticks_at_round_steps ... ok
+test modules::history::layout::tests::a_short_terminal_keeps_whole_bands_in_order_and_names_the_rest ... ok
+test modules::gpu::blocks::tests::a_unified_gpu_shows_the_ram_it_holds_and_the_driver_traffic ... ok
+test modules::gpu::blocks::tests::unreported_values_get_no_row_and_empty_blocks_are_left_out ... ok
+test modules::history::panels::tests::panels_follow_the_overview_with_a_strip_per_gpu ... ok
+test modules::history::strip::tests::columns_follow_time_and_keep_gaps_and_peaks ... ok
+test modules::gpu::readings::tests::the_status_shows_four_bars_and_leaves_out_one_never_known ... ok
+test modules::gpu::blocks::tests::a_removed_gpu_says_so_first_in_its_state ... ok
+test modules::gpu::blocks::tests::power_fans_and_topology_add_rows_only_with_something_to_say ... ok
+test modules::history::tests::a_partly_recorded_window_says_how_much_it_holds ... ok
+test modules::history::strip::tests::a_loading_or_failed_query_says_so_in_the_legend ... ok
+test modules::history::tests::a_window_kept_on_disk_says_it_is_recorded_while_dgxtop_runs ... ok
+test modules::memory::tests::shares_wait_for_total_and_used ... ok
+test modules::memory::tests::the_gpu_share_is_part_of_the_used_share ... ok
+test modules::network::tests::errors_add_both_directions_and_never_hide_a_missing_side ... ok
+test modules::processes::tests::an_exited_selection_is_reported_as_unavailable ... ok
+test modules::processes::tests::gpu_filter_limits_values_to_that_gpu ... ok
+test modules::processes::tests::status_reports_absolute_rows_and_missing_reasons ... ok
+test num::tests::saturating_conversions ... ok
+test modules::settings::tests::status_lines_show_pending_and_result ... ok
+test modules::sources::tests::spread_text_compares_with_tolerance ... ok
+test modules::processes::tests::the_type_column_names_each_gpus_contexts ... ok
+test num::tests::scaled_values_are_clamped_and_reject_non_finite ... ok
+test registry::manifest::tests::json_strings_are_escaped ... ok
+test registry::manifest::tests::schema_constraints_are_enforced ... ok
+test registry::manifest::tests::to_json_matches_the_spec_example ... ok
+test registry::tests::an_eleventh_module_can_be_registered ... ok
+test registry::tests::builtin_registers_the_ten_modules_without_warnings ... ok
+test registry::tests::duplicate_ids_are_rejected_with_a_warning ... ok
+test registry::tests::api_version_mismatch_is_rejected_with_a_warning ... ok
+test terminal::backend::tests::draws_encode_ansi_without_touching_the_terminal ... ok
+test terminal::input::tests::gate_failures_are_input_errors ... ok
+test terminal::input::tests::hang_up_during_the_wait_ends_input ... ok
+test terminal::backend::tests::terminal_clear_and_resize_work_without_terminal_queries ... ok
+test terminal::input::tests::hang_up_ends_input_without_entering_crossterm ... ok
+test terminal::input::tests::hang_up_while_bytes_are_unread_ends_input ... ok
+test terminal::input::tests::readable_terminal_delivers_the_parsed_event ... ok
+test terminal::input::tests::unread_bytes_wait_for_hang_up_instead_of_spinning ... ok
+test modules::gpu::readings::tests::memory_reads_the_framebuffer_or_the_ram_a_unified_gpu_holds ... ok
+test terminal::output::tests::an_oversized_frame_is_discarded_unsent_and_the_buffer_stays_bounded ... ok
+test terminal::output::tests::the_restore_tail_always_fits_after_a_full_frame ... ok
+test registry::tests::registry_is_bounded ... ok
+test terminal::output::tests::would_block_and_interrupts_are_handled_and_errors_surface ... ok
+test terminal::output::tests::frame_records_show_each_frame_started_after_the_previous_one_finished ... ok
+test modules::history::stats::tests::a_series_no_gpu_reports_has_no_column ... ok
+test terminal::output::tests::a_frame_is_written_in_order_within_the_per_step_budget ... ok
+test terminal::runner::tests::manager_shutdown_ends_the_loop ... ok
+test modules::history::stats::tests::a_short_history_lists_one_window_and_says_how_much_a_longer_holds ... ok
+test modules::history::stats::tests::pending_and_empty_windows_say_so ... ok
+test controller::tests::a_click_on_a_stale_hitmap_keeps_the_clicked_identity_and_old_revision ... ok
+test terminal::scheduler::tests::full_redraw_and_backoff ... ok
+test terminal::scheduler::tests::input_and_resize_redraw_quickly_but_capped_at_20_fps ... ok
+test terminal::scheduler::tests::data_frames_respect_fps_and_pressure ... ok
+test controller::tests::k_builds_prepare_signal_with_the_full_process_key ... ok
+test terminal::stats::tests::nearest_rank_percentiles ... ok
+test terminal::setup::tests::enter_and_restore_sequences_are_symmetric ... ok
+test terminal::stats::tests::samples_are_bounded ... ok
+test controller::tests::filter_enter_applies_and_esc_clears ... ok
+test theme::tests::a_missing_value_is_dim_never_italic ... ok
+test theme::tests::conflict_tone_is_emphasized ... ok
+test theme::tests::level_colors_follow_thresholds ... ok
+test viewer::hitmap::tests::hits_resolve_topmost_and_carry_the_frame_revision ... ok
+test viewer::isolation::tests::panics_become_messages_and_depth_is_restored ... ok
+test controller::tests::results_become_honest_notices ... ok
+test viewer::layout::tests::a_module_without_a_cell_gets_a_full_width_row_below_the_grid ... ok
+test viewer::banners::tests::manager_confirmation_text_is_a_fallback_only ... ok
+test viewer::banners::tests::confirm_mode_without_projection_still_shows_a_banner ... ok
+test viewer::banners::tests::confirmation_comes_first_and_errors_before_warnings ... ok
+test viewer::layout::tests::tiers_follow_the_spec_boundaries ... ok
+test viewer::layout::tests::banners_are_allocated_first_and_shrink_the_body ... ok
+test viewer::summary::tests::missing_topics_say_no_data ... ok
+test controller::tests::in_filter_mode_k_and_q_are_text_while_ctrl_c_quits ... ok
+test controller::tests::destructive_commands_are_never_coalesced_and_keep_order ... ok
+test controller::tests::a_token_arriving_while_typing_is_cancelled_not_activated ... ok
+test controller::tests::filter_input_is_bounded_to_256_bytes ... ok
+test controller::tests::y_only_confirms_in_confirm_mode_with_a_token ... ok
+test terminal::runner::tests::terminal_hang_up_stops_rendering_and_requests_shutdown ... ok
+test controller::tests::other_keys_are_ignored_while_confirming ... ok
+test terminal::runner::tests::q_requests_shutdown_and_restores_the_terminal ... ok
+test controller::tests::the_token_never_reaches_ui_state_or_debug_output ... ok
+test controller::tests::j_and_k_select_by_process_key_across_a_reordered_projection ... ok
+test controller::tests::the_cpu_panel_expands_and_collapses_by_click_or_c_without_a_command ... ok
+test viewer::tests::gpu_unavailable_reason_is_shown ... ok
+test terminal::runner::tests::output_errors_stop_rendering_and_request_shutdown ... ok
+test viewer::tests::processes_window_shows_scroll_position_filters_and_truncation ... ok
+test controller::tests::k_without_a_visible_selection_does_nothing ... ok
+test views::tests::sources_processes_and_actions_are_not_offered ... ok
+test widgets::gauge::tests::half_filled_gauge_is_a_band_over_its_track_with_a_label ... ok
+test widgets::gauge::tests::missing_ratio_shows_na_not_empty_bar ... ok
+test widgets::gauge::tests::tiny_area_and_corrupt_ratio_do_not_panic ... ok
+test widgets::sparkline::tests::a_full_scale_column_leaves_the_top_quarter_of_its_top_row_empty ... ok
+test terminal::runner::tests::input_and_q_still_work_while_output_is_blocked_for_30_seconds ... ok
+test controller::tests::interval_keys_require_the_settings_revision ... ok
+test viewer::tests::an_eleventh_fixture_module_is_registered_and_laid_out ... ok
+test viewer::tests::missing_topics_render_no_data_instead_of_zero ... ok
+test viewer::tests::actions_view_never_says_terminated ... ok
+test viewer::tests::a_panicking_module_is_isolated_as_a_module_error ... ok
+test viewer::tests::header_shows_the_host_and_warnings_and_the_footer_the_interval ... ok
+test viewer::tests::simulated_and_replay_values_are_tagged ... ok
+test viewer::tests::confirmation_banner_is_visible_and_never_clipped_at_40x10 ... ok
+test viewer::tests::stale_values_show_the_last_good_value_with_its_age ... ok
+test viewer::tests::tabs_and_rows_produce_hit_targets_with_the_frame_revision ... ok
+test terminal::runner::tests::confirmation_tokens_come_from_drained_results ... ok
+test widgets::sparkline::tests::the_peak_is_the_largest_visible_point ... ok
+test widgets::sparkline::tests::gaps_are_blank_and_zero_is_lowest_bar ... ok
+test widgets::stacked_bar::tests::segments_fill_their_shares_in_order_and_the_rest_is_track ... ok
+test widgets::stacked_bar::tests::shares_over_the_whole_never_overrun_and_bad_values_are_empty ... ok
+test widgets::sparkline::tests::multi_row_fill_and_non_finite_points ... ok
+test terminal::runner::tests::oversized_frames_are_never_sent_and_the_buffer_stays_bounded ... ok
+test viewer::tests::settings_view_shows_origins_restart_and_pending ... ok
+test viewer::hitmap::tests::targets_are_clipped_and_bounded ... ok
+test terminal::runner::tests::rendering_is_dirty_only ... ok
+test viewer::tests::overview_follows_the_reference_layout_and_keeps_every_module_visible_when_wide ... ok
+test viewer::tests::sources_view_explains_arbitration ... ok
+test terminal::runner::tests::a_slow_frame_is_followed_by_a_full_redraw ... ok
+test controller::tests::enter_confirms_and_esc_or_n_cancel ... ok
+test viewer::tests::shed_trends_and_lists_render_text_not_blank ... ok
+test terminal::runner::tests::frames_never_interleave_under_partial_writes ... ok
+test controller::tests::q_and_ctrl_c_quit_in_normal_mode ... ok
+test viewer::tests::processes_view_follows_the_reference_columns_and_marks_the_selection ... ok
+test terminal::runner::tests::idle_polls_are_bounded_and_never_zero ... ok
+test controller::tests::tab_clicks_and_keys_switch_views ... ok
+test terminal::runner::tests::data_frames_are_capped_by_fps ... ok
+test viewer::tests::tiers_are_reported_per_size ... ok
+test viewer::tests::history_says_when_it_loads_fails_is_partly_recorded_or_has_no_series ... ok
+test viewer::tests::every_view_renders_at_every_size_with_a_quit_hint ... ok
+
+test result: ok. 178 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+   Doc-tests dgxtop
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests dgxtop_adapters
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests dgxtop_collectors
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests dgxtop_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests dgxtop_manager
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests dgxtop_runtime
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests dgxtop_store
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests dgxtop_ui
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+# ---- end ----
+# finished_utc: 2026-10-10T13:12:44Z
+# exit_code: 0
+# redacted: GPU UUIDs and hardware serial numbers

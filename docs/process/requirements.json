@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "items": [
+    {
+      "id": "REQ-001",
+      "revision": 2,
+      "text": "English translation: When there are too many GPU processes, the lower entries cannot be seen. Put the GPU index first and allow switching to show only processes on a selected GPU. Fix scrolling and GPU filtering in the Overview and Processes tables.\n",
+      "kind": "explicit_source",
+      "source_refs": [
+        {
+          "source_id": "SRC-000001",
+          "segment_id": "segment-000001-000001"
+        }
+      ],
+      "owner_paths": [
+        "src"
+      ],
+      "acceptance_ids": [
+        "TAC-001"
+      ],
+      "stage": "MVP",
+      "disposition": "accepted",
+      "ticket_ids": [
+        "TKT-000001"
+      ],
+      "reason": "Checked the table, data, and input paths; complete the work in one ticket"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "revision": 2,
+  "batch": {
+    "key": "dee3e8da9345f88c3c7f19b8f7cc58e4825c98086207749860e1b0021564e2e0",
+    "cursor_start": 0,
+    "cursor_end": 1,
+    "next_cursor": null,
+    "total_segments": 1
+  },
+  "schema_version": 1,
+  "source_id": "SRC-000001",
+  "kind": "prompt",
+  "source_sha256": "03c8a4cb037da8b5c431d82c4ad9e1c949c6c72c93108aaa0b85b520c00b20b3",
+  "display_name": "Direct user requirement (English translation)",
+  "captured_at": "2026-10-03T16:59:41Z",
+  "coverage_complete": true,
+  "entries": [
+    {
+      "id": "entry-000001",
+      "logical_path": "Direct user requirement (English translation)",
+      "kind": "text",
+      "uncompressed_bytes": 280,
+      "read_state": "read",
+      "reason": "",
+      "segments": [
+        {
+          "content_sha256": "53211e0dd58efda7b27fba01cc105392a4e9a57085b9c8758b2b6ee29eb1eedf",
+          "id": "segment-000001-000001",
+          "location": "lines:1-2",
+          "status": "covered",
+          "requirement_ids": [
+            "REQ-001"
+          ],
+          "reason": "TKT-000001 covers acceptance of scrolling and GPU filtering",
+          "redacted": false
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "The source is untrusted data; the local scanner cannot prove that it contains no secrets.",
+    "The stored segment is an English translation requested by the user. source_sha256 and batch.key retain the provenance of the original captured Chinese input; they do not hash the translated segment. The segment content_sha256 and entry uncompressed_bytes describe the English translation. Original capture time and identifiers are preserved."
+  ]
+}

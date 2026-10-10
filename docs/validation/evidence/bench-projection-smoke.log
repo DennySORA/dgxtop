@@ -1,0 +1,40 @@
+# evidence: bench-projection-smoke
+# command: cargo bench -p dgxtop --locked --offline --bench projection -- --smoke
+# started_utc: 2026-10-09T18:41:18Z
+# git_commit: b4b5a8d87d3c148cedacf91daf6f926719694a18 (working tree modified)
+# host: Linux 6.12.111+deb13-amd64 x86_64
+# cpu: 13th Gen Intel(R) Core(TM) i9-13900K
+# rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
+# ---- output ----
+   Compiling dgxtop v0.2.0 (/mnt/DennySORA_SSD/Code/Github/dgxtop/crates/dgxtop)
+    Finished `bench` profile [optimized] target(s) in 43.09s
+     Running ../../benches/projection/main.rs (target/release/deps/projection-92101a27356efb29)
+== dgxtop bench projection (smoke) ==
+run 1: 1.5 s, samples: commands 0 frames 105 history 0
+    frame_p95_ms                            0.371 <= 16        Pass
+    frame_p99_ms                            0.434 <= 33        Pass
+    minimum_samples.frames                105.000 >= 1000      Fail
+run 2: 1.5 s, samples: commands 0 frames 105 history 0
+    frame_p95_ms                            0.450 <= 16        Pass
+    frame_p99_ms                            0.480 <= 33        Pass
+    minimum_samples.frames                105.000 >= 1000      Fail
+run 3: 1.5 s, samples: commands 0 frames 105 history 0
+    frame_p95_ms                            0.484 <= 16        Pass
+    frame_p99_ms                            0.489 <= 33        Pass
+    minimum_samples.frames                105.000 >= 1000      Fail
+report kind: synthetic_example (not acceptance evidence)
+  blocker: smoke mode: shortened warm-up and measurement, never acceptance
+  blocker: run 1: not measured: cpu_mean_one_core_percent, rss_tree_peak_mib, managed_peak_mib, command_p95_ms, command_p99_ms, projection_p95_ms, history_p95_ms, coverage_percent, unexplained_drops, adaptive_throttle_events, crashes, deadlocks
+  blocker: run 2: not measured: cpu_mean_one_core_percent, rss_tree_peak_mib, managed_peak_mib, command_p95_ms, command_p99_ms, projection_p95_ms, history_p95_ms, coverage_percent, unexplained_drops, adaptive_throttle_events, crashes, deadlocks
+  blocker: run 3: not measured: cpu_mean_one_core_percent, rss_tree_peak_mib, managed_peak_mib, command_p95_ms, command_p99_ms, projection_p95_ms, history_p95_ms, coverage_percent, unexplained_drops, adaptive_throttle_events, crashes, deadlocks
+  blocker: soak_runs not measured (72 h fixed + churn soak, AT29); zero-length placeholders
+  blocker: source commit not identifiable (build commit "b4b5a8d87d3c148cedacf91daf6f926719694a18-dirty", dirty tree)
+  blocker: micro benchmark: measures projection build and frame compute only; other REF metrics are not measured here
+  note: frame = TuiLoop step that accepted and drew the projection (includes the first <= 8 KiB copy to the null transport)
+  note: worst projection build p95 0.511 ms (component of projection_p95_ms)
+report:   /mnt/DennySORA_SSD/Code/Github/dgxtop/target/perf/projection-smoke.json
+evidence: /mnt/DennySORA_SSD/Code/Github/dgxtop/target/perf/projection-smoke
+# ---- end ----
+# finished_utc: 2026-10-09T18:42:06Z
+# exit_code: 0
+# redacted: GPU UUIDs and hardware serial numbers

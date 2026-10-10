@@ -1,0 +1,30 @@
+# evidence: spec-package-validation
+# command: /tmp/claude-1000/-mnt-DennySORA-SSD-Code-Github-dgxtop/32efa81a-0f25-482f-b209-eb95f51fb786/scratchpad/run_spec_validation.sh
+# started_utc: 2026-10-03T23:44:11Z
+# git_commit: b4b5a8d87d3c148cedacf91daf6f926719694a18 (working tree modified)
+# host: Linux 6.12.111+deb13-amd64 x86_64
+# cpu: 13th Gen Intel(R) Core(TM) i9-13900K
+# rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
+# ---- output ----
+python: Python 3.13.5 (jsonschema 4.26.0)
+
+----------------------------------------------------------------------
+Ran 83 tests in 0.015s
+
+OK
+{
+  "status": "PASS",
+  "scope": "規格／契約／封裝，不是Rust軟體驗收",
+  "checks": [
+    "必備檔案與非空內容",
+    "40需求／15任務／40驗收映射",
+    "13份JSON Schema／13份範例／配額語意",
+    "SQLite DDL語法與schema_version（非production SQLite版本認證）",
+    "Markdown相對連結／薄CLAUDE匯入",
+    "HTML語言、ID、錨點、4幅SVG、無外部依賴",
+    "MANIFEST逐檔size／SHA256"
+  ]
+}
+# ---- end ----
+# finished_utc: 2026-10-03T23:44:11Z
+# exit_code: 0

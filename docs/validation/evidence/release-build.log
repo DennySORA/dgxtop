@@ -1,0 +1,15 @@
+# evidence: release-build
+# command: cargo build --release --locked
+# started_utc: 2026-10-10T13:12:44Z
+# git_commit: b4b5a8d87d3c148cedacf91daf6f926719694a18 (working tree modified)
+# host: Linux 6.12.111+deb13-amd64 x86_64
+# cpu: 13th Gen Intel(R) Core(TM) i9-13900K
+# rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
+# ---- output ----
+   Compiling dgxtop v0.2.0 (/mnt/DennySORA_SSD/Code/Github/dgxtop/crates/dgxtop)
+   Compiling dgxtop-adapters v0.2.0 (/mnt/DennySORA_SSD/Code/Github/dgxtop/crates/adapters)
+    Finished `release` profile [optimized] target(s) in 47.79s
+# ---- end ----
+# finished_utc: 2026-10-10T13:13:32Z
+# exit_code: 0
+# redacted: GPU UUIDs and hardware serial numbers

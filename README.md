@@ -1,238 +1,237 @@
 # dgxtop
 
-![dgxtop — Overview on DGX Spark](docs/screenshot-overview.png)
-
 [繁體中文](docs/README.zh-TW.md) | [简体中文](docs/README.zh-CN.md) | [日本語](docs/README.ja.md)
 
-> High-performance, interactive system monitor for NVIDIA DGX systems with real-time GPU, CPU, memory, disk capacity/I/O, and network monitoring.
+> A stable, efficient local terminal monitor for NVIDIA DGX and GPU Linux hosts: CPU, GPU,
+> memory, disk, network and processes — with explainable multi-source arbitration, exact
+> history and protected process control.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.92%2B-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.92.0-orange.svg)](rust-toolchain.toml)
 [![CI](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml/badge.svg)](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml)
-[![Release](https://github.com/DennySORA/dgxtop/actions/workflows/release.yml/badge.svg)](https://github.com/DennySORA/dgxtop/releases)
 
-**dgxtop** is a comprehensive system monitoring tool purpose-built for NVIDIA DGX infrastructure. It provides real-time visibility into GPU utilization, VRAM, temperature, power draw, NVLink topology, disk usage, and system resources — all in an interactive terminal UI. Built in Rust with direct NVML access for maximum performance and reliability.
+dgxtop v2 is a complete rewrite built from the specification in [`spec/dgxtop-v2/`](spec/dgxtop-v2/README.md).
+It never shows a fake zero: a value that could not be read is displayed as *unsupported*,
+*read failed*, *stale* or *source conflict*, together with where it came from.
 
-## Quick Install
+## Highlights
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
-```
+- **Isolated, non-blocking collection.** Every live data source (procfs, hwmon, thermal,
+  powercap, NVML, network, filesystem) runs in its own resident adapter-host process. A hung
+  driver call (for example a stuck NVML) only affects that host; CPU, memory and the UI keep
+  updating. Timed-out hosts are restarted with bounded backoff or quarantined — never respawned
+  without limit.
+- **Explainable source arbitration.** When two sources report the same metric (e.g. coretemp
+  and the thermal zone for the CPU package), dgxtop de-duplicates proven aliases, compares only
+  independent sources, and shows a *source conflict* instead of averaging or silently picking
+  one. Every candidate, why it was selected or rejected, its age and origin are kept for the
+  source diagnostics view (its tab is hidden for now).
+- **Honest units and quality.** Read status, sample kind (measured / derived / estimated /
+  simulated), quality and freshness are separate axes. Unproven units (such as NVML PCIe "KB/s")
+  are not converted by guesswork, and no bandwidth is invented from utilization percentages.
+- **Exact history.** Rates come from exact `u64` counter deltas over the real elapsed time;
+  totals over a window count only intervals fully inside it (cross-minute intervals are kept as
+  exact *bridges*). Gaps, coverage and source changes are visible.
+- **Bounded resources.** One global managed-memory budget (256 MiB by default) with byte and item
+  limits on every queue; a fixed set of threads; dirty-only rendering at most 4 fps; non-blocking
+  terminal output that never stalls input when the terminal is slow.
+- **Protected process control.** `K` asks for a SIGTERM to the selected process: same user only,
+  never root sessions, never PID 1 / dgxtop itself / its hosts, a one-time 10-second confirmation,
+  a durable audit record *before* the signal, and the signal is sent through a held `pidfd`
+  (no PID reuse races). `SIGKILL` is disabled unless explicitly enabled. Results distinguish
+  *signal sent* from *exit observed*.
 
-See [Installation](#installation) for more options.
+## Views and modules
 
-## Why dgxtop?
+Ten display modules: `cpu`, `gpu`, `memory`, `disk`, `network`, `processes`, `history`,
+`sources`, `settings` and `actions`. The tabs are Overview, GPU, History and Settings. A
+pending process action shows as a banner in every view, and its outcome (sent, still running,
+exited, unknown) as a notice.
 
-- **Direct NVML Access** — Reads GPU metrics through NVIDIA Management Library, not nvidia-smi subprocess calls. Faster, more reliable, and more detailed.
-- **DGX-Optimized** — Supports multi-GPU monitoring, NVLink topology, ECC error tracking, and PCIe throughput — features critical for DGX A100/H100/B200 and DGX Spark.
-- **Full System View** — CPU per-core utilization, memory (RAM + Swap), disk capacity (Used / Free / Use%) plus I/O, and network interfaces in a single dashboard.
-- **Interactive Process Management** — Sort, filter, and kill GPU processes directly from the TUI. See per-process GPU utilization, VRAM usage, and host memory.
-- **Secure by Design** — No subprocess shell-outs, PID recycling protection, config value sanitization, and UTF-8 safe rendering. Passed deep security audit.
+- **Overview.** Four rows, top to bottom:
+  - **CPU and memory**, side by side, memory the wider. CPU shows its temperature, power and
+    maximum frequency (with load and tasks when they fit), its utilization bar with a chart
+    under it, and the usr/sys/iowait/steal split. Memory shows the RAM in use, the used bar with
+    a chart under it, swap, buffers, cache and available memory. Click the CPU panel or press
+    `c` to add every sensor and the per-core bars. On unified-memory GPUs (DGX Spark) memory
+    draws the RAM that GPU processes hold in its own color and says how much it is.
+  - **GPUs.** Each GPU gets a line with its temperature, power, clock and fan, its utilization
+    bar with a chart under it, then its memory bar: `VRAM`, or on unified memory `RAM`, the RAM
+    the GPU's processes hold. The GPUs grow first when the terminal is short.
+  - **Disk I/O and network**, side by side. Each is a table (disks with the capacity of the
+    filesystem they hold), then the read/write or receive/transmit rates of the busiest device,
+    which the panel title names.
+  - **GPU processes**, which take the remaining rows. The table lists only processes that use
+    a GPU, with `TYPE` saying whether each holds a compute (`C`) or graphics (`G`) context on
+    it, or both (`C+G`), as `nvidia-smi` prints it. All process actions (select, sort, filter,
+    terminate) happen there.
 
-## Features
+  Charts are built for a quick read: block columns, one per sample with the newest at the
+  right, each in the bar's color for its level, so busy stretches show red at a glance.
+  Utilization and memory keep a fixed scale. Disk and network rates are scaled to their own
+  peak, which is printed next to them.
+- **GPU.** One device at a time: four live bars (utilization, memory, temperature, power) over
+  all of its live and deep information, read from the NVIDIA driver (NVML) and from driver and
+  CUDA toolkit files, without network access and without running any command. The information
+  reads top to bottom in blocks of `key value` rows, so values you compare sit one above the
+  other, in as few balanced columns as fit the terminal:
+  - **State:** performance state, throttle reasons, and how long each cause held the clocks back.
+  - **Utilization:** memory controller, encoder and decoder.
+  - **Clocks:** graphics, SM, memory and video, each now beside its maximum.
+  - **Memory:** total, used, free, reserved and process memory, BAR1, bus width and theoretical
+    peak bandwidth.
+  - **PCIe:** the link and its theoretical bandwidth now beside their maximum, transmit over
+    receive, replays.
+  - **Thermal:** temperature and fan (every fan on a GPU with several), then the device's own
+    thresholds in rising order.
+  - **Power:** draw and the driver's instantaneous reading (on Ampere and newer GPUs, draw is
+    NVML's one-second average), limit, the requested limit when another limiter enforces a
+    lower one, default limit, the range it can be set within, and the energy since the driver
+    loaded.
+  - **CUDA:** the CUDA version the driver supports, the compute capability (`sm_120`), the
+    installed toolkit, its path and its `nvcc`.
+  - **Driver:** version, open or proprietary kernel module, NVML, persistence, compute mode.
+  - **Device, PCI & firmware:** architecture, brand, CUDA cores, board part, serial, UUID, device
+    node; PCI identity, VBIOS, InfoROM and GSP firmware.
+  - **Health:** ECC, retired-page and NVLink counters, when the GPU has them.
+  - **Topology:** the NUMA node and CPUs nearest the GPU, and for every other GPU the PCIe path
+    (`nvidia-smi topo -m`'s `PIX` to `SYS`) and whether it can read and write that GPU's memory
+    directly (P2P). Without P2P, copies between the GPUs go through system memory.
 
-### GPU Monitoring (via NVML)
+  What the GPU does not report gets no row. A terminal too short for every block names the
+  blocks it leaves out. The processes using each GPU are in the overview's
+  process table (`g` limits it to one GPU).
+- **History.** The overview's resources over a longer window (5 minutes to 24 hours, `w`/`W`),
+  laid out like a monitoring dashboard: panels in pairs, CPU and memory, the GPUs' utilization
+  and memory, their temperature and power (a strip per GPU), and the read/write and
+  receive/transmit rates of the busiest disk and interface (each pair on one scale). Every strip
+  shows its scale, block columns of the window (the mean coloured by level, the peak as a band
+  above it, a dotted base where nothing was recorded) and a legend with the value now, the mean
+  and the peak. A time axis runs under each column of panels. The history is kept on disk
+  (`history.sqlite3`, on by default): earlier runs and boots are read back and charted on the
+  same axis, and the window bar says how much of a window is recorded (only while dgxtop runs).
+  Under the axis, each GPU's last 1, 6, 12
+  and 24 hours: mean and peak utilization, memory, temperature and power, and the energy drawn,
+  listing only the windows that add data. The analysis behind the design is in
+  [docs/process/v2-rewrite/history-redesign.md](docs/process/v2-rewrite/history-redesign.md).
 
-| Category | Metrics |
-|----------|---------|
-| **Utilization** | GPU %, Memory controller %, per-process SM utilization |
-| **Memory** | VRAM used/total/free, BAR1 usage, per-process GPU memory |
-| **Bandwidth** | Memory bandwidth utilization (actual/theoretical GB/s), unified-memory auto-detection (LPDDR5X), PCIe TX/RX throughput with 1/6/12/24h avg/max stats |
-| **Thermal** | Temperature (with slowdown/shutdown thresholds), fan speed, 1/6/12/24h avg/max |
-| **Power** | Draw/limit (watts), usage %, total energy consumption (kWh), 1/6/12/24h avg/max/cumulative energy |
-| **Clock** | Graphics, SM, Memory, Video frequencies (current/max MHz) |
-| **State** | Performance state (P0–P15), throttle reasons, compute mode, persistence mode |
-| **Health** | ECC errors (corrected/uncorrected), retired pages (SBE/DBE) |
-| **Topology** | NVLink active links with remote GPU mapping, PCIe Gen/Width |
-| **Codec** | Encoder/Decoder utilization % |
-| **Identity** | UUID, serial number |
+Layout adapts to the terminal:
 
-### System Monitoring
-
-| Category | Metrics |
-|----------|---------|
-| **CPU** | Aggregate and per-core usage (htop-style), user/system/iowait breakdown, temperature, power draw, frequency, **load average** (1/5/15m), **tasks** (running/total) |
-| **Memory** | RAM used/total, buffers, cached, available, swap usage |
-| **Disk Capacity & I/O** | Filesystem usage for mounted devices (Used / Free / Use%), per-device read/write throughput, IOPS, await latency, sorted by throughput |
-| **Network** | Per-interface RX/TX throughput, errors, sorted by activity |
-
-### Time-Series Analytics
-
-- **Line charts** for GPU utilization, memory, temperature, and power with Braille markers
-- **1/6/12/24h statistics** — avg/max for CPU, Memory, GPU utilization, temperature, power (with cumulative kWh), memory, PCIe TX/RX; avg R/W for Disk; cumulative ↓/↑ for Network
-- **Progressive display** — stats windows only appear after enough data has been collected
-- **Minute-resolution aggregation** — memory-efficient 24h storage (~28KB per metric)
-
-### Interactive TUI
-
-- **Three Views** — Overview dashboard, GPU detail (full-page per-GPU), full-screen process table
-- **Vim Keybindings** — Navigate with `j/k`, switch tabs with `1/2/3`, GPU selection with `h/l`
-- **Device Selection** — Cycle network interfaces (`n/N`), disk devices (`d/D`) with chart/stats following selection
-- **Process Management** — Sort by GPU mem/utilization/CPU/PID, filter by name, kill with confirmation
-- **Responsive Layout** — Auto-adapts to terminal size, conditionally shows charts/stats based on available space
-- **Visual Design** — Rounded panels, gradient gauges, line charts, alternating row colors, color-coded thresholds
-
-#### Multi-GPU Overview with Active Workloads
-
-![dgxtop — Multi-GPU with active workloads](docs/screenshot-multi-gpu.png)
+- full layout from 80×24;
+- a compact summary below 80×24;
+- a size notice below 40×10 (quit still works).
 
 ## Installation
 
-### Quick Install (Recommended)
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
 ```
 
-The installer auto-detects your libc and picks the matching release target.
-For NVIDIA GPU metrics, glibc (`-gnu`) builds are recommended.
+The installer downloads the GNU build for x86_64 or aarch64 into a temporary directory on the
+target filesystem, verifies `SHA256SUMS` and the archive layout, runs `dgxtop --version
+--verbose`, then atomically replaces the binary and keeps the previous one as
+`dgxtop.previous`. Roll back with `./install.sh --rollback` (configuration and state are not
+touched; signals already sent cannot be undone). There is no automatic musl fallback.
 
-### Download Binary
-
-Download pre-built binaries from [GitHub Releases](https://github.com/DennySORA/dgxtop/releases):
-
-| Platform | Architecture | Download |
-|----------|--------------|----------|
-| Linux | x86_64 (glibc, recommended) | `dgxtop-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux | x86_64 (musl, compatibility) | `dgxtop-x86_64-unknown-linux-musl.tar.gz` |
-| Linux | ARM64 (glibc, recommended) | `dgxtop-aarch64-unknown-linux-gnu.tar.gz` |
-| Linux | ARM64 (musl, compatibility) | `dgxtop-aarch64-unknown-linux-musl.tar.gz` |
-
-> Note: On some systems, musl builds may fail to load NVIDIA NVML (`libnvidia-ml.so`), resulting in missing GPU metrics.
-
-### Build from Source
+Build from source (Rust 1.92.0 is pinned by `rust-toolchain.toml`):
 
 ```bash
 git clone https://github.com/DennySORA/dgxtop.git
 cd dgxtop
-cargo build --release
-# Binary: target/release/dgxtop
-```
-
-### Cargo Install
-
-```bash
-cargo install --git https://github.com/DennySORA/dgxtop.git
+cargo build --release --locked
+./target/release/dgxtop
 ```
 
 ## Usage
 
-### Basic Usage
-
 ```bash
-# Start with default settings
-dgxtop
-
-# Custom refresh interval (0.5 seconds)
-dgxtop -i 0.5
-
-# Disable GPU monitoring (system metrics only)
-dgxtop --no-gpu
-
-# Use green color theme
-dgxtop -t green
+dgxtop                       # live monitor
+dgxtop -i 0.5                # 500 ms sampling for this run (saved settings are not changed)
+dgxtop --no-gpu              # do not start the NVML host
+dgxtop --read-only           # disable all process actions
+dgxtop --replay fixture.json # simulated data only, read-only, separate temporary state
+dgxtop --check-config        # validate and print configured/effective settings, then exit
+dgxtop --diagnostics-json    # versions, SQLite, capabilities and health as JSON
+dgxtop --import-legacy ~/.config/dgxtop/config.json --dry-run   # show the v1 → v2 mapping
+dgxtop --version --verbose   # version, commit, toolchain, target, SQLite runtime
 ```
 
-### Command Line Options
+Command-line values override the saved configuration only when they are given explicitly and
+only for the current run.
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `-i, --interval <SECS>` | Update interval in seconds (0.1–10.0) | `1.0` |
-| `-t, --theme <NAME>` | Color theme: `cyan`, `green`, `amber` | `cyan` |
-| `--no-gpu` | Disable GPU monitoring | `false` |
-| `--net-max <N>` | Max visible network interfaces / disk devices (1–20) | `3` |
-| `--log-level <LEVEL>` | Log level: `error`, `warn`, `info`, `debug` | `warn` |
-
-### Keyboard Shortcuts
+### Keys
 
 | Key | Action |
-|-----|--------|
-| `q` / `Ctrl+C` | Quit |
-| `Tab` / `Shift+Tab` | Switch between views |
-| `1` / `2` / `3` | Jump to Overview / GPU Detail / Processes |
-| `j/k` or `↑/↓` | Navigate up/down |
-| `h/l` or `←/→` | Select GPU (in GPU Detail view) |
-| `s` | Enter sort mode |
-| `r` | Reverse sort order (in sort mode) |
-| `/` | Filter processes by name/PID/user |
-| `K` | Kill selected process (with confirmation) |
-| `e` | Toggle per-core CPU view (htop-style) |
-| `n` / `N` | Cycle network interface |
-| `d` / `D` | Cycle disk device |
-| `+` / `-` | Increase / decrease refresh speed |
-| `?` | Toggle help overlay |
+|---|---|
+| `q`, `Ctrl-C` | Quit (`q` is text while editing a filter; `Ctrl-C` always quits) |
+| `1`–`4`, `Tab`, `Shift-Tab` | Overview, GPU, History, Settings |
+| `w` / `W` | Next / previous history window (5m, 1h, 6h, 12h, 24h) |
+| `c` | Show / hide the CPU sensors and per-core bars in the overview (or click the CPU panel) |
+| `j`/`k`, arrows, `PgUp`/`PgDn`, `Home`/`End` | Move the selection (by process identity, not row index) |
+| `h`/`l` | Previous/next GPU in the GPU view |
+| `g` | Cycle the process GPU filter (all GPUs → each GPU) |
+| `/` | Filter processes (Enter applies, Esc clears) |
+| `s` / `r` | Sort column / reverse order |
+| `+` / `-` | Change the sampling interval (saved after confirmation by the store) |
+| `K` | Request SIGTERM for the selected process (confirmation required) |
+| `y`/`Enter`, `n`/`Esc` | Confirm / cancel a pending process action |
+| `F2`, `?`/`F1` | Settings view, help |
 
-### Views
+## Configuration and files
 
-**Overview** — Responsive dashboard with CPU gauge (temperature, power draw, load average, tasks, htop per-core toggle), memory bars, GPU cards, disk capacity + I/O, and network panels with line charts and 1/6/12/24h statistics. The disk table shows Used / Free / Use% for mounted filesystems, with read/write throughput, IOPS, and await latency still tracked per device. Device selection highlights chart/stats for the chosen interface or disk.
+| Purpose | Location |
+|---|---|
+| Configuration (schema 2, versioned, atomic writes) | `$XDG_CONFIG_HOME/dgxtop/v2/config.json` (`~/.config/dgxtop/v2/config.json`) |
+| Action audit (SQLite, `synchronous=FULL`) | `$XDG_STATE_HOME/dgxtop/v2/audit.sqlite3` (`~/.local/state/...`) |
+| History archive (on by default, 7 days, at most 1 GiB) | `$XDG_STATE_HOME/dgxtop/v2/history.sqlite3` |
+| Bounded log, instance lock | `$XDG_STATE_HOME/dgxtop/v2/` |
 
-**GPU Detail** — Full-page single-GPU view with comprehensive metrics: utilization, VRAM, **memory bandwidth** (actual/theoretical GB/s), BAR1, thermal (with thresholds), power (with energy kWh), **throttle reasons**, P-state, all clock domains (Graphics/SM/Memory/Video), PCIe info, **NVLink topology**, encoder/decoder, ECC, retired pages, compute mode, UUID — plus time-series charts and per-GPU process list.
+Directories are created `0700` and files `0600`. Full command lines, environments and tokens are
+never persisted. The complete configuration contract is in
+[`spec/dgxtop-v2/contracts/CONFIG.md`](spec/dgxtop-v2/contracts/CONFIG.md) and the defaults in
+[`spec/dgxtop-v2/examples/config.default.json`](spec/dgxtop-v2/examples/config.default.json).
 
-![dgxtop — GPU Detail view](docs/screenshot-gpu-detail.png)
-
-**Processes** — Full-screen GPU process table with sortable columns, search filter, and process kill capability. Shows PID, user, GPU device, type, GPU%, VRAM, CPU%, host memory, and command.
-
-![dgxtop — Processes view](docs/screenshot-processes.png)
+Upgrading from v1: the old `~/.config/dgxtop/config.json` is never modified. Review the mapping
+with `--import-legacy <path> --dry-run`, then write the v2 file with `--apply`.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                           Main Thread                               │
-│  ┌───────────┐    ┌────────────┐    ┌────────────────────────────┐ │
-│  │  AppState  │◄───│  UI Loop   │◄───│ crossbeam channel (rx)    │ │
-│  │            │    │  (ratatui) │    │ bounded(256)               │ │
-│  └───────────┘    └────────────┘    └────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────┘
-                                                ▲
-                     Tick events + Key/Mouse    │
-                                                │
-┌───────────────────────────────────────────────┴─────────────────────┐
-│                        Event Thread                                  │
-│  ┌───────────────────────────────────────────────────────────────┐  │
-│  │  crossterm::event::poll + Tick timer → AppEvent → channel tx  │  │
-│  └───────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────┘
-
-Collectors (called on each Tick):
-  ├── GpuCollector        (NVML: utilization, temp, power, clocks, memory, bandwidth,
-  │                         ECC, PCIe, NVLink, BAR1, throttle, P-state, encoder/decoder,
-  │                         retired pages, energy, UUID, serial)
-  ├── GpuProcessCollector (NVML + /proc: per-process GPU/CPU/memory stats)
-  ├── CpuCollector        (/proc/stat + /proc/loadavg + powercap/hwmon: per-core usage,
-  │                         frequency, temperature, power draw, load average, task count)
-  ├── MemoryCollector     (/proc/meminfo: RAM, swap, buffers, cached)
-  ├── DiskCollector       (/proc/diskstats + /sys/class/block + mountinfo/statvfs:
-  │                         filesystem Used/Free/Use%, per-device throughput, IOPS, latency)
-  └── NetworkCollector    (/sys/class/net: per-interface RX/TX, packets, errors)
-
-History (per metric):
-  ├── RingBuffer          (short-term: 300 samples for charts)
-  └── TimeWindowAggregator (long-term: minute-resolution buckets for 24h stats)
+```text
+data:    driver/OS → adapter host (Adapter) → Collector → Manager → Store
+         Store → Manager projection → Viewer
+control: input → Controller → Manager → config / scheduler / pidfd action adapter
+         → audit → Store → Viewer
 ```
 
-## Requirements
+| Crate | Role |
+|---|---|
+| `dgxtop-core` | Typed identities, units, quality axes, commands, events, configuration, byte budget, ports |
+| `dgxtop-runtime` | Adapter-host supervision and IPC framing, bounded workers, non-blocking terminal output |
+| `dgxtop-adapters` | Read-only adapters (procfs, hwmon, thermal, powercap, NVML, network, filesystem, replay) and the separate pidfd action adapter |
+| `dgxtop-collectors` | Normalization, origin de-duplication, arbitration, counter rates, process/GPU join |
+| `dgxtop-store` | Hot snapshots, bounded exact history, config repository, SQLite audit and archive |
+| `dgxtop-manager` | Scheduling, catalog, policy, ingestion, history, configuration, process actions, presentation, sessions |
+| `dgxtop-ui` | Display modules, layout, keymap, controller, terminal runner |
+| `dgxtop` | Composition root and CLI |
 
-- **OS**: Linux (DGX systems, WSL2, containers)
-- **GPU**: NVIDIA drivers with NVML (libnvidia-ml.so)
-- **Runtime**: No additional dependencies. For GPU monitoring, prefer glibc (`-gnu`) builds.
+Only the composition root depends on more than `dgxtop-core`; the boundary is checked by
+[`spec/dgxtop-v2/tools/check_boundaries.py`](spec/dgxtop-v2/tools/check_boundaries.py).
 
-## Security
+## Development
 
-dgxtop has undergone a comprehensive security audit addressing:
-- UTF-8 boundary safety in all string rendering
-- PID recycling protection with pre-kill verification
-- Integer overflow protection with saturating arithmetic
-- Path traversal prevention in filesystem readers
-- Config value sanitization against NaN/Infinity/DoS
-- Bounded event channels to prevent memory exhaustion
+```bash
+just ci        # fmt, check, clippy -D warnings, tests, dependency boundaries (all --locked)
+just e2e       # end-to-end suites on request: PTY sessions, fault injection, real host processes
+just hardware  # hardware suites on real procfs/sysfs/NVML (and pidfd on disposable children)
+```
 
-See commit history for the full audit report and fixes.
+## Validation status
+
+See [`docs/validation/VALIDATION.md`](docs/validation/VALIDATION.md) for every acceptance case
+(AT01–AT40) with its command, exit code, environment and evidence hash. Performance numbers in
+the specification are acceptance targets; a platform is only called validated when that report
+lists measured evidence for it.
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE) for details.
-
-## Contributing
-
-Contributions welcome! Please feel free to submit issues and pull requests.
+Apache-2.0 — see [LICENSE](LICENSE).

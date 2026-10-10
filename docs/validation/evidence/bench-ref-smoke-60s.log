@@ -1,0 +1,90 @@
+# evidence: bench-ref-smoke-60s
+# command: env DGXTOP_BENCH_SMOKE_SECONDS=60 cargo bench -p dgxtop --locked --offline --bench ref -- --smoke
+# started_utc: 2026-10-09T18:36:45Z
+# git_commit: b4b5a8d87d3c148cedacf91daf6f926719694a18 (working tree modified)
+# host: Linux 6.12.111+deb13-amd64 x86_64
+# cpu: 13th Gen Intel(R) Core(TM) i9-13900K
+# rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
+# ---- output ----
+   Compiling dgxtop v0.2.0 (/mnt/DennySORA_SSD/Code/Github/dgxtop/crates/dgxtop)
+   Compiling dgxtop-ui v0.2.0 (/mnt/DennySORA_SSD/Code/Github/dgxtop/crates/ui)
+    Finished `bench` profile [optimized] target(s) in 1m 02s
+     Running ../../benches/ref/main.rs (target/release/deps/ref-ad8c4d8cbb0ebaca)
+ref run 1/3: warm-up 5s, window 60s
+ref run 2/3: warm-up 5s, window 60s
+ref run 3/3: warm-up 5s, window 60s
+== dgxtop bench ref (smoke) ==
+run 1: 60.0 s, samples: commands 600 frames 240 history 1992
+    adaptive_throttle_events                0.000 <= 0         Pass
+    command_p95_ms                          0.611 <= 50        Pass
+    command_p99_ms                          0.633 <= 100       Pass
+    coverage_percent                      100.000 >= 99.9      Pass
+    cpu_mean_one_core_percent               4.550 <= 5         Pass
+    crashes                                 0.000 <= 0         Pass
+    deadlocks                               0.000 <= 0         Pass
+    frame_p95_ms                            0.617 <= 16        Pass
+    frame_p99_ms                            0.781 <= 33        Pass
+    history_p95_ms                          0.020 <= 100       Pass
+    managed_peak_mib                       31.095 <= 256       Pass
+    projection_p95_ms                      51.994 <= 100       Pass
+    rss_tree_peak_mib                     212.484 <= 384       Pass
+    unexplained_drops                       0.000 <= 0         Pass
+    minimum_duration_seconds               60.000 >= 1800      Fail
+    minimum_samples.commands              600.000 >= 10000     Fail
+    minimum_samples.frames                240.000 >= 1000      Fail
+    minimum_samples.history_queries      1992.000 >= 1000      Pass
+run 2: 60.0 s, samples: commands 600 frames 240 history 1992
+    adaptive_throttle_events                0.000 <= 0         Pass
+    command_p95_ms                          0.583 <= 50        Pass
+    command_p99_ms                          0.618 <= 100       Pass
+    coverage_percent                      100.000 >= 99.9      Pass
+    cpu_mean_one_core_percent               4.667 <= 5         Pass
+    crashes                                 0.000 <= 0         Pass
+    deadlocks                               0.000 <= 0         Pass
+    frame_p95_ms                            0.597 <= 16        Pass
+    frame_p99_ms                            0.775 <= 33        Pass
+    history_p95_ms                          0.030 <= 100       Pass
+    managed_peak_mib                       31.127 <= 256       Pass
+    projection_p95_ms                      51.887 <= 100       Pass
+    rss_tree_peak_mib                     236.598 <= 384       Pass
+    unexplained_drops                       0.000 <= 0         Pass
+    minimum_duration_seconds               60.001 >= 1800      Fail
+    minimum_samples.commands              600.000 >= 10000     Fail
+    minimum_samples.frames                240.000 >= 1000      Fail
+    minimum_samples.history_queries      1992.000 >= 1000      Pass
+run 3: 60.0 s, samples: commands 600 frames 240 history 1992
+    adaptive_throttle_events                0.000 <= 0         Pass
+    command_p95_ms                          0.617 <= 50        Pass
+    command_p99_ms                          0.651 <= 100       Pass
+    coverage_percent                      100.000 >= 99.9      Pass
+    cpu_mean_one_core_percent               4.767 <= 5         Pass
+    crashes                                 0.000 <= 0         Pass
+    deadlocks                               0.000 <= 0         Pass
+    frame_p95_ms                            0.830 <= 16        Pass
+    frame_p99_ms                            0.886 <= 33        Pass
+    history_p95_ms                          0.028 <= 100       Pass
+    managed_peak_mib                       31.127 <= 256       Pass
+    projection_p95_ms                      51.987 <= 100       Pass
+    rss_tree_peak_mib                     250.336 <= 384       Pass
+    unexplained_drops                       0.000 <= 0         Pass
+    minimum_duration_seconds               60.001 >= 1800      Fail
+    minimum_samples.commands              600.000 >= 10000     Fail
+    minimum_samples.frames                240.000 >= 1000      Fail
+    minimum_samples.history_queries      1992.000 >= 1000      Pass
+report kind: synthetic_example (not acceptance evidence)
+  blocker: smoke mode: shortened warm-up and measurement, never acceptance
+  blocker: soak_runs not measured (72 h fixed + churn soak, AT29); zero-length placeholders
+  blocker: source commit not identifiable (build commit "b4b5a8d87d3c148cedacf91daf6f926719694a18-dirty", dirty tree)
+  blocker: run 1: history preload spans only 5.6 h (boot uptime); the 24 h query definition needs >= 24 h uptime
+  blocker: run 2: history preload spans only 5.6 h (boot uptime); the 24 h query definition needs >= 24 h uptime
+  blocker: run 3: history preload spans only 5.6 h (boot uptime); the 24 h query definition needs >= 24 h uptime
+  note: replay namespace: replay data never enters history (ADR08), so dgxtop CPU excludes live history appends; the 1 Hz shadow feeder doing that work is reported as harness CPU
+  note: commands are submitted to the session as the Controller would (benches cannot build terminal key events); latency = submit -> Manager result, polled every 0.5 ms
+  note: history queries are generated by the Manager's HistoryService and served from a preloaded live-shape history store (synthetic, private, in memory)
+  note: managed_peak_mib = byte ledger used + the preloaded history's raw/aggregate/query partitions
+report:   /mnt/DennySORA_SSD/Code/Github/dgxtop/target/perf/ref-smoke.json
+evidence: /mnt/DennySORA_SSD/Code/Github/dgxtop/target/perf/ref-smoke
+# ---- end ----
+# finished_utc: 2026-10-09T18:41:18Z
+# exit_code: 0
+# redacted: GPU UUIDs and hardware serial numbers

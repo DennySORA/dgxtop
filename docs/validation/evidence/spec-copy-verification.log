@@ -1,0 +1,13 @@
+# evidence: spec-copy-verification
+# command: python3 scripts/verify_spec_copy.py dgxtop-spec-v2.zip spec/dgxtop-v2
+# started_utc: 2026-10-10T13:12:44Z
+# git_commit: b4b5a8d87d3c148cedacf91daf6f926719694a18 (working tree modified)
+# host: Linux 6.12.111+deb13-amd64 x86_64
+# cpu: 13th Gen Intel(R) Core(TM) i9-13900K
+# rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
+# ---- output ----
+verify_spec_copy: 80 members, CRC ok, byte-identical to spec/dgxtop-v2, MANIFEST hashes ok
+# ---- end ----
+# finished_utc: 2026-10-10T13:12:44Z
+# exit_code: 0
+# redacted: GPU UUIDs and hardware serial numbers
