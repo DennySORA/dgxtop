@@ -4,10 +4,11 @@
 use dgxtop_core::metric::{Scalar, ids};
 use dgxtop_core::naming::entity;
 use dgxtop_core::quality::SampleKind;
-use dgxtop_core::view::{CellState, MemoryView, MetricCell};
+use dgxtop_core::view::{CellState, MemoryView, MetricCell, Trend};
 
 use super::gpu_directory::GpuDirectory;
 use super::reader::MetricReader;
+use crate::ingestion::trends::gpu_resident_key;
 
 /// Source label of the summed GPU allocations: only processes the driver
 /// lists are counted, so driver-internal memory is not included.
@@ -34,7 +35,25 @@ pub(crate) fn build_memory_view(
             entity::SCOPE_SYSTEM,
             trend_width,
         ),
+        gpu_resident_trend: gpu_resident_trend(reader, directory, trend_width),
     }
+}
+
+/// What unified-memory GPUs held beside each point of `memory.used`
+/// (recorded with it, so both share their time axis).
+fn gpu_resident_trend(
+    reader: &MetricReader<'_>,
+    directory: &GpuDirectory<'_>,
+    width: usize,
+) -> Trend {
+    if !directory.gpus().iter().any(|gpu| gpu.has_unified_memory()) {
+        return Trend::default();
+    }
+    reader.trend_beside(
+        (ids::MEMORY_USED, entity::MEMORY, entity::SCOPE_SYSTEM),
+        gpu_resident_key,
+        width,
+    )
 }
 
 /// RAM held by the allocations of unified-memory GPUs: the sum of their
@@ -145,6 +164,47 @@ mod tests {
         assert_eq!(cell.state, CellState::Ok);
         assert_eq!(cell.kind, SampleKind::Derived);
         assert_eq!(cell.source_label.as_deref(), Some(GPU_RESIDENT_SOURCE));
+    }
+
+    /// The memory chart draws the GPU share under the used RAM: the share's
+    /// points come beside `memory.used`, from the trend book.
+    #[test]
+    fn the_used_chart_carries_the_unified_gpu_share() {
+        let mut fixture = Fixture::new();
+        add_gpu(&mut fixture, UNIFIED_A, "0", Some("unified"));
+        allocated(&mut fixture, UNIFIED_A, 6 << 30);
+        fixture.add(
+            "memory",
+            sample("memory.used", "memory", "system").u64(8 << 30),
+        );
+        let used = fixture
+            .snapshot
+            .domains
+            .values()
+            .flat_map(|domain| domain.samples.keys())
+            .find(|key| key.metric_id.as_str() == "memory.used")
+            .unwrap()
+            .clone();
+        let share = crate::ingestion::trends::gpu_resident_key(&used).unwrap();
+        fixture.trends.push(&used, Some(8.0));
+        fixture.trends.push(&share, Some(6.0));
+        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
+        let index = SampleIndex::new(&fixture.snapshot);
+        let directory = GpuDirectory::new(&fixture.catalog, &index);
+        let view = build_memory_view(&reader, &directory, 30);
+        assert_eq!(view.used_trend.points, vec![Some(8.0)]);
+        assert_eq!(view.gpu_resident_trend.points, vec![Some(6.0)]);
+        // Without a unified GPU the chart has no share.
+        let plain = Fixture::new();
+        let reader = MetricReader::new(&plain.snapshot, &plain.catalog, &plain.trends, NOW);
+        let index = SampleIndex::new(&plain.snapshot);
+        let directory = GpuDirectory::new(&plain.catalog, &index);
+        assert!(
+            build_memory_view(&reader, &directory, 30)
+                .gpu_resident_trend
+                .points
+                .is_empty()
+        );
     }
 
     #[test]

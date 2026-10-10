@@ -30,6 +30,7 @@ pub struct GapSparkline<'a> {
     max: Option<f64>,
     style: Style,
     levels: Option<&'a ThemePalette>,
+    part: Option<(&'a [Option<f64>], Style)>,
 }
 
 impl<'a> GapSparkline<'a> {
@@ -41,7 +42,16 @@ impl<'a> GapSparkline<'a> {
             max: None,
             style,
             levels: None,
+            part: None,
         }
+    }
+
+    /// A part of each point (the RAM a GPU holds of the used RAM), aligned
+    /// with the points at the newest end, drawn in `style` at the bottom of
+    /// its column; capped at its column.
+    pub fn part(mut self, points: &'a [Option<f64>], style: Style) -> Self {
+        self.part = Some((points, style));
+        self
     }
 
     /// Draws the peaks in `style` instead of their column's dimmed color.
@@ -142,19 +152,62 @@ impl Widget for GapSparkline<'_> {
                 ratio_of(value),
                 self.style_for(ratio_of(value)),
             );
+            if let Some((part, style)) = self.part {
+                let from_end = points.len() - index;
+                let share = part
+                    .len()
+                    .checked_sub(from_end)
+                    .and_then(|position| part.get(position).copied().flatten())
+                    .filter(|share| share.is_finite());
+                if let Some(share) = share {
+                    draw_part(
+                        buf,
+                        area,
+                        x,
+                        (ratio_of(share.min(value)), ratio_of(value)),
+                        style,
+                    );
+                }
+            }
         }
+    }
+}
+
+/// Eighths of `area`'s height a column of `ratio` fills, less the headroom.
+fn column_eighths(area: Rect, ratio: f64) -> u16 {
+    let total_eighths = area
+        .height
+        .saturating_mul(8)
+        .saturating_sub(HEADROOM_EIGHTHS)
+        .max(1);
+    scaled_round(ratio * f64::from(total_eighths), total_eighths).max(1)
+}
+
+/// The part of a column in `style`; where it ends inside a row the column
+/// fills the rest of the cell behind it when it covers the whole row.
+fn draw_part(buf: &mut Buffer, area: Rect, x: u16, (part, whole): (f64, f64), style: Style) {
+    let part_eighths = column_eighths(area, part);
+    let whole_eighths = column_eighths(area, whole);
+    for row in 0..area.height {
+        let level = part_eighths.saturating_sub(row.saturating_mul(8)).min(8);
+        if level == 0 {
+            break;
+        }
+        let symbol = LEVELS.get(usize::from(level - 1)).copied().unwrap_or("█");
+        let y = area.bottom() - 1 - row;
+        let behind = buf[(x, y)].fg;
+        let mut cell_style = style;
+        if level < 8 && whole_eighths >= row.saturating_add(1).saturating_mul(8) {
+            cell_style = cell_style.bg(behind);
+        }
+        buf.set_string(x, y, symbol, cell_style);
     }
 }
 
 /// Block glyphs from the bottom of `area` up to `ratio` of its height less
 /// the headroom.
 fn draw_column(buf: &mut Buffer, area: Rect, x: u16, ratio: f64, style: Style) {
-    let total_eighths = area
-        .height
-        .saturating_mul(8)
-        .saturating_sub(HEADROOM_EIGHTHS)
-        .max(1);
-    let eighths = scaled_round(ratio * f64::from(total_eighths), total_eighths).max(1);
+    let eighths = column_eighths(area, ratio);
     for row in 0..area.height {
         let level = eighths.saturating_sub(row.saturating_mul(8)).min(8);
         if level == 0 {
@@ -221,5 +274,40 @@ mod tests {
             .render(Rect::new(0, 0, 1, 1), &mut buffer);
         let column: Vec<&str> = (0..3).map(|y| buffer[(0, y)].symbol()).collect();
         assert_eq!(column, vec!["▆", "▆", "█"]);
+    }
+
+    /// The GPU's share of the used RAM draws at the bottom of its column in
+    /// its own color; where it ends inside a row the column goes on behind
+    /// it, so the column keeps its height.
+    #[test]
+    fn a_part_draws_at_the_bottom_of_its_column() {
+        use ratatui::style::Color;
+        let area = Rect::new(0, 0, 3, 2);
+        let mut buffer = Buffer::empty(area);
+        let whole = [Some(100.0), Some(100.0), Some(20.0)];
+        // Newest at the right edge: the part's two points share the last two
+        // columns; a gap leaves its column as it is.
+        let part = [Some(50.0), None];
+        GapSparkline::new(&whole, Style::new().fg(Color::Red))
+            .max(Some(100.0))
+            .part(&part, Style::new().fg(Color::Blue))
+            .render(area, &mut buffer);
+        assert_eq!(row(&buffer, 0, 3), "▆▆ ");
+        assert_eq!(row(&buffer, 1, 3), "█▇▃");
+        let cell = |x: u16, y: u16| {
+            let cell = &buffer[(x, y)];
+            (cell.symbol().to_owned(), cell.fg, cell.bg)
+        };
+        assert_eq!(cell(0, 1), ("█".to_owned(), Color::Red, Color::Reset));
+        assert_eq!(cell(1, 1), ("▇".to_owned(), Color::Blue, Color::Red));
+        assert_eq!(cell(1, 0), ("▆".to_owned(), Color::Red, Color::Reset));
+        // A part above its column (read at another instant) is capped.
+        let mut capped = Buffer::empty(area);
+        GapSparkline::new(&whole, Style::new().fg(Color::Red))
+            .max(Some(100.0))
+            .part(&[Some(90.0)], Style::new().fg(Color::Blue))
+            .render(area, &mut capped);
+        assert_eq!(capped[(2, 1)].symbol(), "▃");
+        assert_eq!(capped[(2, 1)].fg, Color::Blue);
     }
 }

@@ -124,7 +124,7 @@ impl DeviceMetadata {
         }
         let mut facts = BTreeMap::new();
         for fact in StaticFact::ALL {
-            let value = abort_on_lost(backend.static_fact(uuid, fact))?;
+            let value = abort_on_lost(reported_fact(fact, backend.static_fact(uuid, fact)))?;
             let channel = Channel::Static(fact);
             tracker.record(uuid, &channel.query_key(), &value, now_boot_ns);
             facts.insert(fact, value);
@@ -189,8 +189,8 @@ impl DeviceMetadata {
                 self.max_pcie_link.insert(link, value);
             }
             Channel::Static(fact) => {
-                self.facts
-                    .insert(fact, backend.static_fact(&self.uuid, fact));
+                let value = reported_fact(fact, backend.static_fact(&self.uuid, fact));
+                self.facts.insert(fact, value);
             }
             _ => {}
         }
@@ -215,6 +215,15 @@ fn cached<K: Ord>(values: &BTreeMap<K, BackendResult<u32>>, key: K) -> BackendRe
         .cloned()
         .unwrap_or(Err(BackendError::NotSupported))
         .map(u64::from)
+}
+
+/// A static fact as the device has it: a memory bus 0 bits wide is a GPU
+/// without a memory bus of its own (GB10), not a reading.
+fn reported_fact(fact: StaticFact, value: BackendResult<u64>) -> BackendResult<u64> {
+    match (fact, value) {
+        (StaticFact::MemoryBusWidth, Ok(0)) => Err(BackendError::NotSupported),
+        (_, value) => value,
+    }
 }
 
 /// Framebuffer facts read through telemetry.
@@ -487,5 +496,25 @@ mod tests {
         );
         assert_eq!(MemoryModel::Unified.attribute(), Some("unified"));
         assert_eq!(MemoryModel::Unknown.attribute(), None);
+    }
+
+    /// GB10 has no memory bus of its own and reports a width of 0: the
+    /// width is not reported, never a 0-bit bus.
+    #[test]
+    fn a_zero_memory_bus_width_is_not_reported() {
+        assert_eq!(
+            reported_fact(StaticFact::MemoryBusWidth, Ok(0)),
+            Err(BackendError::NotSupported)
+        );
+        assert_eq!(reported_fact(StaticFact::MemoryBusWidth, Ok(256)), Ok(256));
+        assert_eq!(
+            reported_fact(
+                StaticFact::MemoryBusWidth,
+                Err(BackendError::Other("TIMEOUT".into()))
+            ),
+            Err(BackendError::Other("TIMEOUT".into()))
+        );
+        // A zero of another fact (no BAR1 in use) stays a real zero.
+        assert_eq!(reported_fact(StaticFact::Bar1Total, Ok(0)), Ok(0));
     }
 }

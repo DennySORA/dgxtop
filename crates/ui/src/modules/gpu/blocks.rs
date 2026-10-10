@@ -102,6 +102,7 @@ pub(super) fn blocks(card: &GpuCard, context: &DisplayContext) -> Vec<Block> {
         ("Clocks", Some(NOW_AND_MAX), info.clocks()),
         ("Memory", None, info.memory()),
         ("PCIe", Some(NOW_AND_MAX), info.pcie()),
+        ("NVLink-C2C", None, info.c2c()),
         ("Thermal", None, info.thermal()),
         ("Power", None, info.power()),
         ("CUDA", None, info.cuda()),
@@ -667,6 +668,21 @@ impl CardInfo<'_> {
     }
 
     /// The NUMA node and CPUs nearest the GPU, then each other GPU.
+    /// The chip-to-chip links to the CPU that carry the data of a GPU like
+    /// GB10 (D-56); the bandwidth is the first link's.
+    fn c2c(&self) -> Rows {
+        let bandwidth = attribute(self.card, attributes::C2C_LINK_BANDWIDTH)
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|rate| rate.is_finite() && *rate > 0.0)
+            .map(|rate| {
+                BlockRow::new(
+                    "bandwidth",
+                    vec![self.text(format_si_rate(rate)), self.muted(" per link")],
+                )
+            });
+        vec![self.attribute("links", attributes::C2C_LINKS), bandwidth]
+    }
+
     fn topology(&self) -> Rows {
         let mut rows = vec![
             self.attribute("NUMA node", attributes::NUMA_NODES),
@@ -772,6 +788,35 @@ mod tests {
         assert!(
             block(&texts, "PCIe").contains("transmit 2243 KB/s, receive 1767 KB/s"),
             "{texts:#?}"
+        );
+    }
+
+    /// GB10 moves its data over NVLink-C2C, not its PCIe link: both are
+    /// shown, the C2C links in a block of their own after the PCIe block.
+    #[test]
+    fn a_gpu_with_chip_to_chip_links_shows_them_beside_pcie() {
+        let mut card = gpu_view().cards.remove(1);
+        let details = card.details.as_deref_mut().unwrap();
+        details.attributes.extend([
+            ("c2c_links".to_owned(), "8".to_owned()),
+            ("c2c_link_bandwidth".to_owned(), "43125000000".to_owned()),
+        ]);
+        let shown = texts(&card);
+        assert_eq!(
+            block(&shown, "NVLink-C2C"),
+            "NVLink-C2C: links 8, bandwidth 43.1 GB/s per link"
+        );
+        let titles: Vec<&str> = shown
+            .iter()
+            .map(|text| text.split(':').next().unwrap_or_default())
+            .collect();
+        let pcie = titles.iter().position(|title| *title == "PCIe").unwrap();
+        assert_eq!(titles.get(pcie + 1), Some(&"NVLink-C2C"));
+        // A GPU without C2C links has no such block.
+        let discrete = texts(&gpu_view().cards.remove(0));
+        assert!(
+            !discrete.iter().any(|text| text.starts_with("NVLink-C2C")),
+            "{discrete:#?}"
         );
     }
 

@@ -402,6 +402,10 @@ pub mod attributes {
     /// The path to and peer access with each other GPU
     /// ([`crate::gpu_state::format_peers`]).
     pub const GPU_PEERS: &str = "gpu_peers";
+    /// Active NVLink-C2C links to the CPU (`8`, D-56).
+    pub const C2C_LINKS: &str = "c2c_links";
+    /// The highest bandwidth of one C2C link in bytes per second.
+    pub const C2C_LINK_BANDWIDTH: &str = "c2c_link_bandwidth";
     pub const MOUNT_POINT: &str = "mount_point";
     pub const DEVICE: &str = "device";
     pub const FS_TYPE: &str = "fs_type";

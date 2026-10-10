@@ -13,8 +13,8 @@ use ratatui::text::{Line, Span};
 use super::ModuleBuildError;
 use super::common::{
     BarRow, ManifestSpec, Output, RowCursor, build_manifest, cell_label, draw_line, fraction_ratio,
-    gap, join_if_fits, measuring_context, message, no_data, panel, render_bar_row, render_chart,
-    under_bar,
+    gap, join_if_fits, measuring_context, message, no_data, panel, render_bar_row,
+    render_chart_with_part, under_bar,
 };
 use crate::format::{format_percent, value_text};
 use crate::num::saturate_u16;
@@ -179,10 +179,15 @@ fn render_used(frame: &mut Frame<'_>, area: Rect, memory: &MemoryView, context: 
     let mut rows = RowCursor::new(area);
     let Some(row) = rows.next_row() else { return };
     if let Some(chart) = rows.rest() {
-        render_chart(
+        let gpu_part = memory.gpu_resident.is_some().then_some((
+            memory.gpu_resident_trend.points.as_slice(),
+            Style::new().fg(theme.accent),
+        ));
+        render_chart_with_part(
             frame,
             under_bar(chart),
             &memory.used_trend.points,
+            gpu_part,
             memory.total.value_f64(),
             context,
         );
@@ -308,5 +313,31 @@ mod tests {
         let unknown_gpu = MetricCell::missing(CanonicalUnit::Bytes, CellState::Unavailable);
         let shares = Shares::of(&memory(bytes(32.0 * GIB), Some(unknown_gpu))).unwrap();
         assert_eq!((shares.used, shares.gpu), (0.5, None));
+    }
+
+    /// The used chart under the bar draws the GPU's share at the bottom of
+    /// each column in the bar's GPU color, like the bar above it.
+    #[test]
+    fn the_used_chart_shows_the_gpu_share_in_its_color() {
+        let context = crate::test_fixtures::display_context();
+        let mut view = memory(bytes(48.0 * GIB), Some(bytes(32.0 * GIB)));
+        view.used_trend.points = vec![Some(48.0 * GIB); 4];
+        view.gpu_resident_trend.points = vec![Some(32.0 * GIB); 4];
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(30, 4)).unwrap();
+        terminal
+            .draw(|frame| render_used(frame, Rect::new(0, 0, 30, 4), &view, &context))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let bottom = buffer.area.bottom() - 1;
+        let right = buffer.area.right() - 1;
+        assert_eq!(buffer[(right, bottom)].fg, context.theme.accent);
+        // Without a share the column keeps the gauge's level color.
+        view.gpu_resident_trend.points.clear();
+        terminal
+            .draw(|frame| render_used(frame, Rect::new(0, 0, 30, 4), &view, &context))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_ne!(buffer[(right, bottom)].fg, context.theme.accent);
     }
 }

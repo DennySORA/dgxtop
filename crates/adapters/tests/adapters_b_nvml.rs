@@ -9,11 +9,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use dgxtop_adapters::nvml::{
-    BackendConnector, BackendError, BackendResult, ClockDomain, ConnectError, DeviceDetails,
-    EccCounterScope, EccErrorKind, FramebufferMemory, GpuBackend, GpuInventory, GpuProcessEntry,
-    GpuProcessQueries, GpuTelemetry, HealthValue, NvmlAdapter, PCIE_UNVERIFIED_REASON,
-    PcieDirection, PcieLink, ProcessUtilizationSample, RetiredPageCause, StaticFact,
-    ThermalThreshold, ThrottleCause, UtilizationRates,
+    BackendConnector, BackendError, BackendResult, C2cLinks, ClockDomain, ConnectError,
+    DeviceDetails, EccCounterScope, EccErrorKind, FramebufferMemory, GpuBackend, GpuInventory,
+    GpuProcessEntry, GpuProcessQueries, GpuTelemetry, HealthValue, NvmlAdapter,
+    PCIE_UNVERIFIED_REASON, PcieDirection, PcieLink, ProcessUtilizationSample, RetiredPageCause,
+    StaticFact, ThermalThreshold, ThrottleCause, UtilizationRates,
 };
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::gpu_state::{GpuLink, PeerAccess};
@@ -60,6 +60,7 @@ struct FakeDevice {
     health: BTreeMap<HealthValue, BackendResult<u64>>,
     cpu_affinity: BackendResult<Vec<u64>>,
     numa_affinity: BackendResult<Vec<u64>>,
+    c2c: BackendResult<C2cLinks>,
     /// The path and peer access to every other device.
     peer_link: BackendResult<GpuLink>,
     peer_access: BackendResult<PeerAccess>,
@@ -144,6 +145,8 @@ impl FakeDevice {
                 .collect(),
             cpu_affinity: Ok(vec![0xffff_ffff]),
             numa_affinity: Ok(vec![0b1]),
+            // A discrete GPU: no chip-to-chip link.
+            c2c: Err(BackendError::NotSupported),
             peer_link: Ok(GpuLink::HostBridge),
             peer_access: Ok(PeerAccess {
                 read: false,
@@ -340,6 +343,10 @@ impl GpuInventory for FakeGpu {
 
     fn numa_affinity(&self, uuid: &str) -> BackendResult<Vec<u64>> {
         self.query("numa_affinity", uuid, |device| device.numa_affinity.clone())
+    }
+
+    fn c2c_links(&self, uuid: &str) -> BackendResult<C2cLinks> {
+        self.query("c2c_links", uuid, |device| device.c2c.clone())
     }
 
     fn peer_link(&self, uuid: &str, _peer: &str) -> BackendResult<GpuLink> {
@@ -859,6 +866,42 @@ fn topology_names_the_nearest_cpus_and_the_path_to_each_other_gpu() {
     );
     // What the driver cannot answer stays unknown, never guessed.
     assert_eq!(topology("gpu:GPU-b"), (None, Some("0"), Some("0:?:none")));
+}
+
+/// GB10 reaches the CPU over NVLink-C2C: its links and the bandwidth of a
+/// link are GPU attributes; a GPU without such a link has none.
+#[test]
+fn chip_to_chip_links_are_attributes_of_the_gpu() {
+    let mut unified = FakeDevice::healthy("GPU-a");
+    unified.c2c = Ok(C2cLinks {
+        count: 8,
+        link_max_mb_per_s: Some(43_125),
+    });
+    let mut idle = FakeDevice::healthy("GPU-b");
+    idle.c2c = Ok(C2cLinks {
+        count: 0,
+        link_max_mb_per_s: None,
+    });
+    let mut harness = Harness::new(vec![unified, idle, FakeDevice::healthy("GPU-c")]);
+    let delta = harness.discover();
+    let c2c = |entity: &str| {
+        let record = delta
+            .entities
+            .iter()
+            .find(|record| record.entity_id.as_str() == entity)
+            .unwrap();
+        (
+            record.attribute("c2c_links").map(str::to_owned),
+            record.attribute("c2c_link_bandwidth").map(str::to_owned),
+        )
+    };
+    assert_eq!(
+        c2c("gpu:GPU-a"),
+        (Some("8".to_owned()), Some("43125000000".to_owned()))
+    );
+    // No active link, or a driver that cannot tell: no attribute.
+    assert_eq!(c2c("gpu:GPU-b"), (None, None));
+    assert_eq!(c2c("gpu:GPU-c"), (None, None));
 }
 
 #[test]

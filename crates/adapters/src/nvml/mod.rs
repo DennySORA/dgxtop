@@ -29,11 +29,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 pub use backend::{
-    BackendConnector, BackendError, BackendResult, ClockDomain, ConnectError, DeviceDetails,
-    EccCounterScope, EccErrorKind, FramebufferMemory, GpuBackend, GpuDeviceQueries, GpuInventory,
-    GpuProcessEntry, GpuProcessQueries, GpuTelemetry, HealthValue, PcieDirection, PcieLink,
-    ProcessUtilizationSample, RetiredPageCause, StaticFact, ThermalThreshold, ThrottleCause,
-    UtilizationRates,
+    BackendConnector, BackendError, BackendResult, C2cLinks, ClockDomain, ConnectError,
+    DeviceDetails, EccCounterScope, EccErrorKind, FramebufferMemory, GpuBackend, GpuDeviceQueries,
+    GpuInventory, GpuProcessEntry, GpuProcessQueries, GpuTelemetry, HealthValue, PcieDirection,
+    PcieLink, ProcessUtilizationSample, RetiredPageCause, StaticFact, ThermalThreshold,
+    ThrottleCause, UtilizationRates,
 };
 pub use capabilities::DEFAULT_UNSUPPORTED_PROBE_MS;
 pub use catalog::{PROFILE_ID, SOURCE_LIMIT};

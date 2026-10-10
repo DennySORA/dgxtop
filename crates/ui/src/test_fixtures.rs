@@ -228,6 +228,11 @@ fn gpu_card(index: u32) -> GpuCard {
         framebuffer_total: framebuffer(80.0 * GIB),
         framebuffer_reserved: framebuffer(0.5 * GIB),
         process_allocated: ok(10.0 * GIB, CanonicalUnit::Bytes),
+        system_ram_total: if unified {
+            ok(64.0 * GIB, CanonicalUnit::Bytes)
+        } else {
+            missing(CanonicalUnit::Bytes, CellState::Unsupported)
+        },
         // The unified GPU's driver reports PCIe traffic in an unverified
         // unit: its details carry the driver's reading instead.
         pcie_tx: if unified {
@@ -424,6 +429,7 @@ pub(crate) fn memory_view() -> MemoryView {
         swap_used: ok(0.0, CanonicalUnit::Bytes),
         gpu_resident: Some(ok(10.0 * GIB, CanonicalUnit::Bytes)),
         used_trend: trend(vec![Some(12.0 * GIB), Some(12.3 * GIB)]),
+        gpu_resident_trend: trend(vec![Some(9.5 * GIB), Some(10.0 * GIB)]),
     }
 }
 

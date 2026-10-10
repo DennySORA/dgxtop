@@ -93,7 +93,7 @@ pub(super) fn panels(history: &HistoryView) -> Vec<Panel<'_>> {
             .map(|chart| Strip {
                 label: gpu_label(&chart.subject),
                 chart,
-                scale: chart.scale_max,
+                scale: scale_or_peak(chart),
                 paint: Paint::Levels,
             })
             .collect();
@@ -110,6 +110,14 @@ pub(super) fn panels(history: &HistoryView) -> Vec<Panel<'_>> {
         }
     }
     panels
+}
+
+/// The chart's fixed scale; without one (a GPU that reports no power
+/// limit), its peak, like a rate (D-41).
+fn scale_or_peak(chart: &HistoryChartView) -> Option<f64> {
+    chart
+        .scale_max
+        .or_else(|| chart.peak.filter(|peak| peak.is_finite() && *peak > 0.0))
 }
 
 /// A panel of one bounded series.
@@ -233,5 +241,26 @@ mod tests {
         );
         assert_eq!(gpu_label("GPU 1 · NVIDIA GB10"), "GPU 1");
         assert_eq!(gpu_label("nameless"), "nameless");
+    }
+
+    /// GB10 reports no power limit: its power strip is scaled to its peak,
+    /// which the gutter prints, instead of a scale left blank.
+    #[test]
+    fn a_gpu_strip_without_a_scale_takes_its_peak() {
+        let mut history = history_view();
+        let power = history
+            .charts
+            .iter_mut()
+            .find(|chart| chart.kind == HistoryChartKind::GpuPower)
+            .unwrap();
+        power.scale_max = None;
+        power.peak = Some(68.2);
+        let panels = panels(&history);
+        let strip = panels
+            .iter()
+            .find(|panel| panel.title == "GPU power")
+            .and_then(|panel| panel.strips.first())
+            .unwrap();
+        assert_eq!(strip.scale, Some(68.2));
     }
 }

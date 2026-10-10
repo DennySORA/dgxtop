@@ -110,11 +110,33 @@ impl<'a> MetricReader<'a> {
         preferred_scope: &str,
         width: usize,
     ) -> Trend {
+        let key = self.series_key(metric, entity, preferred_scope);
+        self.trend_of(key, width)
+    }
+
+    /// The trend of a series recorded beside `(metric, entity, preferred
+    /// scope)`, whose key `beside` derives from that series' key.
+    pub(crate) fn trend_beside(
+        &self,
+        (metric, entity, preferred_scope): (&str, &str, &str),
+        beside: impl Fn(&MetricKey) -> Option<MetricKey>,
+        width: usize,
+    ) -> Trend {
         let key = self
-            .index
+            .series_key(metric, entity, preferred_scope)
+            .and_then(|key| beside(&key));
+        self.trend_of(key, width)
+    }
+
+    /// The committed key of the series, else the catalog's.
+    fn series_key(&self, metric: &str, entity: &str, preferred_scope: &str) -> Option<MetricKey> {
+        self.index
             .find(metric, entity, preferred_scope)
             .map(|entry| entry.sample.key.clone())
-            .or_else(|| self.keys.key(metric, entity, preferred_scope));
+            .or_else(|| self.keys.key(metric, entity, preferred_scope))
+    }
+
+    fn trend_of(&self, key: Option<MetricKey>, width: usize) -> Trend {
         match key {
             Some(key) if width > 0 => self.trends.trend(&key, width),
             _ => Trend::default(),

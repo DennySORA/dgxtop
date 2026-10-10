@@ -184,6 +184,9 @@ pub struct GpuCard {
     pub framebuffer_total: MetricCell,
     pub framebuffer_reserved: MetricCell,
     pub process_allocated: MetricCell,
+    /// On a unified-memory GPU the system RAM its allocations come from,
+    /// the scale of its memory bar; unsupported on a GPU with a framebuffer.
+    pub system_ram_total: MetricCell,
     pub pcie_tx: MetricCell,
     pub pcie_rx: MetricCell,
     pub energy: MetricCell,
@@ -288,6 +291,9 @@ pub struct MemoryView {
     /// `None` when no GPU shares system RAM.
     pub gpu_resident: Option<MetricCell>,
     pub used_trend: Trend,
+    /// What unified-memory GPUs held at each point of `used_trend`; empty
+    /// when no GPU shares system RAM.
+    pub gpu_resident_trend: Trend,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

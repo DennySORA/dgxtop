@@ -15,6 +15,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use self::facts::reported;
 use self::readings::{OVERVIEW_READINGS, overview_readings, render_bar};
 use super::ModuleBuildError;
 use super::common::{
@@ -132,12 +133,12 @@ impl GpuModule {
             }
             return;
         }
-        let widths = ReadingWidths::of(gpu, model);
+        let widths = ReadingWidths::of(gpu);
         for card in &gpu.cards {
             let Some(block) = rows.take(OVERVIEW_GPU_ROWS) else {
                 break;
             };
-            render_overview_gpu(frame, block, card, model, widths, context);
+            render_overview_gpu(frame, block, card, widths, context);
             output.entity_target(
                 model,
                 &self.manifest,
@@ -249,7 +250,6 @@ fn render_overview_gpu(
     frame: &mut Frame<'_>,
     area: Rect,
     card: &GpuCard,
-    model: &ViewModel,
     widths: ReadingWidths,
     context: &DisplayContext,
 ) {
@@ -257,7 +257,7 @@ fn render_overview_gpu(
     if let Some(row) = rows.next_row() {
         draw_line(frame.buffer_mut(), row, &overview_headline(card, context));
     }
-    let [utilization, memory] = overview_readings(card, model);
+    let [utilization, memory] = overview_readings(card);
     let [utilization_width, memory_width] = widths.kinds;
     if let Some(bar) = rows.take(1 + OVERVIEW_GPU_CHART_ROWS) {
         render_bar(
@@ -283,10 +283,10 @@ struct ReadingWidths {
 }
 
 impl ReadingWidths {
-    fn of(gpu: &GpuView, model: &ViewModel) -> Self {
+    fn of(gpu: &GpuView) -> Self {
         let mut kinds = [0; OVERVIEW_READINGS];
         for card in &gpu.cards {
-            for (kind, reading) in kinds.iter_mut().zip(overview_readings(card, model)) {
+            for (kind, reading) in kinds.iter_mut().zip(overview_readings(card)) {
                 *kind = (*kind).max(saturate_u16(display_width(&reading.value)));
             }
         }
@@ -310,16 +310,33 @@ fn overview_headline(card: &GpuCard, context: &DisplayContext) -> Line<'static> 
     spans.extend(cell_spans(&card.temperature, CellDetail::GLANCE, context));
     spans.push(gap(context));
     spans.push(Span::styled("⚡", Style::new().fg(context.theme.warning)));
-    spans.extend(cell_spans(&card.power_draw, CellDetail::GLANCE, context));
-    spans.push(Span::styled(" / ", context.theme.muted_style()));
-    spans.extend(cell_spans(&card.power_limit, CellDetail::GLANCE, context));
+    spans.extend(power_spans(card, context));
     if let Some(clock) = card.clocks.first() {
         spans.push(gap(context));
         spans.extend(cell_spans(&clock.cell, CellDetail::GLANCE, context));
     }
-    spans.push(gap(context));
-    spans.extend(labeled_cell("fan", &card.fan, CellDetail::GLANCE, context));
+    spans.extend(fan_spans(card, context));
     Line::from(spans)
+}
+
+/// `120 W / 250 W`; the draw alone when the GPU reports no limit.
+fn power_spans(card: &GpuCard, context: &DisplayContext) -> Vec<Span<'static>> {
+    let mut spans = cell_spans(&card.power_draw, CellDetail::GLANCE, context);
+    if reported(&card.power_limit) {
+        spans.push(Span::styled(" / ", context.theme.muted_style()));
+        spans.extend(cell_spans(&card.power_limit, CellDetail::GLANCE, context));
+    }
+    spans
+}
+
+/// `  fan 45%`; nothing when the GPU reports no fan.
+fn fan_spans(card: &GpuCard, context: &DisplayContext) -> Vec<Span<'static>> {
+    if !reported(&card.fan) {
+        return Vec::new();
+    }
+    let mut spans = vec![gap(context)];
+    spans.extend(labeled_cell("fan", &card.fan, CellDetail::GLANCE, context));
+    spans
 }
 
 /// The GPU shown in detail: projection selection, then session, then first.
@@ -398,11 +415,8 @@ fn card_headline(card: &GpuCard, context: &DisplayContext) -> Line<'static> {
     ];
     spans.extend(cell_spans(&card.temperature, CellDetail::GLANCE, context));
     spans.push(gap(context));
-    spans.extend(cell_spans(&card.power_draw, CellDetail::GLANCE, context));
-    spans.push(Span::styled(" / ", context.theme.muted_style()));
-    spans.extend(cell_spans(&card.power_limit, CellDetail::GLANCE, context));
-    spans.push(gap(context));
-    spans.extend(labeled_cell("fan", &card.fan, CellDetail::GLANCE, context));
+    spans.extend(power_spans(card, context));
+    spans.extend(fan_spans(card, context));
     Line::from(spans)
 }
 
@@ -428,4 +442,64 @@ fn add_card_labels(output: &mut Output, card: &GpuCard, context: &DisplayContext
         &card.framebuffer_used,
         context,
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_fixtures::{display_context, gpu_view, missing, ok};
+    use dgxtop_core::metric::CanonicalUnit;
+    use dgxtop_core::view::CellState;
+
+    fn text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    /// A GB10 reports neither a power limit nor a fan: the headlines leave
+    /// both out instead of naming their state.
+    #[test]
+    fn headlines_leave_out_a_limit_and_a_fan_the_gpu_does_not_report() {
+        let context = display_context();
+        let mut card = gpu_view().cards.remove(1);
+        card.power_limit = missing(CanonicalUnit::Watts, CellState::Unsupported);
+        card.fan = missing(CanonicalUnit::Percent, CellState::Unavailable);
+        for headline in [
+            text(&overview_headline(&card, &context)),
+            text(&card_headline(&card, &context)),
+        ] {
+            assert!(headline.contains("120 W"), "{headline}");
+            assert!(!headline.contains(" / "), "{headline}");
+            assert!(!headline.contains("fan"), "{headline}");
+            assert!(!headline.contains("unsupported"), "{headline}");
+            assert!(!headline.contains("unavailable"), "{headline}");
+        }
+    }
+
+    #[test]
+    fn headlines_show_a_reported_limit_and_fan() {
+        let context = display_context();
+        let mut card = gpu_view().cards.remove(0);
+        card.fan = ok(45.0, CanonicalUnit::Percent);
+        for headline in [
+            text(&overview_headline(&card, &context)),
+            text(&card_headline(&card, &context)),
+        ] {
+            assert!(headline.contains("120 W / 250 W"), "{headline}");
+            assert!(headline.contains("fan 45"), "{headline}");
+        }
+    }
+
+    /// A value that failed to read is still shown with its state: only what
+    /// the GPU never reports is left out.
+    #[test]
+    fn headlines_keep_a_limit_that_failed_to_read() {
+        let context = display_context();
+        let mut card = gpu_view().cards.remove(0);
+        card.power_limit = missing(CanonicalUnit::Watts, CellState::ReadFailed);
+        let headline = text(&overview_headline(&card, &context));
+        assert!(headline.contains("120 W / "), "{headline}");
+    }
 }

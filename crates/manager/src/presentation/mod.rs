@@ -12,7 +12,7 @@ mod cpu;
 mod disk;
 mod gpu;
 mod gpu_derived;
-mod gpu_directory;
+pub(crate) mod gpu_directory;
 mod history;
 mod history_charts;
 mod index;

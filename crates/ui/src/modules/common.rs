@@ -401,6 +401,22 @@ pub(crate) fn render_chart(
     max: Option<f64>,
     context: &DisplayContext,
 ) {
+    render_chart_with_part(frame, area, points, None, max, context);
+}
+
+/// A part of each chart point and the style it is drawn in.
+pub(crate) type ChartPart<'a> = (&'a [Option<f64>], Style);
+
+/// [`render_chart`] with a part of each point (the RAM GPUs hold of the used
+/// RAM) drawn at the bottom of its column in the part's style.
+pub(crate) fn render_chart_with_part(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    points: &[Option<f64>],
+    part: Option<ChartPart<'_>>,
+    max: Option<f64>,
+    context: &DisplayContext,
+) {
     if area.is_empty() {
         return;
     }
@@ -414,12 +430,13 @@ pub(crate) fn render_chart(
         );
         return;
     }
-    frame.render_widget(
-        GapSparkline::new(points, Style::new())
-            .max(max)
-            .level_colors(&context.theme),
-        area,
-    );
+    let mut sparkline = GapSparkline::new(points, Style::new())
+        .max(max)
+        .level_colors(&context.theme);
+    if let Some((part, style)) = part {
+        sparkline = sparkline.part(part, style);
+    }
+    frame.render_widget(sparkline, area);
 }
 
 /// A chart's caption row: `left` from the start and, muted at the right

@@ -3,11 +3,11 @@
 //! and the views leave them out (D-52: no notes).
 
 use dgxtop_core::identity::EntityId;
-use dgxtop_core::metric::{Scalar, ids, native};
+use dgxtop_core::metric::{CanonicalUnit, Scalar, ids, native};
 use dgxtop_core::naming::{attributes, entity};
 use dgxtop_core::observation::EntityRecord;
 use dgxtop_core::view::{
-    GpuCard, GpuDetails, GpuView, HostState, HostStatus, LabeledCell, MetricCell,
+    CellState, GpuCard, GpuDetails, GpuView, HostState, HostStatus, LabeledCell, MetricCell,
 };
 
 use super::gpu_derived::{memory_bandwidth, pcie_bandwidth};
@@ -35,9 +35,9 @@ const METADATA_KEYS: [&str; 7] = [
     attributes::PERSISTENCE_MODE,
     attributes::MEMORY_MODEL,
 ];
-/// Identity, firmware, topology (D-54) and software attributes of the card
-/// the GPU view shows (D-48).
-const DETAIL_KEYS: [&str; 20] = [
+/// Identity, firmware, topology (D-54), the C2C links (D-56) and software
+/// attributes of the card the GPU view shows (D-48).
+const DETAIL_KEYS: [&str; 22] = [
     attributes::ARCHITECTURE,
     attributes::BRAND,
     attributes::COMPUTE_CAPABILITY,
@@ -58,6 +58,8 @@ const DETAIL_KEYS: [&str; 20] = [
     attributes::NUMA_NODES,
     attributes::CPU_AFFINITY,
     attributes::GPU_PEERS,
+    attributes::C2C_LINKS,
+    attributes::C2C_LINK_BANDWIDTH,
 ];
 /// Scope prefix of a fan's speed (`fan:0`).
 const FAN_SCOPE_PREFIX: &str = "fan:";
@@ -164,6 +166,7 @@ fn build_card(
         framebuffer_total: cell(ids::GPU_MEMORY_FB_TOTAL),
         framebuffer_reserved: cell(ids::GPU_MEMORY_FB_RESERVED),
         process_allocated: cell(ids::GPU_MEMORY_PROCESS_ALLOCATED),
+        system_ram_total: system_ram_total(reader, gpu),
         pcie_tx: cell(ids::GPU_PCIE_TX),
         pcie_rx: cell(ids::GPU_PCIE_RX),
         energy: cell(ids::GPU_ENERGY_TOTAL),
@@ -216,6 +219,16 @@ fn build_card(
             },
             widths.memory_temperature_and_power,
         ),
+    }
+}
+
+/// The RAM a unified-memory GPU allocates from; a GPU with a framebuffer
+/// has none.
+fn system_ram_total(reader: &MetricReader<'_>, gpu: &GpuIdentity<'_>) -> MetricCell {
+    if gpu.has_unified_memory() {
+        reader.cell(ids::MEMORY_TOTAL, entity::MEMORY, entity::SCOPE_SYSTEM)
+    } else {
+        MetricCell::missing(CanonicalUnit::Bytes, CellState::Unsupported)
     }
 }
 
@@ -517,6 +530,26 @@ mod tests {
         assert_eq!(discrete.name, "NVIDIA H100 80GB HBM3");
     }
 
+    /// The GPU view shows one GPU without the memory module: a unified GPU's
+    /// card carries the RAM total its memory bar is scaled to.
+    #[test]
+    fn a_unified_card_carries_the_system_ram_total() {
+        let mut fixture = two_gpus();
+        fixture.add(
+            "memory",
+            sample("memory.total", "memory", "system").u64(128 << 30),
+        );
+        let view = build(&fixture, None, enabled());
+        let unified = &view.cards[0];
+        assert_eq!(
+            unified.system_ram_total.value_f64(),
+            Some(f64::from(128u32) * f64::from(1u32 << 30))
+        );
+        let discrete = &view.cards[1];
+        assert_eq!(discrete.system_ram_total.state, CellState::Unsupported);
+        assert_eq!(discrete.system_ram_total.value, None);
+    }
+
     #[test]
     fn a_removed_gpu_is_marked_removed() {
         let mut fixture = two_gpus();
@@ -646,6 +679,8 @@ mod tests {
                 (attributes::NVML_INDEX, "1"),
                 (attributes::CPU_AFFINITY, "0-31"),
                 (attributes::GPU_PEERS, "0:PHB:none"),
+                (attributes::C2C_LINKS, "8"),
+                (attributes::C2C_LINK_BANDWIDTH, "43125000000"),
             ],
         ));
         let view = build(&fixture, Some(GPU_B), enabled());
@@ -670,6 +705,15 @@ mod tests {
                 .attributes
                 .contains(&("gpu_peers".to_owned(), "0:PHB:none".to_owned()))
         );
+        // The NVLink-C2C links reach the GPU view (D-56).
+        for (key, value) in [("c2c_links", "8"), ("c2c_link_bandwidth", "43125000000")] {
+            assert!(
+                details
+                    .attributes
+                    .contains(&(key.to_owned(), value.to_owned())),
+                "{key}"
+            );
+        }
         // A GPU that reports neither has no fans and no reading, never 0.
         let view = build(&fixture, Some(GPU_A), enabled());
         let other = view.cards[0].details.as_deref().unwrap();

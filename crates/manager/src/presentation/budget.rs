@@ -98,7 +98,9 @@ fn for_each_trend(modules: &mut ModuleViews, mut apply: impl FnMut(&mut Trend) -
         changed |= apply(&mut Arc::make_mut(cpu).utilization_trend);
     }
     if let Some(memory) = modules.memory.as_mut() {
-        changed |= apply(&mut Arc::make_mut(memory).used_trend);
+        let memory = Arc::make_mut(memory);
+        changed |= apply(&mut memory.used_trend);
+        changed |= apply(&mut memory.gpu_resident_trend);
     }
     if let Some(gpu) = modules.gpu.as_mut() {
         for card in &mut Arc::make_mut(gpu).cards {
@@ -294,9 +296,12 @@ mod tests {
             swap_used: missing,
             gpu_resident: None,
             used_trend: trend(64),
+            gpu_resident_trend: trend(64),
         }));
         assert!(halve_trends(&mut modules, &hints));
-        assert_eq!(modules.memory.as_ref().unwrap().used_trend.points.len(), 32);
+        let memory = modules.memory.as_ref().unwrap();
+        assert_eq!(memory.used_trend.points.len(), 32);
+        assert_eq!(memory.gpu_resident_trend.points.len(), 32);
         assert!(clear_trends(&mut modules, &hints));
     }
 }

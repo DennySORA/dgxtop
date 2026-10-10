@@ -25,6 +25,7 @@ use crate::config::{AppliedChange, PersistOutcome, applied_result};
 use crate::effects::Effects;
 use crate::hosts::{HostStatusRejection, module_health};
 use crate::ingestion::pages::PagePush;
+use crate::ingestion::trends::unified_gpus;
 use crate::ingestion::{CollectedOutcome, CommitOutcome, CycleInput};
 use crate::process::Now;
 use crate::scheduler::{ReadReply, ReplyMatch, RequestKind};
@@ -527,7 +528,8 @@ impl ControlCore {
         match self.ingestion.on_committed(ack, now) {
             CommitOutcome::Committed(batch) => {
                 let snapshot = self.ingestion.snapshots().latest();
-                self.trends.record(&snapshot);
+                self.trends
+                    .record(&snapshot, &unified_gpus(&self.catalog.snapshot()));
                 self.pending_commit_ns.get_or_insert(now);
                 self.events.emit(
                     now,

@@ -1,11 +1,12 @@
 //! Where a GPU sits (D-54): the CPUs and NUMA nodes nearest it, and the
-//! PCIe path and direct peer (P2P) access to each other GPU, read once per
+//! PCIe path and direct peer (P2P) access to each other GPU, and the
+//! NVLink-C2C links to the CPU (D-56), read once per
 //! generation like the other static facts. A fact the driver cannot answer
 //! stays unknown; only a lost library session aborts.
 
 use dgxtop_core::gpu_state::GpuPeer;
 
-use super::backend::{BackendError, BackendResult, GpuInventory};
+use super::backend::{BackendError, BackendResult, C2cLinks, GpuInventory};
 
 /// Other GPUs a device's peer list covers (the attribute holds about 20).
 pub const MAX_PEERS: usize = 16;
@@ -21,6 +22,8 @@ pub struct DeviceTopology {
     pub numa_nodes: Option<String>,
     /// The other GPUs, in enumeration order, at most [`MAX_PEERS`].
     pub peers: Vec<GpuPeer>,
+    /// The NVLink-C2C links to the CPU; `None` without an active link.
+    pub c2c: Option<C2cLinks>,
 }
 
 impl DeviceTopology {
@@ -47,6 +50,7 @@ impl DeviceTopology {
             cpus: known(backend.cpu_affinity(uuid))?.and_then(|mask| mask_list(&mask)),
             numa_nodes: known(backend.numa_affinity(uuid))?.and_then(|mask| mask_list(&mask)),
             peers,
+            c2c: known(backend.c2c_links(uuid))?.filter(|links| links.count > 0),
         })
     }
 }

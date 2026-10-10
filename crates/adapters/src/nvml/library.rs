@@ -17,13 +17,15 @@ use nvml_wrapper::enums::device::{DeviceArchitecture, SampleValue, UsedGpuMemory
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::struct_wrappers::device::PciInfo;
 use nvml_wrapper::structs::device::FieldId;
-use nvml_wrapper::sys_exports::field_id::NVML_FI_DEV_POWER_INSTANT;
+use nvml_wrapper::sys_exports::field_id::{
+    NVML_FI_DEV_C2C_LINK_COUNT, NVML_FI_DEV_C2C_LINK_GET_MAX_BW, NVML_FI_DEV_POWER_INSTANT,
+};
 use nvml_wrapper::{Nvml, cuda_driver_version_major, cuda_driver_version_minor};
 
 use super::backend::{
-    BackendConnector, BackendError, BackendResult, ClockDomain, ConnectError, DeviceDetails,
-    EccCounterScope, EccErrorKind, FramebufferMemory, GpuBackend, GpuInventory, GpuProcessEntry,
-    GpuProcessQueries, GpuTelemetry, HealthValue, PcieDirection, PcieLink,
+    BackendConnector, BackendError, BackendResult, C2cLinks, ClockDomain, ConnectError,
+    DeviceDetails, EccCounterScope, EccErrorKind, FramebufferMemory, GpuBackend, GpuInventory,
+    GpuProcessEntry, GpuProcessQueries, GpuTelemetry, HealthValue, PcieDirection, PcieLink,
     ProcessUtilizationSample, RetiredPageCause, StaticFact, ThermalThreshold, ThrottleCause,
     UtilizationRates,
 };
@@ -393,6 +395,25 @@ impl GpuInventory for NvmlLibraryBackend {
 
     fn cpu_affinity(&self, uuid: &str) -> BackendResult<Vec<u64>> {
         query(self.device(uuid)?.cpu_affinity(CPU_AFFINITY_WORDS))
+    }
+
+    /// The link count and the first link's bandwidth: the binding reads
+    /// field values without a scope, which selects link 0.
+    fn c2c_links(&self, uuid: &str) -> BackendResult<C2cLinks> {
+        let fields = [
+            FieldId(NVML_FI_DEV_C2C_LINK_COUNT),
+            FieldId(NVML_FI_DEV_C2C_LINK_GET_MAX_BW),
+        ];
+        let mut samples = query(self.device(uuid)?.field_values_for(&fields))?.into_iter();
+        let mut next_field = || {
+            let sample = samples.next().ok_or(BackendError::NotSupported)?;
+            unsigned_field(query(query(sample)?.value)?)
+        };
+        let count = next_field()?;
+        Ok(C2cLinks {
+            count,
+            link_max_mb_per_s: next_field().ok().filter(|bandwidth| *bandwidth > 0),
+        })
     }
 
     fn numa_affinity(&self, uuid: &str) -> BackendResult<Vec<u64>> {

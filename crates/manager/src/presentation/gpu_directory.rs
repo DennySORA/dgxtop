@@ -29,10 +29,15 @@ impl GpuIdentity<'_> {
     /// The adapter reports this GPU's memory model as unified: it allocates
     /// from system RAM and has no framebuffer of its own.
     pub(crate) fn has_unified_memory(&self) -> bool {
-        self.record
-            .and_then(|record| record.attribute(attributes::MEMORY_MODEL))
-            .is_some_and(|model| model.trim().eq_ignore_ascii_case(UNIFIED_MEMORY_MODEL))
+        self.record.is_some_and(is_unified_memory)
     }
+}
+
+/// The adapter reports the GPU of `record` as allocating from system RAM.
+pub(crate) fn is_unified_memory(record: &EntityRecord) -> bool {
+    record
+        .attribute(attributes::MEMORY_MODEL)
+        .is_some_and(|model| model.trim().eq_ignore_ascii_case(UNIFIED_MEMORY_MODEL))
 }
 
 pub(crate) struct GpuDirectory<'a> {

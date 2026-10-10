@@ -221,6 +221,14 @@ impl StaticFact {
     ];
 }
 
+/// The NVLink-C2C links between a device and the CPU.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct C2cLinks {
+    pub count: u32,
+    /// The highest bandwidth of the first link, in MB/s (10^6 bytes).
+    pub link_max_mb_per_s: Option<u32>,
+}
+
 /// Why the driver held the clocks back, as NVML accounts the time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ThrottleCause {
@@ -383,6 +391,8 @@ pub trait GpuInventory {
     fn cpu_affinity(&self, uuid: &str) -> BackendResult<Vec<u64>>;
     /// NUMA nodes nearest the device's memory: bit `n` is node `n`.
     fn numa_affinity(&self, uuid: &str) -> BackendResult<Vec<u64>>;
+    /// The device's NVLink-C2C links to the CPU (GB10, Grace).
+    fn c2c_links(&self, uuid: &str) -> BackendResult<C2cLinks>;
     /// The PCIe path between two devices.
     fn peer_link(&self, uuid: &str, peer: &str) -> BackendResult<GpuLink>;
     /// Whether `uuid` may read and write `peer`'s memory directly.

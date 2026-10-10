@@ -34,6 +34,8 @@ pub const PROFILE_REVISION: u32 = 1;
 /// Fastest cadence the adapter accepts (manifest `minimum_sample_ms`).
 pub const MIN_INTERVAL_MS: u32 = 1000;
 const DRIVER_NAME: &str = "nvidia";
+/// NVML reports C2C bandwidth in MB/s of 10^6 bytes.
+const BYTES_PER_MB: u64 = 1_000_000;
 
 /// Catalog construction failures (infrastructure-side, never values).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -262,6 +264,17 @@ fn entity_attributes(device: &DeviceMetadata, software: &HostSoftware) -> Vec<At
             attributes::GPU_PEERS,
             (!topology.peers.is_empty()).then(|| format_peers(&topology.peers)),
         ),
+        (
+            attributes::C2C_LINKS,
+            topology.c2c.map(|links| links.count.to_string()),
+        ),
+        (
+            attributes::C2C_LINK_BANDWIDTH,
+            topology
+                .c2c
+                .and_then(|links| links.link_max_mb_per_s)
+                .map(|mb_per_s| (u64::from(mb_per_s) * BYTES_PER_MB).to_string()),
+        ),
     ];
     candidates.extend(stack_attributes(&software.stack));
     candidates
@@ -436,6 +449,7 @@ mod tests {
                         write: false,
                     }),
                 }],
+                c2c: None,
             },
             discovered_boot_ns: 5,
         }

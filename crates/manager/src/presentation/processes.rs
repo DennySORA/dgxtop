@@ -79,6 +79,14 @@ impl ProcessWindow {
     }
 }
 
+/// Whether the bound may have dropped a GPU process or link. The collector
+/// keeps GPU processes first, so a kept row without a GPU proves every GPU
+/// process was kept.
+fn gpu_rows_incomplete(table: &ProcessTable) -> bool {
+    table.gpu_links_truncated
+        || (table.truncated && table.rows.iter().all(|row| !row.gpu.is_empty()))
+}
+
 pub(crate) fn build_processes_view(
     table: &ProcessTable,
     session: &SessionState,
@@ -114,7 +122,7 @@ pub(crate) fn build_processes_view(
         rows,
         window_start: u32::try_from(window.start).unwrap_or(u32::MAX),
         total_rows: u32::try_from(ordered.len()).unwrap_or(u32::MAX),
-        truncated: table.truncated || table.gpu_links_truncated,
+        truncated: gpu_rows_incomplete(table),
         sort: session.sort,
         ascending: session.ascending,
         filter: filter_text(&session.filter),
@@ -444,6 +452,32 @@ mod tests {
         assert_eq!(order(&fixture), vec![1, 2, 3]);
         fixture.session.sort = SortKey::Pid;
         assert_eq!(order(&fixture), vec![3, 2, 1]);
+    }
+
+    /// The collector keeps GPU processes first, so a cut that also kept a
+    /// process without a GPU dropped none of the GPU processes this table
+    /// lists: the listed rows are complete.
+    #[test]
+    fn a_cut_of_processes_without_a_gpu_is_not_reported_as_truncated() {
+        let mut fixture = with_gpus();
+        let mut gpu = process_row(1, "python");
+        gpu.gpu = vec![gpu_link(GPU_A, Some(90.0), Some(64 << 30))];
+        let cpu_only = process_row(2, "bash");
+        fixture.set_processes(vec![gpu, cpu_only]);
+        let truncate = |fixture: &mut Fixture, links: bool| {
+            fixture.snapshot.process_table = std::sync::Arc::new(ProcessTable {
+                truncated: true,
+                gpu_links_truncated: links,
+                ..(*fixture.snapshot.process_table).clone()
+            });
+        };
+        truncate(&mut fixture, false);
+        let view = build(&fixture, 10);
+        assert_eq!(view.total_rows, 1);
+        assert!(!view.truncated);
+        // Dropped GPU links still leave the listed rows incomplete.
+        truncate(&mut fixture, true);
+        assert!(build(&fixture, 10).truncated);
     }
 
     #[test]

@@ -35,7 +35,7 @@ pub(super) fn render_gpu_view(
     let Some(selector) = rows.next_row() else {
         return;
     };
-    let readings = status_readings(selected, model);
+    let readings = status_readings(selected);
     let column = readings
         .iter()
         .map(|reading| saturate_u16(display_width(&reading.value)))
