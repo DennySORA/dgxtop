@@ -1,82 +1,124 @@
+<div align="center">
+
 # dgxtop
 
-[English](../README.md) | [繁體中文](README.zh-TW.md) | [简体中文](README.zh-CN.md)
+**NVIDIA DGX Spark と GPU 搭載 Linux ホストのための、誠実なターミナルモニター**
 
-> NVIDIA DGX と GPU 搭載 Linux ホスト向けの、安定して効率的なローカルターミナルモニター：
-> CPU、GPU、メモリ、ディスク、ネットワーク、プロセス。説明可能なマルチソース調停、正確な履歴、
-> 保護されたプロセス制御を備えます。
+CPU · GPU · メモリ · ディスク · ネットワーク · GPU プロセス<br>
+分離された収集 · 説明可能なソース · 正確な履歴 · 保護されたプロセス制御
 
-dgxtop v2 は [`spec/dgxtop-v2/`](../spec/dgxtop-v2/README.md) の仕様に基づいて全面的に書き直されました。
-偽の 0 は決して表示しません。読み取れなかった値は *unsupported*（非対応）、*read failed*（読み取り失敗）、
-*stale*（古い）、*source conflict*（ソース競合）として、取得元とともに表示されます。
+[English](../README.md) · [繁體中文](README.zh-TW.md) · [設計ノート（英語）](https://dennysora.me/en/projects/tools/dgxtop/)
 
-## 特長
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.92.0-orange.svg)](../rust-toolchain.toml)
+[![CI](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml/badge.svg)](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml)
 
-- **分離されたノンブロッキング収集。** 各 live データソース（procfs、hwmon、thermal、powercap、NVML、
-  network、filesystem）はそれぞれ常駐する adapter-host プロセスで動作します。ドライバ呼び出しが止まっても
-  （例：NVML のハング）影響はその host に限られ、CPU・メモリ・UI は更新を続けます。タイムアウトした host は
-  上限付きバックオフで再起動されるか隔離（quarantine）され、無制限に再生成されることはありません。
-- **説明可能なソース調停。** 2 つのソースが同じメトリクスを報告する場合（例：CPU パッケージの coretemp と
-  thermal zone）、証明済みの同一ソースの別名を除外し、独立したソースだけを比較し、許容差を超えたら平均化も
-  黙った選択もせず「ソース競合」と表示します。*Sources* ビューは各候補、選択・除外の理由、経過時間、取得元を示します。
-- **誠実な単位と品質。** 読み取り状態、データ種別（計測／導出／推定／シミュレーション）、品質、鮮度は別々の軸です。
-  検証されていない単位（NVML PCIe の「KB/s」など）を推測で変換したり、使用率から帯域幅を捏造したりしません。
-- **正確な履歴。** レートは正確な `u64` カウンタ差分を実経過時間で割って求めます。ウィンドウ合計はウィンドウに
-  完全に含まれる区間だけを数えます（分をまたぐ区間は正確な *bridge* として保存）。欠損・カバレッジ・ソース切替は可視化されます。
-- **上限のあるリソース。** 管理対象メモリは単一のグローバル予算（既定 256 MiB）で、すべてのキューにバイト数と件数の上限があります。
-  スレッド数は固定、再描画は変化時のみで最大 4 fps、ターミナル出力はノンブロッキングで、遅い端末でも入力が止まりません。
-- **保護されたプロセス制御。** `K` で選択プロセスへの SIGTERM を要求します。同一ユーザーのみ、root セッションは拒否、
-  PID 1・dgxtop 自身・その host は対象外、10 秒以内に有効な 1 回限りの確認が必要、シグナル送信**前**に永続的な監査記録を書き込み、
-  保持済みの `pidfd` 経由で送信します（PID 再利用の競合なし）。`SIGKILL` は既定で無効です。結果は
-  「シグナル送信済み」と「終了を確認」を区別します。
+<img src="images/screenshots/dgx-spark-overview.png" alt="DGX Spark 上の dgxtop の Overview：CPU とメモリ、使用率 92% の GB10 GPU と RAM バー、ディスクとネットワークの表、GPU プロセス表" width="100%">
 
-## ビューとモジュール
+<sub>DGX Spark の Overview。GB10 は CPU とメモリを共有しているため、GPU プロセスが使う RAM をシステムメモリの中に描きます。</sub>
 
-10 個の表示モジュール（`cpu`、`gpu`、`memory`、`disk`、`network`、`processes`、`history`、`sources`、
-`settings`、`actions`）があります。タブは Overview、GPU、History、Settings です。確認待ちのプロセス操作はどのビューでもバナーで表示し、結果（送信済み・実行中・終了・不明）は通知で表示します。
+</div>
 
-- **Overview：** 上から 4 段構成です。
-  - **CPU とメモリを横並び（メモリが広め）。** CPU は温度・電力・最大周波数（収まるときは同じ行に負荷とタスク数）、使用率のバーとその下のグラフ、usr/sys/iowait/steal の内訳を表示し、メモリは使用量、used のバーとその下のグラフ、swap・buffers・cache・利用可能量を表示します。CPU パネルのクリックまたは `c` で全センサーとコアごとのバーを追加します。ユニファイドメモリの GPU（DGX Spark）では、GPU プロセスが使う RAM を別の色で示し、その量も表示します。
-  - **GPU。** GPU ごとに温度・電力・クロック・ファンの行、使用率のバーとその下のグラフ、続いてメモリのバー（`VRAM`、ユニファイドメモリでは GPU プロセスが使う RAM を示す `RAM`）を表示します。端末が低いときは GPU を優先して広げます。
-  - **ディスク I/O とネットワークを横並び。** それぞれ表（ディスクは載っているファイルシステムの容量付き）と、最も忙しいデバイス（タイトルに表示）の読み書きまたは送受信のレートです。
-  - **GPU プロセス表**が残りの行を使います。GPU を使うプロセスだけを表示し、`TYPE` 列は `nvidia-smi` と同じ表記で、その GPU 上のコンテキストが計算（`C`）かグラフィックス（`G`）か両方（`C+G`）かを示します。選択・ソート・フィルター・終了はここで行います。
+dgxtop は偽の 0 を決して表示しません。読み取れなかった値は**非対応**、**読み取り失敗**、**古い**、**ソース競合**として、取得元とともに表示します。
 
-  グラフはひと目で読めることを重視しています。ブロックの列で、1 列が 1 サンプル、最新が右端です。各列はその値に応じたバーの色になり、負荷の高い時間帯はひと目で赤く見えます。使用率とメモリは固定スケールです。ディスクとネットワークのレートは自身のピークでスケールし、ピーク値を横に表示します。
-- **GPU：** 1 台ずつ表示します。上に 4 本のリアルタイムバー（使用率・メモリ・温度・電力）、その下にその GPU のリアルタイムと詳細の情報をすべて並べます。データはすべて NVIDIA ドライバ（NVML）とドライバ・CUDA toolkit のファイルから読み取り、ネットワークにも接続せず、コマンドも実行しません。情報は分類ごとに上から下へ読む「名前　値」のブロックに並び、比べる値は上下に揃います。ブロックは端末に収まる最少の、高さを揃えた列に並びます。
-  - **State：** P-state、throttle の理由、原因ごとの累計時間。
-  - **Utilization：** メモリコントローラ、エンコーダ、デコーダ。
-  - **Clocks：** graphics・SM・memory・video の各クロック、現在値と最大値を並べて表示。
-  - **Memory：** 総量、使用量、free、reserved、プロセスのメモリ、BAR1、バス幅と理論ピーク帯域。
-  - **PCIe：** link と理論帯域の現在値と最大値を並べて表示、transmit の真下に receive、replay。
-  - **Thermal：** 温度とファン（複数ファンの GPU では全ファン）、続いてデバイス固有の温度しきい値を低い順に。
-  - **Power：** 電力とドライバの瞬時値（Ampere 以降の GPU では電力は NVML の 1 秒平均）、上限、他の制限で実効上限が下がっているときは設定上限も、既定の上限、設定可能な範囲、ドライバ読み込み以降の消費電力量。
-  - **CUDA：** ドライバが対応する CUDA バージョン、compute capability（`sm_120`）、インストール済み toolkit とそのパス・`nvcc`。
-  - **Driver：** バージョン、open／proprietary カーネルモジュール、NVML、persistence、compute mode。
-  - **Device、PCI & firmware：** アーキテクチャ、ブランド、CUDA コア、board part、シリアル、UUID、デバイスノード；PCI の識別情報、VBIOS・InfoROM・GSP ファームウェア。
-  - **Health：** GPU が対応していれば ECC・retired pages・NVLink のカウンタ。
-  - **Topology：** GPU に最も近い NUMA ノードと CPU、ほかの各 GPU への PCIe 経路（`nvidia-smi topo -m` の `PIX`〜`SYS`）と、相手のメモリを直接読み書きできるか（P2P）。P2P がないと GPU 間のコピーはシステムメモリを経由します。
+## 画面
 
-  GPU が報告しないデータには行を設けません。端末が低くすべてのブロックが収まらないときは、表示しきれないブロック名を上に示します。各 GPU を使うプロセスは overview のプロセス表にあります（`g` で 1 台に絞り込み）。
-- **History：** overview の各リソースをより長い時間範囲（5 分〜24 時間、`w`/`W` で切り替え）で、監視ダッシュボードのように表示します。パネルは 2 つずつ並びます：CPU とメモリ、GPU の使用率とメモリ、GPU の温度と電力（GPU ごとに 1 本）、最も忙しいディスクの読み書きとインターフェースの送受信（各組は 2 本のうち最も高い列に合わせた 1 つのスケールを共有）。各ストリップにはスケール、時間範囲のブロック列（平均をレベルの色で、記録のない時間を点線のベースで表示）、現在値・平均・ピーク（時間範囲全体の最大値）の凡例があり、各列のパネルの下に時間軸があります。履歴はディスクに保存され（`history.sqlite3`、既定でオン）、以前の実行や再起動前のデータも読み戻して同じ時間軸に描きます。ウィンドウバーにはどれだけ記録済みかを表示します（記録は dgxtop の実行中のみ）。時間軸の下には各 GPU の直近 1・6・12・24 時間の統計（使用率・メモリ・温度・電力の平均とピーク、電力量）を、データが増える時間範囲だけ表示します。設計の分析は [docs/process/v2-rewrite/history-redesign.md](process/v2-rewrite/history-redesign.md) にあります。
+### Overview
 
-レイアウトは端末サイズに追従します：
+CPU とメモリ、各 GPU の使用率とメモリ、最も忙しいディスクとネットワークインターフェース、そして GPU を使っているプロセス。負荷の高い時間帯はひと目で赤く見えます。`c` で CPU の全センサーとコアごとのバーを追加します。
 
-- 80×24 以上で完全なレイアウト；
-- 80×24 未満で簡易サマリー；
-- 40×10 未満でサイズ警告（q で終了可能）。
+<img src="images/screenshots/workstation-overview.png" alt="2 枚の GPU（RTX 5080 と RTX 3060）を積んだワークステーションでの Overview と、GPU メモリを使うプロセス" width="100%">
+
+### GPU
+
+1 台ずつ表示します。上に 4 本のリアルタイムバー、その下にドライバが報告するすべての情報。NVML と CUDA toolkit のファイルから読み取り、コマンドは実行しません。GPU が報告しない値は行ごと表示しません。
+
+<img src="images/screenshots/dgx-spark-gpu.png" alt="DGX Spark の GB10 の GPU ビュー：状態、クロック、ユニファイドメモリ、PCIe、NVLink-C2C、温度しきい値、電力、CUDA 13.0、ドライバ、デバイス、トポロジ" width="100%">
+
+<img src="images/screenshots/workstation-gpu.png" alt="RTX 5080 の GPU ビュー：状態、クロック、VRAM と BAR1、PCIe Gen5、ファンとしきい値、電力上限、CUDA、ドライバ、デバイス、ファームウェア、2 枚目の GPU への P2P 経路" width="100%">
+
+<sub>上：ユニファイドメモリと NVLink-C2C の GB10。下：VRAM と PCIe Gen5 の RTX 5080。シリアル番号と UUID はモザイク処理済みです。</sub>
+
+### History
+
+Overview のリソースを 5 分〜24 時間の範囲で表示します（`w` / `W` で切替）。ペアのパネルが 1 本の時間軸を共有し、各ストリップにスケール、値に応じて色分けした列ごとの平均、now / avg / max を表示します。時間軸の下には GPU ごとの直近 1・6・12・24 時間の統計。履歴は `history.sqlite3` に保存され、以前の実行分もグラフに出ます。
+
+<img src="images/screenshots/dgx-spark-history.png" alt="DGX Spark の 1 時間分の履歴：CPU、メモリ、GPU 使用率、GPU メモリ、温度、電力と消費電力量、ディスク、ネットワーク" width="100%">
+
+<img src="images/screenshots/workstation-history.png" alt="2 GPU ワークステーションの履歴と、GPU ごとの直近 1・6・12・24 時間の平均とピーク" width="100%">
+
+### Settings
+
+各設定の保存値・有効値・由来と、即時反映か再起動が必要かを一覧します。表示モジュールは個別にオン／オフできます。
+
+<img src="images/screenshots/dgx-spark-settings.png" alt="各設定の保存値、有効値、由来、再起動の要否を並べた Settings ビューと、表示モジュールの切替" width="100%">
+
+## dgxtop の特長
+
+- **偽の 0 を出さない。** 読み取り状態、データ種別（計測・導出・推定・シミュレーション）、品質、鮮度は別々の軸です。検証されていない単位を推測で変換したり、使用率から帯域幅を捏造したりしません。
+- **ドライバが止まっても画面は止まらない。** live データソースはそれぞれ常駐 host プロセスで動きます。NVML の呼び出しがハングしても影響はその host だけで、CPU・メモリ・UI は更新を続けます。
+- **説明可能なソース。** 同じセンサーだと証明された別名は 1 票として数えます。独立したソースが食い違えば、平均せずに「ソース競合」と表示します。
+- **正確な履歴。** レートは正確な `u64` カウンタ差分を実経過時間で割って求め、欠損は欠損として見せます。
+- **上限のあるリソース。** 管理データ全体で 256 MiB の予算を共有し、すべてのキューにバイト数と件数の上限があります。スレッド数は固定、再描画は変化時のみで最大 4 fps です。
+- **保護されたプロセス制御。** `K` で選択中の GPU プロセスに SIGTERM を要求します。同一ユーザーのみ、10 秒以内の 1 回限りの確認、シグナル送信**前**の監査記録、保持済みの `pidfd` 経由での送信です。
+
+## アーキテクチャ
+
+### 6 つのコンポーネント、2 つの経路、1 つの書き込み役
+
+<img src="images/architecture/architecture-overview.png" alt="アーキテクチャ：Linux カーネルと NVIDIA ドライバから 7 つの adapter host、Collector、Manager、Store、Viewer へ続くデータ経路と、Controller とプロセス操作 adapter の制御経路" width="100%">
+
+データはカーネルとドライバから、分離された adapter host を通って Collector（正規化と調停）へ、さらに Store へ唯一書き込む Manager へ流れます。Viewer は不変の view model を描くだけで、Controller はキー入力をコマンドに変えるだけです。
+
+### 分離されたノンブロッキング収集
+
+<img src="images/architecture/runtime-isolation.png" alt="実行モデル：固定数のスレッドを持つ親プロセスが匿名パイプで 7 つの常駐 adapter host とつながり、ハングした NVML host は degraded、circuit open、backoff、probe、warmup の順に進む" width="100%">
+
+タイムアウトした host はバックオフ（1 秒、2 秒、4 秒…最大 60 秒）し、回収できてから再起動します。回収できない host は隔離され、無制限に再生成されることはありません。
+
+### 説明可能なソース調停
+
+<img src="images/architecture/source-arbitration.png" alt="調停：hwmon が 68 °C、thermal zone が 42 °C を報告。9 つのステップの結果は選択、ソース競合、非対応、読み取り失敗、古いのいずれかで、55 °C の平均には決してならない" width="100%">
+
+別のソースへ切り替えるには、3 回連続で勝ち、かつ 5 秒以上経過する必要があります。値がセンサー間で行き来することはありません。
+
+### 保護されたプロセス終了
+
+<img src="images/architecture/protected-kill.png" alt="プロセス終了：K、同一ユーザーと安全チェックの準備、pidfd_open、10 秒の確認、永続的な監査 intent、pidfd_send_signal による SIGTERM、シグナル送信済み、そして終了を確認または実行中" width="100%">
+
+結果は「シグナル送信済み」と「終了を確認」を区別します。`SIGKILL` は `actions.allow_force` を有効にしない限り無効で、`--read-only` はすべての操作を無効にします。
+
+### 正確な履歴
+
+<img src="images/architecture/exact-history.png" alt="履歴：実経過時間によるカウンタ差分、分の境界をまたぐ正確な bridge、見える欠損、5 分〜24 時間のウィンドウ、history.sqlite3 アーカイブ" width="100%">
+
+ウィンドウの合計は、ウィンドウに完全に含まれる区間だけを数えます。分をまたぐ区間は推測で分割せず、正確な bridge として保存します。
+
+### ワークスペースの境界
+
+<img src="images/architecture/crate-boundaries.png" alt="クレートの依存関係：dgxtop-runtime、adapters、collectors、store、manager、ui はすべて dgxtop-core だけに依存し、合成ルートの dgxtop がすべてに依存する" width="100%">
+
+<details>
+<summary>各クレートの役割</summary>
+
+| クレート | 役割 |
+|---|---|
+| `dgxtop-core` | 型付き ID、単位、品質軸、コマンド、イベント、設定、バイト予算、ポート |
+| `dgxtop-runtime` | adapter-host の監視と IPC フレーミング、上限付きワーカー、ノンブロッキングなターミナル出力 |
+| `dgxtop-adapters` | 読み取り専用 adapter（procfs、hwmon、thermal、powercap、NVML、network、filesystem、replay）と独立した pidfd 操作 adapter |
+| `dgxtop-collectors` | 正規化、同一ソースの重複排除、調停、カウンタレート、プロセスと GPU の結合 |
+| `dgxtop-store` | ホットスナップショット、上限付きの正確な履歴、設定リポジトリ、SQLite の監査とアーカイブ |
+| `dgxtop-manager` | スケジューリング、カタログ、ポリシー、取り込み、履歴、設定、プロセス操作、表示、セッション |
+| `dgxtop-ui` | 表示モジュール、レイアウト、キーマップ、コントローラ、ターミナルランナー |
+| `dgxtop` | 合成ルート（composition root）と CLI |
+
+CI は [`spec/dgxtop-v2/tools/check_boundaries.py`](../spec/dgxtop-v2/tools/check_boundaries.py) でこの境界を検査します。
+
+</details>
 
 ## インストール
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
-```
-
-インストーラは x86_64 または aarch64 の GNU ビルドを対象ファイルシステム上の一時ディレクトリにダウンロードし、
-`SHA256SUMS` とアーカイブ構成を検証し、`dgxtop --version --verbose` で読み込めることを確認してから実行ファイルを
-アトミックに置き換え、旧版を `dgxtop.previous` として残します。`./install.sh --rollback` で元に戻せます
-（設定と状態は変更されません。送信済みのシグナルは取り消せません）。musl 版への自動フォールバックはありません。
-
-ソースからのビルド（`rust-toolchain.toml` で Rust 1.92.0 を固定）：
+x86_64 または aarch64 の Linux（glibc）。GPU の値には NVIDIA ドライバ（NVML）が必要で、ない場合もそれ以外は動作します。ソースからビルドします（`rust-toolchain.toml` で Rust 1.92.0 に固定）：
 
 ```bash
 git clone https://github.com/DennySORA/dgxtop.git
@@ -85,91 +127,67 @@ cargo build --release --locked
 ./target/release/dgxtop
 ```
 
+v2 の最初のリリースはまだタグ付けされていません。GitHub の最新リリース（v0.2.5）は以前の v1 実装です。v2 のリリース後は、`install.sh` が GNU ビルドをダウンロードし、`SHA256SUMS` とアーカイブ構成を検証して `dgxtop --version --verbose` を実行し、バイナリをアトミックに置き換え、以前のものを `dgxtop.previous` として残します（`./install.sh --rollback` で戻せます）。
+
 ## 使い方
 
 ```bash
 dgxtop                       # ライブモニター
-dgxtop -i 0.5                # 今回の実行のみ 500 ms 間隔（保存済み設定は変更しない）
+dgxtop -i 0.5                # この実行だけ 500 ms でサンプリング（保存済み設定は変更しない）
 dgxtop --no-gpu              # NVML host を起動しない
 dgxtop --read-only           # すべてのプロセス操作を無効化
 dgxtop --replay fixture.json # シミュレーションデータのみ、読み取り専用、別の一時状態
-dgxtop --check-config        # 設定を検証し、設定値と実効値を表示して終了
-dgxtop --diagnostics-json    # バージョン、SQLite、ケイパビリティ、ヘルスを JSON で出力
-dgxtop --import-legacy ~/.config/dgxtop/config.json --dry-run   # v1 → v2 の対応表を表示
-dgxtop --version --verbose   # バージョン、commit、ツールチェーン、target、SQLite ランタイム
+dgxtop --check-config        # 設定値と有効値を検証して表示し終了
+dgxtop --diagnostics-json    # バージョン、SQLite、機能、ヘルスを JSON で出力
+dgxtop --import-legacy ~/.config/dgxtop/config.json --dry-run   # v1 → v2 の対応を表示
+dgxtop --version --verbose   # バージョン、commit、ツールチェーン、ターゲット、SQLite ランタイム
 ```
-
-コマンドライン引数は明示的に指定された場合に限り、今回の実行に対してのみ保存済み設定を上書きします。
-
-### キー操作
 
 | キー | 動作 |
 |---|---|
-| `q`、`Ctrl-C` | 終了（フィルタ編集中の `q` は文字、`Ctrl-C` は常に終了） |
+| `q`、`Ctrl-C` | 終了（フィルター編集中の `q` は文字入力、`Ctrl-C` は常に終了） |
 | `1`–`4`、`Tab`、`Shift-Tab` | Overview、GPU、History、Settings |
-| `w` / `W` | History の次／前の時間範囲（5m、1h、6h、12h、24h） |
-| `c` | Overview で CPU のセンサーとコアごとのバーを表示／非表示（CPU パネルのクリックでも可） |
-| `j`/`k`、矢印、`PgUp`/`PgDn`、`Home`/`End` | 選択の移動（行番号ではなくプロセスの同一性で） |
+| `w` / `W` | 次／前の履歴ウィンドウ（5m、1h、6h、12h、24h） |
+| `c` | CPU センサーとコアごとのバーの表示切替（CPU パネルのクリックでも可） |
+| `j`/`k`、矢印、`PgUp`/`PgDn`、`Home`/`End` | 選択を移動（行番号ではなくプロセスの ID で追跡） |
 | `h`/`l` | GPU ビューで前／次の GPU |
-| `g` | プロセス表の GPU フィルタ切替（全 GPU → 各 GPU） |
-| `/` | プロセスのフィルタ（Enter で適用、Esc でクリア） |
+| `g` | プロセス表の GPU フィルターを切替（全 GPU → 各 GPU） |
+| `/` | プロセスをフィルター（Enter で適用、Esc でクリア） |
 | `s` / `r` | ソート列／逆順 |
-| `+` / `-` | サンプリング間隔の変更（ストアが書き込みを確認した後に反映） |
-| `K` | 選択プロセスへの SIGTERM を要求（確認が必要） |
+| `+` / `-` | サンプリング間隔を変更（store の確認後に保存） |
+| `K` | 選択プロセスに SIGTERM を要求（確認が必要） |
 | `y`/`Enter`、`n`/`Esc` | 保留中のプロセス操作を確認／取消 |
 | `F2`、`?`/`F1` | Settings ビュー、ヘルプ |
+
+レイアウトは端末に合わせて変わります。80×24 以上はフルレイアウト、それ未満はコンパクトな要約、40×10 未満はサイズの案内を表示します（終了は可能）。コマンドライン引数は明示したときだけ、その実行に限って保存済み設定を上書きします。
 
 ## 設定とファイル
 
 | 用途 | 場所 |
 |---|---|
-| 設定（schema 2、リビジョン付き、アトミック書き込み） | `$XDG_CONFIG_HOME/dgxtop/v2/config.json`（`~/.config/dgxtop/v2/config.json`） |
-| プロセス操作の監査（SQLite、`synchronous=FULL`） | `$XDG_STATE_HOME/dgxtop/v2/audit.sqlite3`（`~/.local/state/...`） |
-| 履歴アーカイブ（既定でオン、7 日間・最大 1 GiB） | `$XDG_STATE_HOME/dgxtop/v2/history.sqlite3` |
-| 上限付きログ、instance lock | `$XDG_STATE_HOME/dgxtop/v2/` |
+| 設定（schema 2、バージョン管理、アトミック書き込み） | `$XDG_CONFIG_HOME/dgxtop/v2/config.json`（`~/.config/dgxtop/v2/config.json`） |
+| 操作の監査（SQLite、`synchronous=FULL`） | `$XDG_STATE_HOME/dgxtop/v2/audit.sqlite3`（`~/.local/state/...`） |
+| 履歴アーカイブ（既定で有効、7 日、最大 1 GiB） | `$XDG_STATE_HOME/dgxtop/v2/history.sqlite3` |
+| 上限付きログ、インスタンスロック | `$XDG_STATE_HOME/dgxtop/v2/` |
 
-ディレクトリは `0700`、ファイルは `0600` で作成されます。完全なコマンドライン、環境変数、トークンは永続化されません。
-設定の完全な契約は [`spec/dgxtop-v2/contracts/CONFIG.md`](../spec/dgxtop-v2/contracts/CONFIG.md)、既定値は
-[`spec/dgxtop-v2/examples/config.default.json`](../spec/dgxtop-v2/examples/config.default.json) を参照してください。
+ディレクトリは `0700`、ファイルは `0600` で作成します。完全なコマンドライン、環境変数、トークンは決して保存しません。設定の契約は [`spec/dgxtop-v2/contracts/CONFIG.md`](../spec/dgxtop-v2/contracts/CONFIG.md)、既定値は [`spec/dgxtop-v2/examples/config.default.json`](../spec/dgxtop-v2/examples/config.default.json) にあります。v1 からのアップグレードでは `~/.config/dgxtop/config.json` を変更しません。`--import-legacy <path> --dry-run` で対応を確認してから、`--apply` で v2 の設定ファイルを書き込みます。
 
-v1 からの移行：旧 `~/.config/dgxtop/config.json` が変更されることはありません。`--import-legacy <path> --dry-run`
-で対応表を確認し、`--apply` で v2 の設定ファイルを書き出します。
-
-## アーキテクチャ
-
-```text
-データ：ドライバ／OS → adapter host（Adapter）→ Collector → Manager → Store
-        Store → Manager の投影 → Viewer
-操作：  入力 → Controller → Manager → 設定／スケジューラ／pidfd 操作 adapter → 監査 → Store → Viewer
-```
-
-| Crate | 役割 |
-|---|---|
-| `dgxtop-core` | 型付き ID、単位、品質軸、コマンド、イベント、設定、バイト予算、ポート |
-| `dgxtop-runtime` | adapter-host の監督と IPC フレーミング、上限付きワーカー、ノンブロッキング端末出力 |
-| `dgxtop-adapters` | 読み取り専用 adapter（procfs、hwmon、thermal、powercap、NVML、network、filesystem、replay）と独立した pidfd 操作 adapter |
-| `dgxtop-collectors` | 正規化、同一ソースの重複除去、調停、カウンタレート、プロセス／GPU の関連付け |
-| `dgxtop-store` | ホットスナップショット、上限付きの正確な履歴、設定リポジトリ、SQLite 監査とアーカイブ |
-| `dgxtop-manager` | スケジューリング、カタログ、ポリシー、取り込み、履歴、設定、プロセス操作、投影、セッション |
-| `dgxtop-ui` | 表示モジュール、レイアウト、キーマップ、コントローラ、端末ランナー |
-| `dgxtop` | コンポジションルートと CLI |
-
-`dgxtop-core` 以外のワークスペース crate に依存するのはコンポジションルートだけで、この境界は
-[`spec/dgxtop-v2/tools/check_boundaries.py`](../spec/dgxtop-v2/tools/check_boundaries.py) で検査されます。
-
-## 開発
+## 開発と検証
 
 ```bash
 just ci        # fmt、check、clippy -D warnings、テスト、依存境界（すべて --locked）
-just e2e       # 必要なときだけ実行するエンドツーエンドテスト：PTY・障害注入・実際の host 子プロセス
-just hardware  # 実機の procfs/sysfs/NVML テスト（pidfd は使い捨ての子プロセスのみ）
+just e2e       # 要求時のみのエンドツーエンド：PTY セッション、障害注入、実 host プロセス
+just hardware  # 実際の procfs/sysfs/NVML でのハードウェアテスト（pidfd は使い捨ての子プロセスのみ）
 ```
 
-## 検証状況
+フォーマット、lint、テストスイート（x86_64 で 1,373 件、aarch64 で 1,372 件）、依存境界、ハードウェアテストは、Debian 13 のワークステーション（RTX 5080 + RTX 3060）と DGX Spark（GB10）の両方で通っています。ログと SHA-256 は [`docs/validation/evidence/`](validation/evidence/) にあります。[`docs/validation/VALIDATION.md`](validation/VALIDATION.md) は 40 件の受け入れケースを追跡しています（現在 12 PASS、24 NOT_RUN、4 BLOCKED）。3 × 30 分のベンチマーク、72 時間のソーク、タグ付きリリースの実行はまだなので、検証済みと呼べるプラットフォームはなく、仕様の性能値は目標のままです。
 
-各受け入れケース（AT01–AT40）のコマンド、終了コード、環境、エビデンスのハッシュは
-[`docs/validation/VALIDATION.md`](validation/VALIDATION.md) を参照してください。仕様中の性能値は受け入れ目標であり、
-同レポートに実測エビデンスがあるプラットフォームだけを「検証済み」と呼びます。
+## ドキュメント
+
+- [設計ノート（英語）](https://dennysora.me/en/projects/tools/dgxtop/)：アーキテクチャとその背景にある考え方（[繁體中文](https://dennysora.me/zh-hant/projects/tools/dgxtop/)）。
+- [`spec/dgxtop-v2/`](../spec/dgxtop-v2/README.md)：完全な仕様（繁体字中国語）。
+- [`docs/process/v2-rewrite/DECISIONS.md`](process/v2-rewrite/DECISIONS.md)：実装上の決定 D-01〜D-57。
+- [`docs/process/v2-rewrite/history-redesign.md`](process/v2-rewrite/history-redesign.md)：履歴ビューの設計分析。
 
 ## ライセンス
 
