@@ -12,7 +12,6 @@ use dgxtop_core::errors::InfraError;
 use dgxtop_core::overview_history::ArchivePrune;
 use dgxtop_core::ports::{ArchiveJournal, ArchiveReceipt, ArchiveSink};
 use dgxtop_core::wire::format_fixed_width;
-use rusqlite::config::DbConfig;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::limits::{ArchiveLimits, ArchiveOpenError};
@@ -25,9 +24,9 @@ use super::rows::{ArchiveBatch, ArchiveRow, storage_estimate};
 use crate::fs::{FileSystemOps, RealFileSystem};
 use crate::sqlite::{
     CapacityPolicy, CapacityView, ConnectionProfile, DatabaseSpec, FaultKind, FreeSpaceProbe,
-    PageUsage, Refusal, SchemaKind, StorageFootprint, TxError, Unusable, VersionGate, WriteClass,
-    describe, drain, ensure_sqlite_version, fault_kind, immediate_transaction, open_database,
-    pages_and_backlog, path_problem, utc_cutoff,
+    PageUsage, Refusal, SchemaKind, StorageFootprint, TxError, VersionGate, WriteClass, Writer,
+    drain, ensure_sqlite_version, fault_kind, fault_message, immediate_transaction, open_database,
+    pages_and_backlog, path_problem, tx_sqlite_error, utc_cutoff,
 };
 
 /// Automatic retention runs at most every ten minutes (boot clock).
@@ -90,8 +89,7 @@ pub struct SqliteArchive {
     policy: CapacityPolicy,
     clock: Arc<dyn TimeProvider>,
     free_space: Arc<dyn FreeSpaceProbe>,
-    connection: Option<Connection>,
-    unusable: Option<Unusable>,
+    writer: Writer,
     last_issue: Option<String>,
     last_retention_boot_ns: Option<u64>,
     recreated: Option<String>,
@@ -104,7 +102,7 @@ impl fmt::Debug for SqliteArchive {
             .debug_struct("SqliteArchive")
             .field("path", &self.path)
             .field("limits", &self.limits)
-            .field("unusable", &self.unusable)
+            .field("writer", &self.writer)
             .field("last_issue", &self.last_issue)
             .field("stats", &self.stats)
             .finish_non_exhaustive()
@@ -230,27 +228,21 @@ impl SqliteArchive {
             profile: ConnectionProfile::best_effort(limits.wal_checkpoint_bytes),
             policy,
         };
-        let opened = open_database(&spec, fs, gate);
+        let (writer, recreated) = Writer::new("archive", open_database(&spec, fs, gate));
         let mut archive = Self {
             path: path.to_path_buf(),
             limits,
             policy,
             clock,
             free_space,
-            connection: None,
-            unusable: None,
+            writer,
             last_issue: None,
             last_retention_boot_ns: None,
-            recreated: None,
+            recreated,
             stats: ArchiveStats::default(),
         };
-        match opened {
-            Ok(opened) => {
-                archive.connection = Some(opened.connection);
-                archive.recreated = opened.recreated;
-                archive.maybe_run_retention();
-            }
-            Err(unusable) => archive.unusable = Some(unusable),
+        if archive.writer.unusable().is_none() {
+            archive.maybe_run_retention();
         }
         Ok(archive)
     }
@@ -312,15 +304,9 @@ impl SqliteArchive {
     }
 
     fn connection(&mut self) -> Result<&mut Connection, InfraError> {
-        if let Some(unusable) = &self.unusable {
-            return Err(InfraError::Unavailable(format!(
-                "archive unavailable: {}",
-                unusable.reason
-            )));
-        }
-        self.connection
-            .as_mut()
-            .ok_or_else(|| InfraError::Unavailable("archive database is not open".to_owned()))
+        self.writer.connection().map_err(|unusable| {
+            InfraError::Unavailable(format!("archive unavailable: {}", unusable.reason))
+        })
     }
 
     fn maybe_run_retention(&mut self) {
@@ -333,72 +319,26 @@ impl SqliteArchive {
         }
     }
 
-    fn stop_corrupt(&mut self, message: &str) {
-        if let Some(connection) = self.connection.take() {
-            // Closing must not checkpoint possibly damaged pages into the file.
-            let _ignored =
-                connection.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true);
-        }
-        self.unusable = Some(Unusable::failed(format!(
-            "{message} (archive stopped; the file is recreated at the next start, D-85)"
-        )));
+    /// A failed statement; corruption stops the archive (D-85).
+    fn sqlite_failure(&mut self, operation: &'static str, error: &rusqlite::Error) -> InfraError {
+        self.note_issue(operation, error);
+        self.writer.statement_failed(operation, error)
     }
 
-    fn sqlite_failure(
-        &mut self,
-        context: &str,
-        operation: &'static str,
-        error: &rusqlite::Error,
-    ) -> InfraError {
-        let message = format!("{context}: {}", describe(error));
-        match fault_kind(error) {
-            FaultKind::Corrupt => {
-                self.stop_corrupt(&message);
-                InfraError::Database(message)
-            }
-            FaultKind::Full => {
-                self.last_issue = Some(message);
-                InfraError::DiskFull { operation }
-            }
-            FaultKind::Busy => InfraError::Unavailable(message),
-            FaultKind::Io => {
-                self.last_issue = Some(message.clone());
-                InfraError::Io { operation, message }
-            }
-            FaultKind::Constraint
-            | FaultKind::ReadOnly
-            | FaultKind::CannotOpen
-            | FaultKind::Other => {
-                self.last_issue = Some(message.clone());
-                InfraError::Database(message)
-            }
+    /// A failed transaction; corruption stops the archive (D-85).
+    fn tx_failure<E>(&mut self, operation: &'static str, error: &TxError<E>) -> InfraError {
+        if let Some(sqlite) = tx_sqlite_error(error) {
+            self.note_issue(operation, sqlite);
         }
+        self.writer.transaction_failed(operation, error)
     }
 
-    fn tx_failure<E>(
-        &mut self,
-        context: &str,
-        operation: &'static str,
-        error: TxError<E>,
-    ) -> InfraError {
-        match error {
-            TxError::Abort(_) => InfraError::Database(format!("{context}: aborted")),
-            TxError::Sqlite(error) => self.sqlite_failure(context, operation, &error),
-            TxError::Commit(error) => {
-                let failure = self.sqlite_failure(context, operation, &error);
-                if fault_kind(&error) == FaultKind::Io {
-                    InfraError::Uncertain {
-                        operation,
-                        message: failure.to_string(),
-                    }
-                } else {
-                    failure
-                }
-            }
-            TxError::BusyTimeout { elapsed_ms } => InfraError::Timeout {
-                operation,
-                elapsed_ms,
-            },
+    /// The status shows a failure until the next good append, except a
+    /// held lock (it passes by itself) and corruption (the archive stops
+    /// and says so).
+    fn note_issue(&mut self, operation: &str, error: &rusqlite::Error) {
+        if !matches!(fault_kind(error), FaultKind::Busy | FaultKind::Corrupt) {
+            self.last_issue = Some(fault_message(operation, error));
         }
     }
 
@@ -413,9 +353,7 @@ impl SqliteArchive {
         let batch = u64::from(self.limits.batch_rows);
         let deadline = self.limits.busy_deadline();
         let drained = drain(self.connection()?, deadline, batch, rounds_left, work);
-        let drained = drained.map_err(|error| {
-            self.tx_failure("archive maintenance", "archive.maintenance", error)
-        })?;
+        let drained = drained.map_err(|error| self.tx_failure("archive.maintenance", &error))?;
         Ok((drained.removed, drained.finished))
     }
 
@@ -484,8 +422,7 @@ impl SqliteArchive {
     fn evict_oldest(&mut self, protected_json: &str) -> Result<u64, InfraError> {
         let offset = i64::from(self.limits.batch_rows).saturating_sub(1);
         let horizon = eviction_horizon(self.connection()?, offset);
-        let horizon = horizon
-            .map_err(|error| self.sqlite_failure("archive eviction", "archive.evict", &error))?;
+        let horizon = horizon.map_err(|error| self.sqlite_failure("archive.evict", &error))?;
         let Some(horizon) = horizon else {
             return Ok(0);
         };
@@ -508,8 +445,8 @@ impl SqliteArchive {
             footprint.wal_bytes,
             wal_checkpoint_bytes,
         );
-        let (pages, wal_backlog_bytes) = measured
-            .map_err(|error| self.sqlite_failure("archive capacity", "archive.capacity", &error))?;
+        let (pages, wal_backlog_bytes) =
+            measured.map_err(|error| self.sqlite_failure("archive.capacity", &error))?;
         let directory = self.path.parent().unwrap_or(Path::new("/"));
         let free_disk_bytes = self.free_space.available_bytes(directory)?;
         Ok(CapacityView {
@@ -586,8 +523,7 @@ impl SqliteArchive {
                     }
                     Ok(written)
                 });
-            let written = result
-                .map_err(|error| self.tx_failure("archive append", "archive.write", error))?;
+            let written = result.map_err(|error| self.tx_failure("archive.write", &error))?;
             let attempted = u64::try_from(chunk.len()).unwrap_or(u64::MAX);
             written_total = written_total.saturating_add(written);
             present_total = present_total.saturating_add(attempted.saturating_sub(written));
@@ -601,7 +537,7 @@ impl SqliteArchive {
     fn check_fits_budget(&mut self, batch: &ArchiveBatch) -> Result<(), InfraError> {
         let pages = PageUsage::read(self.connection()?);
         let page_size = pages
-            .map_err(|error| self.sqlite_failure("archive capacity", "archive.capacity", &error))?
+            .map_err(|error| self.sqlite_failure("archive.capacity", &error))?
             .page_size;
         let capacity = self
             .policy
@@ -621,9 +557,7 @@ impl SqliteArchive {
 
     fn check_segment_references(&mut self, batch: &ArchiveBatch) -> Result<(), InfraError> {
         let unknown = first_unknown_segment(self.connection()?, batch);
-        let unknown = unknown.map_err(|error| {
-            self.sqlite_failure("archive segment check", "archive.validate", &error)
-        })?;
+        let unknown = unknown.map_err(|error| self.sqlite_failure("archive.validate", &error))?;
         match unknown {
             Some(segment_id) => Err(InfraError::Database(format!(
                 "archive journal rejected: rows reference unknown segment {segment_id}"
@@ -633,7 +567,7 @@ impl SqliteArchive {
     }
 
     fn state_and_detail(&mut self) -> (PersistenceState, Option<String>) {
-        if let Some(unusable) = &self.unusable {
+        if let Some(unusable) = self.writer.unusable() {
             return (PersistenceState::Failed, Some(unusable.reason.clone()));
         }
         self.maybe_run_retention();
@@ -730,14 +664,14 @@ mod tests {
     fn writer_connection_is_wal_normal_with_manual_checkpoints() {
         let dir = temp_dir("pragmas");
         let limits = ArchiveLimits::default();
-        let archive = SqliteArchive::open(
+        let mut archive = SqliteArchive::open(
             &dir.join("history.sqlite3"),
             limits,
             FakeClock::new(1),
             Arc::new(StatvfsFreeSpace),
         )
         .unwrap();
-        let connection = archive.connection.as_ref().unwrap();
+        let connection = archive.writer.connection().unwrap();
         let mode: String = connection
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .unwrap();
@@ -824,5 +758,57 @@ mod tests {
         let rows = vec![gap(10), gap(100_000), gap(10)];
         let bounds = chunk_bounds(&rows, 100, 1000);
         assert_eq!(bounds, vec![0..1, 1..2, 2..3]);
+    }
+
+    fn sqlite_failure_of(code: i32) -> rusqlite::Error {
+        rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None)
+    }
+
+    /// The archive maps a failure like every partition (sqlite::Writer): a
+    /// full database is `DiskFull` and shown until the next good append, a
+    /// corrupt one stops the archive with its reason.
+    #[test]
+    fn failures_map_like_every_partition() {
+        let dir = temp_dir("mapping");
+        let mut archive = SqliteArchive::open(
+            &dir.join("history.sqlite3"),
+            ArchiveLimits::default(),
+            FakeClock::new(1),
+            Arc::new(StatvfsFreeSpace),
+        )
+        .unwrap();
+        let full = archive.sqlite_failure(
+            "archive.write",
+            &sqlite_failure_of(rusqlite::ffi::SQLITE_FULL),
+        );
+        assert_eq!(
+            full,
+            InfraError::DiskFull {
+                operation: "archive.write"
+            }
+        );
+        let status = archive.status();
+        assert_eq!(status.state, PersistenceState::Degraded);
+        assert!(status.detail.unwrap().contains("archive.write"));
+        let commit: TxError<()> =
+            TxError::Commit(sqlite_failure_of(rusqlite::ffi::SQLITE_IOERR_FSYNC));
+        assert!(matches!(
+            archive.tx_failure("archive.write", &commit),
+            InfraError::Uncertain { .. }
+        ));
+        let corrupt = archive.sqlite_failure(
+            "archive.write",
+            &sqlite_failure_of(rusqlite::ffi::SQLITE_CORRUPT),
+        );
+        assert!(matches!(corrupt, InfraError::Database(_)), "{corrupt:?}");
+        let status = archive.status();
+        assert_eq!(status.state, PersistenceState::Failed);
+        assert!(status.detail.unwrap().contains("archive stopped"));
+        assert!(matches!(
+            archive.run_retention(),
+            Err(InfraError::Unavailable(_))
+        ));
+        drop(archive);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

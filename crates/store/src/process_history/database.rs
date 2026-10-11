@@ -6,7 +6,6 @@
 use std::time::Duration;
 
 use dgxtop_core::action::Signal;
-use dgxtop_core::errors::InfraError;
 use dgxtop_core::identity::{BootId, HostId, Pid, PidNamespace, ProcessKey};
 use dgxtop_core::process_history::{
     Aggregate, EndCause, MAX_LISTED_RUNS, ProcessHistoryJournal, RUN_METRICS, RunBucket,
@@ -15,8 +14,7 @@ use dgxtop_core::process_history::{
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
 use crate::sqlite::{
-    BucketTable, StepError, checkpoint, immediate_transaction, infra_error, tx_infra_error,
-    used_bytes,
+    BucketTable, DatabaseFailure, StepError, checkpoint, immediate_transaction, used_bytes,
 };
 
 /// A transaction waits this long for the write lock at most.
@@ -43,7 +41,7 @@ const RUN_COLUMNS: &str = "run_id, host_id, boot_id, pid_namespace, pid, start_t
 pub(super) fn append(
     connection: &mut Connection,
     journal: &ProcessHistoryJournal,
-) -> Result<(), InfraError> {
+) -> Result<(), DatabaseFailure> {
     if journal.is_empty() {
         return Ok(());
     }
@@ -80,14 +78,17 @@ pub(super) fn append(
         }
         Ok::<_, StepError<()>>(())
     })
-    .map_err(|error| tx_infra_error("process_history.append", error))?;
-    checkpoint(connection).map_err(|error| infra_error("process_history.checkpoint", &error))
+    .map_err(DatabaseFailure::transaction("process_history.append"))?;
+    checkpoint(connection).map_err(DatabaseFailure::statement("process_history.checkpoint"))
 }
 
 /// Runs beyond the cap, and while the database holds more than
 /// `max_used_bytes`, the ended runs last seen longest ago (D-77: no run
 /// expires by age).
-pub(super) fn retain(connection: &mut Connection, max_used_bytes: u64) -> Result<(), InfraError> {
+pub(super) fn retain(
+    connection: &mut Connection,
+    max_used_bytes: u64,
+) -> Result<(), DatabaseFailure> {
     immediate_transaction(connection, BUSY_DEADLINE, |transaction| {
         transaction.execute(
             "DELETE FROM process_runs WHERE run_id NOT IN \
@@ -106,23 +107,23 @@ pub(super) fn retain(connection: &mut Connection, max_used_bytes: u64) -> Result
         }
         Ok::<_, StepError<()>>(())
     })
-    .map_err(|error| tx_infra_error("process_history.retain", error))
+    .map_err(DatabaseFailure::transaction("process_history.retain"))
 }
 
 /// The runs the history lists (the last seen first), and the buckets of
 /// those still unfinished and of the latest ended ones.
 pub(super) fn load(
     connection: &mut Connection,
-) -> Result<(Vec<RunInfo>, Vec<RunBucketRow>), InfraError> {
+) -> Result<(Vec<RunInfo>, Vec<RunBucketRow>), DatabaseFailure> {
     let limit = i64::try_from(MAX_LISTED_RUNS).unwrap_or(i64::MAX);
     let mut statement = connection
         .prepare(&format!(
             "SELECT {RUN_COLUMNS} FROM process_runs ORDER BY last_seen_utc_ns DESC LIMIT ?1"
         ))
-        .map_err(|error| infra_error("process_history.load", &error))?;
+        .map_err(DatabaseFailure::statement("process_history.load"))?;
     let runs: Vec<(i64, RunInfo)> = statement
         .query_map(params![limit], run_of)
-        .map_err(|error| infra_error("process_history.load", &error))?
+        .map_err(DatabaseFailure::statement("process_history.load"))?
         .filter_map(Result::ok)
         .flatten()
         .collect();
@@ -145,7 +146,7 @@ pub(super) fn load(
 pub(super) fn read_run(
     connection: &mut Connection,
     key: &ProcessKey,
-) -> Result<Vec<RunBucketRow>, InfraError> {
+) -> Result<Vec<RunBucketRow>, DatabaseFailure> {
     let found = connection
         .prepare_cached(
             "SELECT run_id FROM process_runs WHERE host_id = ?1 AND boot_id = ?2 \
@@ -156,7 +157,7 @@ pub(super) fn read_run(
                 .query_row(key_params(key), |row| row.get::<_, i64>(0))
                 .optional()
         })
-        .map_err(|error| infra_error("process_history.read_run", &error))?;
+        .map_err(DatabaseFailure::statement("process_history.read_run"))?;
     match found {
         Some(run_id) => buckets_of(connection, run_id, key),
         None => Ok(Vec::new()),
@@ -167,29 +168,30 @@ fn buckets_of(
     connection: &Connection,
     run_id: i64,
     key: &ProcessKey,
-) -> Result<Vec<RunBucketRow>, InfraError> {
-    let read = |sql: &str, (limit, tier): (i64, i64)| -> Result<Vec<RunBucketRow>, InfraError> {
-        let mut statement = connection
-            .prepare_cached(sql)
-            .map_err(|error| infra_error("process_history.buckets", &error))?;
-        let rows = statement
-            .query_map(params![run_id, limit, tier], |row| {
-                let tier: i64 = row.get(0)?;
-                let start: i64 = row.get(1)?;
-                let packed: Vec<u8> = row.get(2)?;
-                Ok(Tier::from_code(tier).zip(unpack(start, &packed)))
-            })
-            .map_err(|error| infra_error("process_history.buckets", &error))?;
-        Ok(rows
-            .filter_map(Result::ok)
-            .flatten()
-            .map(|(tier, bucket)| RunBucketRow {
-                key: key.clone(),
-                tier,
-                bucket,
-            })
-            .collect())
-    };
+) -> Result<Vec<RunBucketRow>, DatabaseFailure> {
+    let read =
+        |sql: &str, (limit, tier): (i64, i64)| -> Result<Vec<RunBucketRow>, DatabaseFailure> {
+            let mut statement = connection
+                .prepare_cached(sql)
+                .map_err(DatabaseFailure::statement("process_history.buckets"))?;
+            let rows = statement
+                .query_map(params![run_id, limit, tier], |row| {
+                    let tier: i64 = row.get(0)?;
+                    let start: i64 = row.get(1)?;
+                    let packed: Vec<u8> = row.get(2)?;
+                    Ok(Tier::from_code(tier).zip(unpack(start, &packed)))
+                })
+                .map_err(DatabaseFailure::statement("process_history.buckets"))?;
+            Ok(rows
+                .filter_map(Result::ok)
+                .flatten()
+                .map(|(tier, bucket)| RunBucketRow {
+                    key: key.clone(),
+                    tier,
+                    bucket,
+                })
+                .collect())
+        };
     let mut rows = Vec::new();
     // Coarsest first, each oldest first.
     for tier in Tier::ALL.into_iter().skip(1).rev() {

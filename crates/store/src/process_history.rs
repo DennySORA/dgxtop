@@ -7,8 +7,11 @@
 //! The database is opened like the other partitions (0600, no symlinks,
 //! format, schema and integrity checked before any write, a file of
 //! another format recreated (D-85), `max_page_count`); one still unusable
-//! makes every call fail with its reason, and the history stays in memory. A bucket packs 12 bytes a metric; a run keeps at most
-//! 300 buckets a size, so at most about a megabyte however long it runs.
+//! makes every call fail with its reason, and the history stays in memory.
+//! A failed call maps like every partition's ([`crate::sqlite::Writer`]):
+//! corruption stops the database until the next start recreates it. A
+//! bucket packs 12 bytes a metric; a run keeps at most 300 buckets a size,
+//! so at most about a megabyte however long it runs.
 //! No run expires by age: past [`MAX_USED_BYTES`] the ended runs last seen
 //! longest ago give way.
 
@@ -29,7 +32,8 @@ use rusqlite::Connection;
 
 use crate::fs::{FileSystemOps, RealFileSystem};
 use crate::sqlite::{
-    SchemaKind, VersionGate, ensure_sqlite_version, open_small_database, path_problem,
+    DatabaseFailure, SchemaKind, VersionGate, Writer, ensure_sqlite_version, open_small_database,
+    path_problem,
 };
 
 const MIB: u64 = 1024 * 1024;
@@ -41,7 +45,7 @@ const RETENTION_EVERY_NS: u64 = 3_600 * 1_000_000_000;
 
 /// The process history's stores in dgxtop's state directory.
 pub struct ProcessHistoryFiles {
-    database: Result<Connection, String>,
+    database: Writer,
     recreated: Option<String>,
     /// The short-term file, or why its path cannot be used.
     recent_path: Result<PathBuf, String>,
@@ -55,7 +59,7 @@ impl std::fmt::Debug for ProcessHistoryFiles {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ProcessHistoryFiles")
-            .field("database", &self.database.as_ref().map(|_| "open"))
+            .field("database", &self.database)
             .field("recent_path", &self.recent_path)
             .finish_non_exhaustive()
     }
@@ -84,10 +88,7 @@ impl ProcessHistoryFiles {
     ) -> Self {
         let opened =
             open_small_database(database_path, SchemaKind::ProcessHistory, fs.as_ref(), gate);
-        let (database, recreated) = match opened {
-            Ok(opened) => (Ok(opened.connection), opened.recreated),
-            Err(unusable) => (Err(unusable.reason), None),
-        };
+        let (database, recreated) = Writer::new("process history", opened);
         let recent_path = match path_problem(recent_path) {
             Some(problem) => Err(format!("{}: {problem}", recent_path.display())),
             None => Ok(recent_path.to_path_buf()),
@@ -110,9 +111,19 @@ impl ProcessHistoryFiles {
     }
 
     fn connection(&mut self) -> Result<&mut Connection, InfraError> {
-        self.database.as_mut().map_err(|reason| {
-            InfraError::Unavailable(format!("process history database: {reason}"))
+        self.database.connection().map_err(|unusable| {
+            InfraError::Unavailable(format!("process history database: {}", unusable.reason))
         })
+    }
+
+    /// Runs `call` on the database, mapping its failure (D-85: corruption
+    /// stops the database).
+    fn with_database<T>(
+        &mut self,
+        call: impl FnOnce(&mut Connection) -> Result<T, DatabaseFailure>,
+    ) -> Result<T, InfraError> {
+        let result = call(self.connection()?);
+        result.map_err(|failure| self.database.fail(&failure))
     }
 
     fn recent_path(&self) -> Result<&Path, InfraError> {
@@ -137,7 +148,7 @@ impl ProcessHistoryFiles {
             return Ok(());
         }
         let max_used_bytes = self.max_used_bytes;
-        database::retain(self.connection()?, max_used_bytes)?;
+        self.with_database(|connection| database::retain(connection, max_used_bytes))?;
         self.last_retention_boot_ns = Some(now);
         Ok(())
     }
@@ -146,7 +157,7 @@ impl ProcessHistoryFiles {
 impl ProcessHistoryStore for ProcessHistoryFiles {
     fn load(&mut self) -> Result<ProcessHistoryLoad, InfraError> {
         self.maybe_retain()?;
-        let (runs, buckets) = database::load(self.connection()?)?;
+        let (runs, buckets) = self.with_database(database::load)?;
         // A short-term file that cannot be read only loses the last minutes.
         let recent = self
             .recent_path()
@@ -160,7 +171,7 @@ impl ProcessHistoryStore for ProcessHistoryFiles {
     }
 
     fn append(&mut self, journal: &ProcessHistoryJournal) -> Result<(), InfraError> {
-        database::append(self.connection()?, journal)?;
+        self.with_database(|connection| database::append(connection, journal))?;
         self.maybe_retain()
     }
 
@@ -169,7 +180,7 @@ impl ProcessHistoryStore for ProcessHistoryFiles {
     }
 
     fn read_run(&mut self, key: &ProcessKey) -> Result<Vec<RunBucketRow>, InfraError> {
-        database::read_run(self.connection()?, key)
+        self.with_database(|connection| database::read_run(connection, key))
     }
 }
 

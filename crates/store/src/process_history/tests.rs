@@ -510,6 +510,67 @@ fn a_short_term_file_of_another_format_is_replaced() {
     );
 }
 
+/// Caps the database at the pages it has, so the next growth is
+/// `SQLITE_FULL`.
+fn fill_up(connection: &rusqlite::Connection) {
+    let _cap: i64 = connection
+        .query_row("PRAGMA max_page_count = 1", [], |row| row.get(0))
+        .unwrap();
+}
+
+/// A full database is a full disk to the history, like the archive's
+/// (one SQLite mapping for every partition).
+#[test]
+fn a_full_database_reports_disk_full() {
+    let scratch = Scratch::new("disk-full");
+    let clock = clock();
+    let now = now_utc(&clock);
+    let mut store = scratch.open(&clock);
+    store.load().unwrap();
+    fill_up(store.connection().unwrap());
+    let runs = (1..=200).map(|pid| run(pid, now, None)).collect();
+    let error = store
+        .append(&ProcessHistoryJournal {
+            runs,
+            buckets: Vec::new(),
+        })
+        .unwrap_err();
+    assert!(matches!(error, InfraError::DiskFull { .. }), "{error:?}");
+}
+
+/// Corruption stops the database like every partition's (sqlite::Writer):
+/// later calls say why, and the short-term file still works.
+#[test]
+fn a_corrupt_database_stops_with_its_reason() {
+    let scratch = Scratch::new("corrupt");
+    let clock = clock();
+    let mut store = scratch.open(&clock);
+    let corrupt = store
+        .with_database(|_| -> Result<(), DatabaseFailure> {
+            Err(DatabaseFailure::Statement {
+                operation: "process_history.load",
+                error: rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CORRUPT),
+                    None,
+                ),
+            })
+        })
+        .unwrap_err();
+    assert!(matches!(corrupt, InfraError::Database(_)), "{corrupt:?}");
+    let error = store.load().unwrap_err();
+    assert!(matches!(error, InfraError::Unavailable(_)), "{error:?}");
+    assert!(
+        error.to_string().contains("process history stopped"),
+        "{error}"
+    );
+    let recent = RecentHistory {
+        boot_id: boot_id("boot-a"),
+        saved_utc_ns: 0,
+        runs: Vec::new(),
+    };
+    assert!(store.save_recent(&recent).is_ok());
+}
+
 /// Relative paths are refused like the archive's and the audit's: the
 /// database is unusable and says why, the short-term file is never
 /// written, and nothing is created anywhere.

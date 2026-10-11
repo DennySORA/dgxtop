@@ -1,5 +1,8 @@
 //! Classification of SQLite failures into the few classes persistence
-//! policy distinguishes (busy, full, corrupt, I/O, constraint, ...).
+//! policy distinguishes (busy, full, corrupt, I/O, constraint, ...), and
+//! the one mapping of a failed statement or transaction to an
+//! [`InfraError`] that every partition reporting `InfraError` uses (the
+//! audit maps the same classes to its own `AuditFailure` codes).
 
 use dgxtop_core::errors::InfraError;
 use rusqlite::ErrorCode;
@@ -13,8 +16,8 @@ pub(crate) enum FaultKind {
     Busy,
     /// `SQLITE_FULL`: `ENOSPC` or `max_page_count` reached.
     Full,
-    /// `SQLITE_CORRUPT`/`SQLITE_NOTADB`: the file must be kept and the
-    /// partition stopped.
+    /// `SQLITE_CORRUPT`/`SQLITE_NOTADB`: the partition stops writing and
+    /// the file is recreated at the next start (D-85).
     Corrupt,
     /// `SQLITE_IOERR`: during COMMIT the outcome is uncertain.
     Io,
@@ -48,20 +51,52 @@ pub(crate) fn describe(error: &rusqlite::Error) -> String {
     dgxtop_core::text::sanitize_message(&error.to_string())
 }
 
-/// A failed statement of `operation`.
-pub(crate) fn infra_error(operation: &'static str, error: &rusqlite::Error) -> InfraError {
-    InfraError::Database(format!("{operation}: {}", describe(error)))
+/// `operation: <sanitized SQLite message>`, for errors and statuses.
+pub(crate) fn fault_message(operation: &str, error: &rusqlite::Error) -> String {
+    format!("{operation}: {}", describe(error))
 }
 
-/// A failed transaction of `operation`.
-pub(crate) fn tx_infra_error(operation: &'static str, error: TxError<()>) -> InfraError {
+/// A failed statement of `operation`: a full database or disk is
+/// `DiskFull`, a held lock `Unavailable`, an I/O error `Io`, anything else
+/// (corruption included) `Database`.
+pub(crate) fn infra_error(operation: &'static str, error: &rusqlite::Error) -> InfraError {
+    let message = fault_message(operation, error);
+    match fault_kind(error) {
+        FaultKind::Full => InfraError::DiskFull { operation },
+        FaultKind::Busy => InfraError::Unavailable(message),
+        FaultKind::Io => InfraError::Io { operation, message },
+        FaultKind::Corrupt
+        | FaultKind::Constraint
+        | FaultKind::ReadOnly
+        | FaultKind::CannotOpen
+        | FaultKind::Other => InfraError::Database(message),
+    }
+}
+
+/// A failed transaction of `operation`: like [`infra_error`], except that
+/// an I/O error of COMMIT itself is `Uncertain` (it may have reached the
+/// disk) and the lock deadline is a `Timeout`.
+pub(crate) fn tx_infra_error<E>(operation: &'static str, error: &TxError<E>) -> InfraError {
     match error {
-        TxError::Sqlite(error) | TxError::Commit(error) => infra_error(operation, &error),
+        TxError::Sqlite(error) => infra_error(operation, error),
+        TxError::Commit(error) if fault_kind(error) == FaultKind::Io => InfraError::Uncertain {
+            operation,
+            message: fault_message(operation, error),
+        },
+        TxError::Commit(error) => infra_error(operation, error),
         TxError::BusyTimeout { elapsed_ms } => InfraError::Timeout {
             operation,
-            elapsed_ms,
+            elapsed_ms: *elapsed_ms,
         },
-        TxError::Abort(()) => InfraError::Database(format!("{operation}: aborted")),
+        TxError::Abort(_) => InfraError::Database(format!("{operation}: aborted")),
+    }
+}
+
+/// The SQLite error inside a failed transaction, if there is one.
+pub(crate) fn tx_sqlite_error<E>(error: &TxError<E>) -> Option<&rusqlite::Error> {
+    match error {
+        TxError::Sqlite(error) | TxError::Commit(error) => Some(error),
+        TxError::Abort(_) | TxError::BusyTimeout { .. } => None,
     }
 }
 

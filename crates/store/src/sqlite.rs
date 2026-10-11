@@ -30,6 +30,7 @@ mod statements;
 mod time;
 mod transaction;
 mod version;
+mod writer;
 
 pub use capacity::{StorageFootprint, shm_path, wal_path};
 pub use free_space::{FreeSpaceProbe, StatvfsFreeSpace};
@@ -45,10 +46,11 @@ pub(crate) use capacity::{
 };
 pub(crate) use connection::ConnectionProfile;
 pub(crate) use database::{DatabaseSpec, Unusable, VersionGate, open_database, path_problem};
-pub(crate) use errors::{FaultKind, describe, fault_kind, infra_error, tx_infra_error};
+pub(crate) use errors::{FaultKind, describe, fault_kind, fault_message, tx_sqlite_error};
 #[cfg(test)]
 pub(crate) use schema::PROCESS_HISTORY_DDL;
 pub(crate) use statements::{
     BucketTable, Drained, checkpoint, drain, open_small_database, used_bytes,
 };
 pub(crate) use transaction::{StepError, TxError, immediate_transaction};
+pub(crate) use writer::{DatabaseFailure, Writer};

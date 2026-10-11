@@ -8,7 +8,6 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use dgxtop_core::errors::InfraError;
 use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::identity::{EntityId, HostId, MetricId, Scope};
 use dgxtop_core::overview_history::{OverviewBucket, StoredTierSeries, TierJournal, TierRow};
@@ -16,8 +15,7 @@ use dgxtop_core::process_history::Tier;
 use rusqlite::{Connection, Row, Transaction, params};
 
 use crate::sqlite::{
-    BucketTable, StepError, checkpoint, immediate_transaction, infra_error, tx_infra_error,
-    used_bytes,
+    BucketTable, DatabaseFailure, StepError, checkpoint, immediate_transaction, used_bytes,
 };
 
 /// A transaction waits this long for the write lock at most.
@@ -32,7 +30,10 @@ const SERIES_GIVING_WAY: i64 = 1;
 /// Deletes the series the journal forgets, writes its buckets (one written
 /// again replaces the earlier), then keeps the latest `keep_latest` of
 /// every (series, size) it touched.
-pub(super) fn append(connection: &mut Connection, journal: &TierJournal) -> Result<(), InfraError> {
+pub(super) fn append(
+    connection: &mut Connection,
+    journal: &TierJournal,
+) -> Result<(), DatabaseFailure> {
     if journal.rows.is_empty() && journal.forget.is_empty() {
         return Ok(());
     }
@@ -56,8 +57,8 @@ pub(super) fn append(connection: &mut Connection, journal: &TierJournal) -> Resu
         }
         Ok::<_, StepError<()>>(())
     })
-    .map_err(|error| tx_infra_error("history_tiers.append", error))?;
-    checkpoint(connection).map_err(|error| infra_error("history_tiers.checkpoint", &error))
+    .map_err(DatabaseFailure::transaction("history_tiers.append"))?;
+    checkpoint(connection).map_err(DatabaseFailure::statement("history_tiers.checkpoint"))
 }
 
 /// Deletes one series and every bucket of it.
@@ -146,7 +147,10 @@ fn insert_bucket(
 
 /// While the database holds more than `max_used_bytes`, the series written
 /// longest ago give way (D-82: none expires by age).
-pub(super) fn retain(connection: &mut Connection, max_used_bytes: u64) -> Result<(), InfraError> {
+pub(super) fn retain(
+    connection: &mut Connection,
+    max_used_bytes: u64,
+) -> Result<(), DatabaseFailure> {
     immediate_transaction(connection, BUSY_DEADLINE, |transaction| {
         while used_bytes(transaction)? > max_used_bytes {
             let removed = transaction.execute(
@@ -160,18 +164,18 @@ pub(super) fn retain(connection: &mut Connection, max_used_bytes: u64) -> Result
         }
         Ok::<_, StepError<()>>(())
     })
-    .map_err(|error| tx_infra_error("history_tiers.retain", error))
+    .map_err(DatabaseFailure::transaction("history_tiers.retain"))
 }
 
 /// Every series with its buckets, each size oldest first. A series whose
 /// identity no longer parses is left out (kept on disk).
-pub(super) fn load(connection: &mut Connection) -> Result<Vec<StoredTierSeries>, InfraError> {
+pub(super) fn load(connection: &mut Connection) -> Result<Vec<StoredTierSeries>, DatabaseFailure> {
     let mut statement = connection
         .prepare("SELECT series_id, host_id, entity_id, metric_id, scope FROM tier_series")
-        .map_err(|error| infra_error("history_tiers.load", &error))?;
+        .map_err(DatabaseFailure::statement("history_tiers.load"))?;
     let series: Vec<(i64, SeriesInEveryBoot)> = statement
         .query_map([], series_of)
-        .map_err(|error| infra_error("history_tiers.load", &error))?
+        .map_err(DatabaseFailure::statement("history_tiers.load"))?
         .filter_map(Result::ok)
         .flatten()
         .collect();
@@ -205,17 +209,17 @@ fn series_of(row: &Row<'_>) -> rusqlite::Result<Option<(i64, SeriesInEveryBoot)>
 fn buckets_of(
     connection: &Connection,
     series_id: i64,
-) -> Result<Vec<(Tier, OverviewBucket)>, InfraError> {
+) -> Result<Vec<(Tier, OverviewBucket)>, DatabaseFailure> {
     let mut statement = connection
         .prepare_cached(
             "SELECT tier, start_utc_ns, covered_ns, weighted_sum, minimum, maximum, \
              sample_count, total FROM tier_buckets WHERE series_id = ?1 \
              ORDER BY tier, start_utc_ns",
         )
-        .map_err(|error| infra_error("history_tiers.buckets", &error))?;
+        .map_err(DatabaseFailure::statement("history_tiers.buckets"))?;
     let rows = statement
         .query_map(params![series_id], bucket_of)
-        .map_err(|error| infra_error("history_tiers.buckets", &error))?;
+        .map_err(DatabaseFailure::statement("history_tiers.buckets"))?;
     Ok(rows.filter_map(Result::ok).flatten().collect())
 }
 
