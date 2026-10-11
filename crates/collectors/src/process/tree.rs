@@ -12,8 +12,9 @@ pub(crate) struct TreeNode {
     /// Its own CPU time (`utime + stime`), ticks; `None` when its read
     /// failed.
     pub own_ticks: Option<u64>,
-    /// Its reaped children's (`cutime + cstime`), ticks.
-    pub reaped_ticks: u64,
+    /// Its reaped children's (`cutime + cstime`), ticks; `None` when the
+    /// adapter could not read it.
+    pub reaped_ticks: Option<u64>,
     pub rss_bytes: Option<u64>,
 }
 
@@ -26,7 +27,8 @@ pub(crate) struct DescendantUsage {
     /// reaped since it started (the kernel adds a reaped child's time to
     /// its parent's): it only grows while the descendants stay in the tree.
     /// `None` when one's own time is unknown: a total that left it out
-    /// would drop and the next would count its whole time as new.
+    /// would drop and the next would count its whole time as new. The same
+    /// holds for an unknown reaped time, the root's included.
     pub cpu_ticks: Option<u64>,
     /// Resident memory of the descendants running now; `None` when one's
     /// is unknown.
@@ -59,7 +61,7 @@ impl ProcessTree {
         let root = self.nodes.get(&pid)?;
         let mut usage = DescendantUsage {
             processes: 0,
-            cpu_ticks: Some(root.reaped_ticks),
+            cpu_ticks: root.reaped_ticks,
             rss_bytes: Some(0),
         };
         let mut seen = HashSet::from([pid]);
@@ -75,8 +77,8 @@ impl ProcessTree {
             usage.processes += 1;
             usage.cpu_ticks = usage
                 .cpu_ticks
-                .zip(node.own_ticks)
-                .map(|(sum, own)| sum.saturating_add(own).saturating_add(node.reaped_ticks));
+                .zip(node.own_ticks.zip(node.reaped_ticks))
+                .map(|(sum, (own, reaped))| sum.saturating_add(own).saturating_add(reaped));
             usage.rss_bytes = usage
                 .rss_bytes
                 .zip(node.rss_bytes)
@@ -99,7 +101,7 @@ mod tests {
         TreeNode {
             parent,
             own_ticks: Some(own_ticks),
-            reaped_ticks,
+            reaped_ticks: Some(reaped_ticks),
             rss_bytes,
         }
     }
@@ -143,6 +145,14 @@ mod tests {
         assert_eq!(usage.processes, 1);
         assert_eq!(usage.cpu_ticks, None);
         assert_eq!(usage.rss_bytes, Some(1));
+        let mut unreaped = node(10, 0, 0, Some(1));
+        unreaped.reaped_ticks = None;
+        let tree = ProcessTree::of([(10, node(1, 0, 4, Some(1))), (11, unreaped)]);
+        assert_eq!(tree.usage_of(10).unwrap().cpu_ticks, None);
+        let mut root = node(1, 0, 0, Some(1));
+        root.reaped_ticks = None;
+        let tree = ProcessTree::of([(10, root)]);
+        assert_eq!(tree.usage_of(10).unwrap().cpu_ticks, None, "the root's");
     }
 
     #[test]

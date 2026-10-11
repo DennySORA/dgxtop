@@ -348,7 +348,7 @@ impl SeenProcess {
             ppid: self.stat.ppid,
             state: self.stat.state,
             threads: self.stat.num_threads,
-            reaped_ticks: Some(reaped_ticks(&self.stat)),
+            reaped_ticks: reaped_ticks(&self.stat),
         };
         record.reason_codes.extend(stat.reason_codes());
         Some(record)
@@ -438,14 +438,13 @@ fn cpu_ticks(stat: &PidStat) -> Result<u64, DerivationFailure> {
     }
 }
 
-/// The reaped children's time; a column the kernel lacks counts as zero,
-/// as a kernel without it has spent none there.
-fn reaped_ticks(stat: &PidStat) -> u64 {
-    let ticks = |field: Field<u64>| match field {
-        Field::Value(value) => value,
-        Field::Absent | Field::Invalid => 0,
-    };
-    ticks(stat.cutime).saturating_add(ticks(stat.cstime))
+/// The reaped children's time (`cutime + cstime`); `None` when either
+/// column is missing or unparsable, so it is left out, never sent as zero.
+fn reaped_ticks(stat: &PidStat) -> Option<u64> {
+    match (stat.cutime, stat.cstime) {
+        (Field::Value(user), Field::Value(system)) => Some(user.saturating_add(system)),
+        _ => None,
+    }
 }
 
 /// Resident pages × page size, without overflow and never guessed; the

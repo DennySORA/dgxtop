@@ -424,7 +424,7 @@ fn tree_node(key: &ProcessKey, sample: &HostSample<'_>) -> Option<(i64, TreeNode
     let node = TreeNode {
         parent: stat.ppid?,
         own_ticks,
-        reaped_ticks: stat.reaped_ticks.unwrap_or(0),
+        reaped_ticks: stat.reaped_ticks,
         rss_bytes: stat.rss_bytes,
     };
     Some((i64::from(key.pid.get()), node))

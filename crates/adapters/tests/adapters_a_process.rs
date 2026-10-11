@@ -196,6 +196,25 @@ fn a_record_carries_parent_threads_and_reaped_time() {
     assert_eq!(stat.reaped_ticks, Some(12), "cutime + cstime");
 }
 
+/// A reaped children's time the kernel line does not hold as a number is
+/// left out of the tags, never sent as zero.
+#[test]
+fn an_unparsable_reaped_time_is_left_out_not_zero() {
+    let tree = FakeTree::new("process-reaped-unparsable");
+    write_namespaces(&tree);
+    tree.write(
+        "/proc/9/stat",
+        "9 (trainer) R 4 9 9 0 -1 4194560 100 0 0 0 30 20 x 5 20 0 12 0 900 1234567 64 18446744073709551615 1 1 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0\n",
+    );
+    let mut adapter = adapter(&tree, 256);
+    let records = records(&read_all(&mut adapter, ADAPTER, "process", 1));
+    let record = by_pid(&records, 9);
+    assert_eq!(u64_value(record), 50, "the ticks stay");
+    let stat = stat_of(record);
+    assert_eq!(stat.reaped_ticks, None);
+    assert_eq!(stat.ppid, Some(4));
+}
+
 #[test]
 fn hostile_command_names_are_sanitized() {
     let tree = FakeTree::new("process-hostile");
