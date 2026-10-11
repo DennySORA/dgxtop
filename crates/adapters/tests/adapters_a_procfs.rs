@@ -599,6 +599,7 @@ fn manifest_matches_the_contract() {
         unsupported_probe_ms: 60_000,
         max_sources: 500,
         page_size: 256,
+        ..AdapterOptions::default()
     };
     let manifest = manifest_with(&options);
     manifest.validate().unwrap();

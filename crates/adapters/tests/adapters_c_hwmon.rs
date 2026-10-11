@@ -134,8 +134,6 @@ fn zero_celsius_is_kept_as_a_valid_reading() {
 #[test]
 fn unclassified_sensors_are_diagnostics_with_unknown_origin() {
     let sysfs = FakeSysfs::new("hwmon-diagnostics");
-    let acpitz = sysfs.hwmon(0, "virtual/thermal/thermal_zone0", "acpitz");
-    sysfs.write(&format!("{acpitz}/temp1_input"), "27800\n");
     let nvme = sysfs.hwmon(1, "pci0000:00/0000:00:06.0/0000:02:00.0/nvme/nvme0", "nvme");
     sysfs.write(&format!("{nvme}/temp1_input"), "41850\n");
     sysfs.write(&format!("{nvme}/temp1_label"), "Composite\n");
@@ -148,7 +146,7 @@ fn unclassified_sensors_are_diagnostics_with_unknown_origin() {
     let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
     let (_, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let catalog = sources(&pages);
-    assert_eq!(catalog.len(), 4);
+    assert_eq!(catalog.len(), 3);
     for descriptor in &catalog {
         assert!(
             descriptor.metric.is_none(),
@@ -194,6 +192,92 @@ fn unclassified_sensors_are_diagnostics_with_unknown_origin() {
         ),
     );
     assert_eq!(nvme_record.provenance.driver, "nvme");
+}
+
+/// The kernel mirrors thermal zones as an hwmon device whose `device` is a
+/// zone (GB10's `acpitz`: one `tempN_input` per zone). The thermal adapter
+/// already reads every zone and maps it by ACPI path (D-68), so hwmon leaves
+/// the mirror out instead of reading each sensor twice (D-81).
+#[test]
+fn thermal_zone_mirrors_are_left_to_the_thermal_adapter() {
+    let sysfs = FakeSysfs::new("hwmon-thermal-mirror");
+    let acpitz = sysfs.hwmon(0, "virtual/thermal/thermal_zone0", "acpitz");
+    for index in 1..=7 {
+        sysfs.write(
+            &format!("{acpitz}/temp{index}_input"),
+            &format!("{}\n", 70_000 + index),
+        );
+    }
+    let nvme = sysfs.hwmon(1, "pci0000:00/0000:00:06.0/0000:02:00.0/nvme/nvme0", "nvme");
+    sysfs.write(&format!("{nvme}/temp1_input"), "41850\n");
+    let counting = Arc::new(CountingFiles::new(sysfs.rooted()));
+    let files: Arc<dyn SystemFiles> = counting.clone();
+    let clock = clock();
+    let mut hwmon = HwmonAdapter::new(time(&clock), host(), files, AdapterOptions::default());
+
+    let (_, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
+    let catalog = sources(&pages);
+    let source_ids: Vec<&str> = catalog
+        .iter()
+        .map(|descriptor| descriptor.source_id.as_str())
+        .collect();
+    assert_eq!(
+        source_ids,
+        vec![source_id(
+            "nvme@pci0000:00/0000:00:06.0/0000:02:00.0/nvme/nvme0",
+            "temp1"
+        )]
+    );
+    for cycle in 1..=3 {
+        clock.advance_ms(1_000);
+        let readings = records(&read_all(
+            &mut hwmon,
+            ADAPTER,
+            "fast",
+            cycle,
+            deadline(&clock),
+            Vec::new(),
+        ));
+        assert_eq!(readings.len(), 1, "only the NVMe sensor is read");
+        discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
+    }
+    assert_eq!(
+        counting.reads_matching("hwmon0/temp"),
+        0,
+        "no mirrored zone value is ever read"
+    );
+    assert_eq!(
+        counting.reads_matching("hwmon0/name"),
+        1,
+        "the mirror's metadata is read once and cached"
+    );
+}
+
+/// Without the thermal adapter (a small `sampling.max_adapters`), hwmon
+/// reads the zones' mirror itself, so they are never left unread (D-81).
+#[test]
+fn without_the_thermal_adapter_hwmon_reads_the_zone_mirrors() {
+    let sysfs = FakeSysfs::new("hwmon-thermal-mirror-alone");
+    let acpitz = sysfs.hwmon(0, "virtual/thermal/thermal_zone0", "acpitz");
+    sysfs.write(&format!("{acpitz}/temp1_input"), "70001\n");
+    let clock = clock();
+    let options = AdapterOptions {
+        thermal_reads_zones: false,
+        ..AdapterOptions::default()
+    };
+    let mut hwmon = HwmonAdapter::new(time(&clock), host(), sysfs.files(), options);
+    let (_, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
+    assert_eq!(sources(&pages).len(), 1, "the mirrored zone is a source");
+    clock.advance_ms(1_000);
+    let readings = records(&read_all(
+        &mut hwmon,
+        ADAPTER,
+        "fast",
+        1,
+        deadline(&clock),
+        Vec::new(),
+    ));
+    assert_eq!(readings.len(), 1);
 }
 
 #[test]

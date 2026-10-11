@@ -985,12 +985,13 @@ fn host_specs(
     let limit = usize::try_from(effective.sampling.max_adapters).unwrap_or(8);
     let mut specs = Vec::new();
     let mut manifests = Vec::new();
-    for adapter in naming::adapters::LIVE
+    let selected: Vec<&str> = naming::adapters::LIVE
         .iter()
         .copied()
         .filter(|adapter| effective.sampling.gpu_enabled || *adapter != naming::adapters::NVML)
         .take(limit)
-    {
+        .collect();
+    for adapter in selected.iter().copied() {
         let Some(manifest) = dgxtop_adapters::registry::live_manifest(adapter) else {
             continue;
         };
@@ -999,12 +1000,22 @@ fn host_specs(
                 .map_err(|error| StartError::failure(error.to_string()))?,
             launch: HostLaunch::ChildProcess {
                 program: program.clone(),
-                args: vec!["--adapter-host".to_owned(), adapter.to_owned()],
+                args: host_args(adapter, &selected),
             },
         });
         manifests.push(manifest);
     }
     Ok((specs, manifests))
+}
+
+/// An adapter host's arguments; hwmon reads the thermal zones' mirrors
+/// itself when the thermal adapter is not among the hosts (D-81).
+fn host_args(adapter: &str, selected: &[&str]) -> Vec<String> {
+    let mut args = vec!["--adapter-host".to_owned(), adapter.to_owned()];
+    if adapter == naming::adapters::HWMON && !selected.contains(&naming::adapters::THERMAL) {
+        args.push("--hwmon-reads-thermal-zones".to_owned());
+    }
+    args
 }
 
 fn replay_host(
@@ -1132,6 +1143,25 @@ fn wait_for_flag(flag: &AtomicBool, timeout: Duration) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// hwmon reads the thermal zones' mirrors only when the thermal
+    /// adapter is not among the hosts (D-81).
+    #[test]
+    fn hwmon_reads_the_zones_only_without_the_thermal_host() {
+        use dgxtop_core::naming::adapters::{HWMON, PROCFS, THERMAL};
+        assert_eq!(
+            super::host_args(HWMON, &[PROCFS, HWMON, THERMAL]),
+            vec!["--adapter-host", HWMON]
+        );
+        assert_eq!(
+            super::host_args(HWMON, &[PROCFS, HWMON]),
+            vec!["--adapter-host", HWMON, "--hwmon-reads-thermal-zones"]
+        );
+        assert_eq!(
+            super::host_args(PROCFS, &[PROCFS]),
+            vec!["--adapter-host", PROCFS]
+        );
+    }
+
     use super::*;
 
     #[test]

@@ -82,6 +82,11 @@ pub struct Cli {
     #[arg(long, hide = true, value_name = "ADAPTER_ID")]
     pub adapter_host: Option<String>,
 
+    /// Internal: the hwmon host reads the thermal zones' hwmon mirrors
+    /// itself, the thermal adapter not running (D-81).
+    #[arg(long, hide = true)]
+    pub hwmon_reads_thermal_zones: bool,
+
     /// Internal: generation assigned to the adapter host by the supervisor.
     #[arg(long, hide = true, value_name = "N")]
     pub host_generation: Option<u32>,
