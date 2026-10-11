@@ -107,7 +107,8 @@ impl<T> AccountedDeque<T> {
     }
 
     /// Reserved bytes (capacity, not length).
-    pub fn reserved_bytes(&self) -> u64 {
+    #[cfg(test)]
+    fn reserved_bytes(&self) -> u64 {
         self.account.bytes()
     }
 
@@ -153,12 +154,6 @@ impl<T> AccountedDeque<T> {
         }
     }
 
-    pub fn try_push_back(&mut self, item: T) -> Result<(), CapacityError> {
-        self.try_make_room()?;
-        self.items.push_back(item);
-        Ok(())
-    }
-
     pub fn try_insert(&mut self, index: usize, item: T) -> Result<(), CapacityError> {
         self.try_make_room()?;
         self.items.insert(index.min(self.items.len()), item);
@@ -194,7 +189,7 @@ mod tests {
         assert_eq!(ledger.used(Partition::Aggregates), 0);
         assert_eq!(deque.growth_cost(), bytes_of::<u64>(MIN_CAPACITY));
         for value in 0..100u64 {
-            deque.try_push_back(value).unwrap();
+            deque.try_insert(deque.len(), value).unwrap();
         }
         assert_eq!(
             ledger.used(Partition::Aggregates),
@@ -216,7 +211,7 @@ mod tests {
     fn failed_growth_leaves_deque_unchanged() {
         let ledger = ByteLedger::new(super::super::PartitionLimits::for_memory_limit_mib(0));
         let mut deque = AccountedDeque::<u64>::new(&ledger, Partition::Aggregates);
-        assert!(deque.try_push_back(1).is_err());
+        assert!(deque.try_insert(0, 1).is_err());
         assert!(deque.is_empty());
         assert_eq!(deque.reserved_bytes(), 0);
     }

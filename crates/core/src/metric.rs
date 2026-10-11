@@ -84,11 +84,6 @@ impl Scalar {
             ScalarRepr::U64(value) => value as f64,
         }
     }
-
-    /// Rough heap footprint used for byte accounting (scalars are inline).
-    pub const fn heap_bytes(self) -> usize {
-        0
-    }
 }
 
 impl fmt::Debug for Scalar {

@@ -196,7 +196,6 @@ pub enum RejectReason {
     UnknownUnit,
     Excluded,
     UnprovenPurpose,
-    LowerPriority,
     Hysteresis,
 }
 
@@ -213,7 +212,6 @@ impl RejectReason {
             Self::UnknownUnit => "unknown_unit",
             Self::Excluded => "excluded_by_policy",
             Self::UnprovenPurpose => "unproven_purpose",
-            Self::LowerPriority => "lower_priority",
             Self::Hysteresis => "held_by_hysteresis",
         }
     }

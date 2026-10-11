@@ -32,8 +32,8 @@ use uuid::Uuid;
 
 use crate::action::{
     ActionAttempt, ActionCompletion, ActionError, ActionHandle, ActionIntent, ActionOutcomeRecord,
-    ActionRecordSummary, AuditCompletion, AuditFailure, CapabilityContext, DurableReceipt,
-    ExitObservation, PersistenceStatus, PreparedProcess, RecoveredIntent, Signal, SignalOutcome,
+    AuditCompletion, AuditFailure, CapabilityContext, DurableReceipt, ExitObservation,
+    PersistenceStatus, PreparedProcess, RecoveredIntent, Signal, SignalOutcome,
 };
 use crate::budget::{BytePermit, CapacityError};
 use crate::canonical::{
@@ -375,7 +375,6 @@ pub trait AuditRepository: Send {
         now_boot_ns: u64,
         now_utc: &str,
     ) -> Result<Vec<RecoveredIntent>, AuditFailure>;
-    fn lookup(&mut self, request_id: Uuid) -> Result<Option<ActionRecordSummary>, AuditFailure>;
     fn status(&mut self) -> PersistenceStatus;
 }
 
@@ -701,8 +700,6 @@ pub enum AdapterFailureKind {
     HostUnavailable,
     Protocol,
     CapacityExceeded,
-    Quarantined,
-    CircuitOpen,
     Shutdown,
 }
 

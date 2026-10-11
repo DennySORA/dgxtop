@@ -196,9 +196,10 @@ mod tests {
     #[test]
     fn absent_flags_produce_no_overrides() {
         let overrides = parse(&[]).overrides().unwrap();
-        assert!(
-            overrides.is_empty(),
-            "no flag may override persisted settings: {overrides:?}"
+        assert_eq!(
+            overrides,
+            CliOverrides::default(),
+            "no flag may override persisted settings"
         );
     }
 

@@ -3,12 +3,11 @@
 //! intent (SECURITY.md §3).
 
 use dgxtop_core::action::{
-    ActionAttempt, ActionIntent, ActionOutcomeRecord, ActionRecordSummary, AuditFailure,
-    DurableReceipt, PersistenceKind, PersistenceState, PersistenceStatus, RecoveredIntent,
+    ActionAttempt, ActionIntent, ActionOutcomeRecord, AuditFailure, DurableReceipt,
+    PersistenceKind, PersistenceState, PersistenceStatus, RecoveredIntent,
 };
 use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::ports::AuditRepository;
-use uuid::Uuid;
 
 /// Fail-closed audit stand-in with a fixed reason.
 #[derive(Debug, Clone)]
@@ -53,10 +52,6 @@ impl AuditRepository for UnavailableAudit {
         Err(self.failure())
     }
 
-    fn lookup(&mut self, _request_id: Uuid) -> Result<Option<ActionRecordSummary>, AuditFailure> {
-        Err(self.failure())
-    }
-
     fn status(&mut self) -> PersistenceStatus {
         PersistenceStatus {
             kind: PersistenceKind::Audit,
@@ -73,11 +68,22 @@ impl AuditRepository for UnavailableAudit {
 mod tests {
     use super::*;
 
+    fn attempt() -> ActionAttempt {
+        ActionAttempt {
+            request_id: uuid::Uuid::nil(),
+            payload_sha256: String::new(),
+            session_digest: String::new(),
+            result_code: "Ok".to_owned(),
+            detail: String::new(),
+            occurred_utc: "1970-01-01T00:00:00Z".to_owned(),
+        }
+    }
+
     #[test]
     fn every_operation_fails_closed() {
         let mut audit = UnavailableAudit::new("gate failed");
         assert!(audit.recover_unknown(0, "1970-01-01T00:00:00Z").is_err());
-        assert!(audit.lookup(Uuid::nil()).is_err());
+        assert!(audit.append_attempt(&attempt()).is_err());
         assert!(!audit.status().accepts_writes());
     }
 }

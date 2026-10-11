@@ -698,6 +698,7 @@ name = "dgxtop-store"
 version = "2.0.2"
 dependencies = [
  "dgxtop-core",
+ "dgxtop-store",
  "libc",
  "nix 0.31.3",
  "rusqlite",

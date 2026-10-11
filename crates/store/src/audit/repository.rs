@@ -420,6 +420,21 @@ impl SqliteAuditRepository {
     }
 }
 
+/// Reading a request's audit record back is a test aid: the Manager never
+/// asks (single-use tokens make a replayed confirmation harmless, D-93).
+#[cfg(any(test, feature = "test-support"))]
+impl SqliteAuditRepository {
+    /// The audit record of `request_id`: its intent, else its attempt.
+    pub fn lookup(
+        &mut self,
+        request_id: Uuid,
+    ) -> Result<Option<ActionRecordSummary>, AuditFailure> {
+        let request = uuid_text(request_id);
+        let found = lookup_summary(self.connection()?, &request, request_id);
+        found.map_err(|error| self.sqlite_failure("audit lookup", &error))
+    }
+}
+
 impl AuditRepository for SqliteAuditRepository {
     fn append_intent(&mut self, intent: &ActionIntent) -> Result<DurableReceipt, AuditFailure> {
         let boot_id = self.clock.boot_id();
@@ -605,12 +620,6 @@ impl AuditRepository for SqliteAuditRepository {
         Ok(reported)
     }
 
-    fn lookup(&mut self, request_id: Uuid) -> Result<Option<ActionRecordSummary>, AuditFailure> {
-        let request = uuid_text(request_id);
-        let found = lookup_summary(self.connection()?, &request, request_id);
-        found.map_err(|error| self.sqlite_failure("audit lookup", &error))
-    }
-
     fn status(&mut self) -> PersistenceStatus {
         let (state, detail) = self.state_and_detail();
         let footprint = StorageFootprint::measure(&self.path).unwrap_or_default();
@@ -625,6 +634,7 @@ impl AuditRepository for SqliteAuditRepository {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 /// Result code when no event was found since the intent's creation: an
 /// intent still waiting for its first outcome reports `Ok`; otherwise the
 /// wall clock stepped back and the unbounded scan is used.
@@ -642,6 +652,7 @@ fn latest_result(
     Ok(latest_result_any(connection, request)?.unwrap_or_else(|| "Ok".to_owned()))
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn lookup_summary(
     connection: &Connection,
     request: &str,

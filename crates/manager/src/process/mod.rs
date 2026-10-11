@@ -352,9 +352,6 @@ impl ProcessService {
             }
             AuditCompletion::Recovered { result } => self.on_recovered(result, now),
             AuditCompletion::Status(status) => self.audit_status = Some(status),
-            // Lookups are never issued: single-use tokens already make a
-            // replayed confirmation harmless.
-            AuditCompletion::Lookup { .. } => {}
         }
         fx.mark_all_dirty();
     }

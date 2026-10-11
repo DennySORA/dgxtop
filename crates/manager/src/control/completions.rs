@@ -583,8 +583,6 @@ fn failure_label(kind: AdapterFailureKind) -> &'static str {
         AdapterFailureKind::HostUnavailable => "host_unavailable",
         AdapterFailureKind::Protocol => "protocol",
         AdapterFailureKind::CapacityExceeded => "capacity_exceeded",
-        AdapterFailureKind::Quarantined => "quarantined",
-        AdapterFailureKind::CircuitOpen => "circuit_open",
         AdapterFailureKind::Shutdown => "shutdown",
     }
 }
