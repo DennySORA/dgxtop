@@ -4,7 +4,7 @@
 //! exactly one result.
 
 use dgxtop_core::action::Signal;
-use dgxtop_core::commands::{CommandBody, CommandEnvelope, CommandResult, ViewKind};
+use dgxtop_core::commands::{CommandBody, CommandEnvelope, CommandResult};
 use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::identity::{ProcessKey, SessionId};
 use dgxtop_core::process_history::BarSize;
@@ -214,10 +214,6 @@ impl ControlCore {
         update: ViewUpdate,
         now: Now,
     ) {
-        // The run the Process History tab opened (D-76).
-        let opened = (update.view == ViewKind::History)
-            .then(|| update.selected_process.clone())
-            .flatten();
         let snapshot = self.ingestion.snapshots().latest();
         let catalog = self.catalog.snapshot();
         let context = ViewContext {
@@ -228,11 +224,10 @@ impl ControlCore {
         };
         match self.sessions.update(session_id, update, &context) {
             Ok(changed) => {
+                // The run the Process History tab opened is asked of the
+                // process actor with the session's next frame (D-76).
                 if changed {
                     self.sync_history(session_id, now.boot_ns);
-                }
-                if let Some(key) = &opened {
-                    self.process_history.open(key);
                 }
                 self.finish(CommandResult::completed(request_id, "view updated"));
             }

@@ -27,8 +27,7 @@ mod pacing;
 mod policy;
 pub mod presentation;
 mod process;
-pub mod process_history;
-mod process_memory;
+mod process_link;
 mod projection;
 mod results;
 mod scheduler;
@@ -46,5 +45,6 @@ pub use manager::{Manager, ManagerChannels};
 pub use session::SessionHandle;
 pub use setup::{
     CONTROL_INBOX_CAPACITY, INGESTION_INBOX_CAPACITY, ManagerInboxes, ManagerPorts, ManagerSetup,
+    ProcessHistoryHandles,
 };
 pub use shutdown::{ShutdownSummary, ShutdownTrigger};

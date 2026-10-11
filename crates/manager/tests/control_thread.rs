@@ -126,8 +126,6 @@ fn fixture_with_audit(audit: Box<dyn Dispatch<AuditOp>>) -> Fixture {
         config: Box::new(config_jobs.clone()),
         audit,
         actions: Box::new(CapturingDispatch::<ActionOp>::new()),
-        process_probe: None,
-        probe_deriver: Arc::new(dgxtop_core::testing::IdleProbeDeriver),
         process_history: None,
         logger: Arc::new(MemoryLogger::default()),
         diagnostics: Diagnostics::new(),

@@ -4,19 +4,19 @@
 use crate::manager::{Iteration, Manager};
 use crate::presentation::HostFacts;
 use crate::session::SessionHandle;
-use crate::setup::{ManagerInboxes, ManagerPorts, ManagerSetup};
+use crate::setup::{ManagerInboxes, ManagerPorts, ManagerSetup, ProcessHistoryHandles};
 use dgxtop_core::action::{ActionOp, AuditCompletion, AuditOp, PersistenceKind, PersistenceStatus};
 use dgxtop_core::budget::{ByteLedger, Partition, QueueGate};
 use dgxtop_core::canonical::{
-    CanonicalSample, CollectionBatch, CollectionPlan, CollectorState, DomainSnapshot, GpuUsageKind,
-    ImmutableSnapshot, ProcessGpuLink, ProcessRow, ProcessTable, SnapshotEntry,
+    CanonicalSample, CollectionBatch, CollectionPlan, CollectorState, DomainSnapshot,
+    ImmutableSnapshot, SnapshotEntry,
 };
 use dgxtop_core::commands::{CommandBody, CommandEnvelope, CommandRejection, CommandResult};
 use dgxtop_core::config::{Config, ValueOrigin};
 use dgxtop_core::diagnostics::Diagnostics;
+use dgxtop_core::identity::PidNamespace;
 use dgxtop_core::identity::{AdapterId, CollectorId};
 use dgxtop_core::identity::{EntityId, MetricKey, OriginIdentity, ProfileId};
-use dgxtop_core::identity::{Pid, PidNamespace, ProcessKey};
 use dgxtop_core::metric::NativeUnit;
 use dgxtop_core::metric::{CanonicalUnit, Scalar};
 use dgxtop_core::naming::is_replay_adapter;
@@ -26,13 +26,15 @@ use dgxtop_core::observation::{
 };
 use dgxtop_core::ports::{
     AdapterJob, ArchiveReadJob, ConfigJob, ControlCompletion, HistoryJob, IngestionCompletion,
-    SessionPort, StoreJob,
+    ProcessHistoryInput, ProcessHistoryReader, ProcessMemoryReader, SessionPort, StoreJob,
 };
 use dgxtop_core::ports::{Collector, IngressBatch, SnapshotReader};
 use dgxtop_core::quality::Availability;
 use dgxtop_core::quality::{Freshness, Quality, SelectionState};
 use dgxtop_core::quality::{Namespace, RawKind, SampleKind};
-use dgxtop_core::testing::{CapturingDispatch, FakeClock, MemoryLogger, boot_id, host_id};
+use dgxtop_core::testing::{
+    CapturingDispatch, FakeClock, MemoryLogger, StaticProcessHistory, boot_id, host_id,
+};
 use dgxtop_core::testing::{ObservationBuilder, batch_of, metric_key};
 use dgxtop_core::testing::{adapter_id, read_group, source_id};
 use dgxtop_core::view::{HostState, HostStatus};
@@ -241,55 +243,8 @@ pub(crate) fn ingress_page(
     ))
 }
 
-/// The key of test process `pid`.
-pub(crate) fn test_process_key(pid: i64) -> ProcessKey {
-    ProcessKey {
-        host_id: host_id("host-test"),
-        boot_id: boot_id("boot-test"),
-        pid_namespace: PidNamespace::new("pid:[4026531836]").unwrap(),
-        pid: Pid::new(pid).unwrap(),
-        start_time_ticks: 7,
-    }
-}
-
-/// Process `pid` holding the bytes of `held` on each of its GPUs (`None`:
-/// a GPU it uses without a known figure).
-pub(crate) fn gpu_process(pid: i64, name: &str, held: &[(&str, Option<u64>)]) -> ProcessRow {
-    ProcessRow {
-        key: test_process_key(pid),
-        name: name.to_owned(),
-        command: String::new(),
-        uid: Some(1000),
-        state: Some('R'),
-        ppid: None,
-        threads: None,
-        descendants: None,
-        cpu_percent: None,
-        rss_bytes: None,
-        missing_reason: None,
-        gpu: held
-            .iter()
-            .map(|(gpu, bytes)| ProcessGpuLink {
-                gpu_entity_id: entity_id(gpu),
-                usage: GpuUsageKind::Compute,
-                utilization_percent: None,
-                memory_bytes: *bytes,
-            })
-            .collect(),
-        sample_kind: SampleKind::Measured,
-        read_finished_boot_ns: 0,
-    }
-}
-
-/// The process table of collection `cycle`, read at `read_ns`.
-pub(crate) fn process_table(cycle: u64, read_ns: u64, rows: Vec<ProcessRow>) -> ProcessTable {
-    ProcessTable {
-        rows,
-        cycle_id: cycle,
-        read_finished_boot_ns: read_ns,
-        ..ProcessTable::default()
-    }
-}
+/// The test process key, shared with the history crate (D-79).
+pub(crate) use dgxtop_core::testing::test_process_key;
 
 /// A committed sample of `key` (no value means "unavailable").
 pub(crate) fn sample_entry(key: &MetricKey, value: Option<f64>, read_ns: u64) -> SnapshotEntry {
@@ -367,6 +322,10 @@ pub(crate) struct Ports {
     pub(crate) config: CapturingDispatch<ConfigJob>,
     pub(crate) audit: CapturingDispatch<AuditOp>,
     pub(crate) actions: CapturingDispatch<ActionOp>,
+    /// The history's process actor, wired with
+    /// [`HarnessOptions::process_history`].
+    pub(crate) process_inputs: CapturingDispatch<ProcessHistoryInput>,
+    pub(crate) process_history: Arc<StaticProcessHistory>,
     pub(crate) snapshots: Arc<FakeSnapshots>,
     pub(crate) logger: Arc<MemoryLogger>,
     pub(crate) diagnostics: Diagnostics,
@@ -383,6 +342,8 @@ pub(crate) struct HarnessOptions {
     pub(crate) collectors: Vec<Arc<dyn Collector>>,
     pub(crate) euid: u32,
     pub(crate) audit_ready: bool,
+    /// Wires a fake process actor (D-79); off, the Manager has none.
+    pub(crate) process_history: bool,
 }
 
 impl Default for HarnessOptions {
@@ -400,6 +361,7 @@ impl Default for HarnessOptions {
             ],
             euid: HARNESS_EUID,
             audit_ready: true,
+            process_history: false,
         }
     }
 }
@@ -437,6 +399,8 @@ pub(crate) fn harness_ports(options: &HarnessOptions) -> (ManagerPorts, Ports) {
         config: CapturingDispatch::new(),
         audit: CapturingDispatch::new(),
         actions: CapturingDispatch::new(),
+        process_inputs: CapturingDispatch::new(),
+        process_history: StaticProcessHistory::new(Default::default()),
         snapshots: Arc::new(FakeSnapshots::default()),
         logger: Arc::new(MemoryLogger::default()),
         diagnostics: Diagnostics::new(),
@@ -461,9 +425,11 @@ pub(crate) fn harness_ports(options: &HarnessOptions) -> (ManagerPorts, Ports) {
         config: Box::new(ports.config.clone()),
         audit: Box::new(ports.audit.clone()),
         actions: Box::new(ports.actions.clone()),
-        process_probe: None,
-        probe_deriver: Arc::new(dgxtop_core::testing::IdleProbeDeriver),
-        process_history: None,
+        process_history: options.process_history.then(|| ProcessHistoryHandles {
+            inputs: Box::new(ports.process_inputs.clone()),
+            runs: Arc::clone(&ports.process_history) as Arc<dyn ProcessHistoryReader>,
+            memory: Arc::clone(&ports.process_history) as Arc<dyn ProcessMemoryReader>,
+        }),
         logger: ports.logger.clone(),
         diagnostics: ports.diagnostics.clone(),
         ledger: ports.ledger.clone(),

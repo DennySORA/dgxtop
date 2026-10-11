@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 dgxtop-core.workspace = true
+dgxtop-compression.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

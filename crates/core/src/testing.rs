@@ -195,9 +195,12 @@ impl ProbeDeriver for IdleProbeDeriver {
 pub struct StaticProcessHistory {
     model: Mutex<Arc<ProcessHistoryModel>>,
     parts: Mutex<Vec<MemoryPart>>,
-    /// The GPU sets the parts were asked for, in order.
-    asked: Mutex<Vec<BTreeSet<EntityId>>>,
+    /// What the parts were asked for, in order.
+    asked: Mutex<Vec<PartsAsked>>,
 }
+
+/// The GPUs, window and cells a chart's parts were asked for.
+pub type PartsAsked = (BTreeSet<EntityId>, (u64, u64), usize);
 
 impl StaticProcessHistory {
     pub fn new(model: ProcessHistoryModel) -> Arc<Self> {
@@ -215,7 +218,7 @@ impl StaticProcessHistory {
         *self.parts.lock().unwrap_or_else(PoisonError::into_inner) = parts;
     }
 
-    pub fn asked(&self) -> Vec<BTreeSet<EntityId>> {
+    pub fn asked(&self) -> Vec<PartsAsked> {
         self.asked
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -233,13 +236,13 @@ impl ProcessMemoryReader for StaticProcessHistory {
     fn parts(
         &self,
         gpus: &BTreeSet<EntityId>,
-        _window: (u64, u64),
-        _cells: usize,
+        window: (u64, u64),
+        cells: usize,
     ) -> Vec<MemoryPart> {
         self.asked
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(gpus.clone());
+            .push((gpus.clone(), window, cells));
         self.parts
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

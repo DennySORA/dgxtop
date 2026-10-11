@@ -8,8 +8,8 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Sender, bounded};
@@ -25,20 +25,22 @@ use dgxtop_core::canonical::CollectionPlan;
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::config::Config;
 use dgxtop_core::diagnostics::Diagnostics;
-use dgxtop_core::identity::{AdapterId, HostId};
+use dgxtop_core::identity::{AdapterId, BootId, HostId};
 use dgxtop_core::naming;
 use dgxtop_core::observation::AdapterManifest;
 use dgxtop_core::ports::{
     ArchiveGapCause, ArchiveJournal, ArchiveOutcome, ArchiveReadJob, ArchiveReader, ArchiveSink,
     AuditRepository, Collector, ConfigJob, ConfigRepository, ControlCompletion, Dispatch,
     HistoryJob, HistoryReader, IngestionCompletion, LogLevel, Logger, ProcessHistoryCompletion,
-    ProcessHistoryJob, ProcessHistoryStore, ProcessProbe, ProcessProbeJob, StoreJob, StoreWriter,
-    TelemetryPort,
+    ProcessHistoryInput, ProcessHistoryJob, ProcessHistoryReader, ProcessHistoryStore,
+    ProcessProbe, ProcessProbeJob, StoreJob, StoreWriter, TelemetryPort,
 };
 use dgxtop_core::quality::Namespace;
+use dgxtop_history::{ProcessHistory, ProcessHistoryPorts, ProcessHistorySettings};
 use dgxtop_manager::presentation::HostFacts;
 use dgxtop_manager::{
-    Manager, ManagerChannels, ManagerPorts, ManagerSetup, SessionHandle, ShutdownTrigger,
+    Manager, ManagerChannels, ManagerPorts, ManagerSetup, ProcessHistoryHandles, SessionHandle,
+    ShutdownTrigger,
 };
 use dgxtop_runtime::clock::{
     BootClock, current_euid, host_identity, host_name, kernel_release, pid_namespace_of,
@@ -87,8 +89,11 @@ const SIGNAL_POLL: Duration = Duration::from_millis(200);
 const FRONTEND_EXIT_POLL: Duration = Duration::from_millis(50);
 /// Archive reads queued for the reader: the Manager runs two at a time.
 const ARCHIVE_READ_QUEUE: usize = 4;
-/// Probe jobs waiting (D-76); the manager keeps one in flight.
+/// Probe jobs waiting (D-76); the process actor keeps one in flight.
 const PROCESS_PROBE_QUEUE: usize = 2;
+/// Inputs waiting for the history's process actor (D-79): a table each
+/// process period, a tick each commit, the probe's and the stores' answers.
+const PROCESS_HISTORY_INPUTS: usize = 64;
 /// Process history store jobs waiting (D-76): a journal every 10 s, the
 /// short-term file every 30 s, a run's read now and then.
 const PROCESS_HISTORY_QUEUE: usize = 8;
@@ -140,6 +145,34 @@ impl StartError {
 }
 
 /// Workers whose bounded stop is part of shutdown.
+/// Where the process probe and the process history's stores send what
+/// they did: the history's process actor, set once it is spawned (it is
+/// spawned after them, since it holds their handles).
+type ProcessInbox = Arc<OnceLock<PoolHandle<ProcessHistoryInput>>>;
+
+/// Hands a probe report or a store answer to the process actor, waiting a
+/// bounded time while its queue is full: the actor never waits on these
+/// workers, so this cannot deadlock, and a lost answer would leave a probe
+/// or a write unanswered.
+fn deliver_process_input(
+    inbox: &ProcessInbox,
+    input: ProcessHistoryInput,
+    logger: &Arc<dyn Logger>,
+) {
+    let delivered = inbox.get().is_some_and(|actor| {
+        actor
+            .dispatch_within(input, COMPLETION_SEND_TIMEOUT)
+            .is_ok()
+    });
+    if !delivered {
+        logger.log(
+            LogLevel::Error,
+            "composition",
+            "process history actor full or stopped; probe or store answer dropped",
+        );
+    }
+}
+
 trait StopOnShutdown {
     fn stop_within(&self, timeout: Duration) -> Option<String>;
 }
@@ -513,12 +546,20 @@ impl Wiring {
         workers.push(Box::new(("audit".to_owned(), audit.clone())));
         let actions = self.spawn_actions(completions.clone())?;
         workers.push(Box::new(("action".to_owned(), actions.clone())));
-        let process_probe = self.spawn_process_probe(completions.clone(), &mut workers)?;
-        let process_history = self.spawn_process_history(
+        let facts = host_facts(self.namespace);
+        let process_inbox: ProcessInbox = Arc::new(OnceLock::new());
+        let process_probe = self.spawn_process_probe(&process_inbox, &mut workers)?;
+        let process_store = self.spawn_process_history_store(
             effective,
             paths,
             sqlite_ok,
-            completions.clone(),
+            &process_inbox,
+            &mut workers,
+        )?;
+        let process_history = self.spawn_process_history(
+            (process_probe, process_store),
+            (boot_id.clone(), facts.utc_offset_s),
+            &process_inbox,
             &mut workers,
         )?;
 
@@ -545,7 +586,7 @@ impl Wiring {
             euid: current_euid(),
             self_pid,
             adapters: manifests,
-            facts: host_facts(self.namespace),
+            facts,
             namespace: self.namespace,
         };
         let ports = ManagerPorts {
@@ -561,11 +602,7 @@ impl Wiring {
             config: Box::new(config),
             audit: Box::new(audit),
             actions: Box::new(actions),
-            process_probe: process_probe
-                .map(|port| Box::new(port) as Box<dyn Dispatch<ProcessProbeJob>>),
-            probe_deriver: Arc::new(ProcessProbeDeriver),
-            process_history: process_history
-                .map(|port| Box::new(port) as Box<dyn Dispatch<ProcessHistoryJob>>),
+            process_history: Some(process_history),
             logger: Arc::clone(&self.logger),
             diagnostics: self.diagnostics.clone(),
             ledger: self.ledger.clone(),
@@ -822,23 +859,25 @@ impl Wiring {
     }
 
     /// The process history's probe (D-76): live processes only, so none in
-    /// a replay.
+    /// a replay. Its reports go to the history's process actor.
     fn spawn_process_probe(
         &self,
-        completions: Completions,
+        inbox: &ProcessInbox,
         workers: &mut Vec<Box<dyn StopOnShutdown>>,
     ) -> Result<Option<PoolHandle<ProcessProbeJob>>, StartError> {
         if self.namespace != Namespace::Live {
             return Ok(None);
         }
         let probe = ProcfsProcessProbe::new(Arc::new(RootedFiles::host()), Arc::clone(&self.clock));
+        let inbox = Arc::clone(inbox);
+        let logger = Arc::clone(&self.logger);
         let handle = spawn_actor(
             "process-probe",
             PROCESS_PROBE_QUEUE,
             probe,
             move |probe: &mut ProcfsProcessProbe, job: ProcessProbeJob| {
                 let report = probe.probe(&job.targets);
-                completions.control(ControlCompletion::ProcessProbe(report));
+                deliver_process_input(&inbox, ProcessHistoryInput::Probe(report), &logger);
             },
         )
         .map_err(|error| StartError::failure(error.to_string()))?;
@@ -846,15 +885,61 @@ impl Wiring {
         Ok(Some(handle))
     }
 
+    /// The history's process actor (D-79): the GPU process runs and
+    /// memory, fed by the Manager, answered by the probe and the stores,
+    /// read by the Manager through what it publishes.
+    fn spawn_process_history(
+        &self,
+        (probe, store): (
+            Option<PoolHandle<ProcessProbeJob>>,
+            Option<PoolHandle<ProcessHistoryJob>>,
+        ),
+        (boot_id, utc_offset_s): (BootId, i32),
+        inbox: &ProcessInbox,
+        workers: &mut Vec<Box<dyn StopOnShutdown>>,
+    ) -> Result<ProcessHistoryHandles, StartError> {
+        let (actor, published) = ProcessHistory::new(
+            ProcessHistorySettings {
+                boot_id,
+                utc_offset_s,
+            },
+            ProcessHistoryPorts {
+                probe: probe.map(|port| Box::new(port) as Box<dyn Dispatch<ProcessProbeJob>>),
+                probe_deriver: Arc::new(ProcessProbeDeriver),
+                store: store.map(|port| Box::new(port) as Box<dyn Dispatch<ProcessHistoryJob>>),
+                clock: Arc::clone(&self.clock),
+                logger: Arc::clone(&self.logger),
+            },
+        );
+        let handle = spawn_actor(
+            "process-history",
+            PROCESS_HISTORY_INPUTS,
+            actor,
+            |actor: &mut ProcessHistory, input: ProcessHistoryInput| actor.handle(input),
+        )
+        .map_err(|error| StartError::failure(error.to_string()))?;
+        workers.push(Box::new(("process-history".to_owned(), handle.clone())));
+        // The probe and the stores answer only jobs the actor sends, so the
+        // inbox is set before any answer can come.
+        let _ = inbox.set(handle.clone());
+        let published = Arc::new(published);
+        Ok(ProcessHistoryHandles {
+            inputs: Box::new(handle),
+            runs: Arc::clone(&published) as Arc<dyn ProcessHistoryReader>,
+            memory: published,
+        })
+    }
+
     /// The process history's stores (D-76), on with
     /// `store.process_history_enabled`, unset following the history archive
-    /// (D-80): without them the runs live only while dgxtop runs.
-    fn spawn_process_history(
+    /// (D-80): without them the runs live only while dgxtop runs. What a
+    /// job did goes to the history's process actor.
+    fn spawn_process_history_store(
         &self,
         effective: &Config,
         paths: &StatePaths,
         sqlite_ok: bool,
-        completions: Completions,
+        inbox: &ProcessInbox,
         workers: &mut Vec<Box<dyn StopOnShutdown>>,
     ) -> Result<Option<PoolHandle<ProcessHistoryJob>>, StartError> {
         // Its own switch, unset following the archive (D-80).
@@ -866,8 +951,10 @@ impl Wiring {
             &paths.process_recent_file,
             Arc::clone(&self.clock),
         );
+        let inbox = Arc::clone(inbox);
+        let logger = Arc::clone(&self.logger);
         let handle = spawn_actor(
-            "process-history",
+            "process-history-store",
             PROCESS_HISTORY_QUEUE,
             store,
             move |store: &mut ProcessHistoryFiles, job: ProcessHistoryJob| {
@@ -884,11 +971,14 @@ impl Wiring {
                         ProcessHistoryCompletion::RunRead { key, result }
                     }
                 };
-                completions.control(ControlCompletion::ProcessHistory(completion));
+                deliver_process_input(&inbox, ProcessHistoryInput::Store(completion), &logger);
             },
         )
         .map_err(|error| StartError::failure(error.to_string()))?;
-        workers.push(Box::new(("process-history".to_owned(), handle.clone())));
+        workers.push(Box::new((
+            "process-history-store".to_owned(),
+            handle.clone(),
+        )));
         Ok(Some(handle))
     }
 

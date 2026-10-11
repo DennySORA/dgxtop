@@ -827,8 +827,6 @@ fn manager_ports(
             journal.clone(),
             Arc::clone(&workers.action_work),
         )),
-        process_probe: None,
-        probe_deriver: Arc::new(dgxtop_core::testing::IdleProbeDeriver),
         process_history: None,
         logger: Arc::new(MemoryLogger::default()),
         diagnostics,

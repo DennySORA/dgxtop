@@ -19,13 +19,13 @@ use dgxtop_core::identity::{BootId, HostId, PidNamespace};
 use dgxtop_core::observation::AdapterManifest;
 use dgxtop_core::ports::{
     AdapterJob, ArchiveReadJob, Collector, ConfigJob, ControlCompletion, Dispatch, HistoryJob,
-    IngestionCompletion, Logger, ProbeDeriver, ProcessHistoryJob, ProcessProbeJob, SnapshotReader,
-    StoreJob,
+    IngestionCompletion, Logger, SnapshotReader, StoreJob,
 };
 use dgxtop_core::quality::Namespace;
 
 use crate::error::ManagerError;
 use crate::presentation::HostFacts;
+pub use crate::process_link::ProcessHistoryHandles;
 
 /// Capacity of the data-path completion inbox (adapter replies, collector
 /// results, store acks, host status). Payload bytes are bounded separately by
@@ -52,14 +52,9 @@ pub struct ManagerPorts {
     pub config: Box<dyn Dispatch<ConfigJob>>,
     pub audit: Box<dyn Dispatch<AuditOp>>,
     pub actions: Box<dyn Dispatch<ActionOp>>,
-    /// The process probe of the process history (D-76); `None` where no
-    /// live process can be probed (replays, tests).
-    pub process_probe: Option<Box<dyn Dispatch<ProcessProbeJob>>>,
-    /// Makes the values of the probe's readings for the process history
-    /// (D-79: the process collector's transformation).
-    pub probe_deriver: Arc<dyn ProbeDeriver>,
-    /// The process history's stores (D-76); `None` keeps it in memory.
-    pub process_history: Option<Box<dyn Dispatch<ProcessHistoryJob>>>,
+    /// The history's process actor (D-76, D-79): the GPU process runs and
+    /// colors; `None` without one (tests and tools).
+    pub process_history: Option<ProcessHistoryHandles>,
     pub logger: Arc<dyn Logger>,
     pub diagnostics: Diagnostics,
     pub ledger: ByteLedger,

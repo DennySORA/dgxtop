@@ -1058,3 +1058,5 @@ fn invalid_setups_and_session_limits_are_rejected() {
         ManagerError::SessionLimit { max: 2 }
     );
 }
+
+mod process_history;

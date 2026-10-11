@@ -744,10 +744,6 @@ pub enum ControlCompletion {
         session_generation: u64,
         result: Result<ArchiveResult, ErrorDetail>,
     },
-    /// What the process probe read (D-76).
-    ProcessProbe(ProbeReport),
-    /// What a process history store job did (D-76).
-    ProcessHistory(ProcessHistoryCompletion),
 }
 
 /// UI-facing session handle implemented by the Manager.

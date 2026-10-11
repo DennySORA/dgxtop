@@ -30,8 +30,9 @@ impl ControlCore {
         let mut fx = Effects::default();
         self.revoked_tokens = self.process.begin_shutdown(now, &mut fx);
         self.apply(fx);
-        // The store worker writes these while the shutdown drains.
-        self.process_history.flush(now);
+        // The process actor's store worker writes these while the shutdown
+        // drains.
+        self.process_history.flush();
         self.scheduler.stop();
         self.ingestion.stop();
         self.history.cancel_all();
@@ -66,7 +67,7 @@ impl ControlCore {
             .answer_shutdown_requests("shutdown in progress");
         let settled = !self.config.has_pending()
             && !self.process.awaiting_control()
-            && !self.process_history.is_writing();
+            && self.process_history.is_settled();
         if !settled && !timed_out {
             return None;
         }

@@ -8,12 +8,12 @@ use std::cmp::Ordering;
 use dgxtop_core::canonical::{ProcessRow, ProcessTable};
 use dgxtop_core::commands::{SortKey, ViewKind};
 use dgxtop_core::identity::EntityId;
+use dgxtop_core::process_model::ProcessHistoryModel;
 use dgxtop_core::text::{MAX_BASENAME_BYTES, sanitize_display};
 use dgxtop_core::view::{
     ProcessGpuView, ProcessRowView, ProcessesView, SessionState, overview_gpus_rows,
 };
 
-use super::ProcessMemoryBook;
 use super::gpu_directory::{GpuDirectory, is_gpu_entity};
 use super::labels::{TextNeedle, filter_text, note_text};
 
@@ -92,7 +92,7 @@ pub(crate) fn build_processes_view(
     table: &ProcessTable,
     session: &SessionState,
     directory: &GpuDirectory<'_>,
-    colors: &ProcessMemoryBook,
+    colors: &ProcessHistoryModel,
     visible_rows: usize,
 ) -> ProcessesView {
     let gpu_filter = gpu_filter(session, directory);
@@ -237,7 +237,7 @@ pub(crate) fn display_name(name: &str) -> String {
 fn row_view(
     row: &ProcessRow,
     directory: &GpuDirectory<'_>,
-    colors: &ProcessMemoryBook,
+    colors: &ProcessHistoryModel,
 ) -> ProcessRowView {
     ProcessRowView {
         key: row.key.clone(),
@@ -285,7 +285,7 @@ mod tests {
             &fixture.snapshot.process_table,
             &fixture.session,
             &directory,
-            &fixture.process_memory,
+            &fixture.processes,
             visible,
         )
     }
@@ -313,19 +313,23 @@ mod tests {
         train.gpu = vec![gpu_link(GPU_A, None, Some(8 << 30))];
         let mut idle = process_row(2, "idle");
         idle.gpu = vec![gpu_link(GPU_B, None, None)];
+        let key = train.key.clone();
         fixture.set_processes(vec![train, idle]);
-        let mut table = fixture.snapshot.process_table.as_ref().clone();
-        table.cycle_id = 1;
-        table.read_finished_boot_ns = 1;
-        fixture.process_memory.record(&table);
+        // The color the history's process actor gave `train`.
+        fixture.processes.tracked = vec![dgxtop_core::process_model::TrackedProcess {
+            slot: 3,
+            key,
+            pid: 1,
+            name: "train".to_owned(),
+            current: vec![(EntityId::new(GPU_A).unwrap(), 8 << 30)],
+        }];
         let view = build(&fixture, 10);
         let slots: Vec<(&str, Option<u8>)> = view
             .rows
             .iter()
             .map(|row| (row.name.as_str(), row.color_slot))
             .collect();
-        let train = crate::process_memory::preferred_color("train");
-        assert_eq!(slots, vec![("train", Some(train)), ("idle", None)]);
+        assert_eq!(slots, vec![("train", Some(3)), ("idle", None)]);
     }
 
     /// GPU processes (each has one association with GPU A).

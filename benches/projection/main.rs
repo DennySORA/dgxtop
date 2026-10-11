@@ -47,17 +47,21 @@ use dgxtop_core::identity::{EntityId, MetricKey, SessionId};
 use dgxtop_core::metric::{CanonicalUnit, Scalar, descriptor, ids};
 use dgxtop_core::naming::entity;
 use dgxtop_core::observation::EntityKind;
-use dgxtop_core::ports::{LoadOrigin, SessionPort, SnapshotReader, StoreWriter};
+use dgxtop_core::ports::{
+    LoadOrigin, ProcessHistoryInput, ProcessHistoryReader, SessionPort, SnapshotReader, StoreWriter,
+};
+use dgxtop_core::process_model::{ProcessHistoryModel, ProcessTableSample};
 use dgxtop_core::quality::Namespace;
 use dgxtop_core::view::{
     ActionsView, DiskHistory, HistoryChartKind, HistoryChartView, HistoryPointView, HistoryView,
     HostState, HostStatus, IntervalView, OverloadState, SessionState, ViewModel,
 };
-use dgxtop_manager::presentation::{
-    HostFacts, PresentationContext, ProcessMemoryBook, SettingsInputs, TrendBook,
-    build_view_model_measured,
+use dgxtop_history::{
+    ProcessHistory, ProcessHistoryPorts, ProcessHistorySettings, PublishedProcessHistory,
 };
-use dgxtop_manager::process_history::ProcessHistoryBook;
+use dgxtop_manager::presentation::{
+    HostFacts, PresentationContext, SettingsInputs, TrendBook, build_view_model_measured,
+};
 use dgxtop_state::{SharedSnapshot, StateWriter};
 use dgxtop_ui::terminal::GatedInput;
 use dgxtop_ui::{TuiLoop, TuiOptions};
@@ -202,8 +206,12 @@ struct SnapshotWorld {
     writer: StateWriter,
     snapshots: SharedSnapshot,
     trends: TrendFeed,
-    process_memory: ProcessMemoryBook,
-    process_history: ProcessHistoryBook,
+    /// The history's process actor, fed each cycle's table (D-79).
+    processes: ProcessHistory,
+    published: PublishedProcessHistory,
+    /// What it published after the latest cycle.
+    model: Arc<ProcessHistoryModel>,
+    process_period_ms: u64,
     rejections: BTreeMap<String, u64>,
 }
 
@@ -224,13 +232,28 @@ impl SnapshotWorld {
             false,
         )
         .into_parts();
+        let (processes, published) = ProcessHistory::new(
+            ProcessHistorySettings {
+                boot_id: dgxtop_core::testing::boot_id("bench"),
+                utc_offset_s: 0,
+            },
+            ProcessHistoryPorts {
+                probe: None,
+                probe_deriver: Arc::new(dgxtop_core::testing::IdleProbeDeriver),
+                store: None,
+                clock: Arc::clone(pipeline.clock()) as Arc<dyn TimeProvider>,
+                logger: Arc::new(dgxtop_core::ports::NullLogger),
+            },
+        );
         Ok(Self {
             pipeline,
             writer,
             snapshots,
             trends: TrendFeed::new(u64::from(config.sampling.interval_ms)),
-            process_memory: ProcessMemoryBook::new(u64::from(config.sampling.interval_ms)),
-            process_history: ProcessHistoryBook::new(dgxtop_core::testing::boot_id("bench")),
+            processes,
+            model: published.latest(),
+            published,
+            process_period_ms: u64::from(config.sampling.interval_ms),
             rejections: BTreeMap::new(),
         })
     }
@@ -265,7 +288,15 @@ impl SnapshotWorld {
         }
         self.writer.maintain(now);
         let snapshot = self.snapshots.latest();
-        self.process_memory.record(&snapshot.process_table);
+        self.processes
+            .handle(ProcessHistoryInput::Table(Box::new(ProcessTableSample {
+                table: Arc::clone(&snapshot.process_table),
+                clk_tck: None,
+                gpu_labels: BTreeMap::new(),
+                host_network: [None, None],
+                process_period_ms: self.process_period_ms,
+            })));
+        self.model = self.published.latest();
         self.trends.record(&snapshot);
     }
 }
@@ -467,9 +498,8 @@ impl StaticInputs {
             actions: Arc::clone(&self.actions),
             history: Arc::clone(&self.history),
             trends: &world.trends.book,
-            process_memory: &world.process_memory,
-            process_history: &world.process_history,
-            process_history_kept: false,
+            processes: &world.model,
+            process_memory: &world.published,
             boot_to_utc_ns: 0,
             facts: &self.facts,
             enabled_modules: &self.config.viewer.enabled_modules,
