@@ -1,11 +1,12 @@
-//! CPU module: the first temperature and power sensor and the maximum
-//! frequency, with load and tasks on the same line when they fit; the
+//! CPU module: the first temperature and power sensor and the current and
+//! maximum frequency of each kind of core, with load and tasks on the same
+//! line when they fit; the
 //! utilization bar with its chart under it (D-43); the usr/sys/iowait/steal
 //! breakdown. In the overview it starts collapsed (D-36); a click on the
 //! panel or `c` adds every sensor with its source and the htop-style
 //! per-core bars.
 
-use dgxtop_core::view::{CoreView, CpuView, LabeledCell, MetricCell, ViewModel};
+use dgxtop_core::view::{CoreView, CpuView, FrequencyGroup, LabeledCell, MetricCell, ViewModel};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -17,7 +18,7 @@ use super::common::{
     gap, join_if_fits, labeled_cell, measuring_context, message, no_data, panel, panel_with_keys,
     percent_ratio, render_bar_row, render_chart, separator, under_bar,
 };
-use crate::format::{CellDetail, clean, display_width, truncate_to_width, value_text};
+use crate::format::{CellDetail, cell_tone, clean, display_width, truncate_to_width, value_text};
 use crate::num::saturate_u16;
 use crate::registry::{
     DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot, Topic,
@@ -48,6 +49,8 @@ const EXPAND_KEYS: &str = "c/click cores";
 const COLLAPSE_KEYS: &str = "c/click collapse";
 /// Breakdown marker drawn in each part's color.
 const SWATCH: &str = "■ ";
+/// A kind of core whose cores report no current frequency (idle).
+const NO_CURRENT_FREQUENCY: &str = "–";
 
 pub struct CpuModule {
     manifest: DisplayModuleManifest,
@@ -257,22 +260,59 @@ fn render_utilization(frame: &mut Frame<'_>, area: Rect, cpu: &CpuView, context:
     }
 }
 
-/// `71°C │ 12 W │ 3160 MHz` (D-66): the first temperature and power sensor
-/// and the mean frequency the cores run at now (D-67); the expanded panel
-/// lists every sensor.
+/// `71°C │ 12 W │ 2.1/2.8 GHz · 3.4/3.9 GHz` (D-66): the first temperature
+/// and power sensor and, per kind of core, the mean frequency its cores run
+/// at now (D-67) over their maximum; the expanded panel lists every sensor.
 fn summary_line(cpu: &CpuView, context: &DisplayContext) -> Line<'static> {
     let glance = |cell: &MetricCell| cell_spans(cell, CellDetail::GLANCE, context);
-    let mut spans = Vec::new();
     let temperature = cpu
         .package_temperatures
         .first()
         .or_else(|| cpu.soc_temperatures.first());
-    for sensor in [temperature, cpu.power.first()].into_iter().flatten() {
-        spans.extend(glance(&sensor.cell));
-        spans.push(separator(context));
+    let mut parts: Vec<Vec<Span<'static>>> = [temperature, cpu.power.first()]
+        .into_iter()
+        .flatten()
+        .map(|sensor| glance(&sensor.cell))
+        .collect();
+    if !cpu.frequencies.is_empty() {
+        parts.push(frequency_spans(&cpu.frequencies, context));
     }
-    spans.extend(glance(&cpu.frequency_now));
+    let mut spans = Vec::new();
+    for (index, part) in parts.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(separator(context));
+        }
+        spans.extend(part);
+    }
     Line::from(spans)
+}
+
+/// `2.1/2.8 GHz · 3.4/3.9 GHz`: each kind of core's current frequency over
+/// its maximum; `–` for a kind whose cores report no current frequency
+/// (idle), and only the current one when cpufreq gives no maximum.
+fn frequency_spans(groups: &[FrequencyGroup], context: &DisplayContext) -> Vec<Span<'static>> {
+    let theme = &context.theme;
+    let mut spans = Vec::new();
+    for (index, group) in groups.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(" · ", theme.muted_style()));
+        }
+        spans.push(match gigahertz(&group.current) {
+            Some(current) => Span::styled(current, theme.tone_style(cell_tone(&group.current))),
+            None => Span::styled(NO_CURRENT_FREQUENCY, theme.muted_style()),
+        });
+        if let Some(maximum) = gigahertz(&group.maximum) {
+            spans.push(Span::styled(format!("/{maximum}"), theme.label_style()));
+        }
+        spans.push(Span::styled(" GHz", theme.label_style()));
+    }
+    spans
+}
+
+/// A frequency cell (MHz) as GHz with one decimal; `None` without a value.
+fn gigahertz(cell: &MetricCell) -> Option<String> {
+    let mhz = cell.value_f64().filter(|_| cell.state.has_value())?;
+    Some(format!("{:.1}", mhz / 1000.0))
 }
 
 /// `load 1.34 1.15 1.05 │ tasks 2/763`; on a line of its own when the
@@ -476,6 +516,76 @@ fn add_labels(output: &mut Output, cpu: &CpuView, context: &DisplayContext) {
 mod tests {
     use super::*;
     use crate::test_fixtures;
+    use dgxtop_core::metric::{CanonicalUnit, Scalar};
+    use dgxtop_core::view::CellState;
+
+    fn megahertz(value: Option<f64>) -> MetricCell {
+        match value {
+            Some(mhz) => MetricCell {
+                value: Scalar::from_f64(mhz).ok(),
+                ..MetricCell::missing(CanonicalUnit::MHz, CellState::Ok)
+            },
+            None => MetricCell::missing(CanonicalUnit::MHz, CellState::Unavailable),
+        }
+    }
+
+    fn group(current: Option<f64>, maximum: Option<f64>) -> FrequencyGroup {
+        FrequencyGroup {
+            maximum: megahertz(maximum),
+            current: megahertz(current),
+            cores: 10,
+        }
+    }
+
+    fn frequency_text(groups: &[FrequencyGroup]) -> String {
+        let context = test_fixtures::display_context();
+        frequency_spans(groups, &context)
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    /// A hybrid CPU shows each kind of core's current over its maximum
+    /// frequency; one kind shows one value; an idle kind shows `–`; no
+    /// maximum shows only the current frequency.
+    #[test]
+    fn frequencies_show_current_over_maximum_per_kind_of_core() {
+        assert_eq!(
+            frequency_text(&[
+                group(Some(2100.0), Some(2808.0)),
+                group(Some(3400.0), Some(3900.0))
+            ]),
+            "2.1/2.8 GHz · 3.4/3.9 GHz"
+        );
+        assert_eq!(
+            frequency_text(&[group(Some(3000.0), Some(4500.0))]),
+            "3.0/4.5 GHz"
+        );
+        assert_eq!(frequency_text(&[group(None, Some(3900.0))]), "–/3.9 GHz");
+        assert_eq!(frequency_text(&[group(Some(1800.0), None)]), "1.8 GHz");
+    }
+
+    /// Without cpufreq the summary has no frequency part and no dangling
+    /// separator.
+    #[test]
+    fn the_summary_omits_a_missing_frequency() {
+        let context = test_fixtures::display_context();
+        let mut cpu = test_fixtures::cpu_view();
+        let text = |cpu: &CpuView| -> String {
+            summary_line(cpu, &context)
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        };
+        assert!(text(&cpu).ends_with("│ 3.0/3.9 GHz"), "{}", text(&cpu));
+        cpu.frequencies.clear();
+        let without = text(&cpu);
+        assert!(
+            !without.contains("GHz") && !without.ends_with("│ "),
+            "{without}"
+        );
+    }
 
     /// Collapsed, the utilization chart takes the rows a taller panel has
     /// beyond its own, so no blank rows stay under the breakdown (D-70).

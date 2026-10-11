@@ -17,12 +17,12 @@ pub(crate) use dgxtop_core::testing::metric_key;
 use dgxtop_core::testing::test_process_key;
 use dgxtop_core::view::{
     ActionRecordView, ActionsView, CandidateView, CellState, ConfirmationView, ConflictView,
-    CoreView, CpuView, DiskDeviceView, DiskHistory, DiskView, FilesystemView, GpuCard, GpuDetails,
-    GpuView, HeaderView, HistoryChartKind, HistoryChartView, HistoryPointView, HistoryView,
-    HistoryWindowSummary, HostState, HostStatus, InterfaceView, IntervalView, LabeledCell,
-    LastGoodView, MemoryView, MetricCell, ModuleViews, NetworkView, OverloadState, ProcessGpuView,
-    ProcessRowView, ProcessesView, SessionState, SettingField, SettingsView, SourceMetricView,
-    SourcesView, Trend, ViewModel,
+    CoreView, CpuView, DiskDeviceView, DiskHistory, DiskView, FilesystemView, FrequencyGroup,
+    GpuCard, GpuDetails, GpuView, HeaderView, HistoryChartKind, HistoryChartView, HistoryPointView,
+    HistoryView, HistoryWindowSummary, HostState, HostStatus, InterfaceView, IntervalView,
+    LabeledCell, LastGoodView, MemoryView, MetricCell, ModuleViews, NetworkView, OverloadState,
+    ProcessGpuView, ProcessRowView, ProcessesView, SessionState, SettingField, SettingsView,
+    SourceMetricView, SourcesView, Trend, ViewModel,
 };
 
 pub(crate) const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
@@ -166,7 +166,11 @@ pub(crate) fn cpu_view() -> CpuView {
         iowait: ok(0.0, CanonicalUnit::Percent),
         steal: missing(CanonicalUnit::Percent, CellState::Unsupported),
         cores,
-        frequency_now: ok(3000.0, CanonicalUnit::MHz),
+        frequencies: vec![FrequencyGroup {
+            maximum: ok(3900.0, CanonicalUnit::MHz),
+            current: ok(3000.0, CanonicalUnit::MHz),
+            cores: 8,
+        }],
         package_temperatures: vec![LabeledCell {
             label: "pkg0".into(),
             cell: sourced(
