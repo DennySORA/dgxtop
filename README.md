@@ -75,14 +75,19 @@ GPUs first, shows the whole machine around them, and keeps the history.
 
   History is saved on disk for 7 days and survives restarts and reboots. The per-process parts are
   kept in memory, for as long as dgxtop runs.
-- **Process History.** Every GPU process of the last 7 days, the latest start first: when it
-  started and how long it ran, its GPUs, peak GPU memory, GPU and CPU use, and how it ended:
-  still running, stopped by dgxtop, killed by a signal (`SIGKILL`, `SIGTERM`, …), exited with a
-  code, most likely the OOM killer, or ended without a visible cause. Open one to see its full
-  command line (`e` shows all of it, `y` copies it), its working folder, start and end times, and
-  charts of its CPU, memory, GPU utilization, GPU memory, disk reads and writes, and the host's
-  network while it ran. Minutes are kept for a day and ten-minute averages for a week, so the
-  database stays small.
+- **Process History.** Every GPU process dgxtop saw, the latest start first: when it started and
+  how long it ran, its GPUs, peak GPU memory and RAM, GPU and CPU use in the load colors, its most
+  child processes, and how it ended: still running, stopped by dgxtop, killed by a signal
+  (`SIGKILL`, `SIGTERM`, …), exited with a code, most likely the OOM killer, or ended without a
+  visible cause. Open one to see its full command line (`e` shows all of it, `y` copies it), its
+  working folder, program, parent process, niceness and control group, its start and end times,
+  and charts laid out like the Overview History's, with average and maximum: CPU and memory of the
+  process and of its child processes, swap, GPU utilization and memory, threads, child processes
+  and open files, disk reads and writes, and the host's network. `w`/`W` set how much time one bar
+  is: 1, 5, 10 or 30 minutes, 1, 2, 4, 6, 8, 12, 18 or 24 hours, or `auto` (the finest that shows
+  the whole run). Each bar size keeps its latest 300 bars, older ones live on in the coarser
+  sizes, so a run takes at most about a megabyte however long it lasts, and runs never expire by
+  age: the oldest ended ones give way only when the 64 MiB database fills.
 - **The whole machine.** CPU usage per core, CPU temperature and power where the hardware reports
   them, memory and swap, disk throughput and filesystem capacity, network throughput.
 - **Made for DGX Spark.** The GB10 shares memory with the CPU: dgxtop shows how much system RAM GPU
@@ -135,8 +140,8 @@ restart. Display modules can be switched on and off.
   keeps its data within a fixed 256 MiB.
 - **Any terminal size.** The full layout from 80×24, a compact one below that. Keyboard and mouse.
 - **Private.** No network access and no telemetry. Settings and history are files only you can
-  read. Process History keeps the command lines and working folders of GPU processes for 7 days;
-  environments are never stored.
+  read. Process History keeps the command lines, working folders and programs of GPU processes
+  (the latest 2000 runs); environments are never stored.
 - **Safe modes.** `--read-only` turns off process actions. `--replay` shows simulated data for
   demos and tests. `--diagnostics-json` prints versions and health.
 - **Safe upgrades.** The installer verifies every download and keeps the previous version for a
@@ -196,7 +201,7 @@ Each panel names its own keys at the right of its title; the footer keeps the gl
 |---|---|
 | `q`, `Ctrl-C` | Quit (`q` is text while editing a filter; `Ctrl-C` always quits) |
 | `1`–`5`, `Tab`, `Shift-Tab` | Overview, GPU, Overview History, Process History, Settings |
-| `w` / `W`, `→` / `←` | Next / previous history window (5m, 1h, 6h, 12h, 24h) |
+| `w` / `W`, `→` / `←` | Next / previous history window (5m, 1h, 6h, 12h, 24h); in an opened run, the bar size |
 | `j`/`k`, `Enter` | In Process History, choose a run and open or close it |
 | `e` / `y` | In an opened run, show the whole command line / copy it (OSC 52) |
 | `c` | Show / hide the CPU sensors and per-core bars (or click the CPU panel) |
@@ -220,6 +225,7 @@ Command-line values override saved settings only for the current run.
 |---|---|
 | Configuration | `$XDG_CONFIG_HOME/dgxtop/v2/config.json` (`~/.config/dgxtop/v2/config.json`) |
 | History (7 days, at most 1 GiB) | `$XDG_STATE_HOME/dgxtop/v2/history.sqlite3` (`~/.local/state/...`) |
+| Process History (at most 64 MiB) | `$XDG_STATE_HOME/dgxtop/v2/process_history.sqlite3` and `process_recent.json` |
 | Log of process actions | `$XDG_STATE_HOME/dgxtop/v2/audit.sqlite3` |
 | Log file and instance lock | `$XDG_STATE_HOME/dgxtop/v2/` |
 
