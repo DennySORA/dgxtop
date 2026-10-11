@@ -319,7 +319,7 @@ fn cpu_percent(
 
 /// A process of the tree, from its compact record; one whose parent is
 /// unknown is left out.
-fn tree_node(key: &ProcessKey, sample: &HostSample<'_>) -> Option<(i64, TreeNode)> {
+fn tree_node(key: &ProcessKey, sample: &HostSample<'_>) -> Option<(i32, TreeNode)> {
     let own_ticks = sample.record.observation.value.and_then(Scalar::as_u64);
     let node = TreeNode {
         parent: sample.stat.ppid?,
@@ -327,7 +327,7 @@ fn tree_node(key: &ProcessKey, sample: &HostSample<'_>) -> Option<(i64, TreeNode
         reaped_ticks: sample.stat.reaped_ticks,
         rss_bytes: sample.stat.rss_bytes,
     };
-    Some((i64::from(key.pid.get()), node))
+    Some((key.pid.get(), node))
 }
 
 /// What each GPU process's descendants use, their CPU since the last
@@ -340,7 +340,7 @@ fn attach_descendants(
     clk_tck: Option<u64>,
 ) {
     for row in rows.iter_mut().filter(|row| !row.gpu.is_empty()) {
-        let Some(usage) = tree.usage_of(i64::from(row.key.pid.get())) else {
+        let Some(usage) = tree.usage_of(row.key.pid.get()) else {
             continue;
         };
         let now = usage.cpu_ticks.map(|ticks| DescendantTicks {

@@ -106,10 +106,7 @@ impl ProcfsProcessProbe {
 
     /// Its parent, program, control group and niceness.
     fn details_of(&self, key: &ProcessKey, stat: &PidStat) -> RunDetails {
-        let parent_pid = stat
-            .ppid
-            .and_then(|ppid| i32::try_from(ppid).ok())
-            .filter(|ppid| *ppid > 0);
+        let parent_pid = stat.ppid.filter(|ppid| *ppid > 0);
         let parent_name = parent_pid
             .and_then(|ppid| {
                 self.files
@@ -146,7 +143,7 @@ impl ProcfsProcessProbe {
             .read_to_string(&format!("/proc/{}/stat", key.pid))
             .ok()?;
         parse_pid_stat(&text).filter(|stat| {
-            stat.pid == i64::from(key.pid.get()) && stat.start_time_ticks == key.start_time_ticks
+            stat.pid == key.pid.get() && stat.start_time_ticks == key.start_time_ticks
         })
     }
 

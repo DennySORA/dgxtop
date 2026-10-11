@@ -409,12 +409,12 @@ fn disk_field(stats: &[&str], field: DiskField) -> Field<u64> {
 /// Identity and resource fields of `/proc/<pid>/stat`.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PidStat {
-    pub pid: i64,
+    pub pid: i32,
     pub comm: String,
     /// The state letter (field 3: `R`, `S`, `Z`, …); `None` when absent.
     pub state: Option<char>,
     /// The parent's PID (field 4); `None` when unreadable.
-    pub ppid: Option<i64>,
+    pub ppid: Option<i32>,
     pub start_time_ticks: u64,
     pub utime: Field<u64>,
     pub stime: Field<u64>,
@@ -452,7 +452,7 @@ pub(crate) fn parse_pid_stat(text: &str) -> Option<PidStat> {
     if close < open {
         return None;
     }
-    let pid = text[..open].trim().parse::<i64>().ok()?;
+    let pid = text[..open].trim().parse::<i32>().ok()?;
     let comm = text[open + 1..close].to_owned();
     let rest: Vec<&str> = text[close + 1..].split_whitespace().collect();
     let Field::Value(start_time_ticks) = u64_field(rest.get(STAT_START_TIME).copied()) else {
@@ -464,7 +464,7 @@ pub(crate) fn parse_pid_stat(text: &str) -> Option<PidStat> {
         state: rest.get(STAT_STATE).and_then(|state| state.chars().next()),
         ppid: rest
             .get(STAT_PPID)
-            .and_then(|ppid| ppid.parse::<i64>().ok()),
+            .and_then(|ppid| ppid.parse::<i32>().ok()),
         start_time_ticks,
         utime: u64_field(rest.get(STAT_UTIME).copied()),
         stime: u64_field(rest.get(STAT_STIME).copied()),

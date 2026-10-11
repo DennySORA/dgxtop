@@ -44,7 +44,7 @@ pub struct ProcessStat {
     pub rss_bytes: Option<u64>,
     /// Owner of `/proc/<pid>`.
     pub uid: Option<u32>,
-    pub ppid: Option<i64>,
+    pub ppid: Option<i32>,
     /// The state letter (`R`, `S`, `Z`, …).
     pub state: Option<char>,
     /// CPU time of its reaped children (`cutime + cstime`), ticks.
@@ -116,7 +116,7 @@ mod tests {
         ProcessStat {
             rss_bytes: Some(u64::MAX),
             uid: Some(u32::MAX),
-            ppid: Some(i64::from(i32::MAX)),
+            ppid: Some(i32::MAX),
             state: Some('S'),
             reaped_ticks: Some(u64::MAX),
         }

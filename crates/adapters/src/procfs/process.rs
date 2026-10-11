@@ -91,7 +91,7 @@ impl ProcessNames {
             .collect();
         let kept: HashSet<(i32, u64)> = processes.iter().map(SeenProcess::cache_key).collect();
         self.by_process.retain(|key, _| kept.contains(key));
-        let by_pid: HashMap<i64, &Named> = processes
+        let by_pid: HashMap<i32, &Named> = processes
             .iter()
             .zip(&named)
             .map(|(process, (named, _))| (process.stat.pid, named))
@@ -273,7 +273,7 @@ fn read_process(scan: &ProcessScan<'_>, owners: &ProcessOwners, pid: Pid) -> Pro
         Ok(text) => text,
         Err(error) => return failed_scan(&error),
     };
-    let Some(stat) = parse_pid_stat(&text).filter(|stat| stat.pid == i64::from(pid.get())) else {
+    let Some(stat) = parse_pid_stat(&text).filter(|stat| stat.pid == pid.get()) else {
         return ProcessOutcome::Unparsable;
     };
     let uid = match owners.get((pid.get(), stat.start_time_ticks)) {

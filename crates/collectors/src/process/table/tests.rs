@@ -619,7 +619,7 @@ fn bases_stay_bounded_under_heavy_process_churn() {
 
 /// A compact record of `pid` under `parent` with its own and reaped ticks
 /// and RSS bytes.
-fn child(pid: i32, parent: i64, ticks: u64, reaped: u64, rss: Option<u64>, at: u64) -> Observation {
+fn child(pid: i32, parent: i32, ticks: u64, reaped: u64, rss: Option<u64>, at: u64) -> Observation {
     let stat = ProcessStat {
         rss_bytes: rss,
         uid: Some(1000),

@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 /// One process of the tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TreeNode {
-    pub parent: i64,
+    pub parent: i32,
     /// Its own CPU time (`utime + stime`), ticks; `None` when its read
     /// failed.
     pub own_ticks: Option<u64>,
@@ -38,16 +38,16 @@ pub(crate) struct DescendantUsage {
 /// The processes by PID, and each parent's children.
 #[derive(Debug, Default)]
 pub(crate) struct ProcessTree {
-    nodes: HashMap<i64, TreeNode>,
-    children: HashMap<i64, Vec<i64>>,
+    nodes: HashMap<i32, TreeNode>,
+    children: HashMap<i32, Vec<i32>>,
 }
 
 impl ProcessTree {
     /// The tree of `processes`; of two with one PID (a PID reused within
     /// the inputs) the later one counts.
-    pub(crate) fn of(processes: impl IntoIterator<Item = (i64, TreeNode)>) -> Self {
-        let nodes: HashMap<i64, TreeNode> = processes.into_iter().collect();
-        let mut children: HashMap<i64, Vec<i64>> = HashMap::new();
+    pub(crate) fn of(processes: impl IntoIterator<Item = (i32, TreeNode)>) -> Self {
+        let nodes: HashMap<i32, TreeNode> = processes.into_iter().collect();
+        let mut children: HashMap<i32, Vec<i32>> = HashMap::new();
         for (pid, node) in &nodes {
             children.entry(node.parent).or_default().push(*pid);
         }
@@ -57,7 +57,7 @@ impl ProcessTree {
     /// What the descendants of `pid` use: those running and, through each
     /// one's reaped time and `pid`'s own, those reaped since. `None` when
     /// `pid` is not in the tree.
-    pub(crate) fn usage_of(&self, pid: i64) -> Option<DescendantUsage> {
+    pub(crate) fn usage_of(&self, pid: i32) -> Option<DescendantUsage> {
         let root = self.nodes.get(&pid)?;
         let mut usage = DescendantUsage {
             processes: 0,
@@ -65,7 +65,7 @@ impl ProcessTree {
             rss_bytes: Some(0),
         };
         let mut seen = HashSet::from([pid]);
-        let mut pending: Vec<i64> = self.children_of(pid).to_vec();
+        let mut pending: Vec<i32> = self.children_of(pid).to_vec();
         while let Some(child) = pending.pop() {
             // A PID reused while the list was read could close a loop.
             if !seen.insert(child) {
@@ -88,7 +88,7 @@ impl ProcessTree {
         Some(usage)
     }
 
-    fn children_of(&self, pid: i64) -> &[i64] {
+    fn children_of(&self, pid: i32) -> &[i32] {
         self.children.get(&pid).map_or(&[], Vec::as_slice)
     }
 }
@@ -97,7 +97,7 @@ impl ProcessTree {
 mod tests {
     use super::*;
 
-    fn node(parent: i64, own_ticks: u64, reaped_ticks: u64, rss_bytes: Option<u64>) -> TreeNode {
+    fn node(parent: i32, own_ticks: u64, reaped_ticks: u64, rss_bytes: Option<u64>) -> TreeNode {
         TreeNode {
             parent,
             own_ticks: Some(own_ticks),
