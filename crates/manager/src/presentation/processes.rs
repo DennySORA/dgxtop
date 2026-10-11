@@ -268,7 +268,7 @@ fn row_view(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presentation::index::SampleIndex;
+    use crate::presentation::index::SnapshotLookup;
     use crate::presentation::testkit::{
         Fixture, entity_record, gpu_link, process_key, process_row,
     };
@@ -279,7 +279,7 @@ mod tests {
     const GPU_B: &str = "gpu:GPU-bbbb2222";
 
     fn build(fixture: &Fixture, visible: usize) -> ProcessesView {
-        let index = SampleIndex::new(&fixture.snapshot);
+        let index = SnapshotLookup::new(&fixture.snapshot);
         let directory = GpuDirectory::new(&fixture.catalog, &index);
         build_processes_view(
             &fixture.snapshot.process_table,

@@ -109,7 +109,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::presentation::index::SampleIndex;
+    use crate::presentation::index::SnapshotLookup;
     use crate::presentation::testkit::{Fixture, empty_history, entity_record, history_chart};
     use dgxtop_core::naming::attributes;
     use dgxtop_core::observation::EntityKind;
@@ -218,7 +218,7 @@ mod tests {
         history: Arc<HistoryView>,
         offset_s: u64,
     ) -> Arc<HistoryView> {
-        let index = SampleIndex::new(&fixture.snapshot);
+        let index = SnapshotLookup::new(&fixture.snapshot);
         let directory = GpuDirectory::new(&fixture.catalog, &index);
         with_process_parts(
             history,

@@ -519,7 +519,7 @@ fn committed_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presentation::index::SampleIndex;
+    use crate::presentation::index::SnapshotLookup;
     use crate::presentation::testkit::{Fixture, NOW, candidate, explanation_for, host_status};
 
     use dgxtop_core::identity::EntityId;
@@ -531,7 +531,7 @@ mod tests {
 
     fn build(fixture: &Fixture) -> SourcesView {
         let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
-        let index = SampleIndex::new(&fixture.snapshot);
+        let index = SnapshotLookup::new(&fixture.snapshot);
         let directory = GpuDirectory::new(&fixture.catalog, &index);
         build_sources_view(&SourcesInputs {
             reader: &reader,
