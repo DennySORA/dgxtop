@@ -25,8 +25,8 @@ use crate::identity::{AdapterId, CollectorId, EntityId, IdentityError, Scope};
 
 /// Adapter ids.
 /// Between a process's display name and its command line in the channel of
-/// its `process.uid` record (D-73): the channel is the only string a record
-/// carries.
+/// its procfs record (D-73; a replay's `process.uid` record): the channel is
+/// the only string a record carries.
 pub const PROCESS_COMMAND_SEPARATOR: char = '\u{1f}';
 /// Longest the channel of a record may be (observation schema), so the
 /// longest a process's name and command line together may be.
