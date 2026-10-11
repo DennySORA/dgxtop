@@ -3,7 +3,7 @@
 //! Cross-layer contracts shared by the six components (Adapter, Collector,
 //! Manager, Store, Viewer, Controller) of the dgxtop v2 rewrite
 //! (`spec/dgxtop-v2/`). This crate holds typed identities, units, quality
-//! axes, commands/results, events, configuration, byte budgets and the ports
+//! axes, commands/results, configuration, byte budgets and the ports
 //! between components. It performs no I/O and depends only on std plus small
 //! DTO/serialization crates.
 
@@ -17,7 +17,6 @@ pub mod commands;
 pub mod config;
 pub mod digest;
 pub mod errors;
-pub mod event;
 pub mod gpu_bandwidth;
 pub mod gpu_state;
 pub mod history;

@@ -17,9 +17,6 @@ use dgxtop_core::canonical::{CanonicalSample, CanonicalValue};
 use dgxtop_core::commands::{CommandBody, CommandEnvelope, CommandResult, SortKey, ViewKind};
 use dgxtop_core::config::Config;
 use dgxtop_core::errors::ErrorCode;
-use dgxtop_core::event::{
-    ActionEventPayload, CompletionStatus, Event, EventKind, ModuleHealthState,
-};
 use dgxtop_core::identity::{
     BootId, EntityId, HostId, ModuleId, PidNamespace, ProcessKey, SessionId, SourceId,
 };
@@ -188,12 +185,6 @@ fn example_config_default() {
     // valid under both schemas.
     assert!(spec_validator("config.schema.json").is_valid(&original));
 }
-example_round_trip!(
-    example_event_gap,
-    "event.gap.json",
-    "event.schema.json",
-    Event
-);
 example_round_trip!(
     example_ipc_request,
     "ipc-request.read.json",
@@ -472,78 +463,6 @@ fn view_and_sort_enums_match_command_schema() {
     assert_eq!(rust_sorts, sorts);
 }
 
-fn every_event_kind() -> Vec<EventKind> {
-    let action = || ActionEventPayload {
-        request_id: Uuid::new_v4(),
-        intent_id: Some(Uuid::new_v4()),
-        reason: "test".into(),
-    };
-    vec![
-        EventKind::CatalogChanged {
-            catalog_revision: 3,
-            changed_count: 10,
-            removed_count: 1,
-        },
-        EventKind::CollectionCommitted {
-            batch_id: Uuid::new_v4(),
-            snapshot_revision: u64::MAX,
-            sample_count: 12,
-        },
-        EventKind::SourceChanged {
-            entity_id: "cpu.package.0".into(),
-            metric_id: "cpu.temperature.package".into(),
-            previous_source: None,
-            source_id: "hwmon:coretemp.0:temp1".into(),
-            policy_revision: 1,
-        },
-        EventKind::SourceConflict {
-            entity_id: "cpu.package.0".into(),
-            metric_id: "cpu.temperature.package".into(),
-            source_ids: vec!["a".into(), "b".into()],
-        },
-        EventKind::SourceUnavailable {
-            source_id: "nvml:GPU-1:temp".into(),
-            reason: "TIMEOUT".into(),
-        },
-        EventKind::ConfigApplied {
-            revision: 2,
-            epoch: 7,
-        },
-        EventKind::ModuleHealthChanged {
-            module_id: "nvml".into(),
-            state: ModuleHealthState::Quarantined,
-            reason: "unreaped".into(),
-        },
-        EventKind::GapRecorded {
-            start_boot_ns: 1,
-            end_boot_ns: 2,
-            reason: "HOST_TIMEOUT".into(),
-            affected_count: 3,
-        },
-        EventKind::CommandCompleted {
-            request_id: Uuid::new_v4(),
-            status: CompletionStatus::Rejected,
-            code: "Busy".into(),
-        },
-        EventKind::ActionPrepared(action()),
-        EventKind::ActionIntentCommitted(action()),
-        EventKind::ActionSignalSent(action()),
-        EventKind::ActionExitObserved(action()),
-        EventKind::ActionOutcomeUnknown(ActionEventPayload {
-            intent_id: None,
-            ..action()
-        }),
-    ]
-}
-
-#[test]
-fn every_event_kind_is_schema_valid() {
-    for kind in every_event_kind() {
-        let event = Event::new(BootId::new("demo-boot").unwrap(), 42, Uuid::new_v4(), kind);
-        assert_valid("event.schema.json", &to_value(&event));
-    }
-}
-
 fn selected_value() -> CanonicalValue {
     CanonicalValue {
         key: serde_json::from_value(json!({
@@ -687,7 +606,6 @@ fn every_schema_compiles() {
         "command.schema.json",
         "config.schema.json",
         "display-module.schema.json",
-        "event.schema.json",
         "history-query.schema.json",
         "history-result.schema.json",
         "ipc-request.schema.json",
