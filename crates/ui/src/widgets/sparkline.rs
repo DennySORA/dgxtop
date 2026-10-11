@@ -158,8 +158,9 @@ fn column_eighths(area: Rect, ratio: f64) -> u16 {
 /// column's top) in block glyphs from the bottom of `area`. A cell holds
 /// two colors: where a layer ends inside a cell that the column fills to
 /// its top, the layer above it filling most of the rest shows behind the
-/// glyph; where the column ends inside the cell, the layer filling most of
-/// it takes the cell, so the column keeps its height.
+/// glyph; where the column ends inside the cell, the top layer takes the
+/// cell, so the column keeps its height and its top layer always shows
+/// (D-69: the rest of the used RAM above the GPU processes).
 fn draw_layers(buf: &mut Buffer, area: Rect, x: u16, layers: &[Layer]) {
     let Some(&(top, _)) = layers.last() else {
         return;
@@ -196,7 +197,7 @@ fn cell_glyph(layers: &[Layer], floor: u16, cell_top: u16, ceiling: u16) -> Opti
         return Some((cell_top, first_style));
     }
     if cell_top < ceiling {
-        return Some((cell_top, widest(&inside)?));
+        return inside.last().map(|&(_, _, style)| (cell_top, style));
     }
     let behind: Option<Color> = widest(above)?.fg;
     Some((
@@ -334,11 +335,13 @@ mod tests {
         assert_eq!(cell(1), ("█".to_owned(), Color::Green, Color::Reset));
         assert_eq!(cell(0), ("▆".to_owned(), Color::Red, Color::Reset));
         // A column ending inside a cell shared by two layers keeps its
-        // height in the color of the larger one.
+        // height in the color of the top one, even where the lower one
+        // fills more of the cell (D-69: the system's RAM above a GPU job
+        // that holds most of it vanished from the chart).
         let mut short = Buffer::empty(Rect::new(0, 0, 1, 1));
         GapSparkline::new(&[Some(60.0)], Style::new().fg(Color::Red))
             .max(Some(100.0))
-            .parts(vec![(&[Some(20.0)], Style::new().fg(Color::Blue))])
+            .parts(vec![(&[Some(45.0)], Style::new().fg(Color::Blue))])
             .render(Rect::new(0, 0, 1, 1), &mut short);
         assert_eq!(short[(0, 0)].symbol(), "▄");
         assert_eq!(short[(0, 0)].fg, Color::Red);
