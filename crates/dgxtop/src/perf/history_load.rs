@@ -484,15 +484,15 @@ mod tests {
     use dgxtop_core::history::{HISTORY_SCHEMA_VERSION, HistoryQuery, HistoryStat};
     use dgxtop_core::ports::{CancelFlag, HistoryReader};
     use dgxtop_core::quality::Namespace;
-    use dgxtop_store::hot::HotStore;
 
+    use crate::live_store::LiveStore;
     use crate::perf::pipeline::ManualClock;
 
     const HOUR_NS: u64 = 3_600 * NANOS_PER_SECOND;
 
-    fn preloaded(series: usize, span_ns: u64) -> (HotStore, HistoryFeeder, PreloadReport, u64) {
+    fn preloaded(series: usize, span_ns: u64) -> (LiveStore, HistoryFeeder, PreloadReport, u64) {
         let config = Config::defaults().unwrap();
-        let store = HotStore::new(
+        let store = LiveStore::new(
             &config.store,
             &config.sampling,
             &config.runtime,

@@ -11,6 +11,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crossbeam_channel::{Sender, TrySendError};
+use dgxtop::live_store::LiveStore;
 use dgxtop_core::budget::{ByteLedger, BytePermit, MIB, Partition, QueueGate, QueueTicket};
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::commands::CommandBody;
@@ -26,7 +27,6 @@ use dgxtop_core::view::{HostState, HostStatus, OverloadState, ViewModel};
 use dgxtop_manager::{INGESTION_INBOX_CAPACITY, ManagerChannels, ManagerInboxes, ManagerPorts};
 use dgxtop_store::config::FileConfigRepository;
 use dgxtop_store::fs::RealFileSystem;
-use dgxtop_store::hot::HotStore;
 use uuid::Uuid;
 
 use crate::support::manager_rig::{
@@ -73,7 +73,7 @@ impl OverloadRig {
         let channels = ManagerChannels::create();
         let inboxes = channels.inboxes();
         let completions = Completions::from_inboxes(&inboxes);
-        let (writer, snapshots, history) = HotStore::new(
+        let (writer, snapshots, history) = LiveStore::new(
             &config.store,
             &config.sampling,
             &config.runtime,

@@ -464,7 +464,7 @@ impl Wiring {
         };
         let mut workers: Vec<Box<dyn StopOnShutdown>> = Vec::new();
 
-        let (writer, snapshots, history_index) = dgxtop_store::hot::HotStore::new(
+        let (writer, snapshots, history_index) = crate::live_store::LiveStore::new(
             &effective.store,
             &effective.sampling,
             &effective.runtime,

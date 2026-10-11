@@ -1,4 +1,4 @@
-//! All series plus the global gap index; mutated only by the HotStore actor
+//! All series plus the global gap index; mutated only by the state actor
 //! (under the write lock) and pinned by history queries (under a short read
 //! lock).
 
@@ -7,7 +7,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use dgxtop_core::budget::{ByteLedger, Partition};
 use dgxtop_core::canonical::GapRecord;
 use dgxtop_core::identity::MetricKey;
-use dgxtop_core::metric::{CanonicalUnit, MetricDescriptor, Scalar};
+use dgxtop_core::metric::{CanonicalUnit, MetricDescriptor};
+pub(crate) use dgxtop_core::ports::{CutAppend, GaugeAppend, HistoryAppends, IntervalAppend};
 
 use super::gaps::{GapEntry, GapInsert, GapList, ReasonInterner};
 use super::output::{ArchiveRow, DropReason, HistoryReport};
@@ -36,48 +37,6 @@ pub(crate) struct HistorySettings {
     pub finalize_grace_ns: u64,
     pub gap_merge_tolerance_ns: u64,
     pub archive_enabled: bool,
-}
-
-/// One gauge value entering history.
-#[derive(Debug, Clone)]
-pub(crate) struct GaugeAppend {
-    pub key: MetricKey,
-    pub descriptor: &'static MetricDescriptor,
-    pub identity: SegmentIdentity,
-    pub unit: CanonicalUnit,
-    pub time_ns: u64,
-    pub stale_deadline_ns: u64,
-    pub value: Scalar,
-}
-
-/// A history-eligible key reported without a value at `time_ns`.
-#[derive(Debug, Clone)]
-pub(crate) struct CutAppend {
-    pub key: MetricKey,
-    pub time_ns: u64,
-    /// End of the visible gap recorded for the missing value.
-    pub gap_end_ns: u64,
-    pub reason: String,
-}
-
-/// One exact counter interval entering history.
-#[derive(Debug, Clone)]
-pub(crate) struct IntervalAppend {
-    pub key: MetricKey,
-    pub descriptor: &'static MetricDescriptor,
-    pub identity: SegmentIdentity,
-    pub unit: CanonicalUnit,
-    pub start_ns: u64,
-    pub end_ns: u64,
-    pub delta: Scalar,
-}
-
-/// Everything one committed batch adds to history.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct HistoryAppends {
-    pub gauges: Vec<GaugeAppend>,
-    pub cuts: Vec<CutAppend>,
-    pub intervals: Vec<IntervalAppend>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -685,7 +644,7 @@ impl HistoryState {
 mod tests {
     use super::*;
     use dgxtop_core::history::HistoryMethod;
-    use dgxtop_core::metric::{descriptor, ids};
+    use dgxtop_core::metric::{Scalar, descriptor, ids};
     use dgxtop_core::quality::SampleKind;
     use dgxtop_core::testing::{metric_key, source_id};
 

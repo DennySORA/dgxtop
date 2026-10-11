@@ -14,7 +14,7 @@ use super::plan::{
     Floors, Grid, RegionPlan, Window, choose_grid, fit_cells, grid_alignment, rollup_boundary,
 };
 use super::points::PointSink;
-use crate::history::pin::{PinnedCounter, PinnedGauge, PinnedSeries, PinnedTrack};
+use crate::pin::{PinnedCounter, PinnedGauge, PinnedSeries, PinnedTrack};
 
 /// Coarsening attempts when a grid still produced too many points.
 const MAX_REGRIDS: usize = 4;

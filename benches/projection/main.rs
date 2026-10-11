@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 
 use common::headless::{IdleGate, ManualLoopClock, NullTransport, isolate_terminal_input};
 use common::{BenchOutcome, BenchResult, RawSamples};
+use dgxtop::live_store::LiveStore;
 use dgxtop::perf::evidence::EvidenceWriter;
 use dgxtop::perf::fixture::FixtureCensus;
 use dgxtop::perf::latency::{LatencySummary, duration_us, summarize_us};
@@ -57,7 +58,7 @@ use dgxtop_manager::presentation::{
     build_view_model_measured,
 };
 use dgxtop_manager::process_history::ProcessHistoryBook;
-use dgxtop_store::hot::{HotStore, HotStoreWriter, SharedSnapshot};
+use dgxtop_store::hot::{HotStoreWriter, SharedSnapshot};
 use dgxtop_ui::terminal::GatedInput;
 use dgxtop_ui::{TuiLoop, TuiOptions};
 use serde::Serialize;
@@ -214,7 +215,7 @@ impl SnapshotWorld {
     ) -> BenchResult<Self> {
         let pipeline = ReplayPipeline::new(fixture, hosts, config, START_BOOT_NS)
             .map_err(|error| error.to_string())?;
-        let (writer, snapshots, _history) = HotStore::new(
+        let (writer, snapshots, _history) = LiveStore::new(
             &config.store,
             &config.sampling,
             &config.runtime,

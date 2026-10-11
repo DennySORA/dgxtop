@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Sender, bounded};
 use dgxtop::audit_unavailable::UnavailableAudit;
 use dgxtop::control_ops::{run_action_op, run_audit_op};
+use dgxtop::live_store::LiveStore;
 use dgxtop::startup::{real_filesystem, value_origins};
 use dgxtop::version::BuildInfo;
 use dgxtop_collectors::registry::default_collectors;
@@ -58,7 +59,7 @@ use dgxtop_runtime::supervisor::{
 };
 use dgxtop_store::audit::{AuditLimits, SqliteAuditRepository};
 use dgxtop_store::config::FileConfigRepository;
-use dgxtop_store::hot::{HotStore, HotStoreWriter, SharedSnapshot};
+use dgxtop_store::hot::{HotStoreWriter, SharedSnapshot};
 use dgxtop_store::paths::{ProcessEnv, StatePaths};
 use dgxtop_store::sqlite::{StatvfsFreeSpace, ensure_sqlite_version};
 
@@ -242,7 +243,7 @@ impl RefComposition {
             },
             probes: Arc::clone(&inputs.probes),
         };
-        let (writer, snapshots, history_index) = HotStore::new(
+        let (writer, snapshots, history_index) = LiveStore::new(
             &config.store,
             &config.sampling,
             &config.runtime,

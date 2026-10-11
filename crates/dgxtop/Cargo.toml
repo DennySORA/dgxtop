@@ -75,6 +75,27 @@ path = "../../tests/fault_injection/main.rs"
 name = "hardware"
 path = "../../tests/hardware/main.rs"
 
+# The live store: state and history wired together (D-79).
+[[test]]
+name = "store_hot_commit"
+path = "../../tests/live_store/store_hot_commit.rs"
+
+[[test]]
+name = "store_hot_history"
+path = "../../tests/live_store/store_hot_history.rs"
+
+[[test]]
+name = "store_hot_memory"
+path = "../../tests/live_store/store_hot_memory.rs"
+
+[[test]]
+name = "store_hot_properties"
+path = "../../tests/live_store/store_hot_properties.rs"
+
+[[test]]
+name = "store_hot_query_limits"
+path = "../../tests/live_store/store_hot_query_limits.rs"
+
 [[bench]]
 name = "ref"
 path = "../../benches/ref/main.rs"

@@ -23,9 +23,9 @@ use dgxtop_core::history::{
 use dgxtop_core::identity::{MetricKey, SourceId};
 use dgxtop_core::ports::{CancelFlag, HistoryReader};
 
-use crate::history::HistoryIndex;
-use crate::history::gaps::{GapEntry, MAX_REASON_BYTES};
-use crate::history::pin::{PinOutcome, PinRequest};
+use crate::HistoryIndex;
+use crate::gaps::{GapEntry, MAX_REASON_BYTES};
+use crate::pin::{PinOutcome, PinRequest};
 
 pub(crate) use guard::ScanGuard;
 

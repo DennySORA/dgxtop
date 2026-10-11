@@ -172,9 +172,9 @@ impl HistoryState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::history::chunk::chunk_bytes;
-    use crate::history::segment::SegmentIdentity;
-    use crate::history::state::{GaugeAppend, HistoryAppends, HistorySettings};
+    use crate::chunk::chunk_bytes;
+    use crate::segment::SegmentIdentity;
+    use crate::state::{GaugeAppend, HistoryAppends, HistorySettings};
     use dgxtop_core::history::HistoryMethod;
     use dgxtop_core::metric::{CanonicalUnit, Scalar, descriptor, ids};
     use dgxtop_core::quality::SampleKind;

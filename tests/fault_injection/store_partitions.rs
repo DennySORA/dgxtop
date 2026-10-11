@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, bounded};
+use dgxtop::live_store::LiveStore;
 use dgxtop_core::action::{ActionState, PersistenceState};
 use dgxtop_core::budget::{ByteLedger, Partition};
 use dgxtop_core::canonical::{
@@ -30,7 +31,7 @@ use dgxtop_core::testing::{FakeClock, metric_key, source_id};
 use dgxtop_manager::INGESTION_INBOX_CAPACITY;
 use dgxtop_runtime::queues::PoolHandle;
 use dgxtop_store::archive::{ArchiveLimits, SqliteArchive};
-use dgxtop_store::hot::{HotStore, SharedSnapshot};
+use dgxtop_store::hot::SharedSnapshot;
 use uuid::Uuid;
 
 use crate::support::action_rig::{ActionRig, action_config};
@@ -72,7 +73,7 @@ impl ArchivedStore {
         let clock = FakeClock::new(START_NS);
         let time: Arc<dyn TimeProvider> = clock.clone();
         let ledger = ByteLedger::for_memory_limit_mib(u64::from(config.store.memory_limit_mib));
-        let (writer, snapshots, _history) = HotStore::new(
+        let (writer, snapshots, _history) = LiveStore::new(
             &config.store,
             &config.sampling,
             &config.runtime,

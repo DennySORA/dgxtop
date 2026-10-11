@@ -9,9 +9,8 @@ use std::sync::Arc;
 
 use dgxtop_core::budget::{ByteLedger, CapacityError, Partition};
 use dgxtop_core::history::HistoryMethod;
-use dgxtop_core::identity::{MetricKey, SourceId};
+use dgxtop_core::identity::MetricKey;
 use dgxtop_core::metric::CanonicalUnit;
-use dgxtop_core::quality::SampleKind;
 use uuid::Uuid;
 
 use dgxtop_core::budget::accounted::Account;
@@ -21,15 +20,7 @@ pub(crate) const MAX_SEGMENTS_PER_SERIES: usize = 4096;
 /// Accounted bytes of one segment (metadata, uuid, shared key, view slot).
 const SEGMENT_BYTES: u64 = 320;
 
-/// Everything whose change cuts a segment.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SegmentIdentity {
-    pub source_id: SourceId,
-    pub source_generation: u32,
-    pub policy_revision: u32,
-    pub sample_kind: SampleKind,
-    pub method: HistoryMethod,
-}
+pub(crate) use dgxtop_core::ports::SegmentIdentity;
 
 /// Immutable description of one segment, shared with readers and the archive.
 #[derive(Debug)]
@@ -193,6 +184,7 @@ impl SegmentsView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dgxtop_core::quality::SampleKind;
     use dgxtop_core::testing::{metric_key, source_id};
 
     fn identity(source: &str, generation: u32, method: HistoryMethod) -> SegmentIdentity {

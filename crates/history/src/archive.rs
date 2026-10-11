@@ -7,7 +7,7 @@
 //! bridges reference (the sink upserts them), so a journal never depends on
 //! an earlier one. When the queue is full the oldest rows are dropped and the
 //! dropped time is reported to the archive as an `archive_overflow` gap: the
-//! HotStore is never blocked by the archive.
+//! live state is never blocked by the archive.
 
 use std::collections::{BTreeSet, VecDeque};
 
@@ -20,10 +20,10 @@ use dgxtop_core::ports::{ArchiveJournal, ArchivedBridge, ArchivedBucket, Archive
 
 use dgxtop_core::clock::format_utc_ns;
 
-use super::wall_clock::WallClock;
-use crate::history::output::ArchiveRow;
-use crate::history::records::BUCKET_NS;
-use crate::history::segment::SegmentMeta;
+use crate::output::ArchiveRow;
+use crate::records::BUCKET_NS;
+use crate::segment::SegmentMeta;
+use crate::wall_clock::WallClock;
 use dgxtop_core::budget::accounted::Account;
 
 /// Most bytes queued for the archive (`queues.archive_bytes` upper bound).
@@ -313,8 +313,8 @@ mod tests {
     use dgxtop_core::testing::{metric_key, source_id};
     use uuid::Uuid;
 
-    use crate::history::records::{CounterSample, GaugeBucket};
-    use crate::history::segment::SegmentIdentity;
+    use crate::records::{CounterSample, GaugeBucket};
+    use crate::segment::SegmentIdentity;
 
     fn segment() -> Arc<SegmentMeta> {
         Arc::new(SegmentMeta {

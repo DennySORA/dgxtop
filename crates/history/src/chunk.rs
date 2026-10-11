@@ -334,7 +334,7 @@ impl<'a, T> Iterator for SliceIter<'_, 'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::history::records::GaugeSample;
+    use crate::records::GaugeSample;
 
     fn sample(time_ns: u64) -> GaugeSample {
         GaugeSample {

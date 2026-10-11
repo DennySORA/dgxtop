@@ -1,5 +1,6 @@
 //! Shared handles over the history state: the single writer used by the
-//! HotStore actor and the cloneable reader used by history workers.
+//! state actor (through the recorder) and the cloneable reader used by
+//! history workers.
 
 use std::fmt;
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -12,7 +13,7 @@ use super::state::{HistoryAppends, HistoryState};
 use crate::query::QueryLimits;
 
 /// Read side of the bounded history (`HistoryReader`). Cheap to clone; safe
-/// to query from several history workers while the HotStore keeps
+/// to query from several history workers while the state keeps
 /// committing. A query holds the lock only while pinning one series.
 #[derive(Clone)]
 pub struct HistoryIndex {
@@ -56,7 +57,7 @@ impl HistoryIndex {
     }
 }
 
-/// Write side of the history, owned by the HotStore actor.
+/// Write side of the history, owned by the recorder on the state actor.
 pub(crate) struct HistoryWriter {
     shared: Arc<RwLock<HistoryState>>,
 }

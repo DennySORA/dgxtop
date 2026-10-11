@@ -8,12 +8,12 @@ use dgxtop_core::clock::ms_to_ns;
 use dgxtop_core::history::HistoryMethod;
 use dgxtop_core::identity::{MetricKey, SourceId};
 use dgxtop_core::naming::{PeriodClass, READ_GROUPS, is_replay_adapter};
-use dgxtop_core::ports::IngressBatch;
+use dgxtop_core::ports::{
+    CutAppend, GaugeAppend, HistoryAppends, IngressBatch, IntervalAppend, SegmentIdentity,
+};
 use dgxtop_core::quality::{SampleKind, SelectionState};
 
 use super::validate::CheckedBatch;
-use crate::history::segment::SegmentIdentity;
-use crate::history::state::{CutAppend, GaugeAppend, HistoryAppends, IntervalAppend};
 use dgxtop_core::sampling::SamplingTiming;
 use dgxtop_core::sampling::stale_deadline;
 

@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use common::{BenchOutcome, BenchResult, RawSamples};
+use dgxtop::live_store::LiveStore;
 use dgxtop::perf::evidence::EvidenceWriter;
 use dgxtop::perf::history_load::{
     HistoryFeeder, HistorySeries, PreloadReport, PreloadShape, history_series, synthetic_keys,
@@ -36,8 +37,8 @@ use dgxtop_core::history::{HISTORY_SCHEMA_VERSION, HistoryQuery, HistoryStat};
 use dgxtop_core::identity::{BootId, HostId};
 use dgxtop_core::ports::{CancelFlag, HistoryReader, StoreWriter};
 use dgxtop_core::quality::Namespace;
-use dgxtop_store::history::HistoryIndex;
-use dgxtop_store::hot::{HotStore, HotStoreWriter};
+use dgxtop_history::HistoryIndex;
+use dgxtop_store::hot::HotStoreWriter;
 use serde::Serialize;
 use serde_json::json;
 use uuid::Uuid;
@@ -209,7 +210,7 @@ fn run() -> BenchResult<PathBuf> {
         "2 query client threads + 1 writer thread at 1 Hz during queries",
     )?;
     let ledger = ByteLedger::for_memory_limit_mib(u64::from(config.store.memory_limit_mib));
-    let (mut writer, _snapshots, history) = HotStore::new(
+    let (mut writer, _snapshots, history) = LiveStore::new(
         &config.store,
         &config.sampling,
         &config.runtime,

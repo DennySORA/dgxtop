@@ -4,11 +4,12 @@
 //! validated completely before anything changes (epoch, base revision,
 //! values, namespace, units, memory admission), then samples, history,
 //! candidate evidence and collector state are applied and exactly one new
-//! [`ImmutableSnapshot`] revision is published. Readers get the latest
-//! snapshot through [`SharedSnapshot`] and history through [`HistoryIndex`];
-//! neither ever holds a mutable handle.
+//! [`ImmutableSnapshot`] revision is published. History is reached only
+//! through the injected `HistoryIngest` port (D-79), called on this thread
+//! before the publish, so a commit is in history once its ack is visible.
+//! Readers get the latest snapshot through [`SharedSnapshot`]; they never
+//! hold a mutable handle.
 
-mod archive;
 mod counters;
 mod dedup;
 mod estimate;
@@ -17,7 +18,6 @@ mod retained;
 mod settings;
 mod snapshot;
 mod validate;
-mod wall_clock;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, PoisonError, RwLock};
@@ -27,10 +27,12 @@ use dgxtop_core::canonical::{
     AckStatus, ArchiveState, CollectionBatch, CollectorState, CommitGuard, DomainSnapshot,
     GapRecord, ImmutableSnapshot, ProcessTable, StoreAck, StoreHealth,
 };
-use dgxtop_core::config::{RuntimeConfig, SamplingConfig, StoreConfig};
+use dgxtop_core::config::{SamplingConfig, StoreConfig};
 use dgxtop_core::identity::{CollectorId, MetricKey};
 use dgxtop_core::metric::Domain;
-use dgxtop_core::ports::{ArchiveJournal, IngressBatch, StoreWriter};
+use dgxtop_core::ports::{
+    ArchiveJournal, HistoryAppends, HistoryIngest, HistoryOutcome, IngressBatch, StoreWriter,
+};
 use dgxtop_core::quality::Namespace;
 use dgxtop_core::sampling::SamplingTiming;
 use uuid::Uuid;
@@ -39,45 +41,38 @@ pub use counters::StoreCounters;
 pub use snapshot::SharedSnapshot;
 
 use crate::candidates::{CandidateReport, CandidateStore};
-use crate::history::output::HistoryReport;
-use crate::history::state::{HistoryAppends, HistoryState};
-use crate::history::{HistoryIndex, HistoryWriter};
-use archive::ArchiveQueue;
 use dedup::{REMEMBERED_BATCHES, Recall, RememberedBatches};
 use retained::RetainedAllocations;
 use settings::StoreSettings;
 use snapshot::RecentGaps;
 use validate::{CheckedBatch, ContentRules, DescriptorIndex, EpochState, Rejection};
-use wall_clock::WallClock;
 
-/// The three handles of one hot store, built together.
+/// The two handles of one hot store, built together.
 ///
-/// `writer` belongs to the HotStore actor, `snapshots` to presentation and
-/// `history` to the history workers.
+/// `writer` belongs to the HotStore actor, `snapshots` to presentation.
 #[derive(Debug)]
 pub struct HotStore {
     pub writer: HotStoreWriter,
     pub snapshots: SharedSnapshot,
-    pub history: HistoryIndex,
 }
 
 impl HotStore {
     /// Builds an empty store (snapshot revision 0) on the shared ledger.
     ///
     /// `namespace` is the only data namespace accepted (live, or replay in
-    /// `--replay`); `archive_enabled` makes the store queue finished minute
-    /// buckets, bridges and gaps for [`HotStoreWriter::take_archive_journal`].
+    /// `--replay`); `archive_enabled` lets [`HotStoreWriter::take_archive_journal`]
+    /// hand out the journals `history` queues. Every commit, gap and
+    /// maintenance step is forwarded to `history` before it is published.
     pub fn new(
         store: &StoreConfig,
         sampling: &SamplingConfig,
-        runtime: &RuntimeConfig,
         ledger: ByteLedger,
         namespace: Namespace,
         archive_enabled: bool,
+        history: Box<dyn HistoryIngest>,
     ) -> Self {
         let timing = SamplingTiming::from_sampling(sampling);
-        let settings = StoreSettings::new(store, &timing, runtime, namespace, archive_enabled);
-        let shared_history = Arc::new(RwLock::new(HistoryState::new(settings.history, &ledger)));
+        let settings = StoreSettings::new(store, namespace);
         let candidates = Arc::new(RwLock::new(CandidateStore::new(
             settings.candidates,
             &ledger,
@@ -94,8 +89,6 @@ impl HotStore {
             retained.track(&initial, permit);
         }
         let snapshots = SharedSnapshot::new(Arc::clone(&initial), Arc::clone(&candidates));
-        let history =
-            HistoryIndex::new(Arc::clone(&shared_history), ledger.clone(), settings.limits);
         let writer = HotStoreWriter {
             settings,
             timing,
@@ -108,10 +101,8 @@ impl HotStore {
             retained,
             remembered: RememberedBatches::new(&ledger, REMEMBERED_BATCHES),
             epochs: EpochState::default(),
-            history: HistoryWriter::new(shared_history),
+            history,
             candidates,
-            archive: ArchiveQueue::new(&ledger),
-            clock: WallClock::default(),
             recent_gaps: RecentGaps::new(timing.fast_period_ns),
             counters: StoreCounters::default(),
             series_count: 0,
@@ -121,16 +112,12 @@ impl HotStore {
             last_now_ns: 0,
             ledger,
         };
-        Self {
-            writer,
-            snapshots,
-            history,
-        }
+        Self { writer, snapshots }
     }
 
-    /// Splits the store into its writer, snapshot reader and history reader.
-    pub fn into_parts(self) -> (HotStoreWriter, SharedSnapshot, HistoryIndex) {
-        (self.writer, self.snapshots, self.history)
+    /// Splits the store into its writer and snapshot reader.
+    pub fn into_parts(self) -> (HotStoreWriter, SharedSnapshot) {
+        (self.writer, self.snapshots)
     }
 }
 
@@ -180,10 +167,8 @@ pub struct HotStoreWriter {
     retained: RetainedAllocations,
     remembered: RememberedBatches,
     epochs: EpochState,
-    history: HistoryWriter,
+    history: Box<dyn HistoryIngest>,
     candidates: Arc<RwLock<CandidateStore>>,
-    archive: ArchiveQueue,
-    clock: WallClock,
     recent_gaps: RecentGaps,
     counters: StoreCounters,
     series_count: u32,
@@ -228,9 +213,7 @@ impl HotStoreWriter {
     /// tick). A wall clock step becomes a clock discontinuity in history
     /// results; archive rows need at least one observation.
     pub fn observe_wall_clock(&mut self, boot_ns: u64, utc_ns: i128) {
-        if let Some(discontinuity) = self.clock.observe(boot_ns, utc_ns) {
-            self.history.note_discontinuity(discontinuity);
-        }
+        self.history.observe_wall_clock(boot_ns, utc_ns);
     }
 
     /// Finished rows (minute buckets, bridges, their segments, settled gaps)
@@ -240,7 +223,7 @@ impl HotStoreWriter {
         if !self.archive_enabled {
             return None;
         }
-        self.archive.take(max_bytes, &self.clock, self.revision)
+        self.history.take_archive_journal(max_bytes)
     }
 
     /// Store counters as of now.
@@ -263,10 +246,8 @@ impl HotStoreWriter {
             ..CandidateReport::default()
         });
         self.refresh_candidate_count();
-        let report = self
-            .history
-            .shed_raw(now, self.settings.history.raw_history_ns / 2);
-        self.absorb_history(report);
+        let outcome = self.history.shed_raw(now, self.settings.raw_history_ns / 2);
+        self.absorb_history(outcome);
         self.publish_now(SnapshotChange::default(), now);
     }
 
@@ -463,9 +444,9 @@ impl HotStoreWriter {
             inputs,
             new_keys,
         } = prepared;
-        let report = self.history.apply(appends, now, revision);
-        self.counters.count_gaps(report.gaps_added);
-        self.absorb_history(report);
+        let outcome = self.history.ingest(appends, now, revision);
+        self.counters.count_gaps(outcome.gaps_added);
+        self.absorb_history(outcome);
         let candidate_report = self
             .candidates
             .write()
@@ -501,18 +482,14 @@ impl HotStoreWriter {
         }
     }
 
-    /// Folds a history report: drops, evictions, health, recent gaps and
-    /// archive rows (gap totals are counted by the caller).
-    fn absorb_history(&mut self, report: HistoryReport) {
-        self.counters.absorb_history(&report);
-        self.series_count = report.series_count;
-        self.truncated = report.truncated;
-        for gap in &report.new_gaps {
-            self.recent_gaps.note(gap.clone());
-        }
-        if self.archive_enabled {
-            let dropped = self.archive.enqueue(report.archive_rows);
-            self.counters.count_archive_drops(dropped);
+    /// Folds a history outcome: drops, evictions, archive drops, health and
+    /// recent gaps (gap totals are counted by the caller).
+    fn absorb_history(&mut self, outcome: HistoryOutcome) {
+        self.counters.absorb_history(&outcome);
+        self.series_count = outcome.series_count;
+        self.truncated = outcome.truncated;
+        for gap in outcome.new_gaps {
+            self.recent_gaps.note(gap);
         }
     }
 
@@ -719,14 +696,14 @@ impl StoreWriter for HotStoreWriter {
             self.shared.publish_counters(self.counters);
             return;
         }
-        let report = self.history.record_gap(gap.clone());
-        self.counters.count_gaps(report.gaps_added);
-        if report.new_gaps.is_empty() {
+        let outcome = self.history.record_gap(gap.clone());
+        self.counters.count_gaps(outcome.gaps_added);
+        if outcome.new_gaps.is_empty() {
             // Not stored (no memory left for the index): still counted and listed.
             self.counters.count_gaps(1);
             self.recent_gaps.note(gap);
         }
-        self.absorb_history(report);
+        self.absorb_history(outcome);
         let now = self.last_now_ns;
         self.publish_now(SnapshotChange::default(), now);
     }
@@ -740,10 +717,10 @@ impl StoreWriter for HotStoreWriter {
             .unwrap_or_else(PoisonError::into_inner)
             .expire(now);
         self.refresh_candidate_count();
-        let report = self.history.maintain(now);
-        let visible = report.changed_visible_state() || expired > 0;
-        self.counters.count_gaps(report.gaps_added);
-        self.absorb_history(report);
+        let outcome = self.history.maintain(now);
+        let visible = outcome.changed_visible_state() || expired > 0;
+        self.counters.count_gaps(outcome.gaps_added);
+        self.absorb_history(outcome);
         let pruned = self.prune_idle_keys(now);
         if visible || !pruned.is_empty() {
             let change = SnapshotChange {

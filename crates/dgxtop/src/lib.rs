@@ -10,6 +10,7 @@ pub mod control_ops;
 pub mod diagnostics;
 pub mod fail_stop;
 pub mod host_mode;
+pub mod live_store;
 pub mod modes;
 pub mod monitor;
 pub mod perf;
