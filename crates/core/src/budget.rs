@@ -605,34 +605,6 @@ impl Drop for QueueTicket {
     }
 }
 
-/// Approximate retained heap size, used to reserve before allocating and to
-/// account long-lived structures (projections, snapshots, query results).
-pub trait EstimateBytes {
-    fn estimated_bytes(&self) -> usize;
-}
-
-impl EstimateBytes for String {
-    fn estimated_bytes(&self) -> usize {
-        self.capacity()
-    }
-}
-
-impl<T: EstimateBytes> EstimateBytes for Vec<T> {
-    fn estimated_bytes(&self) -> usize {
-        self.capacity() * std::mem::size_of::<T>()
-            + self
-                .iter()
-                .map(EstimateBytes::estimated_bytes)
-                .sum::<usize>()
-    }
-}
-
-impl<T: EstimateBytes> EstimateBytes for Option<T> {
-    fn estimated_bytes(&self) -> usize {
-        self.as_ref().map_or(0, EstimateBytes::estimated_bytes)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
