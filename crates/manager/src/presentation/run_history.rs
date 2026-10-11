@@ -19,9 +19,9 @@ use super::gpu_directory::GpuDirectory;
 use super::history_charts::{gpu_memory_scale, ram_total};
 use super::reader::MetricReader;
 use super::run_bars::{Bars, bars_of};
-use crate::process_history::series::RunSeries;
 use crate::process_history::{ProcessHistoryBook, Run};
 use crate::process_memory::ProcessMemoryBook;
+use dgxtop_compression::RunSeries;
 
 const PERCENT_SCALE: f64 = 100.0;
 

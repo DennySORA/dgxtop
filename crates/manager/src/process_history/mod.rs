@@ -2,7 +2,8 @@
 //! from the first process table that lists it using a GPU until it ends,
 //! and keeps the latest runs listed (D-77: however long ago they ended).
 //!
-//! Each cycle it adds a sample to each live run ([`series`]) and asks the
+//! Each cycle it adds a sample to each live run (a [`RunSeries`] of the
+//! compression, D-79) and asks the
 //! process probe about the live runs: their command line, working folder
 //! and details once, their IO counters, threads, swap, open files and
 //! descendants each cycle (D-77), and, for a run the table no longer lists,
@@ -12,13 +13,13 @@
 //! Nothing here performs I/O.
 
 mod ending;
-pub(crate) mod series;
 mod service;
 
 pub(crate) use self::service::{ProcessHistoryPorts, ProcessHistoryService};
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use dgxtop_compression::{RunSample, RunSeries};
 use dgxtop_core::action::Signal;
 use dgxtop_core::canonical::{ProcessRow, ProcessTable};
 use dgxtop_core::identity::{BootId, EntityId, ProcessKey};
@@ -32,7 +33,6 @@ use dgxtop_core::process_probe::{
 };
 
 use self::ending::{EndEvidence, end_cause};
-use self::series::{RunSeries, Sample};
 use crate::process::Now;
 
 const NANOS_PER_SECOND: u64 = 1_000_000_000;
@@ -627,7 +627,7 @@ fn sample_run(
         }
     }
     let probed = run.probed();
-    let mut sample: Sample = [None; RUN_METRICS];
+    let mut sample: RunSample = [None; RUN_METRICS];
     sample[RunMetric::Cpu.index()] = row.cpu_percent;
     #[allow(clippy::cast_precision_loss)]
     {

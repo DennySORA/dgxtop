@@ -35,7 +35,11 @@ FORBIDDEN = {
     'dgxtop-ui': {'libc', 'nix', 'nvml-wrapper', 'rusqlite'},
 }
 # Workspace edges allowed beside dgxtop-core.
-ALLOWED = {'dgxtop-history': {'dgxtop-compression'}}
+ALLOWED = {
+    'dgxtop-history': {'dgxtop-compression'},
+    # D-79 transition: removed when process history moves to the history crate (S4)
+    'dgxtop-manager': {'dgxtop-compression'},
+}
 
 
 def check(metadata):

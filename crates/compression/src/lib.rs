@@ -7,3 +7,11 @@
 //! clock, no threads.
 
 #![forbid(unsafe_code)]
+
+mod bucket;
+mod run;
+mod series;
+
+pub use bucket::Bucket;
+pub use run::{RunSample, RunSeries};
+pub use series::TieredSeries;

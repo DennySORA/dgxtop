@@ -6,7 +6,7 @@
 
 use dgxtop_core::process_history::{RunBar, RunBucket, Tier};
 
-use crate::process_history::series::RunSeries;
+use dgxtop_compression::RunSeries;
 
 /// The bars of a run at one size.
 #[derive(Debug, Clone, PartialEq)]

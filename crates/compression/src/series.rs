@@ -1,75 +1,80 @@
-//! What one run used, in every bucket size (D-76, D-77). A sample lands in
+//! One series in every bucket size (D-76, D-77, D-79). A sample lands in
 //! the 5 s bucket being filled; when a bucket's time is over it closes,
-//! joins the run's kept buckets of its size (the latest
+//! joins the series' kept buckets of its size (the latest
 //! [`Tier::capacity`]) and merges into the bucket being filled of each size
 //! it is the source of ([`Tier::source`]). Closed buckets of a minute and
-//! more also go to the long-term store. Buckets follow the local clock
-//! (`shift_ns`), so a day's bucket is a local day.
+//! more are handed back for the long-term store. Buckets follow the local
+//! clock (`shift_ns`), so a day's bucket is a local day.
 
 use std::collections::VecDeque;
 
-use dgxtop_core::process_history::{RUN_METRICS, RunBucket, RunMetric, Tier};
+use dgxtop_core::process_history::Tier;
+
+use crate::bucket::{Bucket, merged_at};
 
 const LEVELS: usize = Tier::ALL.len();
 
-/// One sample: each metric's value, `None` where unknown.
-pub(crate) type Sample = [Option<f64>; RUN_METRICS];
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct RunSeries {
-    kept: [VecDeque<RunBucket>; LEVELS],
-    filling: [Option<RunBucket>; LEVELS],
+/// A series' buckets of every size, generic over what a bucket holds.
+#[derive(Debug, Clone)]
+pub struct TieredSeries<B> {
+    kept: [VecDeque<B>; LEVELS],
+    filling: [Option<B>; LEVELS],
     /// Added to UTC before aligning a bucket: the local offset.
     shift_ns: i64,
 }
 
-impl RunSeries {
-    pub(crate) fn new(shift_ns: i64) -> Self {
+impl<B: Bucket> Default for TieredSeries<B> {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+impl<B: Bucket> TieredSeries<B> {
+    pub fn new(shift_ns: i64) -> Self {
         Self {
+            kept: std::array::from_fn(|_| VecDeque::new()),
+            filling: [None; LEVELS],
             shift_ns,
-            ..Self::default()
         }
     }
 
-    pub(crate) fn shift_ns(&self) -> i64 {
+    pub fn shift_ns(&self) -> i64 {
         self.shift_ns
     }
 
-    /// Adds `sample` taken at `utc_ns`; returns the buckets of a minute and
-    /// more it closed (for the long-term store).
-    pub(crate) fn add(&mut self, utc_ns: i64, sample: &Sample) -> Vec<(Tier, RunBucket)> {
+    /// Lets `fill` add a sample taken at `utc_ns` to the 5 s bucket that
+    /// holds it; returns the buckets of a minute and more it closed (for
+    /// the long-term store).
+    pub fn record(&mut self, utc_ns: i64, fill: impl FnOnce(&mut B)) -> Vec<(Tier, B)> {
         let mut closed = Vec::new();
         self.close_before(utc_ns, &mut closed);
         let start = Tier::Recent.align(utc_ns, self.shift_ns);
-        let bucket = self.filling[0].get_or_insert_with(|| RunBucket::new(start));
-        for (metric, value) in RunMetric::ALL.iter().zip(sample) {
-            bucket.add(*metric, *value);
-        }
+        fill(self.filling[0].get_or_insert_with(|| B::new(start)));
         closed
     }
 
-    /// Closes every bucket being filled, as when the run ends.
-    pub(crate) fn close_all(&mut self) -> Vec<(Tier, RunBucket)> {
+    /// Closes every bucket being filled, as when the series ends.
+    pub fn close_all(&mut self) -> Vec<(Tier, B)> {
         let mut closed = Vec::new();
         self.close_before(i64::MAX, &mut closed);
         closed
     }
 
     /// The buckets of `tier` kept, oldest first, then the one being filled.
-    pub(crate) fn buckets(&self, tier: Tier) -> impl Iterator<Item = &RunBucket> {
+    pub fn buckets(&self, tier: Tier) -> impl Iterator<Item = &B> {
         let level = tier.level();
         self.kept[level].iter().chain(self.filling[level].as_ref())
     }
 
     /// What `tier` has not merged yet: the buckets being filled of its
     /// source, the source's source and so on.
-    pub(crate) fn unmerged(&self, tier: Tier) -> impl Iterator<Item = &RunBucket> {
+    pub fn unmerged(&self, tier: Tier) -> impl Iterator<Item = &B> {
         std::iter::successors(tier.source(), |source| source.source())
             .filter_map(|source| self.filling[source.level()].as_ref())
     }
 
     /// The buckets being filled, for the short-term file.
-    pub(crate) fn filling(&self) -> Vec<(Tier, RunBucket)> {
+    pub fn filling(&self) -> Vec<(Tier, B)> {
         Tier::ALL
             .iter()
             .zip(&self.filling)
@@ -79,18 +84,16 @@ impl RunSeries {
 
     /// Puts back stored buckets (startup): closed ones join the kept
     /// buckets in time order, filling ones resume.
-    pub(crate) fn restore(&mut self, tier: Tier, bucket: RunBucket, filling: bool) {
+    pub fn restore(&mut self, tier: Tier, bucket: B, filling: bool) {
         let level = tier.level();
         if filling {
             self.filling[level] = Some(bucket);
             return;
         }
+        let start = bucket.start_utc_ns();
         let kept = &mut self.kept[level];
-        let at = kept.partition_point(|old| old.start_utc_ns < bucket.start_utc_ns);
-        if kept
-            .get(at)
-            .is_some_and(|old| old.start_utc_ns == bucket.start_utc_ns)
-        {
+        let at = kept.partition_point(|old| old.start_utc_ns() < start);
+        if kept.get(at).is_some_and(|old| old.start_utc_ns() == start) {
             kept[at] = bucket;
         } else {
             kept.insert(at, bucket);
@@ -101,10 +104,10 @@ impl RunSeries {
     /// After a restore: each size takes what its source holds from before
     /// its own first bucket (a size added since those buckets were stored,
     /// or one whose buckets were lost), so every size reaches back as far
-    /// as the finer ones do. A `live` run's sources are still filling: what
-    /// they fill reaches each size when it closes. Returns the buckets it
-    /// made, for the store.
-    pub(crate) fn backfill(&mut self, live: bool) -> Vec<(Tier, RunBucket)> {
+    /// as the finer ones do. A `live` series' sources are still filling:
+    /// what they fill reaches each size when it closes. Returns the buckets
+    /// it made, for the store.
+    pub fn backfill(&mut self, live: bool) -> Vec<(Tier, B)> {
         let mut made = Vec::new();
         for tier in Tier::ALL {
             let Some(source) = tier.source().filter(|source| *source != Tier::Recent) else {
@@ -113,53 +116,61 @@ impl RunSeries {
             let first = self
                 .buckets(tier)
                 .next()
-                .map_or(i64::MAX, |bucket| bucket.start_utc_ns);
-            let mut older: Vec<RunBucket> = Vec::new();
-            let source_filling = self.filling[source.level()].filter(|_| !live);
-            for bucket in self.kept[source.level()]
-                .iter()
-                .chain(source_filling.as_ref())
-                .filter(|bucket| bucket.start_utc_ns < first)
-            {
-                let start = tier.align(bucket.start_utc_ns, self.shift_ns);
-                match older.last_mut() {
-                    Some(last) if last.start_utc_ns == start => last.merge(bucket),
-                    _ => {
-                        let mut fresh = RunBucket::new(start);
-                        fresh.merge(bucket);
-                        older.push(fresh);
-                    }
-                }
-            }
-            // Without a later bucket of its own the latest may take more of
-            // its time: it is the one being filled (the coarser sizes made
-            // next see only the closed ones, so nothing counts twice).
-            let filling = (live && first == i64::MAX).then(|| older.pop()).flatten();
-            for bucket in older {
-                made.push((tier, bucket));
-                self.restore(tier, bucket, false);
-            }
-            if let Some(bucket) = filling {
-                made.push((tier, bucket));
-                self.filling[tier.level()] = Some(bucket);
-            }
+                .map_or(i64::MAX, Bucket::start_utc_ns);
+            let older = self.regrouped_before(source, tier, first, live);
+            self.take_backfilled(tier, older, live && first == i64::MAX, &mut made);
         }
         made
     }
 
-    /// Whether any bucket of any size is held.
-    pub(crate) fn is_empty(&self) -> bool {
+    /// `source`'s buckets before `first` (a `live` series' filling one
+    /// left out), merged into buckets of `tier`.
+    fn regrouped_before(&self, source: Tier, tier: Tier, first: i64, live: bool) -> Vec<B> {
+        let mut older: Vec<B> = Vec::new();
+        let source_filling = self.filling[source.level()].filter(|_| !live);
+        for bucket in self.kept[source.level()]
+            .iter()
+            .chain(source_filling.as_ref())
+            .filter(|bucket| bucket.start_utc_ns() < first)
+        {
+            let start = tier.align(bucket.start_utc_ns(), self.shift_ns);
+            match older.last_mut() {
+                Some(last) if last.start_utc_ns() == start => last.merge(bucket),
+                _ => older.push(merged_at(start, bucket)),
+            }
+        }
+        older
+    }
+
+    /// Keeps the backfilled `older` buckets of `tier`. Without a later
+    /// bucket of its own (`latest_fills`) the latest may take more of its
+    /// time: it is the one being filled (the coarser sizes made next see
+    /// only the closed ones, so nothing counts twice).
+    fn take_backfilled(
+        &mut self,
+        tier: Tier,
+        mut older: Vec<B>,
+        latest_fills: bool,
+        made: &mut Vec<(Tier, B)>,
+    ) {
+        let filling = latest_fills.then(|| older.pop()).flatten();
+        for bucket in older {
+            made.push((tier, bucket));
+            self.restore(tier, bucket, false);
+        }
+        if let Some(bucket) = filling {
+            made.push((tier, bucket));
+            self.filling[tier.level()] = Some(bucket);
+        }
+    }
+
+    /// Whether no bucket of any size is held.
+    pub fn is_empty(&self) -> bool {
         self.kept.iter().all(VecDeque::is_empty) && self.filling.iter().all(Option::is_none)
     }
 
-    /// Drops every bucket (a run listed with its figures only).
-    pub(crate) fn clear(&mut self) {
-        *self = Self::new(self.shift_ns);
-    }
-
     /// Buckets held, all sizes.
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.kept.iter().map(VecDeque::len).sum::<usize>()
             + self
                 .filling
@@ -168,12 +179,17 @@ impl RunSeries {
                 .count()
     }
 
+    /// Drops every bucket (a series listed with its figures only).
+    pub fn clear(&mut self) {
+        *self = Self::new(self.shift_ns);
+    }
+
     /// Closes, finest first, each bucket whose time is over at `utc_ns`.
-    fn close_before(&mut self, utc_ns: i64, closed: &mut Vec<(Tier, RunBucket)>) {
+    fn close_before(&mut self, utc_ns: i64, closed: &mut Vec<(Tier, B)>) {
         for tier in Tier::ALL {
             let over = self.filling[tier.level()].is_some_and(|bucket| {
                 let step = i64::try_from(tier.step_ns()).unwrap_or(i64::MAX);
-                utc_ns >= bucket.start_utc_ns.saturating_add(step)
+                utc_ns >= bucket.start_utc_ns().saturating_add(step)
             });
             if over {
                 self.close(tier, closed);
@@ -183,7 +199,7 @@ impl RunSeries {
 
     /// Closes the bucket of `tier` being filled now, whatever its time,
     /// and merges it into the sizes it is the source of.
-    fn close(&mut self, tier: Tier, closed: &mut Vec<(Tier, RunBucket)>) {
+    fn close(&mut self, tier: Tier, closed: &mut Vec<(Tier, B)>) {
         let Some(bucket) = self.filling[tier.level()].take() else {
             return;
         };
@@ -191,14 +207,12 @@ impl RunSeries {
             .into_iter()
             .filter(|parent| parent.source() == Some(tier))
         {
-            let start = parent.align(bucket.start_utc_ns, self.shift_ns);
+            let start = parent.align(bucket.start_utc_ns(), self.shift_ns);
             match &mut self.filling[parent.level()] {
-                Some(filling) if filling.start_utc_ns == start => filling.merge(&bucket),
+                Some(filling) if filling.start_utc_ns() == start => filling.merge(&bucket),
                 _ => {
                     self.close(parent, closed);
-                    let mut fresh = RunBucket::new(start);
-                    fresh.merge(&bucket);
-                    self.filling[parent.level()] = Some(fresh);
+                    self.filling[parent.level()] = Some(merged_at(start, &bucket));
                 }
             }
         }
@@ -211,7 +225,7 @@ impl RunSeries {
     }
 }
 
-fn trim(kept: &mut VecDeque<RunBucket>, capacity: usize) {
+fn trim<B>(kept: &mut VecDeque<B>, capacity: usize) {
     while kept.len() > capacity {
         kept.pop_front();
     }
@@ -219,13 +233,17 @@ fn trim(kept: &mut VecDeque<RunBucket>, capacity: usize) {
 
 #[cfg(test)]
 mod tests {
+    use dgxtop_core::process_history::{RUN_METRICS, RunBucket, RunMetric, TIER_BUCKETS};
+
     use super::*;
+    use crate::bucket::Tally;
+    use crate::run::{RunSample, RunSeries};
 
     const SECOND: i64 = 1_000_000_000;
     const MINUTE: i64 = 60 * SECOND;
     const HOUR: i64 = 60 * MINUTE;
 
-    fn sample(cpu: f64) -> Sample {
+    fn sample(cpu: f64) -> RunSample {
         let mut sample = [None; RUN_METRICS];
         sample[RunMetric::Cpu.index()] = Some(cpu);
         sample
@@ -305,12 +323,10 @@ mod tests {
         );
         assert_eq!(
             series.buckets(Tier::OneMinute).count(),
-            TIER_BUCKETS_FOR_TEST,
+            TIER_BUCKETS,
             "the latest only"
         );
     }
-
-    const TIER_BUCKETS_FOR_TEST: usize = dgxtop_core::process_history::TIER_BUCKETS;
 
     /// Buckets follow the local clock: at UTC+8 a day closes at 16:00 UTC.
     #[test]
@@ -393,6 +409,7 @@ mod tests {
         assert_eq!(restored.len(), 4);
         restored.clear();
         assert!(restored.is_empty());
+        assert_eq!(restored.len(), 0);
     }
 
     /// A version 2 run kept minutes and ten minutes only: the backfill
@@ -445,5 +462,76 @@ mod tests {
         assert_eq!(made.len(), Tier::ALL.len() - 2);
         assert!(series.filling().is_empty());
         assert_eq!(cpu_means(&series, Tier::OneDay), vec![(0, 1.0)]);
+    }
+
+    fn count_one(tally: &mut Tally) {
+        tally.samples += 1;
+    }
+
+    fn tallies(series: &TieredSeries<Tally>, tier: Tier) -> Vec<(i64, u32)> {
+        series
+            .buckets(tier)
+            .map(|tally| (tally.start_utc_ns / SECOND, tally.samples))
+            .collect()
+    }
+
+    /// The algorithm works for any bucket: a bucket that only counts.
+    #[test]
+    fn any_bucket_type_rolls_up_through_every_size() {
+        let mut series = TieredSeries::<Tally>::default();
+        assert!(series.is_empty());
+        let mut closed = Vec::new();
+        for second in 0..(2 * 3_600) {
+            closed.extend(series.record(second * SECOND, count_one));
+        }
+        closed.extend(series.close_all());
+        assert_eq!(
+            tallies(&series, Tier::OneHour),
+            vec![(0, 3_600), (3_600, 3_600)]
+        );
+        assert_eq!(tallies(&series, Tier::OneDay), vec![(0, 7_200)]);
+        let minutes: u32 = closed
+            .iter()
+            .filter(|(tier, _)| *tier == Tier::OneMinute)
+            .map(|(_, tally)| tally.samples)
+            .sum();
+        assert_eq!(minutes, 7_200, "every sample handed to the store once");
+        assert!(closed.iter().all(|(tier, _)| *tier != Tier::Recent));
+    }
+
+    /// Restoring and backfilling a generic bucket: a repeated start is
+    /// replaced, and every coarser size is made from the restored minutes.
+    #[test]
+    fn any_bucket_type_restores_and_backfills() {
+        let mut series = TieredSeries::<Tally>::new(0);
+        for (start, samples) in [(60, 2), (0, 1), (60, 3)] {
+            let tally = Tally {
+                start_utc_ns: start * SECOND,
+                samples,
+            };
+            series.restore(Tier::OneMinute, tally, false);
+        }
+        assert_eq!(tallies(&series, Tier::OneMinute), vec![(0, 1), (60, 3)]);
+        let made = series.backfill(false);
+        assert_eq!(made.len(), Tier::ALL.len() - 2, "one bucket per size");
+        assert_eq!(tallies(&series, Tier::OneDay), vec![(0, 4)]);
+        assert!(series.backfill(false).is_empty(), "nothing left to make");
+    }
+
+    /// A restored bucket of a size past its capacity drops the oldest.
+    #[test]
+    fn a_restore_past_capacity_keeps_the_latest() {
+        let mut series = TieredSeries::<Tally>::default();
+        let capacity = i64::try_from(Tier::Recent.capacity()).unwrap();
+        for start in 0..=capacity {
+            let tally = Tally {
+                start_utc_ns: start * 5 * SECOND,
+                samples: 1,
+            };
+            series.restore(Tier::Recent, tally, false);
+        }
+        let kept = tallies(&series, Tier::Recent);
+        assert_eq!(kept.len(), Tier::Recent.capacity());
+        assert_eq!(kept[0].0, 5, "the first one gave way");
     }
 }
