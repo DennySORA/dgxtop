@@ -71,11 +71,18 @@ GPUs first, shows the whole machine around them, and keeps the history.
   - each GPU's utilization, memory, temperature and power;
   - now, average and maximum for every chart;
   - each GPU's last 1, 6, 12 and 24 hours, with the energy it used;
-  - each colored process's part of the memory charts, with its average and peak memory, also after
-    it exits.
+  - each colored process's part of the memory charts.
 
   History is saved on disk for 7 days and survives restarts and reboots. The per-process parts are
   kept in memory, for as long as dgxtop runs.
+- **Process History.** Every GPU process of the last 7 days, the latest start first: when it
+  started and how long it ran, its GPUs, peak GPU memory, GPU and CPU use, and how it ended:
+  still running, stopped by dgxtop, killed by a signal (`SIGKILL`, `SIGTERM`, …), exited with a
+  code, most likely the OOM killer, or ended without a visible cause. Open one to see its full
+  command line (`e` shows all of it, `y` copies it), its working folder, start and end times, and
+  charts of its CPU, memory, GPU utilization, GPU memory, disk reads and writes, and the host's
+  network while it ran. Minutes are kept for a day and ten-minute averages for a week, so the
+  database stays small.
 - **The whole machine.** CPU usage per core, CPU temperature and power where the hardware reports
   them, memory and swap, disk throughput and filesystem capacity, network throughput.
 - **Made for DGX Spark.** The GB10 shares memory with the CPU: dgxtop shows how much system RAM GPU
@@ -128,7 +135,8 @@ restart. Display modules can be switched on and off.
   keeps its data within a fixed 256 MiB.
 - **Any terminal size.** The full layout from 80×24, a compact one below that. Keyboard and mouse.
 - **Private.** No network access and no telemetry. Settings and history are files only you can
-  read, and command lines and environments are never stored.
+  read. Process History keeps the command lines and working folders of GPU processes for 7 days;
+  environments are never stored.
 - **Safe modes.** `--read-only` turns off process actions. `--replay` shows simulated data for
   demos and tests. `--diagnostics-json` prints versions and health.
 - **Safe upgrades.** The installer verifies every download and keeps the previous version for a
@@ -189,7 +197,8 @@ Each panel names its own keys at the right of its title; the footer keeps the gl
 | `q`, `Ctrl-C` | Quit (`q` is text while editing a filter; `Ctrl-C` always quits) |
 | `1`–`5`, `Tab`, `Shift-Tab` | Overview, GPU, Overview History, Process History, Settings |
 | `w` / `W`, `→` / `←` | Next / previous history window (5m, 1h, 6h, 12h, 24h) |
-| `j`/`k`, `Enter` | In Process History, choose a GPU process and open or close it |
+| `j`/`k`, `Enter` | In Process History, choose a run and open or close it |
+| `e` / `y` | In an opened run, show the whole command line / copy it (OSC 52) |
 | `c` | Show / hide the CPU sensors and per-core bars (or click the CPU panel) |
 | `j`/`k`, arrows, `PgUp`/`PgDn`, `Home`/`End` | Move the selection |
 | `h`/`l`, `←`/`→` | Previous / next GPU in the GPU view |
