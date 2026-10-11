@@ -2,9 +2,9 @@
 //! collection session, source arbitration, exact counter derivation and the
 //! value/output plumbing every collector uses.
 
-pub mod arbitration;
-pub mod counter;
-pub mod reasons;
+pub(crate) mod arbitration;
+pub(crate) mod counter;
+pub(crate) mod reasons;
 
 pub(crate) mod context;
 pub(crate) mod counter_inputs;

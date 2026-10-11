@@ -27,6 +27,4 @@ mod tests;
 
 pub use process::ProcessCollector;
 pub use registry::{collector_for, default_collectors};
-pub use shared::{arbitration, counter, reasons};
 pub use system::{CpuCollector, DiskCollector, GpuCollector, MemoryCollector, NetworkCollector};
-pub use system::{cpu, disk, gpu, memory, network};

@@ -15,6 +15,8 @@ use dgxtop_core::quality::ReadStatus;
 /// The driver flagged the channel as faulty (e.g. hwmon `fault=1`).
 pub const SENSOR_FAULT: &str = "SENSOR_FAULT";
 /// An alarm is raised; the reading itself stays valid and is never dropped.
+/// No collector reads it, which is the point: only tests name it.
+#[cfg(test)]
 pub const ALARM: &str = "ALARM";
 /// NVML process association from the compute process list.
 pub const GPU_USAGE_COMPUTE: &str = "gpu_usage:compute";
