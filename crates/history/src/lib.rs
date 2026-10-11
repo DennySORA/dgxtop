@@ -39,6 +39,7 @@
 mod archive;
 pub(crate) mod chunk;
 pub(crate) mod gaps;
+pub(crate) mod grid;
 mod index;
 pub(crate) mod output;
 mod overview;

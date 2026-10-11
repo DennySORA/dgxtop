@@ -12,8 +12,9 @@ use dgxtop_core::metric::{CanonicalUnit, MetricDescriptor};
 pub(crate) use dgxtop_core::ports::{CutAppend, GaugeAppend, HistoryAppends, IntervalAppend};
 
 use super::gaps::{GapEntry, GapInsert, GapList, ReasonInterner};
+use super::grid::MinuteGrid;
 use super::output::{ArchiveRow, DropReason, HistoryReport};
-use super::records::{CounterSample, GaugeBucket, floor_bucket};
+use super::records::{CounterSample, GaugeBucket};
 use super::segment::SegmentIdentity;
 use super::series::{Series, gauge_record, series_overhead_bytes};
 use super::slots::{SlotHandle, SlotTable};
@@ -59,6 +60,8 @@ pub(crate) struct HistoryState {
     pub(super) by_key: BTreeMap<MetricKey, SlotHandle>,
     pub(super) global_gaps: GapList,
     pub(super) discontinuities: VecDeque<u64>,
+    /// The boot's minutes, fixed by the first boot-to-UTC pairing.
+    grid: Option<MinuteGrid>,
     reasons: ReasonInterner,
     settings: HistorySettings,
     ledger: ByteLedger,
@@ -72,10 +75,37 @@ impl HistoryState {
             by_key: BTreeMap::new(),
             global_gaps: GapList::new(ledger, MAX_GLOBAL_GAPS),
             discontinuities: VecDeque::new(),
+            grid: None,
             reasons: ReasonInterner::new(ledger),
             settings,
             ledger: ledger.clone(),
         }
+    }
+
+    /// Fixes the boot's minutes (D-82); a later grid is ignored, because
+    /// finished minutes are never cut again. Minutes wait for it: none is
+    /// finalized before, so the first finalization already cuts on it.
+    pub(crate) fn set_minute_grid(&mut self, grid: MinuteGrid) {
+        if self.grid.is_some() {
+            return;
+        }
+        self.grid = Some(grid);
+        for handle in self.slots.handles() {
+            if let Some(series) = self.slots.get_mut(handle) {
+                series.adopt_grid(grid);
+            }
+        }
+    }
+
+    /// The boot's minutes, once known.
+    pub(crate) fn minute_grid(&self) -> Option<MinuteGrid> {
+        self.grid
+    }
+
+    /// Start of the minute holding `time_ns`; boot 0 while the grid is
+    /// unknown (nothing is old or settled yet).
+    fn minute_floor(&self, time_ns: u64) -> u64 {
+        self.grid.map_or(0, |grid| grid.floor(time_ns))
     }
 
     pub(crate) fn set_finalize_grace(&mut self, grace_ns: u64) {
@@ -332,7 +362,14 @@ impl HistoryState {
             record_drop(report, kind, DropReason::Capacity);
             return None;
         }
-        let Ok(series) = Series::new(key.clone(), descriptor, time_ns, now_ns, &self.ledger) else {
+        let created = Series::new(
+            key.clone(),
+            descriptor,
+            (time_ns, now_ns),
+            self.grid,
+            &self.ledger,
+        );
+        let Ok(series) = created else {
             record_drop(report, kind, DropReason::Capacity);
             return None;
         };
@@ -583,7 +620,7 @@ impl HistoryState {
         let horizon = now_ns.saturating_sub(self.settings.finalize_grace_ns);
         let raw_target = now_ns.saturating_sub(self.settings.raw_history_ns);
         let rollup_target = now_ns.saturating_sub(self.settings.aggregate_retention_ns);
-        let settle_horizon = floor_bucket(horizon);
+        let settle_horizon = self.minute_floor(horizon);
         let archive = self.settings.archive_enabled;
         for handle in self.slots.handles() {
             self.finalize(handle, horizon, &mut report);
@@ -599,7 +636,8 @@ impl HistoryState {
                 }
             }
         }
-        self.global_gaps.drop_ending_by(floor_bucket(rollup_target));
+        let rollup_floor = self.minute_floor(rollup_target);
+        self.global_gaps.drop_ending_by(rollup_floor);
         if archive {
             for entry in self.global_gaps.settle_before(settle_horizon) {
                 report.archive_rows.push(ArchiveRow::Gap(entry.to_record()));
@@ -678,6 +716,12 @@ mod tests {
         }
     }
 
+    fn state(ledger: &ByteLedger) -> HistoryState {
+        let mut state = HistoryState::new(settings(), ledger);
+        state.set_minute_grid(MinuteGrid::BOOT);
+        state
+    }
+
     fn gauge(entity: &str, seconds: u64, value: f64) -> GaugeAppend {
         GaugeAppend {
             key: metric_key(entity, ids::GPU_TEMPERATURE, "gpu"),
@@ -699,7 +743,7 @@ mod tests {
     #[test]
     fn series_limit_rejects_new_series_visibly() {
         let ledger = ByteLedger::for_memory_limit_mib(64);
-        let mut state = HistoryState::new(settings(), &ledger);
+        let mut state = state(&ledger);
         let appends = HistoryAppends {
             gauges: vec![
                 gauge("gpu:a", 1, 1.0),
@@ -719,7 +763,7 @@ mod tests {
     #[test]
     fn future_late_and_duplicate_samples_are_dropped() {
         let ledger = ByteLedger::for_memory_limit_mib(64);
-        let mut state = HistoryState::new(settings(), &ledger);
+        let mut state = state(&ledger);
         let report = state.apply(
             HistoryAppends {
                 gauges: vec![
@@ -749,7 +793,7 @@ mod tests {
     #[test]
     fn empty_series_are_reclaimed_with_a_new_generation() {
         let ledger = ByteLedger::for_memory_limit_mib(64);
-        let mut state = HistoryState::new(settings(), &ledger);
+        let mut state = state(&ledger);
         state.apply(
             HistoryAppends {
                 gauges: vec![gauge("gpu:a", 1, 1.0)],

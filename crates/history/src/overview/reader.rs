@@ -11,6 +11,7 @@ use dgxtop_core::overview_history::{OverviewAnswer, OverviewBucket, OverviewRequ
 use dgxtop_core::ports::{CancelFlag, OverviewReader};
 
 use crate::HistoryIndex;
+use crate::grid::utc_minute_ending_near;
 
 impl OverviewReader for HistoryIndex {
     fn read(
@@ -56,7 +57,8 @@ impl OverviewReader for HistoryIndex {
 
 impl HistoryIndex {
     /// `series`' minutes since its last finalized one, up to now, on the
-    /// wall clock of `clock`.
+    /// wall clock of `clock`, each filed in its one UTC minute like the
+    /// finalized ones.
     fn unfinalized_minutes(
         &self,
         series: &SeriesInEveryBoot,
@@ -71,13 +73,22 @@ impl HistoryIndex {
         };
         let now_boot_ns = clock.now_boot_ns();
         let offset_ns = clock.now_utc_ns().saturating_sub(i128::from(now_boot_ns));
-        let minutes = self.read().provisional_minutes(&key, now_boot_ns);
+        let (minutes, grid) = {
+            let state = self.read();
+            (
+                state.provisional_minutes(&key, now_boot_ns),
+                state.minute_grid(),
+            )
+        };
+        let Some(grid) = grid else {
+            return Vec::new();
+        };
         minutes
             .into_iter()
             .filter(|minute| minute.covered_ns > 0)
             .filter_map(|minute| {
-                let start =
-                    i64::try_from(i128::from(minute.start_ns).saturating_add(offset_ns)).ok()?;
+                let end_utc_ns = i128::from(grid.end_of(minute.start_ns)).saturating_add(offset_ns);
+                let start = i64::try_from(utc_minute_ending_near(end_utc_ns)).ok()?;
                 Some(OverviewBucket::gauge(
                     start,
                     minute.covered_ns,

@@ -8,6 +8,7 @@ use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use dgxtop_core::budget::ByteLedger;
 use dgxtop_core::canonical::GapRecord;
 
+use super::grid::MinuteGrid;
 use super::output::HistoryReport;
 use super::state::{HistoryAppends, HistoryState};
 use crate::overview::OverviewTiers;
@@ -101,6 +102,10 @@ impl HistoryWriter {
 
     pub(crate) fn shed_raw(&self, now_ns: u64, keep_ns: u64) -> HistoryReport {
         self.write().shed_raw(now_ns, keep_ns)
+    }
+
+    pub(crate) fn set_minute_grid(&self, grid: MinuteGrid) {
+        self.write().set_minute_grid(grid);
     }
 
     pub(crate) fn note_discontinuity(&self, boot_ns: u64) {

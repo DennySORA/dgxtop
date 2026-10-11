@@ -14,6 +14,7 @@ use super::plan::{
     Floors, Grid, RegionPlan, Window, choose_grid, fit_cells, grid_alignment, rollup_boundary,
 };
 use super::points::PointSink;
+use crate::grid::MinuteGrid;
 use crate::pin::{PinnedCounter, PinnedGauge, PinnedSeries, PinnedTrack};
 
 /// Coarsening attempts when a grid still produced too many points.
@@ -98,6 +99,7 @@ fn evaluate_gauge(
         source_filter: query.source_filter.as_ref(),
         gaps: &pin.gaps,
         now_ns: guard.now(),
+        grid: pin.grid,
     };
     let Some(stat) = stat else {
         guard.admit_estimate(
@@ -117,12 +119,13 @@ fn evaluate_gauge(
         window,
         floors,
         rollup_boundary(query.resolution_ms, &floors),
+        pin.grid,
     );
     guard.admit_estimate(
         gauge::gauge_scan_estimate(&inputs, &plan),
         &suggestion(query),
     )?;
-    let mut grid = choose_grid(query.resolution_ms, window, &plan, cap);
+    let mut grid = choose_grid(query.resolution_ms, window, &plan, (cap, pin.grid));
     for _ in 0..MAX_REGRIDS {
         let mut sink = PointSink::new(cap);
         match grid {
@@ -140,7 +143,12 @@ fn evaluate_gauge(
         if sink.overflow_start().is_none() {
             return Ok(complete(sink, HistoryMethod::TimeWeightedStep));
         }
-        grid = Grid::Cells(coarser(grid, window, cap, grid_alignment(&plan)));
+        grid = Grid::Cells(coarser(
+            grid,
+            window,
+            (cap, grid_alignment(&plan)),
+            pin.grid,
+        ));
     }
     Err(too_many_points(query))
 }
@@ -161,6 +169,7 @@ fn evaluate_counter(
         segments: &pin.segments,
         source_filter: query.source_filter.as_ref(),
         gaps: &pin.gaps,
+        grid: pin.grid,
     };
     if query.stat == HistoryStat::Raw {
         guard.admit_estimate(
@@ -180,13 +189,14 @@ fn evaluate_counter(
         window,
         floors,
         rollup_boundary(query.resolution_ms, &floors),
+        pin.grid,
     );
     plan.absorb_crossings(|boundary| inputs.crossing_at(boundary));
     guard.admit_estimate(
         counter::counter_scan_estimate(&inputs, &plan),
         &suggestion(query),
     )?;
-    let mut grid = choose_grid(query.resolution_ms, window, &plan, cap);
+    let mut grid = choose_grid(query.resolution_ms, window, &plan, (cap, pin.grid));
     for _ in 0..MAX_REGRIDS {
         let mut sink = PointSink::new(cap);
         match grid {
@@ -203,17 +213,22 @@ fn evaluate_counter(
         if sink.overflow_start().is_none() {
             return Ok(complete(sink, HistoryMethod::CounterDelta));
         }
-        grid = Grid::Cells(coarser(grid, window, cap, grid_alignment(&plan)));
+        grid = Grid::Cells(coarser(
+            grid,
+            window,
+            (cap, grid_alignment(&plan)),
+            pin.grid,
+        ));
     }
     Err(too_many_points(query))
 }
 
 /// Next grid after an overflow: native points become cells sized to the
 /// cap; cells double.
-fn coarser(grid: Grid, window: Window, cap: usize, align: u64) -> u64 {
+fn coarser(grid: Grid, window: Window, cap_align: (usize, u64), minutes: MinuteGrid) -> u64 {
     match grid {
-        Grid::Native => fit_cells(NANOS_PER_MILLI, window, cap, align),
-        Grid::Cells(cell) => fit_cells(cell.saturating_mul(2), window, cap, align),
+        Grid::Native => fit_cells(NANOS_PER_MILLI, window, cap_align, minutes),
+        Grid::Cells(cell) => fit_cells(cell.saturating_mul(2), window, cap_align, minutes),
     }
 }
 

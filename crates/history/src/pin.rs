@@ -13,6 +13,7 @@ use dgxtop_core::metric::MetricDescriptor;
 
 use super::chunk::LogPin;
 use super::gaps::GapEntry;
+use super::grid::MinuteGrid;
 use super::records::{CounterBucket, CounterSample, GaugeBucket, GaugeSample};
 use super::segment::SegmentsView;
 use super::series::Series;
@@ -62,6 +63,9 @@ pub(crate) struct PinnedSeries {
     pub descriptor: &'static MetricDescriptor,
     pub segments: SegmentsView,
     pub finalized_through_ns: u64,
+    /// The series' minutes (any grid while none is known: then no minute
+    /// is final and everything is raw).
+    pub grid: MinuteGrid,
     pub track: PinnedTrack,
     /// Gaps overlapping the window (series and global), ordered by start.
     pub gaps: Vec<GapEntry>,
@@ -156,11 +160,16 @@ impl HistoryState {
                 rollup_floor_ns: series.gauge.rollup_floor_ns,
             })
         };
+        let (grid, finalized_through_ns) = match series.grid() {
+            Some(grid) => (grid, series.finalized_through_ns),
+            None => (MinuteGrid::default(), 0),
+        };
         Ok(PinOutcome::Pinned(Box::new(PinnedSeries {
             revision: self.revision,
             descriptor: series.descriptor,
             segments: series.segments.view(),
-            finalized_through_ns: series.finalized_through_ns,
+            finalized_through_ns,
+            grid,
             track,
             gaps,
             discontinuities,
@@ -183,7 +192,7 @@ mod tests {
     const SECOND: u64 = 1_000_000_000;
 
     fn state(ledger: &ByteLedger) -> HistoryState {
-        HistoryState::new(
+        let mut state = HistoryState::new(
             HistorySettings {
                 raw_history_ns: 30 * SECOND,
                 aggregate_retention_ns: 24 * 3600 * SECOND,
@@ -193,7 +202,9 @@ mod tests {
                 archive_enabled: false,
             },
             ledger,
-        )
+        );
+        state.set_minute_grid(MinuteGrid::BOOT);
+        state
     }
 
     fn samples(key: &MetricKey, seconds: u64) -> HistoryAppends {

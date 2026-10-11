@@ -17,7 +17,8 @@ use super::points::{DataPoint, PointSink, SourceSet};
 use super::push_null_region;
 use crate::chunk::Slices;
 use crate::gaps::GapEntry;
-use crate::records::{BUCKET_NS, CounterBucket, CounterSample, CounterTotal};
+use crate::grid::MinuteGrid;
+use crate::records::{CounterBucket, CounterSample, CounterTotal};
 use crate::segment::SegmentsView;
 
 /// Pinned counter history plus query context.
@@ -29,6 +30,8 @@ pub(crate) struct CounterInputs<'p> {
     pub segments: &'p SegmentsView,
     pub source_filter: Option<&'p SourceId>,
     pub gaps: &'p [GapEntry],
+    /// Where the series' minutes begin and end.
+    pub grid: MinuteGrid,
 }
 
 impl CounterInputs<'_> {
@@ -137,8 +140,7 @@ fn count_buckets(
             break;
         }
         guard.charge(1)?;
-        if bucket.start_ns >= point_start && bucket.start_ns.saturating_add(BUCKET_NS) <= point_end
-        {
+        if bucket.start_ns >= point_start && inputs.grid.end_of(bucket.start_ns) <= point_end {
             accumulator.add_bucket(bucket, inputs);
         } else {
             accumulator.saw_partial = true;
@@ -245,7 +247,7 @@ pub(crate) fn counter_cells(
     guard: &mut ScanGuard<'_>,
 ) -> Result<(), ErrorDetail> {
     let mut portions: Vec<(u64, u64, RegionKind)> = Vec::new();
-    for (cell_start, cell_end) in cells(window, cell_ns) {
+    for (cell_start, cell_end) in cells(window, cell_ns, inputs.grid) {
         for region in plan.regions() {
             if region.end_ns <= cell_start || region.start_ns >= cell_end {
                 continue;

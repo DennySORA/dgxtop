@@ -9,23 +9,9 @@ use dgxtop_core::clock::NANOS_PER_SECOND;
 use dgxtop_core::metric::{Scalar, ScalarView};
 
 /// Width of one rollup bucket. `store.aggregate_seconds` is fixed at 60 by
-/// configuration validation, so the bucket width is a constant.
+/// configuration validation, so the bucket width is a constant; where the
+/// buckets begin is the boot's [`crate::grid::MinuteGrid`].
 pub(crate) const BUCKET_NS: u64 = 60 * NANOS_PER_SECOND;
-
-/// Start of the minute bucket containing `time_ns`.
-pub(crate) const fn floor_bucket(time_ns: u64) -> u64 {
-    time_ns - time_ns % BUCKET_NS
-}
-
-/// First bucket boundary at or after `time_ns`.
-pub(crate) const fn ceil_bucket(time_ns: u64) -> u64 {
-    let floor = floor_bucket(time_ns);
-    if floor == time_ns {
-        floor
-    } else {
-        floor.saturating_add(BUCKET_NS)
-    }
-}
 
 /// Time extent of a record; logs are ordered by both start and end.
 pub(crate) trait TimeSpan: Copy {
@@ -117,6 +103,8 @@ impl TimeSpan for GaugeBucket {
         self.start_ns
     }
 
+    /// At most a minute after the start: a boot's head minute ends earlier
+    /// (its grid knows where), which only widens a pin by a neighbour.
     fn end_ns(&self) -> u64 {
         self.start_ns.saturating_add(BUCKET_NS)
     }
@@ -224,6 +212,8 @@ impl TimeSpan for CounterBucket {
         self.start_ns
     }
 
+    /// At most a minute after the start: a boot's head minute ends earlier
+    /// (its grid knows where), which only widens a pin by a neighbour.
     fn end_ns(&self) -> u64 {
         self.start_ns.saturating_add(BUCKET_NS)
     }
@@ -232,17 +222,6 @@ impl TimeSpan for CounterBucket {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn bucket_alignment() {
-        assert_eq!(floor_bucket(0), 0);
-        assert_eq!(floor_bucket(BUCKET_NS - 1), 0);
-        assert_eq!(floor_bucket(BUCKET_NS), BUCKET_NS);
-        assert_eq!(ceil_bucket(0), 0);
-        assert_eq!(ceil_bucket(1), BUCKET_NS);
-        assert_eq!(ceil_bucket(BUCKET_NS), BUCKET_NS);
-        assert_eq!(ceil_bucket(u64::MAX), u64::MAX);
-    }
 
     #[test]
     fn integral_totals_stay_exact_and_floats_are_flagged() {
