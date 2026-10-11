@@ -7,7 +7,6 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use dgxtop_core::action::PersistenceState;
 use dgxtop_core::config::{Config, ConfigError, LegacyMappingStatus, MAX_CONFIG_REVISION, Theme};
@@ -172,8 +171,7 @@ fn another_process_holding_the_commit_lock_times_out_cleanly() {
         .try_lock_directory(dir.config_path().parent().unwrap())
         .unwrap()
         .unwrap();
-    let mut repository = FileConfigRepository::new(dir.config_path(), real())
-        .with_lock_wait(Duration::from_millis(50));
+    let mut repository = FileConfigRepository::new(dir.config_path(), real());
     let result = repository.compare_and_swap(2, &current);
     assert!(matches!(
         result,

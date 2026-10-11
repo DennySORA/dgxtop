@@ -354,6 +354,7 @@ pub(crate) fn transition_allowed(current: &str, next: &str) -> bool {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 /// State reported for a request that only has an `action_attempts` row.
 pub(crate) fn attempt_state(result_code: &str) -> ActionState {
     match result_code {

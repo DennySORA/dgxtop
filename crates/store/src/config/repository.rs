@@ -20,8 +20,8 @@ use super::document::{CurrentDocument, MAX_CONFIG_FILE_BYTES, display, read_curr
 use crate::fs::{DirectoryLock, FileSystemOps};
 use crate::paths::{PathError, ensure_private_dir, verify_private_directory};
 
-/// Default wait for another dgxtop process's commit to finish.
-const DEFAULT_LOCK_WAIT: Duration = Duration::from_millis(500);
+/// Wait for another dgxtop process's commit to finish.
+const LOCK_WAIT: Duration = Duration::from_millis(500);
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// Directory entries examined when removing stale temporary files.
 const MAX_DIRECTORY_SCAN: usize = 1024;
@@ -40,7 +40,6 @@ pub(crate) enum Publish {
 pub struct FileConfigRepository {
     path: PathBuf,
     fs: Arc<dyn FileSystemOps>,
-    lock_wait: Duration,
     state: PersistenceState,
     detail: Option<String>,
     file_bytes: u64,
@@ -128,17 +127,10 @@ impl FileConfigRepository {
         Self {
             path,
             fs,
-            lock_wait: DEFAULT_LOCK_WAIT,
             state: PersistenceState::Healthy,
             detail: None,
             file_bytes: 0,
         }
-    }
-
-    /// How long a commit waits for another process's commit (default 500 ms).
-    pub fn with_lock_wait(mut self, lock_wait: Duration) -> Self {
-        self.lock_wait = lock_wait;
-        self
     }
 
     pub fn path(&self) -> &Path {
@@ -168,7 +160,7 @@ impl FileConfigRepository {
     }
 
     /// Creates/validates the private directory and takes the cross-process
-    /// commit lock, waiting at most `lock_wait`.
+    /// commit lock, waiting at most [`LOCK_WAIT`].
     pub(crate) fn lock_directory(&self) -> Result<DirectoryLock, PersistError> {
         let directory = self.directory()?;
         ensure_private_dir(self.fs.as_ref(), directory).map_err(|error| path_failure(&error))?;
@@ -176,7 +168,7 @@ impl FileConfigRepository {
         loop {
             match self.fs.try_lock_directory(directory) {
                 Ok(Some(lock)) => return Ok(lock),
-                Ok(None) if started.elapsed() < self.lock_wait => {
+                Ok(None) if started.elapsed() < LOCK_WAIT => {
                     std::thread::sleep(LOCK_POLL_INTERVAL);
                 }
                 Ok(None) => {

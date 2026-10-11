@@ -4,10 +4,11 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[cfg(any(test, feature = "test-support"))]
+use dgxtop_core::action::ActionRecordSummary;
 use dgxtop_core::action::{
-    ActionAttempt, ActionIntent, ActionOutcomeRecord, ActionRecordSummary, ActionState,
-    AuditFailure, DurableReceipt, PersistenceKind, PersistenceState, PersistenceStatus,
-    RecoveredIntent,
+    ActionAttempt, ActionIntent, ActionOutcomeRecord, ActionState, AuditFailure, DurableReceipt,
+    PersistenceKind, PersistenceState, PersistenceStatus, RecoveredIntent,
 };
 use dgxtop_core::clock::{NANOS_PER_SECOND, TimeProvider};
 use dgxtop_core::errors::ErrorCode;
@@ -19,13 +20,16 @@ use uuid::Uuid;
 use super::limits::{AuditLimits, AuditOpenError};
 use super::queries::{
     StoredIntent, UnresolvedIntent, find_attempt, find_event, find_intent, insert_attempt,
-    insert_event, insert_intent, latest_result_any, latest_result_since, unresolved_intents,
-    update_status,
+    insert_event, insert_intent, unresolved_intents, update_status,
 };
+#[cfg(any(test, feature = "test-support"))]
+use super::queries::{latest_result_any, latest_result_since};
 use super::records::{
-    AttemptRow, EventRow, IntentRow, StoredTarget, attempt_state, failure, invalid, parse_signal,
-    state_from_status, transition_allowed, uuid_text,
+    AttemptRow, EventRow, IntentRow, StoredTarget, failure, invalid, parse_signal,
+    transition_allowed, uuid_text,
 };
+#[cfg(any(test, feature = "test-support"))]
+use super::records::{attempt_state, state_from_status};
 use super::retention::delete_expired;
 use crate::fs::{FileSystemOps, RealFileSystem};
 use crate::sqlite::{
