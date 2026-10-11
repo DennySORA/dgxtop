@@ -581,12 +581,15 @@ fn at23_command_flood_is_busy_without_blocking_timers_and_shutdown_still_run() {
 
 // ----- AT08 -----------------------------------------------------------------
 
+/// A whole-configuration replacement, even of a restart-only field, is
+/// refused with its own code and never reaches the config worker (D-91);
+/// a stale revision conflicts.
 #[test]
-fn at08_restart_only_and_stale_revisions_never_persist() {
+fn at08_replaced_configurations_and_stale_revisions_never_persist() {
     let mut harness = ready_harness(HarnessOptions::default());
     let mut candidate = Config::defaults().unwrap();
     candidate.store.max_series = 100;
-    let restart = harness
+    let replace = harness
         .submit(CommandBody::ReplaceConfig {
             expected_config_revision: 1,
             candidate: Box::new(candidate),
@@ -600,13 +603,17 @@ fn at08_restart_only_and_stale_revisions_never_persist() {
         .unwrap();
     harness.settle();
     let results = harness.results();
-    let code_of = |id: Uuid| results.iter().find(|r| r.request_id == id).unwrap().code;
-    assert_eq!(
-        code_of(restart),
-        ResultCode::from(ErrorCode::RequiresRestart)
+    let result_of = |id: Uuid| results.iter().find(|r| r.request_id == id).unwrap();
+    let refused = result_of(replace);
+    assert_eq!(refused.status, CommandStatus::Rejected);
+    assert_eq!(refused.code, ResultCode::from(ErrorCode::Unsupported));
+    assert!(
+        refused.message.contains("ReplaceConfig is not supported"),
+        "{refused:?}"
     );
-    assert_eq!(code_of(stale), ResultCode::from(ErrorCode::Conflict));
+    assert_eq!(result_of(stale).code, ResultCode::from(ErrorCode::Conflict));
     assert!(harness.ports.config.is_empty());
+    assert_eq!(harness.manager.core().config.saved().revision, 1);
 }
 
 #[test]

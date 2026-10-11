@@ -9,8 +9,10 @@
 //! * `PersistError::Uncertain` adopts the on-disk configuration reported by the
 //!   repository (or keeps the old one when there is none) and answers
 //!   `PersistFailed` with `commit_uncertain`;
-//! * restart-only changes (`Config::restart_required_changes`) answer
-//!   `RequiresRestart` without writing anything.
+//!
+//! The commands change the sampling interval or one module switch, never a
+//! restart-only field; `ReplaceConfig` is refused before it reaches this
+//! service (D-91).
 //!
 //! CLI overrides (`ValueOrigin::CliOverride`) are re-applied to the effective
 //! configuration after every swap and are never persisted. A path the command
@@ -46,10 +48,6 @@ pub(crate) enum ConfigRequest {
         interval_ms: u32,
         expected_revision: u32,
     },
-    Replace {
-        expected_revision: u32,
-        candidate: Box<Config>,
-    },
     SetModule {
         module_id: ModuleId,
         enabled: bool,
@@ -61,9 +59,6 @@ impl ConfigRequest {
     fn expected_revision(&self) -> u32 {
         match self {
             Self::SetInterval {
-                expected_revision, ..
-            }
-            | Self::Replace {
                 expected_revision, ..
             }
             | Self::SetModule {
@@ -262,26 +257,9 @@ impl ConfigurationService {
                 let verb = if enabled { "enable" } else { "disable" };
                 (candidate, format!("{verb} module {module_id}"))
             }
-            ConfigRequest::Replace { candidate, .. } => {
-                if candidate.revision != expected {
-                    return Err(reject(
-                        ErrorCode::ValidationFailed,
-                        "candidate.revision must equal expected_config_revision",
-                    ));
-                }
-                (*candidate, "configuration replaced".to_owned())
-            }
         };
         if let Err(issues) = candidate.validate() {
             return Err(reject(ErrorCode::ValidationFailed, &issue_summary(&issues)));
-        }
-        let restart = self.saved.restart_required_changes(&candidate);
-        if !restart.is_empty() {
-            let message = format!("restart required for: {}", restart.join(", "));
-            self.last_result = Some(format!("not applied: {message}"));
-            let mut result = reject(ErrorCode::RequiresRestart, &message);
-            result.config_revision = Some(self.saved.revision);
-            return Err(result);
         }
         if let Some(problem) = registry_or_pin_problem(&candidate, catalog) {
             return Err(reject(ErrorCode::ValidationFailed, &problem));
@@ -852,71 +830,37 @@ mod tests {
         assert_eq!(bench.port.len(), 1);
     }
 
+    /// A change is validated as a whole configuration: its schema, the
+    /// module registry and the pins against the catalog.
     #[test]
-    fn restart_only_changes_require_restart_without_persisting() {
+    fn changes_are_validated_against_schema_registry_and_pins() {
         let mut bench = bench();
-        let mut candidate = Config::defaults().unwrap();
-        candidate.queues.commands = 64;
-        candidate.runtime.max_pending_requests = 64;
-        let decision = bench.service.submit(
+        let out_of_range = bench.service.submit(
             Uuid::new_v4(),
-            ConfigRequest::Replace {
+            ConfigRequest::SetInterval {
+                interval_ms: 1,
                 expected_revision: 1,
-                candidate: Box::new(candidate),
             },
             &catalog(),
             NOW,
         );
-        let ConfigDecision::Reply(result) = decision else {
+        let ConfigDecision::Reply(result) = out_of_range else {
             panic!("immediate reply expected");
         };
-        assert_eq!(result.code, ResultCode::from(ErrorCode::RequiresRestart));
-        assert!(result.message.contains("queues"));
-        assert!(bench.port.is_empty(), "nothing persisted");
-        assert!(bench.service.last_result().unwrap().contains("restart"));
-    }
-
-    #[test]
-    fn replace_validates_revision_schema_registry_and_pins() {
-        let mut bench = bench();
-        let submit = |bench: &mut Bench, candidate: Config, catalog: &CatalogSnapshot| {
-            bench.service.submit(
-                Uuid::new_v4(),
-                ConfigRequest::Replace {
-                    expected_revision: 1,
-                    candidate: Box::new(candidate),
-                },
-                catalog,
-                NOW,
-            )
-        };
-        let mut wrong_revision = Config::defaults().unwrap();
-        wrong_revision.revision = 3;
-        assert_eq!(
-            rejected_code(&submit(&mut bench, wrong_revision, &catalog())),
-            ResultCode::from(ErrorCode::ValidationFailed)
+        assert_eq!(result.code, ResultCode::from(ErrorCode::ValidationFailed));
+        assert!(
+            result.message.contains("sampling.interval_ms"),
+            "{result:?}"
         );
-        let mut invalid = Config::defaults().unwrap();
-        invalid.viewer.fps = 99;
-        let ConfigDecision::Reply(result) = submit(&mut bench, invalid, &catalog()) else {
-            panic!();
-        };
-        assert!(result.message.contains("viewer.fps"));
-        let mut unknown_module = Config::defaults().unwrap();
-        unknown_module.viewer.enabled_modules.push("plugin".into());
-        assert_eq!(
-            rejected_code(&submit(&mut bench, unknown_module, &catalog())),
-            ResultCode::from(ErrorCode::ValidationFailed)
-        );
+        assert!(bench.port.is_empty());
         let key = metric_key("cpu.package.0", "cpu.temperature.package", "package:0");
         let mut pinned = Config::defaults().unwrap();
         pinned.quality.pinned_sources.push(PinnedSource {
             key: key.clone(),
             source_id: source_id("hwmon:coretemp:temp1"),
         });
-        assert_eq!(
-            rejected_code(&submit(&mut bench, pinned.clone(), &catalog())),
-            ResultCode::from(ErrorCode::ValidationFailed),
+        assert!(
+            registry_or_pin_problem(&pinned, &catalog()).is_some(),
             "pin must exist in the catalog"
         );
         let mut known = CatalogSnapshot::default();
@@ -930,7 +874,7 @@ mod tests {
                 Some(key),
             )),
         );
-        assert_eq!(submit(&mut bench, pinned, &known), ConfigDecision::Pending);
+        assert_eq!(registry_or_pin_problem(&pinned, &known), None);
     }
 
     #[test]
@@ -1086,35 +1030,6 @@ mod tests {
             bench.service.origins().get("viewer.theme"),
             Some(&ValueOrigin::CliOverride)
         );
-        // --read-only can never be lifted from the UI, even explicitly.
-        let mut lift = bench.service.saved().clone();
-        lift.actions.read_only = true;
-        let first = Uuid::new_v4();
-        bench.service.submit(
-            first,
-            ConfigRequest::Replace {
-                expected_revision: 2,
-                candidate: Box::new(lift.clone()),
-            },
-            &catalog(),
-            NOW,
-        );
-        bench.service.on_persist_result(first, receipt(3));
-        lift.revision = 3;
-        lift.actions.read_only = false;
-        let second = Uuid::new_v4();
-        bench.service.submit(
-            second,
-            ConfigRequest::Replace {
-                expected_revision: 3,
-                candidate: Box::new(lift),
-            },
-            &catalog(),
-            NOW,
-        );
-        bench.service.on_persist_result(second, receipt(4));
-        assert!(!bench.service.saved().actions.read_only);
-        assert!(bench.service.effective().actions.read_only);
     }
 
     #[test]

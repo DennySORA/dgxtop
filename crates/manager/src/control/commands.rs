@@ -18,6 +18,11 @@ use crate::results::CacheLookup;
 use crate::session::QueuedCommand;
 use crate::views::{ViewContext, ViewUpdate};
 
+/// Why `ReplaceConfig` is refused (D-91): settings change one field at a
+/// time through their own commands.
+pub(crate) const REPLACE_CONFIG_REFUSED: &str = "ReplaceConfig is not supported (D-91); change \
+     settings with SetSamplingInterval or SetModuleEnabled";
+
 impl ControlCore {
     pub(crate) fn on_command(&mut self, queued: QueuedCommand) {
         let QueuedCommand {
@@ -106,17 +111,13 @@ impl ControlCore {
                 },
                 now,
             ),
-            CommandBody::ReplaceConfig {
-                expected_config_revision,
-                candidate,
-            } => self.submit_config(
+            // The wire keeps the command (command.schema.json); no frontend
+            // sends it, so it is refused before validating any candidate.
+            CommandBody::ReplaceConfig { .. } => self.finish(CommandResult::rejected(
                 request_id,
-                ConfigRequest::Replace {
-                    expected_revision: expected_config_revision,
-                    candidate,
-                },
-                now,
-            ),
+                ErrorCode::Unsupported,
+                REPLACE_CONFIG_REFUSED,
+            )),
             CommandBody::SetModuleEnabled {
                 module_id,
                 enabled,
