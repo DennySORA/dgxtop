@@ -3,9 +3,12 @@ use std::sync::Arc;
 
 use dgxtop_core::action::Signal;
 use dgxtop_core::canonical::{ProcessRow, ProcessTable};
+use dgxtop_core::errors::InfraError;
 use dgxtop_core::identity::EntityId;
 use dgxtop_core::ports::{ProcessHistoryCompletion, ProcessHistoryReader, ProcessMemoryReader};
-use dgxtop_core::process_history::{EndCause, ProcessHistoryLoad, RunEnd, RunMetric};
+use dgxtop_core::process_history::{
+    EndCause, ProcessHistoryLoad, RunDetails, RunEnd, RunInfo, RunMetric,
+};
 use dgxtop_core::process_model::RunRequest;
 use dgxtop_core::process_probe::{ProbeLiveness, ProbeReading, ProbeReport};
 use dgxtop_core::testing::{
@@ -258,4 +261,77 @@ fn the_memory_record_answers_the_parts_of_a_window() {
             .parts(&other, (10 * SECOND, 20 * SECOND), 2)
             .is_empty()
     );
+}
+
+/// What the stores kept of an ended run: its row, without buckets.
+fn ended_info(pid: i64) -> RunInfo {
+    RunInfo {
+        key: test_process_key(pid),
+        name: "acme_llm.eval".to_owned(),
+        command: String::new(),
+        cwd: String::new(),
+        uid: None,
+        gpus: vec!["GPU 0".to_owned()],
+        details: RunDetails::default(),
+        started_utc_ns: 1_789_999_000_000_000_000,
+        last_seen_utc_ns: 1_789_999_600_000_000_000,
+        end: Some(RunEnd {
+            utc_ns: 1_789_999_600_000_000_000,
+            cause: EndCause::Exit(0),
+        }),
+    }
+}
+
+/// An ended run restored without its buckets, opened in the tab.
+fn opened_ended_run(rig: &mut Rig) -> RunRequest {
+    table(rig, 1, vec![row(9, GIB)]);
+    loaded(
+        rig,
+        ProcessHistoryLoad {
+            runs: vec![ended_info(5)],
+            ..ProcessHistoryLoad::default()
+        },
+    );
+    rig.store.take();
+    let request = RunRequest {
+        key: test_process_key(5),
+        bar: BarSize::OneMinute,
+        columns: 30,
+    };
+    rig.actor.handle(ProcessHistoryInput::Show(request.clone()));
+    request
+}
+
+/// A run the store holds no buckets of (it gave way, or its writes were
+/// lost) is no longer loading once the read answered: its detail shows
+/// it has no bars instead of waiting for good.
+#[test]
+fn an_empty_read_answer_ends_the_loading() {
+    let mut rig = rig();
+    let request = opened_ended_run(&mut rig);
+    assert!(rig.published.latest().detail_for(&request).unwrap().loading);
+    rig.actor.handle(ProcessHistoryInput::Store(
+        ProcessHistoryCompletion::RunRead {
+            key: test_process_key(5),
+            result: Ok(Vec::new()),
+        },
+    ));
+    let model = rig.published.latest();
+    let detail = model.detail_for(&request).unwrap();
+    assert!(!detail.loading, "answered: nothing to wait for");
+    assert!(detail.bars.is_none());
+}
+
+/// A failed read ends the loading too (the failure is logged).
+#[test]
+fn a_failed_read_answer_ends_the_loading() {
+    let mut rig = rig();
+    let request = opened_ended_run(&mut rig);
+    rig.actor.handle(ProcessHistoryInput::Store(
+        ProcessHistoryCompletion::RunRead {
+            key: test_process_key(5),
+            result: Err(InfraError::Unavailable("acme".to_owned())),
+        },
+    ));
+    assert!(!rig.published.latest().detail_for(&request).unwrap().loading);
 }

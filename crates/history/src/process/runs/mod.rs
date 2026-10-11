@@ -51,6 +51,13 @@ const MISSING_GRACE_NS: u64 = 10 * NANOS_PER_SECOND;
 /// at most 64, each at most one size's TIER_BUCKETS a size.
 pub(crate) const ENDED_SERIES_BUDGET_BYTES: usize = 48 * 1024 * 1024;
 
+/// Where the long-term store's read of a run's buckets is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Read {
+    Asked,
+    Answered,
+}
+
 /// What a cycle's sample needs beside the process table.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SampleInputs<'a> {
@@ -156,8 +163,9 @@ pub(crate) struct ProcessHistoryBook {
     /// The local clock's offset, nanoseconds east: where buckets begin.
     shift_ns: i64,
     journal: ProcessHistoryJournal,
-    /// Runs whose buckets were asked of the long-term store.
-    reading: BTreeSet<ProcessKey>,
+    /// Runs whose buckets were asked of the long-term store, and whether
+    /// the store answered.
+    reading: BTreeMap<ProcessKey, Read>,
     /// Moves whenever what a run shows may have changed (the read model
     /// is built again then).
     revision: u64,
@@ -175,7 +183,7 @@ impl ProcessHistoryBook {
             last_table: None,
             shift_ns: 0,
             journal: ProcessHistoryJournal::default(),
-            reading: BTreeSet::new(),
+            reading: BTreeMap::new(),
             revision: 0,
             series_budget_bytes: ENDED_SERIES_BUDGET_BYTES,
         }
@@ -367,16 +375,36 @@ impl ProcessHistoryBook {
         let Some(run) = self.runs.get(key) else {
             return false;
         };
-        if !run.series.is_empty() || run.is_live() || self.reading.contains(key) {
+        if !run.series.is_empty() || run.is_live() || self.reading.contains_key(key) {
             return false;
         }
-        self.reading.insert(key.clone());
+        self.reading.insert(key.clone(), Read::Asked);
         true
+    }
+
+    /// Whether `run` waits for its buckets: it holds none and the store
+    /// has not answered for it (an answer without rows leaves it empty,
+    /// not loading).
+    pub(crate) fn is_loading(&self, run: &Run) -> bool {
+        run.series.is_empty()
+            && !run.is_live()
+            && self.reading.get(&run.info.key) != Some(&Read::Answered)
+    }
+
+    /// The store could not read `key`'s buckets: it is answered, with none.
+    pub(crate) fn on_read_failed(&mut self, key: &ProcessKey) {
+        if self.reading.contains_key(key) {
+            self.reading.insert(key.clone(), Read::Answered);
+            self.revision += 1;
+        }
     }
 
     /// Takes the buckets read for `key`; drops the buckets of the ended
     /// runs that ended longest ago beyond the ones kept in memory.
     pub(crate) fn on_buckets(&mut self, key: &ProcessKey, rows: Vec<RunBucketRow>) {
+        if let Some(read) = self.reading.get_mut(key) {
+            *read = Read::Answered;
+        }
         if let Some(run) = self.runs.get_mut(key) {
             for row in rows.into_iter().filter(|row| row.key == *key) {
                 run.series.restore_closed(row.tier, row.bucket);

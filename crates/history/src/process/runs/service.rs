@@ -162,10 +162,13 @@ impl ProcessHistoryService {
             }
             ProcessHistoryCompletion::RunRead { key, result } => match result {
                 Ok(rows) => self.book.on_buckets(&key, rows),
-                Err(error) => self.warn(&format!(
-                    "PROCESS_HISTORY_READ_FAILED: {}: {error}",
-                    key.summary()
-                )),
+                Err(error) => {
+                    self.book.on_read_failed(&key);
+                    self.warn(&format!(
+                        "PROCESS_HISTORY_READ_FAILED: {}: {error}",
+                        key.summary()
+                    ));
+                }
             },
         }
     }
