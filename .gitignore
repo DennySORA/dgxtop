@@ -4,7 +4,9 @@
 .env
 *.log
 __pycache__/
+# Local tool state (Serena's language-server cache and project file).
+.serena/
 # Validation evidence is part of the repository.
 !docs/validation/evidence/*.log
-# The specification copy must stay byte-identical to dgxtop-spec-v2.zip.
+# The specification copy must stay byte-identical to the delivered package (D-02, D-58).
 !spec/dgxtop-v2/**/*.log

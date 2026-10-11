@@ -186,8 +186,8 @@ just hardware  # 実際の procfs/sysfs/NVML でのハードウェアテスト�
 
 - [設計ノート（英語）](https://dennysora.me/en/projects/tools/dgxtop/)：アーキテクチャとその背景にある考え方（[繁體中文](https://dennysora.me/zh-hant/projects/tools/dgxtop/)）。
 - [`spec/dgxtop-v2/`](../spec/dgxtop-v2/README.md)：完全な仕様（繁体字中国語）。
-- [`docs/process/v2-rewrite/DECISIONS.md`](process/v2-rewrite/DECISIONS.md)：実装上の決定 D-01〜D-57。
-- [`docs/process/v2-rewrite/history-redesign.md`](process/v2-rewrite/history-redesign.md)：履歴ビューの設計分析。
+- [`docs/design/DECISIONS.md`](design/DECISIONS.md)：実装上の決定 D-01〜D-58。
+- [`docs/design/history-redesign.md`](design/history-redesign.md)：履歴ビューの設計分析。
 
 ## ライセンス
 

@@ -3,6 +3,9 @@
 
 Usage: scripts/verify_spec_copy.py dgxtop-spec-v2.zip [spec/dgxtop-v2]
 
+The package is kept in history, not in the tree (D-58):
+git show 0a348c0:dgxtop-spec-v2.zip > target/dgxtop-spec-v2.zip
+
 Checks every ZIP member's CRC, that each member file is byte-identical to the
 copy under the spec directory, that the copy has no extra files, and that every
 file listed in the copy's MANIFEST.json has the recorded size and SHA-256.

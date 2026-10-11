@@ -42,7 +42,7 @@ which needs the owner's request.
 
 ## What was kept
 
-- Every check an acceptance test cites in [VALIDATION.md](../../validation/VALIDATION.md).
+- Every check an acceptance test cites in [VALIDATION.md](../validation/VALIDATION.md).
   Two citations pointed at a test removed as a duplicate or renamed earlier; they
   now cite the remaining test of the same invariant. Five cited tests were removed
   by mistake and are back (see [Corrected after the evidence check](#corrected-after-the-evidence-check)).

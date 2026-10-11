@@ -881,9 +881,16 @@ Micro benchmarks that measure no budgeted metric report a note instead:
    - The spec's Python tests ran before this session's changes, and the spec copy has not
      changed since (`spec-copy-verification`). Re-running them needs the pinned `jsonschema`,
      which is not installed.
+   - The delivered archive is kept in history, not in the tree (D-58). To rerun
+     `spec-copy-verification`, extract it with
+     `git show 0a348c0:dgxtop-spec-v2.zip > target/dgxtop-spec-v2.zip`, then pass that path to
+     `scripts/verify_spec_copy.py`.
 9. **Opt-in runs (D-53):**
    - The end-to-end suites (`just e2e`, recorded as `e2e-suites`) run only on the owner's
      request. A passing recording returns AT06, AT11, AT14, AT22, AT26, AT30, AT33 and AT39 to
      PASS.
    - The hardware suites and benchmarks were last recorded on the D-50 tree. A REF A/B with
      the history archive on (the D-51 default) against off has not been run.
+10. **Optimization, not a defect.** Once the archive's WAL first reaches its 16 MiB limit, a
+    passive checkpoint runs at every archive write. The result is correct, but checkpoints run
+    more often than designed.
