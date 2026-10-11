@@ -1,15 +1,17 @@
 //! The process probe (D-76, D-77): what the process history follows of the
-//! few GPU processes it tracks, read from `/proc/<pid>/{stat,io,status,fd}`,
+//! few GPU processes it tracks, read from `/proc/<pid>/{stat,io,status}`,
+//! `/proc/<pid>/fd` every [`OPEN_FILES_EVERY_NS`],
 //! once per process `/proc/<pid>/{cmdline,cwd,exe,cgroup}` and the parent's
 //! `comm`, and `/proc/vmstat`. It never scans `/proc`: the process table
 //! sums the descendants from the scan it makes anyway (D-79). Read-only,
 //! like every telemetry adapter; a PID whose start time no longer matches
 //! the key is another process and reads as gone.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use dgxtop_core::clock::TimeProvider;
+use dgxtop_core::clock::{NANOS_PER_SECOND, TimeProvider};
 use dgxtop_core::identity::{PidNamespace, ProcessKey};
 use dgxtop_core::ports::ProcessProbe;
 use dgxtop_core::process_history::RunDetails;
@@ -31,6 +33,8 @@ const ZOMBIE: char = 'Z';
 const KIB: u64 = 1024;
 /// The unified (v2) hierarchy's line of `/proc/<pid>/cgroup`.
 const UNIFIED_CGROUP: &str = "0::";
+/// How long an open-file count stands before `fd` is listed again.
+pub(crate) const OPEN_FILES_EVERY_NS: u64 = 10 * NANOS_PER_SECOND;
 
 /// Probes processes through `files` (the host's `/proc` in production).
 pub struct ProcfsProcessProbe {
@@ -39,6 +43,7 @@ pub struct ProcfsProcessProbe {
     /// Ours, read on the first probe; a key of another namespace is not
     /// a process this probe can see.
     namespace: Option<Option<PidNamespace>>,
+    open_files: OpenFileCounts,
 }
 
 impl ProcfsProcessProbe {
@@ -47,6 +52,7 @@ impl ProcfsProcessProbe {
             files,
             clock,
             namespace: None,
+            open_files: OpenFileCounts::default(),
         }
     }
 
@@ -95,11 +101,6 @@ impl ProcfsProcessProbe {
             .ok()
             .and_then(|text| field_value(&text, "VmSwap:"))
             .map(|kib| kib.saturating_mul(KIB));
-        reading.open_files = self
-            .files
-            .read_dir(&format!("/proc/{pid}/fd"))
-            .ok()
-            .map(|entries| u64::try_from(entries.len()).unwrap_or(u64::MAX));
         reading
     }
 
@@ -177,15 +178,57 @@ impl ProcessProbe for ProcfsProcessProbe {
         let own = self.own_namespace().cloned();
         let targets = &targets[..targets.len().min(MAX_PROBED_PROCESSES)];
         let visible = |target: &ProbeTarget| own.as_ref() == Some(&target.key.pid_namespace);
-        let readings = targets
+        let mut readings: Vec<ProbeReading> = targets
             .iter()
             .map(|target| self.read(target, visible(target)))
             .collect();
+        let now_ns = self.clock.now_boot_ns();
+        self.open_files.keep(&readings);
+        for reading in readings
+            .iter_mut()
+            .filter(|reading| reading.liveness == ProbeLiveness::Running)
+        {
+            reading.open_files = self.open_files.count(&*self.files, &reading.key, now_ns);
+        }
         ProbeReport {
             readings,
             oom_kills: oom_kills(&*self.files),
             read_boot_ns: self.clock.now_boot_ns(),
         }
+    }
+}
+
+/// The open-file counts of the probed processes: listing `fd` costs one
+/// entry per descriptor and a training job may hold thousands, so a count
+/// stands for [`OPEN_FILES_EVERY_NS`] before the folder is listed again.
+#[derive(Debug, Default)]
+struct OpenFileCounts {
+    /// The count (`None`: unreadable, another user's) and when it was read.
+    by_process: HashMap<ProcessKey, (Option<u64>, u64)>,
+}
+
+impl OpenFileCounts {
+    fn count(&mut self, files: &dyn SystemFiles, key: &ProcessKey, now_ns: u64) -> Option<u64> {
+        if let Some((count, at)) = self.by_process.get(key)
+            && now_ns.saturating_sub(*at) < OPEN_FILES_EVERY_NS
+        {
+            return *count;
+        }
+        let count = files
+            .read_dir(&format!("/proc/{}/fd", key.pid))
+            .ok()
+            .map(|entries| u64::try_from(entries.len()).unwrap_or(u64::MAX));
+        self.by_process.insert(key.clone(), (count, now_ns));
+        count
+    }
+
+    /// Forgets the processes no longer probed or no longer running.
+    fn keep(&mut self, readings: &[ProbeReading]) {
+        self.by_process.retain(|key, _| {
+            readings
+                .iter()
+                .any(|reading| reading.key == *key && reading.liveness == ProbeLiveness::Running)
+        });
     }
 }
 

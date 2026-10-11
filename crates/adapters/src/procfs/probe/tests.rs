@@ -360,3 +360,42 @@ fn io_and_vmstat_fields_need_their_whole_name() {
     );
     assert_eq!(parse_io("read_bytes: 1\n"), None, "both counters or none");
 }
+
+/// `fd` is listed when a process is first probed and again only once
+/// [`OPEN_FILES_EVERY_NS`] passed; the count stands meanwhile. A process
+/// that ended is forgotten, so its PID's next process is counted afresh.
+#[test]
+fn open_files_are_counted_every_ten_seconds() {
+    let files = Arc::new(
+        MapFiles::with_namespace()
+            .file("/proc/42/stat", &stat_of(42, 1, &[]))
+            .dir("/proc/42/fd", &["0", "1", "2"], false),
+    );
+    let clock = FakeClock::new(5_000);
+    let shared = Arc::clone(&files) as Arc<dyn SystemFiles>;
+    let mut probe = ProcfsProcessProbe::new(shared, Arc::clone(&clock) as Arc<dyn TimeProvider>);
+    let targets = [target(42, 900, false)];
+    let fd_lists = || {
+        files
+            .listed
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|path| *path == "/proc/42/fd")
+            .count()
+    };
+    assert_eq!(probe.probe(&targets).readings[0].open_files, Some(3));
+    clock.advance_ns(OPEN_FILES_EVERY_NS - 1);
+    assert_eq!(probe.probe(&targets).readings[0].open_files, Some(3));
+    assert_eq!(fd_lists(), 1, "the count stands");
+    clock.advance_ns(1);
+    assert_eq!(probe.probe(&targets).readings[0].open_files, Some(3));
+    assert_eq!(fd_lists(), 2, "listed again after ten seconds");
+    assert_eq!(probe.open_files.by_process.len(), 1);
+    let gone = probe.probe(&[target(43, 900, false)]);
+    assert_eq!(gone.readings[0].open_files, None);
+    assert!(
+        probe.open_files.by_process.is_empty(),
+        "an ended process is forgotten"
+    );
+}
