@@ -67,7 +67,7 @@ fn row(entity: &str, tier: Tier, bucket: OverviewBucket) -> TierRow {
 fn journal(rows: Vec<TierRow>) -> TierJournal {
     TierJournal {
         forget: Vec::new(),
-        rows,
+        rows: std::sync::Arc::new(rows),
         keep_latest: u32::try_from(TIER_BUCKETS).unwrap(),
     }
 }
@@ -132,7 +132,7 @@ fn each_size_keeps_its_latest_buckets() {
     store
         .append(&TierJournal {
             forget: Vec::new(),
-            rows,
+            rows: std::sync::Arc::new(rows),
             keep_latest: 4,
         })
         .unwrap();
@@ -154,7 +154,6 @@ fn each_size_keeps_its_latest_buckets() {
     );
 }
 
-/// Past the size limit the series written longest ago give way.
 /// A series the history let go is deleted in every size before the
 /// journal's rows are written, so one coming back in the same journal
 /// starts fresh; a forgotten series never stored is no error, and a
@@ -205,22 +204,37 @@ fn a_forgotten_series_is_deleted_before_the_rows() {
     assert_eq!(left, vec!["gpu:1".to_owned()]);
 }
 
+/// The store deletes only what the history's journal says (D-95): however
+/// many pages are in use, every series it was not told to forget keeps
+/// every bucket, and the append reports the pages in use and the series
+/// held for the history's budget.
 #[test]
-fn the_series_written_longest_ago_give_way() {
+fn the_store_never_lets_a_series_go_on_its_own() {
     let scratch = Scratch::new("retain");
-    let mut store = scratch.open().with_max_used_bytes(40 * 1024);
+    let mut store = scratch.open();
+    let mut usages = Vec::new();
     for (entity, start) in [("gpu:old", 0), ("gpu:new", 1_000 * MINUTE)] {
         let rows = (0..300)
             .map(|minute| row(entity, Tier::OneMinute, gauge(start + minute * MINUTE, 1.0)))
             .collect();
-        store.append(&journal(rows)).unwrap();
+        usages.push(store.append(&journal(rows)).unwrap());
     }
     let loaded = store.load().unwrap();
-    assert_eq!(loaded.len(), 1, "one series fits");
-    assert_eq!(loaded[0].series, series("gpu:new"));
-    assert_eq!(loaded[0].buckets.len(), 300);
-    let connection = store.connection().unwrap();
-    assert_eq!(database::series_count(connection).unwrap(), 1);
+    assert_eq!(loaded.len(), 2, "nothing was forgotten");
+    assert!(loaded.iter().all(|stored| stored.buckets.len() == 300));
+    assert_eq!(usages[0].series, 1);
+    assert_eq!(usages[1].series, 2);
+    assert!(usages[1].used_bytes > usages[0].used_bytes, "{usages:?}");
+    assert!(usages[1].used_bytes > 40 * 1024, "past the old limit");
+    let forgotten = store
+        .append(&TierJournal {
+            forget: vec![series("gpu:old")],
+            ..journal(Vec::new())
+        })
+        .unwrap();
+    assert_eq!(forgotten.series, 1, "the journal's deletion is counted");
+    let idle = store.append(&journal(Vec::new())).unwrap();
+    assert_eq!(idle, forgotten, "an empty journal reports what is held");
 }
 
 /// The database is private to its user.

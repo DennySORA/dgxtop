@@ -52,7 +52,7 @@ use crate::observation::{
 };
 use crate::overview_history::{
     ArchivePrune, ArchivedMinutes, ArchivedMinutesRead, ArchivedSeriesList, OverviewAnswer,
-    OverviewRequest, StoredTierSeries, TierJournal,
+    OverviewRequest, StoredTierSeries, TierJournal, TierStoreUsage,
 };
 use crate::process_history::{
     BucketRequest, ProcessHistoryJournal, ProcessHistoryLoad, ProcessHistoryLoadRequest,
@@ -273,8 +273,9 @@ pub trait ArchiveReader: Send {
 pub trait HistoryTierStore: Send {
     /// Every series' kept buckets, read once at startup.
     fn load(&mut self) -> Result<Vec<StoredTierSeries>, InfraError>;
-    /// Writes closed buckets and keeps the latest of each (series, size).
-    fn append(&mut self, journal: &TierJournal) -> Result<(), InfraError>;
+    /// Deletes the series the journal forgets, writes closed buckets and
+    /// keeps the latest of each (series, size); returns what it holds then.
+    fn append(&mut self, journal: &TierJournal) -> Result<TierStoreUsage, InfraError>;
 }
 
 /// Where the effective configuration came from at load.

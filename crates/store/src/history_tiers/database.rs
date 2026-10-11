@@ -1,16 +1,17 @@
 //! Rows of the tiers database (D-82): series the history let go deleted,
 //! series upserted by their identity, closed buckets written as the history
 //! hands them, each (series, size) cut to the latest the journal asks for,
-//! the series written longest ago
-//! giving way past the size limit, and the read at startup. Only prepared
-//! statements with bound parameters.
+//! what is held then for the history's budget (D-95), and the read at
+//! startup. Only prepared statements with bound parameters.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
 
 use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::identity::{EntityId, HostId, MetricId, Scope};
-use dgxtop_core::overview_history::{OverviewBucket, StoredTierSeries, TierJournal, TierRow};
+use dgxtop_core::overview_history::{
+    OverviewBucket, StoredTierSeries, TierJournal, TierRow, TierStoreUsage,
+};
 use dgxtop_core::tiers::Tier;
 use rusqlite::{Connection, Row, Transaction, params};
 
@@ -24,25 +25,22 @@ const TIER_BUCKETS: BucketTable = BucketTable {
     table: "tier_buckets",
     owner_column: "series_id",
 };
-/// Series a pass over a database past its size gives way at once.
-const SERIES_GIVING_WAY: i64 = 1;
-
 /// Deletes the series the journal forgets, writes its buckets (one written
 /// again replaces the earlier), then keeps the latest `keep_latest` of
-/// every (series, size) it touched.
+/// every (series, size) it touched; returns what the database holds then.
 pub(super) fn append(
     connection: &mut Connection,
     journal: &TierJournal,
-) -> Result<(), DatabaseFailure> {
+) -> Result<TierStoreUsage, DatabaseFailure> {
     if journal.rows.is_empty() && journal.forget.is_empty() {
-        return Ok(());
+        return usage(connection).map_err(DatabaseFailure::statement("history_tiers.usage"));
     }
-    immediate_transaction(connection, BUSY_DEADLINE, |transaction| {
+    let held = immediate_transaction(connection, BUSY_DEADLINE, |transaction| {
         for series in &journal.forget {
             delete_series(transaction, series)?;
         }
         let mut touched = BTreeSet::new();
-        for row in &journal.rows {
+        for row in journal.rows.iter() {
             let Some(tier) = stored_tier(row.tier) else {
                 continue;
             };
@@ -55,10 +53,22 @@ pub(super) fn append(
         for (series_id, tier) in touched {
             TIER_BUCKETS.keep_latest(transaction, series_id, tier, keep)?;
         }
-        Ok::<_, StepError<()>>(())
+        Ok::<_, StepError<()>>(usage(transaction)?)
     })
     .map_err(DatabaseFailure::transaction("history_tiers.append"))?;
-    checkpoint(connection).map_err(DatabaseFailure::statement("history_tiers.checkpoint"))
+    checkpoint(connection).map_err(DatabaseFailure::statement("history_tiers.checkpoint"))?;
+    Ok(held)
+}
+
+/// The pages in use and the series held.
+fn usage(connection: &Connection) -> rusqlite::Result<TierStoreUsage> {
+    let series: i64 = connection
+        .prepare_cached("SELECT count(*) FROM tier_series")?
+        .query_row([], |row| row.get(0))?;
+    Ok(TierStoreUsage {
+        used_bytes: used_bytes(connection)?,
+        series: u64::try_from(series).unwrap_or(0),
+    })
 }
 
 /// Deletes one series and every bucket of it.
@@ -143,28 +153,6 @@ fn insert_bucket(
             total,
         ])?;
     Ok(())
-}
-
-/// While the database holds more than `max_used_bytes`, the series written
-/// longest ago give way (D-82: none expires by age).
-pub(super) fn retain(
-    connection: &mut Connection,
-    max_used_bytes: u64,
-) -> Result<(), DatabaseFailure> {
-    immediate_transaction(connection, BUSY_DEADLINE, |transaction| {
-        while used_bytes(transaction)? > max_used_bytes {
-            let removed = transaction.execute(
-                "DELETE FROM tier_series WHERE series_id IN (SELECT series_id FROM tier_series \
-                 ORDER BY last_utc_ns LIMIT ?1)",
-                params![SERIES_GIVING_WAY],
-            )?;
-            if removed == 0 {
-                break;
-            }
-        }
-        Ok::<_, StepError<()>>(())
-    })
-    .map_err(DatabaseFailure::transaction("history_tiers.retain"))
 }
 
 /// Every series with its buckets, each size oldest first. A series whose
@@ -260,10 +248,4 @@ fn bucket_of(row: &Row<'_>) -> rusqlite::Result<(i64, OverviewBucket)> {
         total_exact: exact_total.is_some(),
     };
     Ok((tier, bucket))
-}
-
-/// Whether a series is stored (tests).
-#[cfg(test)]
-pub(super) fn series_count(connection: &Connection) -> rusqlite::Result<i64> {
-    connection.query_row("SELECT count(*) FROM tier_series", [], |row| row.get(0))
 }

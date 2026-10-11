@@ -20,9 +20,13 @@
 //! back: the store deletes it with the next journal, the archive its
 //! minutes with the next archive journal (whatever the store's state),
 //! and its archived minutes are not compressed if the startup is still
-//! reading them.
+//! reading them. The history alone decides which series go (D-95): the
+//! cache and the store each have a byte budget ([`budget`]), and the store
+//! never deletes a series on its own.
 
 mod book;
+mod budget;
+mod issues;
 mod reader;
 pub(crate) mod rows;
 
@@ -37,18 +41,20 @@ use dgxtop_core::identity::{HostId, MetricKey};
 use dgxtop_core::overview_history::{
     ArchivePrune, ArchivedMinutes, ArchivedMinutesRead, ArchivedSeriesList, HistoryTierCompletion,
     HistoryTierJob, OVERVIEW_METRICS, OverviewBars, OverviewBucket, StoredTierSeries, TierJournal,
-    TierRow, is_overview_series,
+    TierRow, TierStoreUsage, is_overview_series,
 };
-use dgxtop_core::ports::{Dispatch, DispatchError};
+use dgxtop_core::ports::{Dispatch, DispatchError, Logger};
 use dgxtop_core::tiers::{TIER_BUCKETS, Tier};
 
 use self::book::{Eviction, TierBook, TierMinute};
+use self::issues::StoreIssues;
 
-/// Closed buckets kept for a store that fell behind; past it the oldest
-/// go (and the archive is no longer pruned this run).
-const MAX_UNSENT_ROWS: usize = 200_000;
 /// Archived minutes one read returns at most (two weeks of one series).
 const ARCHIVE_PAGE_MINUTES: u32 = 20_000;
+/// Archived minutes compressed under one hold of the lock (a day): feeds
+/// from the state's commit path and readers wait for a chunk at most,
+/// never for a whole page.
+const ARCHIVE_CHUNK_MINUTES: usize = 1_440;
 /// The archive is pruned at most this often (boot clock).
 const PRUNE_EVERY_NS: u64 = 600 * NANOS_PER_SECOND;
 
@@ -73,6 +79,26 @@ impl fmt::Debug for OverviewTiers {
 struct Inner {
     book: TierBook,
     link: Option<StoreLink>,
+    /// The most archived minutes compressed under one hold of the lock.
+    #[cfg(test)]
+    most_archived_under_one_lock: usize,
+}
+
+impl Inner {
+    fn new(book: TierBook) -> Self {
+        Self {
+            book,
+            link: None,
+            #[cfg(test)]
+            most_archived_under_one_lock: 0,
+        }
+    }
+}
+
+/// What is left after an archived page went into the sizes.
+struct PageRead {
+    /// Where the next page starts, when more follow.
+    next_from_utc_ns: Option<i64>,
 }
 
 /// Where the startup of a kept history stands.
@@ -101,8 +127,10 @@ struct StoreLink {
     listed: bool,
     /// Every closed bucket so far reached the store.
     healthy: bool,
-    issue: Option<String>,
-    appends_inflight: u32,
+    issues: StoreIssues,
+    /// The journals sent and not answered yet, oldest first (the store's
+    /// one actor answers in order), each with whether it deletes series.
+    appends_inflight: VecDeque<bool>,
     last_prune_boot_ns: Option<u64>,
     /// Series the cache let go that the store is still to delete.
     forget: Vec<SeriesInEveryBoot>,
@@ -114,9 +142,11 @@ struct StoreLink {
 }
 
 impl StoreLink {
-    fn fail(&mut self, error: &InfraError) {
+    /// A store call failed: nothing it would have held may be lost from
+    /// the archive this run.
+    fn fail(&mut self, code: &'static str, error: &InfraError) {
         self.healthy = false;
-        self.issue = Some(format!("history tiers: {error}"));
+        self.issues.infra(code, "history tiers", error);
     }
 
     /// What the cache let go: deleted from the store and the archive, and
@@ -141,15 +171,82 @@ impl StoreLink {
         }
     }
 
+    /// Past the store's budget the series given a minute longest ago give
+    /// way, never while a deletion is still unanswered (the usage would
+    /// not show it yet).
+    fn give_way_for_store(&mut self, book: &mut TierBook, usage: TierStoreUsage) {
+        let deleting = !self.forget.is_empty() || self.appends_inflight.contains(&true);
+        let count = budget::series_giving_way(usage, budget::STORE_BUDGET_BYTES);
+        if !deleting && count > 0 {
+            book.give_way(count);
+            self.issues
+                .gave_way(count, usage.used_bytes, budget::STORE_BUDGET_BYTES);
+        }
+    }
+
+    /// Drops the oldest closed buckets past [`budget::UNSENT_BUDGET_BYTES`]
+    /// while the store cannot take them; the archive is then no longer
+    /// pruned this run (what it would lose was not written).
+    fn keep_unsent_within_budget(&mut self, book: &mut TierBook) {
+        if book.shed_unsent(budget::UNSENT_BUDGET_BYTES) {
+            self.healthy = false;
+            self.issues.rows_dropped();
+        }
+    }
+
+    /// One chunk of an archived page of the series being read into its
+    /// sizes (the first one of its first page goes on from what was
+    /// stored); `false` when it is no longer read.
+    fn add_archived(
+        &mut self,
+        book: &mut TierBook,
+        series: &SeriesInEveryBoot,
+        minutes: &[OverviewBucket],
+    ) -> bool {
+        let Phase::Backfilling {
+            reading: Some((read, first_page)),
+            ..
+        } = &mut self.phase
+        else {
+            return false;
+        };
+        if read != series || self.let_go.contains(series) {
+            return false;
+        }
+        book.add_archived(series, minutes, *first_page);
+        *first_page = false;
+        true
+    }
+
+    /// Takes the series being read, with whether its first page is still
+    /// to come, when the answer is about it.
+    fn take_reading(&mut self, series: &SeriesInEveryBoot) -> Option<(SeriesInEveryBoot, bool)> {
+        let Phase::Backfilling { reading, .. } = &mut self.phase else {
+            return None;
+        };
+        reading.take_if(|(read, _)| read == series)
+    }
+
     /// Sends a startup job, holding it while the queue is full.
-    fn send(&mut self, job: HistoryTierJob) {
+    fn send(&mut self, book: &mut TierBook, job: HistoryTierJob) {
         match self.port.try_dispatch(job.clone()) {
             Ok(()) => {}
             Err(DispatchError::Busy) => self.held = Some(job),
-            Err(error) => {
-                self.healthy = false;
-                self.issue = Some(format!("history tiers store stopped: {error}"));
-            }
+            Err(error) => self.stop(book, &error),
+        }
+    }
+
+    /// The store actor is gone: no answer will come, so the startup is
+    /// over and every series still waiting for it is fed live (none
+    /// backfilled, so the archive is never pruned for them).
+    fn stop(&mut self, book: &mut TierBook, error: &DispatchError) {
+        self.healthy = false;
+        self.issues.stopped(error);
+        self.held = None;
+        if !matches!(self.phase, Phase::Done) {
+            self.phase = Phase::Done;
+            self.let_go.clear();
+            book.release(false);
         }
     }
 }
@@ -163,10 +260,7 @@ impl Default for OverviewTiers {
 impl OverviewTiers {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(Inner {
-                book: TierBook::new(),
-                link: None,
-            })),
+            inner: Arc::new(Mutex::new(Inner::new(TierBook::new()))),
         }
     }
 
@@ -184,15 +278,19 @@ impl OverviewTiers {
     /// Keeps the sizes in a store from now on: loads what it kept, then
     /// compresses the archive's minutes from before `run_start_utc_ns` of
     /// `host_id`'s series. Live minutes wait until each series' earlier
-    /// history is in.
+    /// history is in. The store's issues are logged to `logger`.
     pub fn attach_store(
         &self,
         port: Box<dyn Dispatch<HistoryTierJob>>,
         host_id: HostId,
         run_start_utc_ns: i64,
+        logger: Arc<dyn Logger>,
     ) {
         let mut inner = self.lock();
-        inner.book.keep_on_disk();
+        let Inner {
+            book, link: slot, ..
+        } = &mut *inner;
+        book.keep_on_disk();
         let mut link = StoreLink {
             port,
             host_id,
@@ -201,55 +299,88 @@ impl OverviewTiers {
             held: None,
             listed: false,
             healthy: true,
-            issue: None,
-            appends_inflight: 0,
+            issues: StoreIssues::new(logger),
+            appends_inflight: VecDeque::new(),
             last_prune_boot_ns: None,
             forget: Vec::new(),
             eviction_prunes: Vec::new(),
             let_go: BTreeSet::new(),
         };
-        link.send(HistoryTierJob::Load);
-        inner.link = Some(link);
+        link.send(book, HistoryTierJob::Load);
+        *slot = Some(link);
     }
 
     /// What a store job did.
     pub fn on_store(&self, completion: HistoryTierCompletion) {
+        match completion {
+            HistoryTierCompletion::Loaded(result) => {
+                self.with_link(|book, link| loaded(book, link, result));
+            }
+            HistoryTierCompletion::Listed(result) => {
+                self.with_link(|book, link| listed(book, link, result));
+            }
+            HistoryTierCompletion::ArchivedRead { read, result } => {
+                let result = result.map(|page| self.compress_archived(&read, &page));
+                self.with_link(|book, link| archived_read(book, link, &read, result));
+            }
+            HistoryTierCompletion::Appended(result) => {
+                self.with_link(|book, link| appended(book, link, result));
+            }
+        }
+    }
+
+    /// Runs `step` under the lock while a store is kept, then lets what
+    /// the budget asks go and hands the store what is due.
+    fn with_link(&self, step: impl FnOnce(&mut TierBook, &mut StoreLink)) {
         let mut inner = self.lock();
-        let Inner { book, link } = &mut *inner;
+        let Inner { book, link, .. } = &mut *inner;
         let Some(link) = link.as_mut() else {
             return;
         };
-        match completion {
-            HistoryTierCompletion::Loaded(result) => loaded(book, link, result),
-            HistoryTierCompletion::Listed(result) => listed(book, link, result),
-            HistoryTierCompletion::ArchivedRead { read, result } => {
-                archived_read(book, link, &read, result);
+        step(book, link);
+        settle(book, link);
+    }
+
+    /// The archived minutes of the series being read into its sizes, a
+    /// chunk under each hold of the lock; stops when the series was let go
+    /// meanwhile.
+    fn compress_archived(&self, read: &ArchivedMinutesRead, page: &ArchivedMinutes) -> PageRead {
+        for chunk in page.minutes.chunks(ARCHIVE_CHUNK_MINUTES) {
+            let mut wanted = false;
+            self.with_link(|book, link| wanted = link.add_archived(book, &read.series, chunk));
+            if !wanted {
+                break;
             }
-            HistoryTierCompletion::Appended(result) => {
-                link.appends_inflight = link.appends_inflight.saturating_sub(1);
-                if let Err(error) = result {
-                    link.fail(&error);
-                }
+            #[cfg(test)]
+            {
+                let mut inner = self.lock();
+                inner.most_archived_under_one_lock =
+                    inner.most_archived_under_one_lock.max(chunk.len());
             }
         }
-        link.forget(book.take_evictions());
-        flush(book, link);
+        PageRead {
+            next_from_utc_ns: page
+                .minutes
+                .last()
+                .filter(|_| page.more)
+                .map(|last| last.start_utc_ns.saturating_add(1)),
+        }
     }
 
     /// Finalized minutes, into the sizes; their closed buckets go to the
     /// store.
     pub(crate) fn feed(&self, minutes: Vec<TierMinute>) {
         let mut inner = self.lock();
-        let Inner { book, link } = &mut *inner;
+        let Inner { book, link, .. } = &mut *inner;
         for minute in minutes {
             book.feed(minute);
         }
         match link.as_mut() {
-            Some(link) => {
-                link.forget(book.take_evictions());
-                flush(book, link);
+            Some(link) => settle(book, link),
+            None => {
+                book.keep_within_budget();
+                drop(book.take_unsent());
             }
-            None => drop(book.take_unsent()),
         }
     }
 
@@ -258,7 +389,7 @@ impl OverviewTiers {
     /// while everything they would lose is written).
     pub(crate) fn take_prunes(&self, now_boot_ns: u64) -> Vec<ArchivePrune> {
         let mut inner = self.lock();
-        let Inner { book, link } = &mut *inner;
+        let Inner { book, link, .. } = &mut *inner;
         let Some(link) = link.as_mut() else {
             return Vec::new();
         };
@@ -266,8 +397,8 @@ impl OverviewTiers {
         let settled = link.healthy
             && matches!(link.phase, Phase::Done)
             && link.held.is_none()
-            && link.appends_inflight == 0
-            && book.unsent_len() == 0;
+            && link.appends_inflight.is_empty()
+            && !book.has_unsent();
         let due = link
             .last_prune_boot_ns
             .is_none_or(|last| now_boot_ns.saturating_sub(last) >= PRUNE_EVERY_NS);
@@ -290,7 +421,10 @@ impl OverviewTiers {
         let inner = self.lock();
         let mut bars = inner.book.bars(series, tier, window, extra);
         bars.kept_on_disk = inner.link.is_some();
-        bars.store_issue = inner.link.as_ref().and_then(|link| link.issue.clone());
+        bars.store_issue = inner
+            .link
+            .as_ref()
+            .and_then(|link| link.issues.latest().map(str::to_owned));
         bars
     }
 
@@ -310,6 +444,19 @@ impl OverviewTiers {
         self.lock().book.key_of(series)
     }
 
+    /// Without a store, with a cache of `budget_bytes`.
+    #[cfg(test)]
+    fn with_cache_budget(budget_bytes: usize) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Inner::new(TierBook::with_budget(budget_bytes)))),
+        }
+    }
+
+    #[cfg(test)]
+    fn most_archived_under_one_lock(&self) -> usize {
+        self.lock().most_archived_under_one_lock
+    }
+
     #[cfg(test)]
     fn with_book<R>(&self, read: impl FnOnce(&TierBook) -> R) -> R {
         read(&self.lock().book)
@@ -327,14 +474,17 @@ fn loaded(
                 book.restore(&series.series, &series.buckets);
             }
         }
-        Err(error) => link.fail(&error),
+        Err(error) => link.fail(issues::LOAD_FAILED, &error),
     }
     link.phase = Phase::Listing;
-    link.send(HistoryTierJob::ListArchived(ArchivedSeriesList {
-        host_id: link.host_id.clone(),
-        metric_ids: OVERVIEW_METRICS.iter().map(|id| (*id).to_owned()).collect(),
-        before_utc_ns: link.run_start_utc_ns,
-    }));
+    link.send(
+        book,
+        HistoryTierJob::ListArchived(ArchivedSeriesList {
+            host_id: link.host_id.clone(),
+            metric_ids: OVERVIEW_METRICS.iter().map(|id| (*id).to_owned()).collect(),
+            before_utc_ns: link.run_start_utc_ns,
+        }),
+    );
 }
 
 fn listed(
@@ -354,7 +504,8 @@ fn listed(
                 .collect()
         }
         Err(error) => {
-            link.issue = Some(format!("history archive: {error}"));
+            link.issues
+                .infra(issues::ARCHIVE_LIST_FAILED, "history archive", &error);
             VecDeque::new()
         }
     };
@@ -369,13 +520,9 @@ fn archived_read(
     book: &mut TierBook,
     link: &mut StoreLink,
     read: &ArchivedMinutesRead,
-    result: Result<ArchivedMinutes, InfraError>,
+    result: Result<PageRead, InfraError>,
 ) {
-    let Phase::Backfilling { reading, .. } = &mut link.phase else {
-        return;
-    };
-    let Some((series, first_page)) = reading.take().filter(|(series, _)| *series == read.series)
-    else {
+    let Some((series, first_page)) = link.take_reading(&read.series) else {
         return;
     };
     if link.let_go.contains(&series) {
@@ -384,28 +531,39 @@ fn archived_read(
     }
     match result {
         Ok(page) => {
-            book.add_archived(&series, &page.minutes, first_page);
-            match page.minutes.last().filter(|_| page.more) {
-                Some(last) => {
-                    let next = ArchivedMinutesRead {
-                        from_utc_ns: last.start_utc_ns.saturating_add(1),
-                        ..read.clone()
-                    };
-                    if let Phase::Backfilling { reading, .. } = &mut link.phase {
-                        *reading = Some((series, false));
-                    }
-                    link.send(HistoryTierJob::ReadArchived(next));
-                    return;
-                }
-                None => book.finish(&series, true, true),
+            // A page without minutes still goes on from what was stored.
+            book.add_archived(&series, &[], first_page);
+            if let Some(from_utc_ns) = page.next_from_utc_ns {
+                read_next_page(book, link, read, series, from_utc_ns);
+                return;
             }
+            book.finish(&series, true, true);
         }
         Err(error) => {
-            link.issue = Some(format!("history archive: {error}"));
+            link.issues
+                .infra(issues::ARCHIVE_READ_FAILED, "history archive", &error);
             book.finish(&series, false, !first_page);
         }
     }
     next_backfill(book, link);
+}
+
+/// Asks for the page of `series` after the one just read.
+fn read_next_page(
+    book: &mut TierBook,
+    link: &mut StoreLink,
+    read: &ArchivedMinutesRead,
+    series: SeriesInEveryBoot,
+    from_utc_ns: i64,
+) {
+    if let Phase::Backfilling { reading, .. } = &mut link.phase {
+        *reading = Some((series, false));
+    }
+    let next = ArchivedMinutesRead {
+        from_utc_ns,
+        ..read.clone()
+    };
+    link.send(book, HistoryTierJob::ReadArchived(next));
 }
 
 /// Reads the next series' archived minutes; with none left the startup is
@@ -427,43 +585,55 @@ fn next_backfill(book: &mut TierBook, link: &mut StoreLink) {
         max_minutes: ARCHIVE_PAGE_MINUTES,
     };
     *reading = Some((series, true));
-    link.send(HistoryTierJob::ReadArchived(read));
+    link.send(book, HistoryTierJob::ReadArchived(read));
+}
+
+fn appended(book: &mut TierBook, link: &mut StoreLink, result: Result<TierStoreUsage, InfraError>) {
+    link.appends_inflight.pop_front();
+    match result {
+        Ok(usage) => link.give_way_for_store(book, usage),
+        Err(error) => link.fail(issues::WRITE_FAILED, &error),
+    }
+}
+
+/// After any change: what the cache's budget asks goes, and the store gets
+/// what is due.
+fn settle(book: &mut TierBook, link: &mut StoreLink) {
+    book.keep_within_budget();
+    link.forget(book.take_evictions());
+    flush(book, link);
 }
 
 /// Sends a held startup job, then the closed buckets collected.
 fn flush(book: &mut TierBook, link: &mut StoreLink) {
     if let Some(job) = link.held.take() {
-        link.send(job);
+        link.send(book, job);
         if link.held.is_some() {
+            link.keep_unsent_within_budget(book);
             return;
         }
     }
-    let rows: Vec<TierRow> = book.take_unsent();
+    let rows: Arc<Vec<TierRow>> = Arc::new(book.take_unsent());
     if rows.is_empty() && link.forget.is_empty() {
         return;
     }
     let journal = TierJournal {
         forget: link.forget.clone(),
-        rows: rows.clone(),
+        rows: Arc::clone(&rows),
         keep_latest: u32::try_from(TIER_BUCKETS).unwrap_or(u32::MAX),
     };
     match link.port.try_dispatch(HistoryTierJob::Append(journal)) {
         Ok(()) => {
+            link.appends_inflight.push_back(!link.forget.is_empty());
             link.forget.clear();
-            link.appends_inflight = link.appends_inflight.saturating_add(1);
         }
         Err(DispatchError::Busy) => {
-            book.return_unsent(rows);
-            if book.shed_unsent(MAX_UNSENT_ROWS) {
-                link.healthy = false;
-                link.issue =
-                    Some("history tiers store fell behind; oldest buckets dropped".to_owned());
-            }
+            // The refused journal is dropped already: the rows come back
+            // without a copy.
+            book.return_unsent(Arc::unwrap_or_clone(rows));
+            link.keep_unsent_within_budget(book);
         }
-        Err(error) => {
-            link.healthy = false;
-            link.issue = Some(format!("history tiers store stopped: {error}"));
-        }
+        Err(error) => link.stop(book, &error),
     }
 }
 

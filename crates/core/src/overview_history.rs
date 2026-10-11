@@ -12,6 +12,8 @@
 //! the history asks its store to keep, the archived minutes it compresses
 //! at startup and the reads the Manager asks of it.
 
+use std::sync::Arc;
+
 use crate::errors::InfraError;
 use crate::history::SeriesInEveryBoot;
 use crate::identity::HostId;
@@ -190,12 +192,23 @@ pub struct StoredTierSeries {
 /// What the history asks its store to write: first every bucket of the
 /// `forget` series deleted (the history's cache let them go, so they are
 /// not read back), then the closed buckets, then of every (series, size)
-/// written only the latest `keep_latest` kept.
+/// written only the latest `keep_latest` kept. The rows are shared: the
+/// history keeps them (without a copy) when the store's queue is full.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TierJournal {
     pub forget: Vec<SeriesInEveryBoot>,
-    pub rows: Vec<TierRow>,
+    pub rows: Arc<Vec<TierRow>>,
     pub keep_latest: u32,
+}
+
+/// What the tiers store holds after an append, for the history's byte
+/// budget (D-95): the store itself never lets a series go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TierStoreUsage {
+    /// Bytes of the database pages in use.
+    pub used_bytes: u64,
+    /// Series it holds.
+    pub series: u64,
 }
 
 /// The series of `metric_ids` the archive holds minutes of in earlier
@@ -251,7 +264,7 @@ pub enum HistoryTierJob {
 #[derive(Debug, Clone, PartialEq)]
 pub enum HistoryTierCompletion {
     Loaded(Result<Vec<StoredTierSeries>, InfraError>),
-    Appended(Result<(), InfraError>),
+    Appended(Result<TierStoreUsage, InfraError>),
     Listed(Result<Vec<SeriesInEveryBoot>, InfraError>),
     ArchivedRead {
         read: ArchivedMinutesRead,
@@ -293,7 +306,8 @@ impl OverviewRequest {
 #[derive(Debug, Clone, PartialEq)]
 pub struct OverviewBars {
     /// Changes when the series' past changed (the startup compression of
-    /// the archive filled it in), so cached bars must be read again.
+    /// the archive filled it in, or the series was let go or came back),
+    /// so cached bars must be read again.
     pub epoch: u64,
     /// Bars ending by this time never change again (minutes reach the
     /// history in time order).

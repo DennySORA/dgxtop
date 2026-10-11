@@ -4,16 +4,18 @@
 //! then kept incrementally. Every chart and statistics read is answered
 //! from here.
 //!
-//! Bounded: at most [`MAX_TIER_SERIES`] series, each at most a full set of
-//! sizes (about 200 KiB, so about 32 MiB in all); a new series beyond it
-//! takes the place of the one fed longest ago. A series that gives way is
-//! gone: its closed buckets not sent yet go with it and, while a store is
-//! kept, the eviction is noted so that the store and the archive delete it
-//! too ([`Eviction`]); if it comes back it starts fresh. While the store's startup load runs, a series'
-//! live minutes wait ([`MAX_PENDING_MINUTES`] at most) so that its earlier
-//! history goes in first.
+//! Bounded by bytes (D-95, [`super::budget`]): past its budget the series
+//! given a minute longest ago give way ([`TierBook::keep_within_budget`]),
+//! and so do as many as the store's budget asks ([`TierBook::give_way`]).
+//! A series that gives way is gone: its closed buckets not sent yet go with
+//! it and, while a store is kept, the eviction is noted so that the store
+//! and the archive delete it too ([`Eviction`]); if it comes back it starts
+//! fresh. While the store's startup load runs, a series' live minutes wait
+//! ([`MAX_PENDING_BYTES`] of them at most) so that its earlier history
+//! goes in first.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::mem::size_of;
 
 use dgxtop_compression::{TieredSeries, bars_in, merged_between};
 use dgxtop_core::history::SeriesInEveryBoot;
@@ -21,16 +23,11 @@ use dgxtop_core::identity::MetricKey;
 use dgxtop_core::overview_history::{ArchivePrune, OverviewBars, OverviewBucket, TierRow};
 use dgxtop_core::tiers::Tier;
 
-/// Series the cache holds at most: the host's charts and every GPU's,
-/// disk's and interface's with room to spare.
-pub(crate) const MAX_TIER_SERIES: usize = 160;
-/// The most one series holds: every size full, plus what each fills.
-#[cfg(test)]
-pub(crate) const MAX_SERIES_BYTES: usize = (Tier::ALL.len() - 1)
-    * (dgxtop_core::tiers::TIER_BUCKETS + 1)
-    * std::mem::size_of::<OverviewBucket>();
-/// Live minutes a series keeps while its earlier history is being read.
-pub(crate) const MAX_PENDING_MINUTES: usize = 240;
+use super::budget::{CACHE_BUDGET_BYTES, key_bytes, row_bytes, series_bytes};
+
+/// Bytes of live minutes a series keeps while its earlier history is
+/// being read (about four and a half hours of minutes).
+pub(crate) const MAX_PENDING_BYTES: usize = 16 * 1024;
 
 /// A finalized minute of an Overview series, on the wall clock.
 #[derive(Debug, Clone, PartialEq)]
@@ -60,7 +57,8 @@ pub(crate) struct TierEntry {
     /// Its archived minutes are in the sizes: the archive may let the ones
     /// the minutes size no longer holds go.
     backfilled: bool,
-    /// Changes when its past changed under a reader's cached bars.
+    /// Changes when its past changed under a reader's cached bars; drawn
+    /// from the book's [`TierBook::epoch`], so no two pasts share one.
     epoch: u64,
     /// End of the latest minute it was given.
     fed_through_utc_ns: i64,
@@ -70,13 +68,13 @@ pub(crate) struct TierEntry {
 }
 
 impl TierEntry {
-    fn new(shift_ns: i64, ready: bool, backfilled: bool) -> Self {
+    fn new(shift_ns: i64, ready: bool, backfilled: bool, epoch: u64) -> Self {
         Self {
             tiers: TieredSeries::new(shift_ns),
             pending: VecDeque::new(),
             ready,
             backfilled,
-            epoch: 0,
+            epoch,
             fed_through_utc_ns: i64::MIN,
             pruned_before_utc_ns: i64::MIN,
             key: None,
@@ -93,6 +91,16 @@ impl TierEntry {
         });
         let held = self.minutes_through_utc_ns().unwrap_or(i64::MIN);
         self.fed_through_utc_ns.max(waiting).max(held)
+    }
+
+    /// What it costs in memory under `series`: the structs, the buckets
+    /// its sizes and waiting minutes have room for, and the strings.
+    fn bytes(&self, series: &SeriesInEveryBoot) -> usize {
+        let buckets = self.tiers.allocated_buckets() + self.pending.capacity();
+        size_of::<(SeriesInEveryBoot, TierEntry)>()
+            + series_bytes(series)
+            + self.key.as_ref().map_or(0, key_bytes)
+            + buckets * size_of::<OverviewBucket>()
     }
 
     /// The end of the latest minute the minutes size holds, if any.
@@ -117,23 +125,44 @@ pub(crate) struct TierBook {
     new_backfilled: bool,
     /// Closed buckets collected for the store (only while one is kept).
     unsent: Vec<TierRow>,
+    /// What they cost in memory ([`row_bytes`]).
+    unsent_bytes: usize,
     keeps_rows: bool,
     /// Series let go since the last [`TierBook::take_evictions`] (only
     /// while a store is kept).
     evicted: Vec<Eviction>,
+    /// The latest epoch handed out: bumped for every new entry, every
+    /// change of an entry's past and every eviction, so a series that
+    /// comes back (or is gone) never answers with an epoch a reader cached
+    /// for its earlier past.
+    epoch: u64,
+    /// Bytes the entries may take ([`CACHE_BUDGET_BYTES`]).
+    budget_bytes: usize,
 }
 
 impl TierBook {
     pub(crate) fn new() -> Self {
+        Self::with_budget(CACHE_BUDGET_BYTES)
+    }
+
+    pub(crate) fn with_budget(budget_bytes: usize) -> Self {
         Self {
             shift_ns: 0,
             entries: BTreeMap::new(),
             waiting: false,
             new_backfilled: false,
             unsent: Vec::new(),
+            unsent_bytes: 0,
             keeps_rows: false,
             evicted: Vec::new(),
+            epoch: 0,
+            budget_bytes,
         }
+    }
+
+    fn next_epoch(&mut self) -> u64 {
+        self.epoch = self.epoch.saturating_add(1);
+        self.epoch
     }
 
     /// Buckets follow the local clock `shift_ns` east of UTC. Set before
@@ -155,26 +184,38 @@ impl TierBook {
 
     /// Takes the closed buckets collected for the store.
     pub(crate) fn take_unsent(&mut self) -> Vec<TierRow> {
+        self.unsent_bytes = 0;
         std::mem::take(&mut self.unsent)
     }
 
-    pub(crate) fn unsent_len(&self) -> usize {
-        self.unsent.len()
+    pub(crate) fn has_unsent(&self) -> bool {
+        !self.unsent.is_empty()
+    }
+
+    /// What the collected rows cost in memory.
+    #[cfg(test)]
+    pub(crate) fn unsent_bytes(&self) -> usize {
+        self.unsent_bytes
     }
 
     /// Puts back rows the store could not take yet, before the ones
     /// collected since.
     pub(crate) fn return_unsent(&mut self, mut rows: Vec<TierRow>) {
+        self.unsent_bytes += rows.iter().map(row_bytes).sum::<usize>();
         rows.append(&mut self.unsent);
         self.unsent = rows;
     }
 
-    /// Drops the oldest collected rows past `keep` (the store fell
-    /// behind); returns whether any went.
-    pub(crate) fn shed_unsent(&mut self, keep: usize) -> bool {
-        let excess = self.unsent.len().saturating_sub(keep);
-        self.unsent.drain(..excess);
-        excess > 0
+    /// Drops the oldest collected rows until they cost at most
+    /// `max_bytes` (the store fell behind); returns whether any went.
+    pub(crate) fn shed_unsent(&mut self, max_bytes: usize) -> bool {
+        let mut cut = 0;
+        while self.unsent_bytes > max_bytes && cut < self.unsent.len() {
+            self.unsent_bytes -= row_bytes(&self.unsent[cut]);
+            cut += 1;
+        }
+        self.unsent.drain(..cut);
+        cut > 0
     }
 
     /// A finalized minute: into the sizes, or waiting while the series'
@@ -192,29 +233,65 @@ impl TierBook {
             return;
         }
         let entry = self.entry(&series);
-        if entry.pending.len() >= MAX_PENDING_MINUTES {
+        let minute_bytes = size_of::<OverviewBucket>();
+        while (entry.pending.len() + 1) * minute_bytes > MAX_PENDING_BYTES {
             entry.pending.pop_front();
         }
         entry.pending.push_back(bucket);
     }
 
-    /// The series' entry, made (waiting while the store loads) when new;
-    /// beyond [`MAX_TIER_SERIES`] the one fed longest ago gives way.
+    /// The series' entry, made (waiting while the store loads) when new.
     fn entry(&mut self, series: &SeriesInEveryBoot) -> &mut TierEntry {
-        if !self.entries.contains_key(series) && self.entries.len() >= MAX_TIER_SERIES {
-            let oldest = self
-                .entries
-                .iter()
-                .min_by_key(|(_, entry)| entry.fed_through_utc_ns)
-                .map(|(series, _)| series.clone());
-            if let Some(oldest) = oldest {
-                self.evict(&oldest);
-            }
-        }
+        let epoch = if self.entries.contains_key(series) {
+            self.epoch
+        } else {
+            self.next_epoch()
+        };
         let (shift, ready, backfilled) = (self.shift_ns, !self.waiting, self.new_backfilled);
         self.entries
             .entry(series.clone())
-            .or_insert_with(|| TierEntry::new(shift, ready, backfilled && ready))
+            .or_insert_with(|| TierEntry::new(shift, ready, backfilled && ready, epoch))
+    }
+
+    /// What every entry costs in memory.
+    pub(crate) fn bytes(&self) -> usize {
+        self.entries
+            .iter()
+            .map(|(series, entry)| entry.bytes(series))
+            .sum()
+    }
+
+    /// While the entries take more than the budget, the series given a
+    /// minute longest ago give way; the last one always stays.
+    pub(crate) fn keep_within_budget(&mut self) {
+        let mut bytes = self.bytes();
+        while bytes > self.budget_bytes && self.entries.len() > 1 {
+            let Some(oldest) = self.given_longest_ago() else {
+                return;
+            };
+            bytes = bytes.saturating_sub(self.entries.get(&oldest).map_or(0, |e| e.bytes(&oldest)));
+            self.evict(&oldest);
+        }
+    }
+
+    /// Lets the `count` series given a minute longest ago go (the store's
+    /// budget asks for room).
+    pub(crate) fn give_way(&mut self, count: usize) {
+        for _ in 0..count {
+            let Some(oldest) = self.given_longest_ago() else {
+                return;
+            };
+            self.evict(&oldest);
+        }
+    }
+
+    /// The series whose latest minute (fed, waiting or restored) is the
+    /// oldest: a series no longer seen, before any live one.
+    fn given_longest_ago(&self) -> Option<SeriesInEveryBoot> {
+        self.entries
+            .iter()
+            .min_by_key(|(_, entry)| entry.given_through_utc_ns(self.shift_ns))
+            .map(|(series, _)| series.clone())
     }
 
     /// Lets a series go: its entry, its rows not sent yet and, while a
@@ -223,10 +300,12 @@ impl TierBook {
         let Some(entry) = self.entries.remove(series) else {
             return;
         };
+        self.next_epoch();
         if !self.keeps_rows {
             return;
         }
         self.unsent.retain(|row| row.series != *series);
+        self.unsent_bytes = self.unsent.iter().map(row_bytes).sum();
         self.evicted.push(Eviction {
             series: series.clone(),
             through_utc_ns: entry.given_through_utc_ns(self.shift_ns),
@@ -255,12 +334,15 @@ impl TierBook {
         if !self.keeps_rows {
             return;
         }
-        self.unsent
-            .extend(closed.into_iter().map(|(tier, bucket)| TierRow {
+        for (tier, bucket) in closed {
+            let row = TierRow {
                 series: series.clone(),
                 tier,
                 bucket,
-            }));
+            };
+            self.unsent_bytes += row_bytes(&row);
+            self.unsent.push(row);
+        }
     }
 
     /// Puts back what the store kept of a series (startup).
@@ -315,11 +397,12 @@ impl TierBook {
         if !resumed {
             self.resume(series);
         }
+        let epoch = self.next_epoch();
         let entry = self.entry(series);
         let pending: Vec<OverviewBucket> = entry.pending.drain(..).collect();
         entry.ready = true;
         entry.backfilled = backfilled;
-        entry.epoch = entry.epoch.saturating_add(1);
+        entry.epoch = epoch;
         for minute in &pending {
             self.add(series, minute);
         }
@@ -375,8 +458,10 @@ impl TierBook {
         extra: &[OverviewBucket],
     ) -> OverviewBars {
         let Some(entry) = self.entries.get(series) else {
+            // The latest epoch: one the series' past, if it had one, never
+            // carried.
             return OverviewBars {
-                epoch: 0,
+                epoch: self.epoch,
                 settled_through_utc_ns: i64::MIN,
                 bars: bars_in(&TieredSeries::new(self.shift_ns), tier, window, extra),
                 kept_on_disk: false,

@@ -827,7 +827,12 @@ impl Wiring {
         .map_err(|error| StartError::failure(error.to_string()))?;
         workers.push(Box::new(("history-tiers".to_owned(), handle.clone())));
         let run_start_utc_ns = i64::try_from(self.clock.now_utc_ns()).unwrap_or(i64::MAX);
-        overview.attach_store(Box::new(handle), host_id, run_start_utc_ns);
+        overview.attach_store(
+            Box::new(handle),
+            host_id,
+            run_start_utc_ns,
+            Arc::clone(&self.logger),
+        );
         Ok(())
     }
 
