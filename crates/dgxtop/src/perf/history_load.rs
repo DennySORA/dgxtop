@@ -666,4 +666,35 @@ mod tests {
             "raw counters are not history series"
         );
     }
+
+    /// What the reference preload (512 series over 24 h with outages and
+    /// source changes) holds in each partition: the evidence of the shares
+    /// (D-98). Raw steps at 1 s take a fraction of their share, which also
+    /// holds them at the 100 ms minimum interval; the aggregates hold only
+    /// bookkeeping, segments and gaps.
+    #[test]
+    fn the_reference_preload_fits_its_partitions_with_room() {
+        use dgxtop_core::budget::Partition;
+        use dgxtop_core::ports::SnapshotReader;
+        let (store, _feeder, report, _end) = preloaded(512, 24 * HOUR_NS);
+        assert_eq!(report.rejected, 0, "{:?}", report.first_rejection);
+        let health = store.snapshots.latest().health.clone();
+        let ledger = health.ledger.unwrap();
+        let peak_and_limit = |partition: Partition| {
+            let usage = ledger
+                .partitions
+                .iter()
+                .find(|usage| usage.partition == partition)
+                .unwrap();
+            (usage.peak, usage.limit)
+        };
+        let (raw, raw_limit) = peak_and_limit(Partition::RawHistory);
+        assert!(raw > 0 && raw * 12 <= raw_limit, "raw {raw} of {raw_limit}");
+        let (aggregates, aggregates_limit) = peak_and_limit(Partition::Aggregates);
+        assert!(
+            aggregates > 0 && aggregates * 8 <= aggregates_limit,
+            "aggregates {aggregates} of {aggregates_limit}"
+        );
+        assert!(!health.truncated_history);
+    }
 }

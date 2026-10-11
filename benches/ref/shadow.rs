@@ -96,17 +96,13 @@ impl ShadowHistory {
 }
 
 /// History bytes a live process would hold for the shadow's data (raw
-/// history, aggregates and query scratch; the shadow's hot state duplicates
-/// the replay store's and is left out).
+/// history and aggregates; the shadow's hot state duplicates the replay
+/// store's and is left out).
 pub fn history_bytes(ledger: &ByteLedger) -> u64 {
-    [
-        Partition::RawHistory,
-        Partition::Aggregates,
-        Partition::HistoryQuery,
-    ]
-    .into_iter()
-    .map(|partition| ledger.used(partition))
-    .sum()
+    [Partition::RawHistory, Partition::Aggregates]
+        .into_iter()
+        .map(|partition| ledger.used(partition))
+        .sum()
 }
 
 fn spawn_feeder(

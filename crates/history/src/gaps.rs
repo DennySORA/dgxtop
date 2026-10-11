@@ -270,4 +270,34 @@ mod tests {
         }
         assert_eq!(&*interner.intern("brand-new"), OTHER_REASON);
     }
+
+    /// The aggregates share (D-98) holds the default series table with
+    /// every series' gap list full, the worst the gap index can grow to
+    /// before its oldest gaps give way.
+    #[test]
+    fn full_gap_lists_of_the_default_series_fit_the_aggregates_share() {
+        use crate::series::{MAX_SERIES_GAPS, series_overhead_bytes};
+        let ledger = ByteLedger::for_memory_limit_mib(256);
+        let mut interner = ReasonInterner::new(&ledger);
+        let mut list = GapList::new(&ledger, MAX_SERIES_GAPS);
+        let before = ledger.used(Partition::Aggregates);
+        for index in 0..MAX_SERIES_GAPS as u64 {
+            let entry = gap(index * 100, index * 100 + 10, "timeout", &mut interner);
+            assert!(matches!(list.insert(entry, 0), GapInsert::Added { .. }));
+        }
+        let full_list = ledger.used(Partition::Aggregates) - before;
+        let key = metric_key("bench.entity.0", "gpu.temperature", "gpu");
+        let series = u64::from(
+            dgxtop_core::config::Config::defaults()
+                .unwrap()
+                .store
+                .max_series,
+        );
+        let worst = series * (full_list + series_overhead_bytes(&key));
+        let share = ledger.limits().limit(Partition::Aggregates);
+        assert!(
+            worst * 3 / 2 <= share,
+            "{series} series with full gap lists take {worst} of {share} bytes"
+        );
+    }
 }
