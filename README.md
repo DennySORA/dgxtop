@@ -235,7 +235,7 @@ remain targets.
 - [Design notes](https://dennysora.me/en/projects/tools/dgxtop/): the architecture and the ideas
   behind it ([繁體中文](https://dennysora.me/zh-hant/projects/tools/dgxtop/)).
 - [`spec/dgxtop-v2/`](spec/dgxtop-v2/README.md): the specification (Traditional Chinese).
-- [`docs/design/DECISIONS.md`](docs/design/DECISIONS.md): implementation decisions D-01 to D-62.
+- [`docs/design/DECISIONS.md`](docs/design/DECISIONS.md): implementation decisions D-01 to D-63.
 - [`docs/design/history-redesign.md`](docs/design/history-redesign.md): how the history view was
   designed.
 

@@ -1,7 +1,9 @@
 name: Release
 
-# Runs only when a maintainer pushes a version tag. The release is created as a
-# draft; a maintainer publishes it after checking its assets.
+# Runs only when a maintainer pushes a version tag. The release is published
+# once the gate passes and both builds pass their version, glibc and install
+# checks; the published release is then installed on the supported Linux
+# systems (D-63).
 on:
   push:
     tags:
@@ -111,9 +113,10 @@ jobs:
           sha256sum dgxtop-*.tar.gz > SHA256SUMS
           python3 ../scripts/sbom.py ../Cargo.lock "${GITHUB_REF_NAME}" metadata.json > "dgxtop-${GITHUB_REF_NAME}.cdx.json"
           cat SHA256SUMS
+      # No `draft`: the action uploads the assets first and then publishes.
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          draft: true
+          make_latest: true
           body: |
             dgxtop for Linux on x86_64 and aarch64 with glibc 2.34 or newer; WSL 2 runs the Linux build.
             Install: curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
@@ -123,3 +126,14 @@ jobs:
             dist/dgxtop-*.tar.gz
             dist/SHA256SUMS
             dist/dgxtop-*.cdx.json
+
+  # A release published with GITHUB_TOKEN starts no other workflow, so the
+  # install test of the published release is called from here.
+  install:
+    name: install the published release
+    needs: publish
+    permissions:
+      contents: read
+    uses: ./.github/workflows/install.yml
+    with:
+      version: ${{ github.ref_name }}

@@ -175,13 +175,25 @@ fn the_release_gate_matches_version_and_target_lines_exactly_and_checks_sqlite()
 
 #[test]
 fn workflows_pin_actions_by_commit_and_build_from_the_lock_file() {
-    for workflow in [".github/workflows/ci.yml", ".github/workflows/release.yml"] {
+    for workflow in [
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+        ".github/workflows/install.yml",
+    ] {
         for line in read(workflow).lines().map(str::trim) {
             if let Some(action) = line
                 .strip_prefix("- uses: ")
                 .or_else(|| line.strip_prefix("uses: "))
             {
                 let reference = action.split_whitespace().next().unwrap_or_default();
+                // A workflow of this repository runs from the caller's commit.
+                if let Some(local) = reference.strip_prefix("./") {
+                    assert!(
+                        repository().join(local).is_file(),
+                        "{workflow}: no such workflow: {reference}"
+                    );
+                    continue;
+                }
                 let sha = reference.rsplit('@').next().unwrap_or_default();
                 assert!(
                     sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit()),

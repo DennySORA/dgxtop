@@ -1,11 +1,19 @@
 name: Install
 
 # Installs a published release with the README's command on the Linux systems
-# the README names, and checks that musl hosts are refused. Runs when a release
-# is published and on request; it builds and publishes nothing.
+# the README names, and checks that musl hosts are refused. release.yml calls it
+# after publishing; it also runs when a release is published by hand and on
+# request. It builds and publishes nothing.
 on:
   release:
     types: [published]
+  workflow_call:
+    inputs:
+      version:
+        description: "Release tag to install"
+        type: string
+        required: false
+        default: ""
   workflow_dispatch:
     inputs:
       version:
