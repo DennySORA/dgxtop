@@ -16,7 +16,7 @@ use super::grid::MinuteGrid;
 use super::output::{ArchiveRow, DropReason, HistoryReport};
 use super::records::{CounterSample, GaugeBucket};
 use super::segment::SegmentIdentity;
-use super::series::{Series, gauge_record, series_overhead_bytes};
+use super::series::{Series, SeriesOpening, gauge_record, series_overhead_bytes};
 use super::slots::{SlotHandle, SlotTable};
 
 /// Gap entries kept for keys without a series and host-wide gaps.
@@ -367,7 +367,10 @@ impl HistoryState {
         let created = Series::new(
             key.clone(),
             descriptor,
-            (time_ns, now_ns),
+            SeriesOpening {
+                first_time_ns: time_ns,
+                now_ns,
+            },
             self.grid,
             &self.ledger,
         );

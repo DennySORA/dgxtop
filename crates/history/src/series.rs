@@ -21,7 +21,7 @@ use super::gaps::GapList;
 use super::grid::MinuteGrid;
 use super::output::{ArchiveRow, DropReason, HistoryReport};
 use super::records::{BUCKET_NS, CounterBucket, CounterSample, GaugeBucket, GaugeSample};
-use super::rollup::{self, CounterRollup};
+use super::rollup::{self, CounterRollup, RollupSpan};
 use super::segment::{SegmentIdentity, SegmentTable};
 use super::steps::{RawGauge, StepIter};
 use dgxtop_core::budget::accounted::Account;
@@ -107,6 +107,14 @@ pub(crate) struct Series {
     _overhead: Account,
 }
 
+/// When a series opens: the time of the append that creates it and the
+/// commit time it is created at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SeriesOpening {
+    pub first_time_ns: u64,
+    pub now_ns: u64,
+}
+
 /// Accounted bytes of one series' fixed state.
 pub(crate) fn series_overhead_bytes(key: &MetricKey) -> u64 {
     let strings = key.host_id.as_str().len()
@@ -122,10 +130,14 @@ impl Series {
     pub(crate) fn new(
         key: MetricKey,
         descriptor: &'static MetricDescriptor,
-        (first_time_ns, now_ns): (u64, u64),
+        opening: SeriesOpening,
         grid: Option<MinuteGrid>,
         ledger: &ByteLedger,
     ) -> Result<Self, CapacityError> {
+        let SeriesOpening {
+            first_time_ns,
+            now_ns,
+        } = opening;
         let mut overhead = Account::new(ledger, Partition::Aggregates);
         overhead.try_grow(series_overhead_bytes(&key))?;
         Ok(Self {
@@ -280,12 +292,17 @@ impl Series {
         let samples = gauge_slices
             .iter_from(gauge_slices.seek_start(from.max(self.gauge.raw_floor_ns)))
             .take_while(|record| record.time_ns < target);
-        let gauge_buckets = rollup::gauge_buckets(steps, samples, (from, target), grid);
+        let span = RollupSpan {
+            from_ns: from,
+            to_ns: target,
+            grid,
+        };
+        let gauge_buckets = rollup::gauge_buckets(steps, samples, span);
         let counter_slices = self.counter.raw.slices();
         let intervals = counter_slices
             .iter_from(counter_slices.seek_end_after(from))
             .take_while(|interval| interval.end_ns <= target);
-        let counter = rollup::counter_rollup(intervals, (from, target), grid);
+        let counter = rollup::counter_rollup(intervals, span);
         Some(Finalization {
             target_ns: target,
             gauge_buckets,
@@ -315,7 +332,12 @@ impl Series {
         let samples = gauge_slices
             .iter_from(gauge_slices.seek_start(from.max(self.gauge.raw_floor_ns)))
             .take_while(|record| record.time_ns < now_ns);
-        rollup::gauge_buckets(steps, samples, (from, now_ns), grid)
+        let span = RollupSpan {
+            from_ns: from,
+            to_ns: now_ns,
+            grid,
+        };
+        rollup::gauge_buckets(steps, samples, span)
     }
 
     /// Aggregates bytes storing `finalization` will reserve.
@@ -694,11 +716,15 @@ mod tests {
 
     const SECOND: u64 = 1_000_000_000;
     const GRID: MinuteGrid = MinuteGrid::BOOT_CLOCK;
+    const AT_BOOT: SeriesOpening = SeriesOpening {
+        first_time_ns: 0,
+        now_ns: 0,
+    };
 
     fn series(ledger: &ByteLedger) -> Series {
         let key = metric_key("cpu.package.0", ids::CPU_TEMPERATURE_PACKAGE, "package:0");
         let descriptor = descriptor(ids::CPU_TEMPERATURE_PACKAGE).unwrap();
-        Series::new(key, descriptor, (0, 0), Some(GRID), ledger).unwrap()
+        Series::new(key, descriptor, AT_BOOT, Some(GRID), ledger).unwrap()
     }
 
     fn gauge_identity() -> SegmentIdentity {
@@ -810,7 +836,7 @@ mod tests {
         let ledger = ByteLedger::for_memory_limit_mib(64);
         let key = metric_key("cpu.package.0", ids::CPU_TEMPERATURE_PACKAGE, "package:0");
         let descriptor = descriptor(ids::CPU_TEMPERATURE_PACKAGE).unwrap();
-        let mut series = Series::new(key, descriptor, (0, 0), None, &ledger).unwrap();
+        let mut series = Series::new(key, descriptor, AT_BOOT, None, &ledger).unwrap();
         for second in 0..200 {
             push_gauge(&mut series, second, 1.0);
         }
@@ -858,7 +884,10 @@ mod tests {
         let mut series = Series::new(
             key,
             descriptor,
-            (60 * SECOND, 60 * SECOND),
+            SeriesOpening {
+                first_time_ns: 60 * SECOND,
+                now_ns: 60 * SECOND,
+            },
             Some(GRID),
             &ledger,
         )

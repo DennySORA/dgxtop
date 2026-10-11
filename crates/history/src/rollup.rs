@@ -12,15 +12,27 @@ use super::grid::MinuteGrid;
 use super::records::{CounterBucket, CounterSample, GaugeBucket, GaugeSample};
 use super::steps::Step;
 
-/// Gauge buckets (one per minute of `grid` and segment) for the steps
-/// clipped to `[from_ns, to_ns)`, in `(start, segment)` order. `samples`
+/// The time one rollup pass covers, cut into the minutes of `grid`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RollupSpan {
+    pub from_ns: u64,
+    pub to_ns: u64,
+    pub grid: MinuteGrid,
+}
+
+/// Gauge buckets (one per minute and segment) for the steps clipped to
+/// `[from_ns, to_ns)` of `span`, in `(start, segment)` order. `samples`
 /// must yield the records starting inside the same range.
 pub(crate) fn gauge_buckets<'r>(
     steps: impl Iterator<Item = Step>,
     samples: impl Iterator<Item = &'r GaugeSample>,
-    (from_ns, to_ns): (u64, u64),
-    grid: MinuteGrid,
+    span: RollupSpan,
 ) -> Vec<GaugeBucket> {
+    let RollupSpan {
+        from_ns,
+        to_ns,
+        grid,
+    } = span;
     let mut buckets: BTreeMap<(u64, u32), GaugeBucket> = BTreeMap::new();
     for step in steps {
         let start = step.start_ns.max(from_ns);
@@ -60,13 +72,17 @@ pub(crate) struct CounterRollup {
     pub bridges: Vec<CounterSample>,
 }
 
-/// Classifies the intervals ending inside `(from_ns, to_ns]` by the
-/// minutes of `grid`.
+/// Classifies the intervals ending inside `(from_ns, to_ns]` of `span` by
+/// its minutes.
 pub(crate) fn counter_rollup<'r>(
     intervals: impl Iterator<Item = &'r CounterSample>,
-    (from_ns, to_ns): (u64, u64),
-    grid: MinuteGrid,
+    span: RollupSpan,
 ) -> CounterRollup {
+    let RollupSpan {
+        from_ns,
+        to_ns,
+        grid,
+    } = span;
     let mut buckets: BTreeMap<(u64, u32), CounterBucket> = BTreeMap::new();
     let mut bridges = Vec::new();
     for interval in intervals {
@@ -98,6 +114,14 @@ mod tests {
     use dgxtop_core::metric::Scalar;
 
     const SECOND: u64 = NANOS_PER_SECOND;
+
+    fn span(from_ns: u64, to_ns: u64, grid: MinuteGrid) -> RollupSpan {
+        RollupSpan {
+            from_ns,
+            to_ns,
+            grid,
+        }
+    }
 
     fn step(start_s: f64, end_s: f64, value: f64, segment: u32) -> Step {
         let to_ns = |seconds: f64| {
@@ -135,8 +159,7 @@ mod tests {
         let buckets = gauge_buckets(
             steps.into_iter(),
             samples.iter(),
-            (0, 120 * SECOND),
-            MinuteGrid::BOOT_CLOCK,
+            span(0, 120 * SECOND, MinuteGrid::BOOT_CLOCK),
         );
         assert_eq!(buckets.len(), 3);
         assert_eq!((buckets[0].start_ns, buckets[0].segment), (0, 0));
@@ -161,8 +184,7 @@ mod tests {
         let buckets = gauge_buckets(
             vec![step(0.0, 90.0, 1.0, 0)].into_iter(),
             std::iter::empty(),
-            (0, 90 * SECOND),
-            grid,
+            span(0, 90 * SECOND, grid),
         );
         let spans: Vec<(u64, u64)> = buckets
             .iter()
@@ -182,7 +204,7 @@ mod tests {
             delta: Scalar::from_u64(1),
             segment: 0,
         };
-        let rollup = counter_rollup([interval].iter(), (0, 23 * SECOND), grid);
+        let rollup = counter_rollup([interval].iter(), span(0, 23 * SECOND, grid));
         assert_eq!(TimeSpan::end_ns(&rollup.buckets[0]), 23 * SECOND);
     }
 
@@ -191,8 +213,7 @@ mod tests {
         let buckets = gauge_buckets(
             vec![step(50.0, 130.0, 1.0, 0)].into_iter(),
             std::iter::empty(),
-            (60 * SECOND, 120 * SECOND),
-            MinuteGrid::BOOT_CLOCK,
+            span(60 * SECOND, 120 * SECOND, MinuteGrid::BOOT_CLOCK),
         );
         assert_eq!(buckets.len(), 1);
         assert_eq!(buckets[0].start_ns, 60 * SECOND);
@@ -212,7 +233,10 @@ mod tests {
             interval(59_500, 60_500, 300),
             interval(60_500, 61_500, 5),
         ];
-        let rollup = counter_rollup(intervals.iter(), (0, 120 * SECOND), MinuteGrid::BOOT_CLOCK);
+        let rollup = counter_rollup(
+            intervals.iter(),
+            span(0, 120 * SECOND, MinuteGrid::BOOT_CLOCK),
+        );
         assert_eq!(rollup.bridges, vec![intervals[1]]);
         assert_eq!(rollup.buckets.len(), 2);
         assert_eq!(rollup.buckets[0].total.integral(), Some(7));
@@ -220,15 +244,14 @@ mod tests {
         assert_eq!(rollup.buckets[0].covered_ns, SECOND);
         // An interval ending exactly on a boundary belongs to the bucket before.
         let edge = [interval(59_000, 60_000, 9)];
-        let rollup = counter_rollup(edge.iter(), (0, 60 * SECOND), MinuteGrid::BOOT_CLOCK);
+        let rollup = counter_rollup(edge.iter(), span(0, 60 * SECOND, MinuteGrid::BOOT_CLOCK));
         assert!(rollup.bridges.is_empty());
         assert_eq!(rollup.buckets[0].start_ns, 0);
         // Intervals outside (from, to] are left for another pass.
         assert_eq!(
             counter_rollup(
                 edge.iter(),
-                (60 * SECOND, 120 * SECOND),
-                MinuteGrid::BOOT_CLOCK
+                span(60 * SECOND, 120 * SECOND, MinuteGrid::BOOT_CLOCK)
             ),
             CounterRollup::default()
         );

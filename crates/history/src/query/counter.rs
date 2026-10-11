@@ -30,8 +30,8 @@ pub(crate) struct CounterInputs<'p> {
     pub segments: &'p SegmentsView,
     pub source_filter: Option<&'p SourceId>,
     pub gaps: &'p [GapEntry],
-    /// Where the series' minutes begin and end.
-    pub grid: MinuteGrid,
+    /// The minutes its cells of whole minutes lie on.
+    pub minute_grid: MinuteGrid,
 }
 
 impl CounterInputs<'_> {
@@ -237,7 +237,7 @@ fn emit(
     });
 }
 
-/// Totals on an absolute grid of `cell_ns` cells.
+/// Totals on absolute cells of `cell_ns` (see `plan::cells`).
 pub(crate) fn counter_cells(
     inputs: &CounterInputs<'_>,
     plan: &RegionPlan,
@@ -247,7 +247,7 @@ pub(crate) fn counter_cells(
     guard: &mut ScanGuard<'_>,
 ) -> Result<(), ErrorDetail> {
     let mut portions: Vec<(u64, u64, RegionKind)> = Vec::new();
-    for (cell_start, cell_end) in cells(window, cell_ns, inputs.grid) {
+    for (cell_start, cell_end) in cells(window, cell_ns, inputs.minute_grid) {
         for region in plan.regions() {
             if region.end_ns <= cell_start || region.start_ns >= cell_end {
                 continue;
