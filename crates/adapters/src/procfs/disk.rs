@@ -1,8 +1,11 @@
 //! `disk` read group: `/proc/diskstats` counters per block device, entity
 //! `blockdev:MAJ:MIN`. `ram*` and `loop*` devices are skipped. The scope is
-//! `partition` when `/sys/class/block/<name>/partition` exists (static
-//! metadata cached per generation); a renamed device or a new major:minor is
-//! a new incarnation, so counter bases are never continued across devices.
+//! `partition` when `/sys/class/block/<name>/partition` exists, and a
+//! partition's parent entity is the disk holding it (the `dev` of its sysfs
+//! parent directory), so the disk's own facts such as its temperature
+//! (D-92) reach its partitions; both are static metadata cached per
+//! generation. A renamed device or a new major:minor is a new incarnation,
+//! so counter bases are never continued across devices.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -48,35 +51,58 @@ fn sysfs_block_name(name: &str) -> Option<String> {
     valid.then(|| name.replace('/', "!"))
 }
 
-/// Partition flag per block device incarnation.
+/// Where a block device sits: a whole disk, or a partition of a disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiskPlacement {
+    partition: bool,
+    /// The disk holding a partition; `None` for disks or when unreadable.
+    parent: Option<EntityId>,
+}
+
+/// Placement per block device incarnation.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct DiskScopeCache {
-    entries: BTreeMap<EntityId, (u32, bool)>,
+    entries: BTreeMap<EntityId, (u32, DiskPlacement)>,
 }
 
 impl DiskScopeCache {
-    fn is_partition(
+    fn placement(
         &mut self,
         files: &dyn SystemFiles,
         entity_id: &EntityId,
         generation: u32,
         sysfs_name: &str,
-    ) -> bool {
-        if let Some((cached_generation, partition)) = self.entries.get(entity_id)
+    ) -> DiskPlacement {
+        if let Some((cached_generation, placement)) = self.entries.get(entity_id)
             && *cached_generation == generation
         {
-            return *partition;
+            return placement.clone();
         }
-        let partition = files.exists(&format!("/sys/class/block/{sysfs_name}/partition"));
+        let class_path = format!("/sys/class/block/{sysfs_name}");
+        let partition = files.exists(&format!("{class_path}/partition"));
+        let placement = DiskPlacement {
+            partition,
+            parent: partition.then(|| parent_disk(files, &class_path)).flatten(),
+        };
         self.entries
-            .insert(entity_id.clone(), (generation, partition));
-        partition
+            .insert(entity_id.clone(), (generation, placement.clone()));
+        placement
     }
 
     fn retain(&mut self, present: &BTreeSet<EntityId>) {
         self.entries
             .retain(|entity_id, _| present.contains(entity_id));
     }
+}
+
+/// The disk holding a partition: the sysfs directory around the
+/// partition's own is the disk's, whose `dev` names it.
+fn parent_disk(files: &dyn SystemFiles, class_path: &str) -> Option<EntityId> {
+    let partition = files.canonicalize(class_path).ok()?;
+    let disk = partition.parent()?.join("dev");
+    let dev = files.read_to_string(disk.to_str()?).ok()?;
+    let (major, minor) = dev.trim().split_once(':')?;
+    entity::block_device(major.parse().ok()?, minor.parse().ok()?).ok()
 }
 
 /// Adds every block device of `/proc/diskstats`; an unreadable file carries
@@ -122,8 +148,8 @@ fn add_device(
         return None;
     };
     let incarnation = builder.incarnation(&entity_id, &line.name)?;
-    let partition = cache.is_partition(files, &entity_id, incarnation.generation, &sysfs_name);
-    let scope_name = if partition {
+    let placement = cache.placement(files, &entity_id, incarnation.generation, &sysfs_name);
+    let scope_name = if placement.partition {
         entity::SCOPE_PARTITION
     } else {
         entity::SCOPE_DEVICE
@@ -134,7 +160,7 @@ fn add_device(
     let parts = EntityParts {
         entity_id: entity_id.clone(),
         kind: EntityKind::BlockDevice,
-        parent_id: Some(host_entity_id()),
+        parent_id: Some(placement.parent.unwrap_or_else(host_entity_id)),
         display_name: line.name.clone(),
         attributes: vec![
             Attribute {

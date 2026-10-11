@@ -21,11 +21,11 @@ use super::profile::{
 };
 use crate::common::{SystemFiles, reason_of};
 use crate::hwmon::engine::{ScanContext, Scanner, codes};
-use crate::hwmon::mapping::resolve;
+use crate::hwmon::mapping::{Mapping, resolve};
 use crate::hwmon::reader::{ReadSpec, ValueFormat};
 use crate::hwmon::sysfs::{
     attribute, canonical, canonical_link, device_key, disambiguate, is_missing, list_names,
-    numbered, read_label, read_optional,
+    numbered, read_label, read_optional, static_group,
 };
 use crate::hwmon::table::{EntityDraft, ScanOutput, ScannedDevice, SourceDraft};
 
@@ -190,11 +190,16 @@ impl ThermalScanner {
                 continue;
             }
             let metadata = metadata.clone();
+            // A zone no profile proves is not catalogued (D-92).
+            let Some(mapping) = classify(&host, &metadata.zone_type, metadata.acpi_path.as_deref())
+            else {
+                continue;
+            };
             output.devices.push(ScannedDevice {
                 device_key: key.clone(),
                 instance: zone.instance.clone(),
             });
-            match zone_drafts(context, &host, zone, &metadata, &key) {
+            match zone_drafts(context, &mapping, zone, &metadata, &key) {
                 Some((source, entities)) => {
                     output.sources.push(source);
                     output.entities.extend(entities);
@@ -237,19 +242,18 @@ impl ThermalScanner {
 /// Source and entity drafts of one zone.
 fn zone_drafts(
     context: &ScanContext<'_>,
-    host: &ThermalHostFacts,
+    mapping: &Mapping,
     zone: &FoundZone,
     metadata: &ZoneMetadata,
     key: &str,
 ) -> Option<(SourceDraft, Vec<EntityDraft>)> {
-    let mapping = classify(host, &metadata.zone_type, metadata.acpi_path.as_deref());
-    let resolved = resolve(context, &mapping, ADAPTER, key, CHANNEL)?;
+    let resolved = resolve(context, mapping)?;
     let zone_entity_id = naming::entity::sensor(ADAPTER, key, CHANNEL).ok()?;
     let mut entities = vec![EntityDraft {
         entity_id: zone_entity_id,
         kind: EntityKind::Sensor,
-        // A mapped zone's metadata entity hangs below the semantic entity.
-        parent_id: resolved.proven.then(|| resolved.entity_id.clone()),
+        // The zone's metadata entity hangs below the semantic entity.
+        parent_id: Some(resolved.entity_id.clone()),
         display_name: metadata.zone_type.clone(),
         attributes: zone_attributes(zone, metadata),
         device_key: Some(key.to_owned()),
@@ -262,7 +266,6 @@ fn zone_drafts(
         device_key: key.to_owned(),
         entity_id: resolved.entity_id,
         record_key: resolved.record_key,
-        proven: resolved.proven,
         origin: resolved.origin,
         driver: metadata.zone_type.clone(),
         device_path: instance.clone(),
@@ -280,6 +283,7 @@ fn zone_drafts(
             gate_path: metadata.has_mode.then(|| format!("{instance}/mode")),
             ..ReadSpec::value(format!("{instance}/temp"), ValueFormat::SignedGauge)
         },
+        read_group: static_group(naming::groups::FAST),
     };
     Some((source, entities))
 }

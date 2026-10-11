@@ -1,15 +1,18 @@
 //! Linux hwmon adapter (`/sys/class/hwmon`).
 //!
-//! Emits temperatures (`mdegC`), power (`uW`, instantaneous `input` and
-//! driver-averaged `average` as separate sources), fans (RPM as `count`) and
-//! energy counters (`uJ`) in read group `fast`. A channel becomes a CPU metric
-//! only when a versioned profile proves it (coretemp, AMD k10temp/zenpower,
-//! NVIDIA GB10); every other channel is a `sensor.*` diagnostics source with
-//! unknown origin and quality. A driver fault flag keeps the value but marks
-//! it invalid (`SENSOR_FAULT`); an alarm flag only adds `ALARM`. The
-//! kernel's hwmon mirror of thermal zones (a device whose `device` is a
-//! `thermal_zoneN`, such as `acpitz`) is skipped: the thermal adapter reads
-//! those sensors (D-81).
+//! Emits temperatures (`mdegC`) and power (`uW`, instantaneous `input` and
+//! driver-averaged `average` as separate sources) in read group `fast`. A
+//! channel is catalogued only when a versioned profile proves what it
+//! measures (coretemp, AMD k10temp/zenpower, NVIDIA GB10); every other
+//! channel, every fan and every energy counter is left unread (D-92). A
+//! driver fault flag keeps the value but marks it invalid (`SENSOR_FAULT`);
+//! an alarm flag only adds `ALARM`. The kernel's hwmon mirror of thermal
+//! zones (a device whose `device` is a `thermal_zoneN`, such as `acpitz`) is
+//! skipped: the thermal adapter reads those sensors (D-81).
+//!
+//! A drive's own temperature (NVMe `Composite`, `drivetemp`) is emitted as
+//! `disk.temperature` on each disk its device link proves it measures, in
+//! read group `disk`, which feeds the disk collector (D-92, [`drives`]).
 //!
 //! The submodules `sysfs`, `reader`, `mapping`, `catalog`, `table` and
 //! `engine` are the sysfs mechanics shared with the thermal, powercap (and,
@@ -17,6 +20,7 @@
 //! module ownership and are candidates for `common.rs`.
 
 pub(crate) mod catalog;
+mod drives;
 pub(crate) mod engine;
 pub(crate) mod mapping;
 mod profile;
@@ -62,7 +66,7 @@ impl HwmonAdapter {
                 host_id,
                 files,
                 &options,
-                HwmonScanner::new(options.hwmon_reads_thermal_zones),
+                HwmonScanner::new(),
             ),
         }
     }

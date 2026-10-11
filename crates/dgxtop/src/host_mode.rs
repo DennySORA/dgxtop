@@ -64,12 +64,13 @@ fn prepare(cli: &Cli) -> Result<Prepared, String> {
                 .map_err(|error| error.to_string())?,
         )
     } else {
-        let options = AdapterOptions {
-            hwmon_reads_thermal_zones: cli.hwmon_reads_thermal_zones,
-            ..AdapterOptions::default()
-        };
-        build_live_adapter(adapter_name, Arc::clone(&clock), host_id, options)
-            .map_err(|error| error.to_string())?
+        build_live_adapter(
+            adapter_name,
+            Arc::clone(&clock),
+            host_id,
+            AdapterOptions::default(),
+        )
+        .map_err(|error| error.to_string())?
     };
     Ok((adapter, generation, nonce, clock))
 }

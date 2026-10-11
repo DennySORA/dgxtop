@@ -4,8 +4,10 @@
 //! Per block device scope (`device` and `partition` are separate scopes and
 //! never summed): bytes/s = Δsectors × 512 / dt (intervals in bytes), IOPS =
 //! Δcompleted / dt (intervals in counts), await = (Δread_ms + Δwrite_ms) /
-//! (Δreads + Δwrites), unavailable when nothing completed. Filesystems:
-//! used = total − free, use% = used / (used + available) × 100 (df).
+//! (Δreads + Δwrites), unavailable when nothing completed. A drive's
+//! temperature (hwmon `disk` group, D-92) passes through arbitration per
+//! disk. Filesystems: used = total − free, use% = used / (used +
+//! available) × 100 (df).
 
 use std::collections::BTreeMap;
 
@@ -58,7 +60,14 @@ const DERIVED: [&str; 7] = [
     ids::FS_USE_PERCENT,
 ];
 
-const FS_PASS_THROUGH: [&str; 3] = [ids::FS_TOTAL, ids::FS_FREE, ids::FS_AVAILABLE];
+/// Filesystem capacity gauges, published through arbitration and inputs
+/// of use%.
+const FS_CAPACITY: [&str; 3] = [ids::FS_TOTAL, ids::FS_FREE, ids::FS_AVAILABLE];
+
+/// Gauges published straight through arbitration.
+fn is_pass_through(metric: &str) -> bool {
+    FS_CAPACITY.contains(&metric) || metric == ids::DISK_TEMPERATURE
+}
 
 const FS_USED: Difference = Difference {
     minuend: ids::FS_TOTAL,
@@ -72,7 +81,8 @@ fn accepts(metric: &MetricDescriptor) -> bool {
 }
 
 /// Diskstats counters are consumed once per reading; filesystem capacity
-/// values are kept for arbitration and formulas across batches.
+/// and drive temperatures are kept for arbitration and formulas across
+/// batches.
 fn retains(_route: &Route<'_>, metric: &MetricDescriptor) -> bool {
     metric.role == MetricRole::Canonical
 }
@@ -116,11 +126,7 @@ fn collect_disk(session: &mut Session<'_>) {
     publish_rates(session, &steps);
     publish_await(session, &steps);
     let mut selections = Selections::new();
-    formulas::publish_pending(
-        session,
-        |metric| FS_PASS_THROUGH.contains(&metric),
-        &mut selections,
-    );
+    formulas::publish_pending(session, is_pass_through, &mut selections);
     formulas::publish_differences(session, FS_USED, &mut selections);
     publish_use_percent(session, &mut selections);
 }
@@ -285,7 +291,7 @@ fn input_freshness(session: &Session<'_>, inputs: &[Option<Step<'_>>; 4]) -> Fre
 /// df semantics: `used / (used + available) × 100`; `available` excludes the
 /// reserved blocks, so use% can reach 100 before `free` reaches 0.
 fn publish_use_percent(session: &mut Session<'_>, selections: &mut Selections) {
-    let groups = formulas::result_keys(session, &FS_PASS_THROUGH, ids::FS_USE_PERCENT);
+    let groups = formulas::result_keys(session, &FS_CAPACITY, ids::FS_USE_PERCENT);
     for percent_key in groups {
         let (Ok(total), Ok(free), Ok(available)) = (
             values::with_metric(&percent_key, ids::FS_TOTAL),
@@ -489,6 +495,47 @@ mod tests {
             .build()
         })
         .collect()
+    }
+
+    fn drive_temperature(entity: &str, millidegrees: f64, at: u64) -> Observation {
+        reading(
+            &metric_key(entity, ids::DISK_TEMPERATURE, "device"),
+            "hwmon",
+            &format!("hwmon:nvme@acme/nvme/nvme0:temp1@{entity}"),
+            at,
+        )
+        .unit(native::MILLI_DEG_C)
+        .f64(millidegrees)
+        .build()
+    }
+
+    /// A drive's temperature passes through per disk in °C (D-92); a true
+    /// 0 °C stays a value, and it never becomes a filesystem use%.
+    #[test]
+    fn drive_temperatures_pass_through_per_disk() {
+        let collector = DiskCollector::new().unwrap();
+        let plan = PlanBuilder::new("disk")
+            .at(SECOND + 1)
+            .batch(
+                "hwmon",
+                "disk",
+                vec![
+                    drive_temperature("blockdev:259:0", 41_850.0, SECOND),
+                    drive_temperature("blockdev:259:1", 0.0, SECOND),
+                ],
+            )
+            .build();
+        let batch = collect(&collector, &plan);
+        let celsius = |entity| number(&batch, &metric_key(entity, ids::DISK_TEMPERATURE, "device"));
+        assert_close(celsius("blockdev:259:0").unwrap(), 41.85);
+        assert_eq!(celsius("blockdev:259:1"), Some(0.0));
+        assert!(
+            batch
+                .canonical
+                .iter()
+                .all(|value| value.key.metric_id.as_str() != ids::FS_USE_PERCENT)
+        );
+        assert!(batch.failures.is_empty(), "{:?}", batch.failures);
     }
 
     #[test]

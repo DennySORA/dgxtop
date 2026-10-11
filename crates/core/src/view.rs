@@ -171,6 +171,20 @@ pub struct CoreView {
     pub temperature: MetricCell,
 }
 
+/// The cores of one kind: the logical CPUs sharing one maximum frequency
+/// (`cpuinfo_max_freq`), such as the efficiency or the performance cores of
+/// a hybrid CPU.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FrequencyGroup {
+    /// The group's maximum frequency; missing when cpufreq reports none.
+    pub maximum: MetricCell,
+    /// The mean current frequency of the group's cores reporting one now
+    /// (derived, D-67).
+    pub current: MetricCell,
+    /// Logical CPUs in the group.
+    pub cores: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LabeledCell {
     pub label: String,
@@ -186,9 +200,9 @@ pub struct CpuView {
     pub iowait: MetricCell,
     pub steal: MetricCell,
     pub cores: Vec<CoreView>,
-    /// The mean current frequency of the cores that report one now
-    /// (derived, D-67).
-    pub frequency_now: MetricCell,
+    /// Current and maximum frequency per kind of core, by ascending
+    /// maximum; empty without cpufreq.
+    pub frequencies: Vec<FrequencyGroup>,
     pub package_temperatures: Vec<LabeledCell>,
     pub soc_temperatures: Vec<LabeledCell>,
     pub power: Vec<LabeledCell>,
@@ -346,6 +360,8 @@ pub struct DiskDeviceView {
     pub read_iops: MetricCell,
     pub write_iops: MetricCell,
     pub await_ms: MetricCell,
+    /// The drive's temperature (D-92); a partition shows its disk's.
+    pub temperature: MetricCell,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -154,9 +154,7 @@ impl ProcfsAdapter {
             .get_or_insert_with(|| load_host_metadata(&*self.files))
             .clone();
         if self.pid_namespace.is_none() {
-            self.pid_namespace = metadata
-                .pid_namespace
-                .as_deref()
+            self.pid_namespace = namespace_link(&*self.files, PID_NAMESPACE_PATH)
                 .and_then(|namespace| PidNamespace::new(namespace).ok());
         }
         let namespace_known = self.pid_namespace.is_some();

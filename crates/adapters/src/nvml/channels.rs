@@ -2,6 +2,7 @@
 //! its metric id, native unit, raw kind, read group and scope. Units are the
 //! driver's native units; conversion is the collector's job.
 
+use dgxtop_core::identity::{IdentityError, Scope};
 use dgxtop_core::metric::{ids, native};
 use dgxtop_core::naming::{entity, groups};
 use dgxtop_core::quality::RawKind;
@@ -310,18 +311,20 @@ impl Channel {
         }
     }
 
-    /// Scope text of the metric key (process channels use `gpu:<UUID>`).
-    pub fn scope(self, uuid: &str) -> String {
-        match self {
-            Self::FanSpeed(fan) => format!("fan:{fan}"),
-            Self::Ecc(_, scope) => scope.scope().name().to_owned(),
-            Self::MaxClock(domain) => domain.name().to_owned(),
-            Self::MaxPcieLink(link) => link.name().to_owned(),
-            Self::TemperatureThreshold(threshold) => threshold.name().to_owned(),
-            Self::Health(HealthValue::ThrottleTime(cause)) => cause.name().to_owned(),
-            Self::ProcessMemory | Self::ProcessUtilization => format!("gpu:{uuid}"),
-            _ => entity::SCOPE_GPU.to_owned(),
-        }
+    /// Scope of the metric key (process channels use `gpu:<UUID>`), spelled
+    /// by the naming contract.
+    pub fn scope(self, uuid: &str) -> Result<Scope, IdentityError> {
+        let name = match self {
+            Self::FanSpeed(fan) => return entity::scope_gpu_fan(fan),
+            Self::ProcessMemory | Self::ProcessUtilization => return entity::scope_gpu_of(uuid),
+            Self::Ecc(_, scope) => scope.scope().name(),
+            Self::MaxClock(domain) => domain.name(),
+            Self::MaxPcieLink(link) => link.name(),
+            Self::TemperatureThreshold(threshold) => threshold.name(),
+            Self::Health(HealthValue::ThrottleTime(cause)) => cause.name(),
+            _ => entity::SCOPE_GPU,
+        };
+        Scope::new(name)
     }
 
     pub const fn native_unit(self) -> &'static str {
@@ -487,14 +490,16 @@ mod tests {
 
     #[test]
     fn scopes_follow_naming_contract() {
-        assert_eq!(Channel::FanSpeed(2).scope("GPU-1"), "fan:2");
+        let scope = |channel: Channel| channel.scope("GPU-1").unwrap().as_str().to_owned();
+        assert_eq!(scope(Channel::FanSpeed(2)), "fan:2");
         assert_eq!(
-            Channel::Ecc(EccKindKey::Corrected, EccScopeKey::Aggregate).scope("GPU-1"),
+            scope(Channel::Ecc(EccKindKey::Corrected, EccScopeKey::Aggregate)),
             "aggregate"
         );
-        assert_eq!(Channel::MaxClock(ClockDomain::Sm).scope("GPU-1"), "sm");
-        assert_eq!(Channel::ProcessMemory.scope("GPU-1"), "gpu:GPU-1");
-        assert_eq!(Channel::Temperature.scope("GPU-1"), "gpu");
+        assert_eq!(scope(Channel::MaxClock(ClockDomain::Sm)), "sm");
+        assert_eq!(scope(Channel::ProcessMemory), "gpu:GPU-1");
+        assert_eq!(scope(Channel::ProcessUtilization), "gpu:GPU-1");
+        assert_eq!(scope(Channel::Temperature), "gpu");
     }
 
     #[test]

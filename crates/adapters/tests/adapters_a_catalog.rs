@@ -215,14 +215,14 @@ fn source_limit_keeps_host_wide_sources_and_reports_the_rest() {
     standard_procfs(&tree);
     let clock = FakeClock::new(1_000_000_000);
     let options = AdapterOptions {
-        max_sources: 20,
+        max_sources: 19,
         ..AdapterOptions::default()
     };
     let mut adapter = procfs(&clock, tree.files(), options);
-    assert_eq!(adapter.manifest().source_limit, 20);
+    assert_eq!(adapter.manifest().source_limit, 19);
     let mut parent = ParentCatalog::default();
     let pages = parent.sync(&mut adapter, PROCFS);
-    assert_eq!(parent.sources.len(), 20);
+    assert_eq!(parent.sources.len(), 19);
     let limitation = pages[0]
         .capabilities
         .iter()

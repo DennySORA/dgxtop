@@ -1,12 +1,13 @@
 //! Linux thermal-zone adapter (`/sys/class/thermal`).
 //!
-//! Emits one `mdegC` gauge per zone in read group `fast`. `x86_pkg_temp`
-//! maps to `cpu.temperature.package` only on single-package hosts with a
-//! single such zone, with confirmed origin `x86_pkg_therm:0` (the same
-//! physical sensor as coretemp `Package id 0`, so the collector treats both
-//! as aliases); SoC zones map to `soc.temperature`; every other zone is a
-//! `sensor.temperature` diagnostics source. Trip points are bounded entity
-//! attributes; a `disabled` zone is unsupported (re-probed with throttling).
+//! Emits one `mdegC` gauge per mapped zone in read group `fast`.
+//! `x86_pkg_temp` maps to `cpu.temperature.package` only on single-package
+//! hosts with a single such zone, with confirmed origin `x86_pkg_therm:0`
+//! (the same physical sensor as coretemp `Package id 0`, so the collector
+//! treats both as aliases); SoC zones map to `soc.temperature`, GB10's ACPI
+//! zones by path (D-68); every other zone is not catalogued (D-92). Trip
+//! points are bounded entity attributes; a `disabled` zone is unsupported
+//! (re-probed with throttling).
 
 mod profile;
 mod scan;

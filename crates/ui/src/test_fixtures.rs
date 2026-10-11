@@ -17,8 +17,8 @@ pub(crate) use dgxtop_core::testing::metric_key;
 use dgxtop_core::testing::test_process_key;
 use dgxtop_core::view::{
     ActionRecordView, ActionsView, CellState, ConfirmationView, ConflictView, CoreView, CpuView,
-    DiskDeviceView, DiskHistory, DiskView, FilesystemView, GpuCard, GpuDetails, GpuView,
-    HeaderView, HistoryChartKind, HistoryChartView, HistoryPointView, HistoryView,
+    DiskDeviceView, DiskHistory, DiskView, FilesystemView, FrequencyGroup, GpuCard, GpuDetails,
+    GpuView, HeaderView, HistoryChartKind, HistoryChartView, HistoryPointView, HistoryView,
     HistoryWindowSummary, HostState, HostStatus, InterfaceView, LabeledCell, LastGoodView,
     MemoryView, MetricCell, ModuleViews, NetworkView, OverloadState, ProcessGpuView,
     ProcessRowView, ProcessesView, SessionState, SettingField, SettingsView, Trend, ViewModel,
@@ -165,7 +165,11 @@ pub(crate) fn cpu_view() -> CpuView {
         iowait: ok(0.0, CanonicalUnit::Percent),
         steal: missing(CanonicalUnit::Percent, CellState::Unsupported),
         cores,
-        frequency_now: ok(3000.0, CanonicalUnit::MHz),
+        frequencies: vec![FrequencyGroup {
+            maximum: ok(3900.0, CanonicalUnit::MHz),
+            current: ok(3000.0, CanonicalUnit::MHz),
+            cores: 8,
+        }],
         package_temperatures: vec![LabeledCell {
             label: "pkg0".into(),
             cell: sourced(
@@ -450,6 +454,7 @@ pub(crate) fn disk_view() -> DiskView {
             read_iops: ok(120.0, CanonicalUnit::CountPerSecond),
             write_iops: missing(CanonicalUnit::CountPerSecond, CellState::Warmup),
             await_ms: ok(0.4, CanonicalUnit::Milliseconds),
+            temperature: ok(58.85, CanonicalUnit::DegC),
         }],
         filesystems: vec![FilesystemView {
             entity_id: entity("fs:/"),

@@ -54,10 +54,8 @@ pub(crate) struct SourceDraft {
     pub source_id: SourceId,
     pub device_key: String,
     pub entity_id: EntityId,
-    /// Key of emitted records: the proven key or a `sensor.*` diagnostics key.
+    /// Key of emitted records, proven by a profile.
     pub record_key: MetricKey,
-    /// Whether a profile proves the purpose (`descriptor.metric = Some`).
-    pub proven: bool,
     pub origin: OriginIdentity,
     pub driver: String,
     pub device_path: String,
@@ -72,6 +70,8 @@ pub(crate) struct SourceDraft {
     pub counter_modulus: Option<u64>,
     pub update_interval_ms: Option<u32>,
     pub read: ReadSpec,
+    /// The read group serving this source (`fast`, or hwmon's `disk`).
+    pub read_group: ReadGroup,
 }
 
 /// One entity found by a scan.
@@ -186,7 +186,6 @@ pub(crate) struct ReadTargets {
 #[derive(Debug)]
 pub(crate) struct SourceTable {
     adapter_id: AdapterId,
-    read_group: ReadGroup,
     max_sources: usize,
     probe_interval_ms: u64,
     interner: SlotInterner,
@@ -201,15 +200,10 @@ pub(crate) struct SourceTable {
 }
 
 impl SourceTable {
-    pub(crate) fn new(
-        adapter_id: AdapterId,
-        read_group: ReadGroup,
-        options: &AdapterOptions,
-    ) -> Self {
+    pub(crate) fn new(adapter_id: AdapterId, options: &AdapterOptions) -> Self {
         let max_sources = usize::try_from(options.max_sources.min(2048)).unwrap_or(2048);
         Self {
             adapter_id,
-            read_group,
             max_sources,
             probe_interval_ms: options.unsupported_probe_ms,
             interner: SlotInterner::new(),
@@ -341,14 +335,8 @@ impl SourceTable {
         for draft in drafts {
             unique.entry(draft.source_id.clone()).or_insert(draft);
         }
+        // Truncation keeps the lowest source ids.
         let mut ordered: Vec<SourceDraft> = unique.into_values().collect();
-        // Profile-proven sources are kept before diagnostics when truncating.
-        ordered.sort_by(|left, right| {
-            right
-                .proven
-                .cmp(&left.proven)
-                .then_with(|| left.source_id.cmp(&right.source_id))
-        });
         let truncated = ordered.len() > self.max_sources;
         ordered.truncate(self.max_sources);
         let mut previous = std::mem::take(&mut self.sources);
@@ -384,7 +372,7 @@ impl SourceTable {
         generation: u32,
         support: SourceSupport,
     ) -> SourceEntry {
-        let metric = draft.proven.then(|| draft.record_key.clone());
+        let metric = Some(draft.record_key.clone());
         SourceEntry {
             descriptor: SourceDescriptor {
                 source_id: draft.source_id,
@@ -402,7 +390,7 @@ impl SourceTable {
                 native_unit: draft.native_unit,
                 raw_kind: draft.raw_kind,
                 sample_kind: SampleKind::Measured,
-                read_group: self.read_group.clone(),
+                read_group: draft.read_group,
                 update_interval_ms: draft.update_interval_ms,
                 profile_id: draft.profile_id,
                 profile_revision: draft.profile_revision,
@@ -460,29 +448,43 @@ impl SourceTable {
         self.departed.retain(|source_id, _| still_held(source_id));
     }
 
-    /// Resolves plan slots (empty = every current source).
-    pub(crate) fn targets(&self, slots: &[u32], held: impl Fn(&SourceId) -> bool) -> ReadTargets {
+    /// Resolves plan slots of `read_group` (empty = every current source of
+    /// that group); a slot of another group is unknown to this plan.
+    pub(crate) fn targets(
+        &self,
+        read_group: &str,
+        slots: &[u32],
+        held: impl Fn(&SourceId) -> bool,
+    ) -> ReadTargets {
+        let in_group = |entry: &SourceEntry| entry.descriptor.read_group.as_str() == read_group;
         if slots.is_empty() {
             return ReadTargets {
-                current: self.sources.keys().cloned().collect(),
+                current: self
+                    .sources
+                    .iter()
+                    .filter(|(_, entry)| in_group(entry))
+                    .map(|(source_id, _)| source_id.clone())
+                    .collect(),
                 departed: self
                     .departed
-                    .keys()
-                    .filter(|source_id| held(source_id))
-                    .cloned()
+                    .iter()
+                    .filter(|(source_id, entry)| in_group(entry) && held(source_id))
+                    .map(|(source_id, _)| source_id.clone())
                     .collect(),
                 unknown_slots: Vec::new(),
             };
         }
         let mut targets = ReadTargets::default();
         for slot in slots {
-            if let Some(source_id) = self.by_slot.get(slot) {
+            let current = self
+                .by_slot
+                .get(slot)
+                .filter(|source_id| self.sources.get(*source_id).is_some_and(in_group));
+            if let Some(source_id) = current {
                 targets.current.push(source_id.clone());
-            } else if let Some((source_id, _)) = self
-                .departed
-                .iter()
-                .find(|(source_id, entry)| entry.descriptor.slot == *slot && held(source_id))
-            {
+            } else if let Some((source_id, _)) = self.departed.iter().find(|(source_id, entry)| {
+                entry.descriptor.slot == *slot && in_group(entry) && held(source_id)
+            }) {
                 targets.departed.push(source_id.clone());
             } else {
                 targets.unknown_slots.push(*slot);

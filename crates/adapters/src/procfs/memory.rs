@@ -1,7 +1,8 @@
 //! `memory` read group: `/proc/meminfo` fields in KiB on entity `memory`,
 //! scope `system`. A field the kernel does not provide (e.g. MemAvailable
 //! before Linux 3.14) is reported unsupported; it is never derived from
-//! other fields such as MemFree.
+//! other fields. `MemFree` is not read: on unified memory it says nothing
+//! about what is usable, and used memory is total minus available.
 
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::identity::{EntityId, Scope};

@@ -171,7 +171,7 @@ fn overview_follows_the_reference_layout_and_keeps_every_module_visible_when_wid
         "GPU 0 │ NVIDIA GB10 │",
         "GPU 1 │ NVIDIA GB10 │",
         // Parts that say different things are set apart (D-66).
-        "68°C │ 45.2 W · estimated │ 3000 MHz",
+        "68°C │ 45.2 W · estimated │ 3.0/3.9 GHz",
         "RAM 12.3 GiB / 64.0 GiB │ ■ OS 2.3 GiB",
         "[GPU] ■ other 10.0 GiB",
         "spark-01 │ 2x GPU │",

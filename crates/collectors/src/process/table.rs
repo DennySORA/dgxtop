@@ -42,7 +42,7 @@ use crate::shared::reasons;
 use crate::shared::state_bounds::PROCESS_BASES_PER_ROW;
 
 fn accepts(metric: &MetricDescriptor) -> bool {
-    metric.domain == Domain::Process && metric.id != ids::PROCESS_CPU_PERCENT
+    metric.domain == Domain::Process
 }
 
 /// GPU process lists are retained so a table built from a later procfs

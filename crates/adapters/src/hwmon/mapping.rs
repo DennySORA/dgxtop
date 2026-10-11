@@ -1,8 +1,9 @@
 //! Profile mapping vocabulary shared by the hwmon, thermal and powercap
-//! profiles, and its resolution into typed identities.
+//! profiles, and its resolution into typed identities. A channel no profile
+//! proves has no mapping and is not catalogued (D-92): nothing reads an
+//! unclassified sensor.
 
 use dgxtop_core::identity::{EntityId, MetricKey, OriginId, OriginIdentity};
-use dgxtop_core::naming::entity;
 use dgxtop_core::quality::Quality;
 
 use super::engine::ScanContext;
@@ -16,17 +17,12 @@ pub(crate) struct ProfileSpec {
     pub revision: u32,
 }
 
-/// Where a channel's records go.
+/// The metric key parts a profile proves for a channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Target {
-    /// Profile-proven metric key parts.
-    Proven {
-        entity: String,
-        metric: &'static str,
-        scope: String,
-    },
-    /// Diagnostics only (`sensor.*`, entity `sensor:<adapter>:<device>:<channel>`).
-    Diagnostic { metric: &'static str },
+pub(crate) struct Target {
+    pub entity: String,
+    pub metric: &'static str,
+    pub scope: String,
 }
 
 /// Classification of one channel by a profile.
@@ -45,52 +41,25 @@ pub(crate) struct Mapping {
 pub(crate) struct ResolvedTarget {
     pub entity_id: EntityId,
     pub record_key: MetricKey,
-    pub proven: bool,
     pub origin: OriginIdentity,
-    /// Shared entity record for proven targets (`cpu.package.N`, `soc`).
+    /// Shared entity record (`cpu.package.N`, `soc`).
     pub shared_entity: Option<EntityDraft>,
 }
 
-/// Resolves `mapping`; diagnostics use entity `sensor:<adapter>:<device>:<channel>`
-/// with scope `sensor`. `None` when an identity would be invalid.
-pub(crate) fn resolve(
-    context: &ScanContext<'_>,
-    mapping: &Mapping,
-    adapter: &str,
-    device_key: &str,
-    sensor_channel: &str,
-) -> Option<ResolvedTarget> {
+/// Resolves `mapping`; `None` when an identity would be invalid.
+pub(crate) fn resolve(context: &ScanContext<'_>, mapping: &Mapping) -> Option<ResolvedTarget> {
     let origin = match &mapping.origin {
         Some(origin) => OriginIdentity::confirmed(OriginId::new(origin.as_str()).ok()?),
         None => OriginIdentity::unknown(),
     };
-    match &mapping.target {
-        Target::Proven {
-            entity: entity_text,
-            metric,
-            scope,
-        } => {
-            let entity_id = EntityId::new(entity_text.as_str()).ok()?;
-            let record_key = context.metric_key(&entity_id, metric, scope)?;
-            let shared_entity = shared_entity_draft(&entity_id);
-            Some(ResolvedTarget {
-                entity_id,
-                record_key,
-                proven: true,
-                origin,
-                shared_entity,
-            })
-        }
-        Target::Diagnostic { metric } => {
-            let entity_id = entity::sensor(adapter, device_key, sensor_channel).ok()?;
-            let record_key = context.metric_key(&entity_id, metric, entity::SCOPE_SENSOR)?;
-            Some(ResolvedTarget {
-                entity_id,
-                record_key,
-                proven: false,
-                origin,
-                shared_entity: None,
-            })
-        }
-    }
+    let target = &mapping.target;
+    let entity_id = EntityId::new(target.entity.as_str()).ok()?;
+    let record_key = context.metric_key(&entity_id, target.metric, &target.scope)?;
+    let shared_entity = shared_entity_draft(&entity_id);
+    Some(ResolvedTarget {
+        entity_id,
+        record_key,
+        origin,
+        shared_entity,
+    })
 }

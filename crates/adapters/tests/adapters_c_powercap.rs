@@ -44,14 +44,15 @@ fn adapter_with(
 }
 
 #[test]
-fn package_and_psys_are_distinct_metrics_and_subdomains_are_diagnostics() {
+fn package_and_psys_are_distinct_metrics_and_subdomains_are_not_catalogued() {
     let sysfs = FakeSysfs::new("powercap-map");
     rapl(&sysfs);
     let clock = clock();
     let mut adapter = adapter_with(sysfs.files(), &clock);
     let (_, pages) = discover(&mut adapter, ADAPTER, 0, deadline(&clock));
     let catalog = sources(&pages);
-    assert_eq!(catalog.len(), 3, "the control-type directory is not a zone");
+    // Neither the control-type directory nor the `core` subdomain (D-92).
+    assert_eq!(catalog.len(), 2);
 
     let package = source(&catalog, "powercap:intel-rapl:0:energy_uj");
     let package_key = package.metric.as_ref().unwrap();
@@ -74,27 +75,13 @@ fn package_and_psys_are_distinct_metrics_and_subdomains_are_diagnostics() {
         "platform energy is not package energy"
     );
 
-    let core = source(&catalog, "powercap:intel-rapl:0:0:energy_uj");
-    assert!(core.metric.is_none());
-    assert_eq!(
-        core.entity_id.as_str(),
-        "sensor:powercap:intel-rapl:0:0:energy_uj"
-    );
-
-    let domains: Vec<_> = pages
+    let domains: Vec<&str> = pages
         .iter()
         .flat_map(|page| page.entities.iter())
         .filter(|entity| entity.kind == EntityKind::PowerDomain)
+        .map(|entity| entity.entity_id.as_str())
         .collect();
-    assert_eq!(domains.len(), 3);
-    let subdomain = domains
-        .iter()
-        .find(|entity| entity.entity_id.as_str() == "power:intel-rapl:0:0")
-        .unwrap();
-    assert_eq!(
-        subdomain.parent_id.as_ref().unwrap().as_str(),
-        "power:intel-rapl:0"
-    );
+    assert_eq!(domains, vec!["power:intel-rapl:0", "power:intel-rapl:1"]);
 
     let readings = records(&read_all(
         &mut adapter,
@@ -111,10 +98,7 @@ fn package_and_psys_are_distinct_metrics_and_subdomains_are_diagnostics() {
         record(&readings, "powercap:intel-rapl:1:energy_uj").quality,
         Quality::Usable
     );
-    assert_eq!(
-        record(&readings, "powercap:intel-rapl:0:0:energy_uj").quality,
-        Quality::Unknown
-    );
+    assert_eq!(readings.len(), 2);
 }
 
 #[test]
@@ -250,7 +234,7 @@ fn denied_energy_is_reprobed_at_most_once_per_interval() {
 }
 
 #[test]
-fn mmio_duplicates_and_die_domains_stay_diagnostics() {
+fn mmio_duplicates_and_die_domains_are_not_catalogued() {
     let sysfs = FakeSysfs::new("powercap-mmio");
     sysfs.powercap_zone("intel-rapl:0", "package-0", Some("1"), Some(MODULUS));
     sysfs.powercap_zone("intel-rapl-mmio:0", "package-0", Some("2"), Some(MODULUS));
@@ -259,21 +243,12 @@ fn mmio_duplicates_and_die_domains_stay_diagnostics() {
     let mut adapter = adapter_with(sysfs.files(), &clock);
     let (_, pages) = discover(&mut adapter, ADAPTER, 0, deadline(&clock));
     let catalog = sources(&pages);
-    assert!(
-        source(&catalog, "powercap:intel-rapl:0:energy_uj")
-            .metric
-            .is_some()
-    );
-    assert!(
-        source(&catalog, "powercap:intel-rapl-mmio:0:energy_uj")
-            .metric
-            .is_none()
-    );
-    assert!(
-        source(&catalog, "powercap:intel-rapl:1:energy_uj")
-            .metric
-            .is_none()
-    );
+    let ids: Vec<&str> = catalog
+        .iter()
+        .map(|descriptor| descriptor.source_id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["powercap:intel-rapl:0:energy_uj"]);
+    assert!(catalog[0].metric.is_some());
 }
 
 #[test]

@@ -3,7 +3,7 @@
 //! link's per-direction capacity from its generation and width. These are
 //! capabilities of the hardware, never measurements of traffic: the memory
 //! controller's busy share is not turned into bytes per second
-//! (`gpu.memory.bandwidth.estimated` stays without a model).
+//! (D-11: no bandwidth is estimated without a validated model).
 
 /// Bits per byte.
 const BITS_PER_BYTE: f64 = 8.0;

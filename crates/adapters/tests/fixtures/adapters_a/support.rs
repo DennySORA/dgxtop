@@ -166,7 +166,6 @@ pub fn standard_procfs(tree: &FakeTree) {
     tree.write("/proc/meminfo", MEMINFO);
     tree.write("/proc/diskstats", DISKSTATS);
     tree.write("/proc/sys/kernel/hostname", "dgx-test\n");
-    tree.write("/proc/sys/kernel/osrelease", "6.12.0-test\n");
     tree.write(
         "/proc/cpuinfo",
         "processor\t: 0\nmodel name\t: Test CPU @ 3.0GHz\n",

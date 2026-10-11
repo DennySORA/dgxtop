@@ -1,6 +1,7 @@
-//! CPU module projection: host aggregate, logical cores, package, cluster
-//! and SoC temperatures, power, load and tasks. Package, core, cluster and
-//! SoC temperatures are different metrics and are never substituted for one
+//! CPU module projection: host aggregate, logical cores, the current and
+//! maximum frequency of each kind of core, package, cluster and SoC
+//! temperatures, power, load and tasks. Package, core, cluster and SoC
+//! temperatures are different metrics and are never substituted for one
 //! another.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,7 +12,7 @@ use dgxtop_core::metric::Scalar;
 use dgxtop_core::metric::ids;
 use dgxtop_core::naming::{attributes, entity};
 use dgxtop_core::quality::SampleKind;
-use dgxtop_core::view::{CellState, CoreView, CpuView, LabeledCell, MetricCell};
+use dgxtop_core::view::{CellState, CoreView, CpuView, FrequencyGroup, LabeledCell, MetricCell};
 
 use super::cell::missing_cell;
 use super::labels::{humanize_scope, label_text};
@@ -41,7 +42,7 @@ pub(crate) fn build_cpu_view(
         system: aggregate(ids::CPU_UTILIZATION_SYSTEM),
         iowait: aggregate(ids::CPU_UTILIZATION_IOWAIT),
         steal: aggregate(ids::CPU_UTILIZATION_STEAL),
-        frequency_now: frequency_now(&cores),
+        frequencies: frequency_groups(reader, &cores),
         cores,
         package_temperatures: temperature_rows(reader),
         soc_temperatures: labeled_rows(reader, ids::SOC_TEMPERATURE),
@@ -162,11 +163,64 @@ fn physical_core_temperature<'a>(
     )
 }
 
+/// One group per kind of core: the logical CPUs sharing a maximum
+/// frequency, by ascending maximum (hybrid ARM: efficiency then
+/// performance cores; x86: usually one group). Cores without a maximum
+/// form a last group, kept only when one of them reports a current
+/// frequency; without cpufreq there is no group.
+fn frequency_groups(reader: &MetricReader<'_>, cores: &[CoreView]) -> Vec<FrequencyGroup> {
+    let mut kinds: BTreeMap<(bool, u64), (MetricCell, Vec<&CoreView>)> = BTreeMap::new();
+    for core in cores {
+        let maximum = core_maximum(reader, core);
+        let key = maximum_khz(&maximum).map_or((true, 0), |khz| (false, khz));
+        kinds
+            .entry(key)
+            .or_insert_with(|| (maximum, Vec::new()))
+            .1
+            .push(core);
+    }
+    kinds
+        .into_iter()
+        .filter_map(|((unknown_maximum, _), (maximum, members))| {
+            let current = mean_frequency(&members);
+            (!unknown_maximum || current.value.is_some()).then_some(FrequencyGroup {
+                maximum,
+                current,
+                cores: members.len(),
+            })
+        })
+        .collect()
+}
+
+fn core_maximum(reader: &MetricReader<'_>, core: &CoreView) -> MetricCell {
+    let Some(cpu) = core.core_id.parse::<u32>().ok() else {
+        return missing_cell(ids::CPU_FREQUENCY_MAXIMUM);
+    };
+    match (entity::cpu_core(cpu), entity::scope_core(cpu)) {
+        (Ok(entity_id), Ok(scope)) => reader.cell(
+            ids::CPU_FREQUENCY_MAXIMUM,
+            entity_id.as_str(),
+            scope.as_str(),
+        ),
+        _ => missing_cell(ids::CPU_FREQUENCY_MAXIMUM),
+    }
+}
+
+/// A maximum frequency in whole kHz (the unit cpufreq reports), so cores
+/// of one kind group exactly; `None` without a value.
+fn maximum_khz(maximum: &MetricCell) -> Option<u64> {
+    let mhz = maximum.value_f64().filter(|_| maximum.state.has_value())?;
+    // Finite, non-negative and far below u64::MAX for any real clock.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let khz = (mhz * 1000.0).round().max(0.0) as u64;
+    Some(khz)
+}
+
 /// The mean current frequency of the cores that report one (D-67), a
 /// derived value: the oldest and least certain of them set its age and
 /// quality. An idle core reports no current frequency; with none reporting,
 /// the first core's cell says why.
-fn frequency_now(cores: &[CoreView]) -> MetricCell {
+fn mean_frequency(cores: &[&CoreView]) -> MetricCell {
     let current: Vec<&MetricCell> = cores
         .iter()
         .map(|core| &core.frequency)
@@ -191,7 +245,10 @@ fn frequency_now(cores: &[CoreView]) -> MetricCell {
             .max()
             .unwrap_or(first.quality),
         age_ms: current.iter().filter_map(|cell| cell.age_ms).max(),
-        source_label: Some(format!("mean of {} cores", current.len())),
+        source_label: Some(match current.len() {
+            1 => "1 core".to_owned(),
+            count => format!("mean of {count} cores"),
+        }),
         conflict: None,
         last_good: None,
         ..(*first).clone()
@@ -342,43 +399,101 @@ mod tests {
         assert_eq!(view.cores[2].frequency.state, CellState::Unavailable);
     }
 
-    /// The CPU runs at the mean frequency of the cores reporting one now
-    /// (D-67), a derived value; a core reporting none (idle) is left out,
-    /// and with none reporting the first core's cell says why.
-    #[test]
-    fn the_frequency_now_is_the_mean_of_the_cores_reporting_one() {
-        let mut fixture = Fixture::new();
-        for (core, mhz) in [(0_u32, 2800.0), (1, 3800.0)] {
-            fixture.add(
-                "cpu",
-                sample(
-                    "cpu.frequency.current",
-                    &format!("cpu.core.{core}"),
-                    &format!("core:{core}"),
-                )
-                .f64(mhz),
-            );
-        }
+    fn frequency(fixture: &mut Fixture, metric: &str, core: u32, mhz: Option<f64>) {
+        let sample = sample(metric, &format!("cpu.core.{core}"), &format!("core:{core}"));
         fixture.add(
             "cpu",
-            sample("cpu.frequency.current", "cpu.core.2", "core:2").unavailable(),
+            match mhz {
+                Some(mhz) => sample.f64(mhz),
+                None => sample.unavailable(),
+            },
         );
+    }
+
+    /// `(current, maximum, cores)` per group.
+    fn groups(view: &CpuView) -> Vec<(Option<f64>, Option<f64>, usize)> {
+        view.frequencies
+            .iter()
+            .map(|group| {
+                (
+                    group.current.value_f64(),
+                    group.maximum.value_f64(),
+                    group.cores,
+                )
+            })
+            .collect()
+    }
+
+    /// Each kind of core runs at the mean frequency of its cores reporting
+    /// one now (D-67), a derived value; a core reporting none (idle) is
+    /// left out. A hybrid CPU (GB10: ten 2.808 GHz and ten 3.9 GHz cores,
+    /// interleaved) shows one group per kind, slowest first.
+    #[test]
+    fn hybrid_cores_group_by_their_maximum_frequency() {
+        let mut fixture = Fixture::new();
+        for core in 0..4_u32 {
+            let performance = core % 2 == 1;
+            let maximum = if performance { 3900.0 } else { 2808.0 };
+            frequency(
+                &mut fixture,
+                ids::CPU_FREQUENCY_MAXIMUM,
+                core,
+                Some(maximum),
+            );
+            let current = match core {
+                0 => Some(2100.0),
+                1 => Some(3300.0),
+                2 => Some(2300.0),
+                _ => None,
+            };
+            frequency(&mut fixture, ids::CPU_FREQUENCY_CURRENT, core, current);
+        }
         let view = build(&fixture);
-        assert_eq!(view.frequency_now.value_f64(), Some(3300.0));
-        assert_eq!(view.frequency_now.kind, SampleKind::Derived);
         assert_eq!(
-            view.frequency_now.source_label.as_deref(),
-            Some("mean of 2 cores")
+            groups(&view),
+            vec![
+                (Some(2200.0), Some(2808.0), 2),
+                (Some(3300.0), Some(3900.0), 2)
+            ]
         );
-        let mut idle = Fixture::new();
-        idle.add(
+        let efficiency = &view.frequencies[0].current;
+        assert_eq!(efficiency.kind, SampleKind::Derived);
+        assert_eq!(efficiency.source_label.as_deref(), Some("mean of 2 cores"));
+        assert_eq!(
+            view.frequencies[1].current.source_label.as_deref(),
+            Some("1 core")
+        );
+    }
+
+    /// One kind of core (plain x86) is one group; an idle group keeps its
+    /// maximum and its first core's cell says why it has no current value.
+    #[test]
+    fn one_kind_of_core_is_one_group_and_idle_keeps_the_maximum() {
+        let mut fixture = Fixture::new();
+        for core in 0..3_u32 {
+            frequency(&mut fixture, ids::CPU_FREQUENCY_MAXIMUM, core, Some(4500.0));
+            frequency(&mut fixture, ids::CPU_FREQUENCY_CURRENT, core, None);
+        }
+        let view = build(&fixture);
+        assert_eq!(groups(&view), vec![(None, Some(4500.0), 3)]);
+        assert_eq!(view.frequencies[0].current.state, CellState::Unavailable);
+    }
+
+    /// Without cpufreq there is no group; cores reporting a current
+    /// frequency without a maximum form one group without a maximum.
+    #[test]
+    fn missing_cpufreq_has_no_group() {
+        let mut fixture = Fixture::new();
+        fixture.add(
             "cpu",
-            sample("cpu.frequency.current", "cpu.core.0", "core:0").unavailable(),
+            sample("cpu.utilization.total", "cpu.core.0", "core:0").f64(5.0),
         );
-        let view = build(&idle);
-        assert_eq!(view.frequency_now.value, None);
-        assert_eq!(view.frequency_now.state, CellState::Unavailable);
-        assert_eq!(build(&Fixture::new()).frequency_now.value, None);
+        assert!(build(&fixture).frequencies.is_empty());
+        assert!(build(&Fixture::new()).frequencies.is_empty());
+        frequency(&mut fixture, ids::CPU_FREQUENCY_CURRENT, 0, Some(1800.0));
+        let view = build(&fixture);
+        assert_eq!(groups(&view), vec![(Some(1800.0), None, 1)]);
+        assert_eq!(view.frequencies[0].maximum.value, None);
     }
 
     /// The package temperature leads, and the cluster sensors it may come

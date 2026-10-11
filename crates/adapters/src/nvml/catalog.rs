@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use dgxtop_core::gpu_state::format_peers;
 use dgxtop_core::identity::{
     AdapterId, BootId, EntityId, HostId, IdentityError, MetricId, MetricKey, OriginId,
-    OriginIdentity, ProfileId, ReadGroup, Scope, SourceId,
+    OriginIdentity, ProfileId, ReadGroup, SourceId,
 };
 use dgxtop_core::metric::NativeUnit;
 use dgxtop_core::naming::{self, attributes};
@@ -173,7 +173,7 @@ fn metric_key_of(
         identity.boot_id.clone(),
         entity_id.clone(),
         MetricId::new(channel.metric_id())?,
-        Scope::new(channel.scope(&device.uuid))?,
+        channel.scope(&device.uuid)?,
     )))
 }
 

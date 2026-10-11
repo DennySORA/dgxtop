@@ -693,7 +693,6 @@ pub enum Domain {
     Filesystem,
     Network,
     Process,
-    Sensor,
 }
 
 /// Catalog entry for one metric id.
@@ -741,20 +740,10 @@ pub mod ids {
     pub const CPU_TIME_IRQ: &str = "cpu.time.irq";
     pub const CPU_TIME_SOFTIRQ: &str = "cpu.time.softirq";
     pub const CPU_TIME_STEAL: &str = "cpu.time.steal";
-    pub const CPU_TIME_GUEST: &str = "cpu.time.guest";
-    pub const CPU_TIME_GUEST_NICE: &str = "cpu.time.guest_nice";
     /// CPU cluster power component (e.g. GB10 `cpu_p`/`cpu_e`); summed only by a profile formula.
     pub const CPU_POWER_CLUSTER: &str = "cpu.power.cluster";
     pub const CPU_ENERGY_PACKAGE: &str = "cpu.energy.package";
     pub const CPU_ENERGY_PLATFORM: &str = "cpu.energy.platform";
-    /// Unclassified temperature channel: diagnostics only, never CPU package.
-    pub const SENSOR_TEMPERATURE: &str = "sensor.temperature";
-    /// Unclassified power channel: diagnostics only.
-    pub const SENSOR_POWER: &str = "sensor.power";
-    /// Unclassified energy counter: diagnostics only.
-    pub const SENSOR_ENERGY: &str = "sensor.energy";
-    /// Fan tachometer (RPM is a count per minute; kept as diagnostics).
-    pub const SENSOR_FAN: &str = "sensor.fan";
 
     // Memory
     pub const MEMORY_TOTAL: &str = "memory.total";
@@ -764,7 +753,6 @@ pub mod ids {
     pub const MEMORY_CACHED: &str = "memory.cached";
     pub const MEMORY_SWAP_TOTAL: &str = "memory.swap_total";
     pub const MEMORY_SWAP_USED: &str = "memory.swap_used";
-    pub const MEMORY_FREE_RAW: &str = "memory.free";
     pub const MEMORY_SWAP_FREE_RAW: &str = "memory.swap_free";
 
     // GPU
@@ -795,7 +783,6 @@ pub mod ids {
     pub const GPU_ENCODER_UTILIZATION: &str = "gpu.encoder.utilization";
     pub const GPU_DECODER_UTILIZATION: &str = "gpu.decoder.utilization";
     pub const GPU_NVLINK_ACTIVE: &str = "gpu.nvlink.active";
-    pub const GPU_MEMORY_BANDWIDTH_ESTIMATED: &str = "gpu.memory.bandwidth.estimated";
     /// Performance state, 0 (maximum performance) to 15 (minimum).
     pub const GPU_PERFORMANCE_STATE: &str = "gpu.performance_state";
     /// Why the clocks are held below their target, as the bits of
@@ -839,6 +826,9 @@ pub mod ids {
     pub const DISK_READ_IOPS: &str = "disk.read.iops";
     pub const DISK_WRITE_IOPS: &str = "disk.write.iops";
     pub const DISK_AWAIT: &str = "disk.await";
+    /// A drive's own temperature (NVMe `Composite`, SATA/SAS `drivetemp`)
+    /// on each block device of the drive, scope `device` (D-92).
+    pub const DISK_TEMPERATURE: &str = "disk.temperature";
     // Disk (raw counters from /proc/diskstats)
     pub const DISK_READS_COMPLETED: &str = "disk.reads.completed";
     pub const DISK_SECTORS_READ: &str = "disk.sectors.read";
@@ -867,7 +857,6 @@ pub mod ids {
     pub const NET_TX_BYTES: &str = "network.tx.bytes";
 
     // Process
-    pub const PROCESS_CPU_PERCENT: &str = "process.cpu.percent";
     pub const PROCESS_RSS: &str = "process.rss";
     pub const PROCESS_GPU_UTILIZATION: &str = "process.gpu.utilization";
     pub const PROCESS_GPU_MEMORY: &str = "process.gpu.memory_allocated";
@@ -1128,24 +1117,6 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         "steal ticks"
     ),
     descriptor!(
-        ids::CPU_TIME_GUEST,
-        Count,
-        Raw,
-        Counter,
-        Cpu,
-        false,
-        "guest ticks"
-    ),
-    descriptor!(
-        ids::CPU_TIME_GUEST_NICE,
-        Count,
-        Raw,
-        Counter,
-        Cpu,
-        false,
-        "guest nice ticks"
-    ),
-    descriptor!(
         ids::CPU_POWER_CLUSTER,
         Watts,
         Raw,
@@ -1172,34 +1143,6 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         false,
         "platform energy"
     ),
-    descriptor!(
-        ids::SENSOR_TEMPERATURE,
-        DegC,
-        Raw,
-        Gauge,
-        Sensor,
-        false,
-        "sensor temperature"
-    ),
-    descriptor!(
-        ids::SENSOR_POWER,
-        Watts,
-        Raw,
-        Gauge,
-        Sensor,
-        false,
-        "sensor power"
-    ),
-    descriptor!(
-        ids::SENSOR_ENERGY,
-        Joules,
-        Raw,
-        Counter,
-        Sensor,
-        false,
-        "sensor energy"
-    ),
-    descriptor!(ids::SENSOR_FAN, Count, Raw, Gauge, Sensor, false, "fan RPM"),
     descriptor!(
         ids::MEMORY_TOTAL,
         Bytes,
@@ -1262,15 +1205,6 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         Memory,
         true,
         "Swap used"
-    ),
-    descriptor!(
-        ids::MEMORY_FREE_RAW,
-        Bytes,
-        Raw,
-        Gauge,
-        Memory,
-        false,
-        "MemFree"
     ),
     descriptor!(
         ids::MEMORY_SWAP_FREE_RAW,
@@ -1516,15 +1450,6 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         "NVLink active links"
     ),
     descriptor!(
-        ids::GPU_MEMORY_BANDWIDTH_ESTIMATED,
-        BytesPerSecond,
-        Canonical,
-        Gauge,
-        Gpu,
-        false,
-        "Memory bandwidth (estimated)"
-    ),
-    descriptor!(
         ids::GPU_PERFORMANCE_STATE,
         Count,
         Canonical,
@@ -1750,6 +1675,15 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         "Await"
     ),
     descriptor!(
+        ids::DISK_TEMPERATURE,
+        DegC,
+        Canonical,
+        Gauge,
+        Disk,
+        false,
+        "Drive temperature"
+    ),
+    descriptor!(
         ids::DISK_READS_COMPLETED,
         Count,
         Raw,
@@ -1937,15 +1871,6 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         Network,
         false,
         "TX bytes"
-    ),
-    descriptor!(
-        ids::PROCESS_CPU_PERCENT,
-        Percent,
-        Canonical,
-        Gauge,
-        Process,
-        false,
-        "Process CPU"
     ),
     descriptor!(
         ids::PROCESS_RSS,

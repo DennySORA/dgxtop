@@ -214,7 +214,7 @@ fn idle_process_keys_and_orphan_explanations_leave_the_snapshot() {
     use dgxtop_core::testing::metric_key;
 
     let mut harness = Harness::new();
-    let process_key = metric_key("process:ns:42:100", ids::PROCESS_CPU_PERCENT, "process");
+    let process_key = metric_key("process:ns:42:100", ids::PROCESS_RSS, "process");
     let gpu_key = temperature_key("gpu:0");
     let orphan_key = temperature_key("gpu:7");
     let mut batch = harness.batch(

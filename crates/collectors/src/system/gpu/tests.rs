@@ -239,24 +239,27 @@ fn static_values_use_the_discovery_period_for_freshness() {
     assert_eq!(value.value, None, "older than the static freshness window");
 }
 
+/// No bandwidth is estimated from busy% x peak (D-11): the catalog has no
+/// such metric, so a record claiming one is refused as unknown.
 #[test]
-fn bandwidth_estimate_is_never_produced() {
+fn a_bandwidth_estimate_is_never_produced() {
+    const ESTIMATE: &str = "gpu.memory.bandwidth.estimated";
     let batch = run(
         vec![gauge(
             GPU_A,
-            ids::GPU_MEMORY_BANDWIDTH_ESTIMATED,
+            ESTIMATE,
             native::BYTES_PER_SECOND,
             900_000_000_000,
             SECOND,
         )],
         vec![],
     );
-    assert!(value_of(&batch, &gpu_key(GPU_A, ids::GPU_MEMORY_BANDWIDTH_ESTIMATED)).is_none());
+    assert!(value_of(&batch, &gpu_key(GPU_A, ESTIMATE)).is_none());
     assert!(
         batch
             .failures
             .iter()
-            .any(|failure| failure.code == reasons::NO_VALIDATED_MODEL)
+            .any(|failure| failure.code == reasons::UNKNOWN_METRIC)
     );
 }
 

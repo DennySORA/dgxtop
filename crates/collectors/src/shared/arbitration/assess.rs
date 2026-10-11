@@ -12,9 +12,6 @@ use dgxtop_core::quality::{Freshness, Namespace, RawKind};
 use super::{Candidate, CatalogMapping, Deadlines};
 use crate::shared::reasons;
 
-/// Metric id prefix of unclassified channels (diagnostics only).
-const SENSOR_PREFIX: &str = "sensor.";
-
 /// Evaluation of one candidate.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Assessment {
@@ -88,9 +85,6 @@ fn check_source(
 }
 
 fn check_mapping(candidate: &Candidate<'_>, key: &MetricKey) -> Result<(), RejectReason> {
-    if key.metric_id.as_str().starts_with(SENSOR_PREFIX) {
-        return Err(RejectReason::UnprovenPurpose);
-    }
     if candidate.observation.key != *key {
         return Err(RejectReason::DifferentScope);
     }

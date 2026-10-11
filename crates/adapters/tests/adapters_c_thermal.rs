@@ -95,27 +95,25 @@ fn x86_pkg_temp_maps_to_package_with_the_coretemp_origin() {
     assert_eq!(reading.native_unit.as_str(), "mdegC");
 }
 
+/// Zones no profile proves (acpitz, Wi-Fi, INT3400, TCPU) are neither
+/// catalogued nor read (D-92).
 #[test]
-fn other_zones_are_diagnostics_with_unknown_origin() {
-    let sysfs = FakeSysfs::new("thermal-diagnostics");
+fn other_zones_are_neither_catalogued_nor_read() {
+    let sysfs = FakeSysfs::new("thermal-unproven");
     intel_laptop(&sysfs);
     sysfs.thermal_zone(3, "INT3400 Thermal", "20000", None);
     sysfs.thermal_zone(4, "TCPU", "55000", None);
+    let counting = Arc::new(CountingFiles::new(sysfs.rooted()));
+    let files: Arc<dyn SystemFiles> = counting.clone();
     let clock = clock();
-    let mut zones = adapter(&sysfs, &clock);
+    let mut zones = ThermalAdapter::new(time(&clock), host(), files, AdapterOptions::default());
     let (_, pages) = discover(&mut zones, ADAPTER, 0, deadline(&clock));
     let catalog = sources(&pages);
-    for id in [
-        "thermal:acpitz@LNXSYSTM:00/LNXSYBUS:01/LNXTHERM:00:temp",
-        "thermal:iwlwifi_1:temp",
-        "thermal:INT3400_Thermal:temp",
-        "thermal:TCPU:temp",
-    ] {
-        let descriptor = source(&catalog, id);
-        assert!(descriptor.metric.is_none(), "{id}");
-        assert_eq!(descriptor.origin.relation, OriginRelation::Unknown);
-        assert_eq!(descriptor.profile_id.as_str(), "thermal-generic");
-    }
+    let ids: Vec<&str> = catalog
+        .iter()
+        .map(|descriptor| descriptor.source_id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["thermal:x86_pkg_temp:temp"]);
     let readings = records(&read_all(
         &mut zones,
         ADAPTER,
@@ -124,11 +122,19 @@ fn other_zones_are_diagnostics_with_unknown_origin() {
         deadline(&clock),
         Vec::new(),
     ));
-    let tcpu = record(&readings, "thermal:TCPU:temp");
-    assert_eq!(tcpu.key.metric_id.as_str(), ids::SENSOR_TEMPERATURE);
-    assert_eq!(tcpu.key.entity_id.as_str(), "sensor:thermal:TCPU:temp");
-    assert_eq!(tcpu.key.scope.as_str(), "sensor");
-    assert_eq!(tcpu.quality, Quality::Unknown);
+    assert_eq!(readings.len(), 1);
+    for zone in [
+        "thermal_zone0",
+        "thermal_zone1",
+        "thermal_zone3",
+        "thermal_zone4",
+    ] {
+        assert_eq!(
+            counting.reads_matching(&format!("{zone}/temp")),
+            0,
+            "{zone}"
+        );
+    }
 }
 
 #[test]
@@ -138,7 +144,7 @@ fn unknown_topology_does_not_prove_a_package() {
     let clock = clock();
     let mut zones = adapter(&sysfs, &clock);
     let (_, pages) = discover(&mut zones, ADAPTER, 0, deadline(&clock));
-    assert!(sources(&pages)[0].metric.is_none());
+    assert!(sources(&pages).is_empty());
 }
 
 #[test]
@@ -223,8 +229,8 @@ fn zone_id(index: usize) -> String {
 /// GB10 (D-68): the zones of its CPU clusters' E and P cores map to
 /// `cpu.temperature.cluster` and its SoC zone to `soc.temperature`, both
 /// usable (named by the firmware, not a datasheet); the GPU and uncore
-/// zones stay diagnostics. Without all four cluster zones, or on more than
-/// one package, no zone is proven.
+/// zones are not catalogued. Without all four cluster zones, or on more
+/// than one package, no zone is proven.
 #[test]
 fn gb10_zones_map_by_their_acpi_paths() {
     let names = ["TSOC", "TS0E", "TS0P", "TS1E", "TS1P", "TGPU", "TUNC"];
@@ -235,7 +241,10 @@ fn gb10_zones_map_by_their_acpi_paths() {
     let (_, pages) = discover(&mut zones, ADAPTER, 0, deadline(&clock));
     let catalog = sources(&pages);
     let mapped = |index: usize| {
-        let descriptor = source(&catalog, &zone_id(index));
+        let id = zone_id(index);
+        let descriptor = catalog
+            .iter()
+            .find(|descriptor| descriptor.source_id.as_str() == id)?;
         descriptor.metric.as_ref().map(|key| {
             (
                 key.entity_id.as_str().to_owned(),
@@ -288,14 +297,14 @@ fn gb10_zones_map_by_their_acpi_paths() {
     gb10(&partial, &["TSOC", "TS0E", "TS0P"]);
     let mut zones = adapter(&partial, &clock);
     let (_, pages) = discover(&mut zones, ADAPTER, 0, deadline(&clock));
-    assert!(sources(&pages).iter().all(|source| source.metric.is_none()));
+    assert!(sources(&pages).is_empty());
 
     let two = FakeSysfs::new("thermal-gb10-two-packages");
     gb10(&two, &names);
     two.cpus(&[0, 1]);
     let mut zones = adapter(&two, &clock);
     let (_, pages) = discover(&mut zones, ADAPTER, 0, deadline(&clock));
-    assert!(sources(&pages).iter().all(|source| source.metric.is_none()));
+    assert!(sources(&pages).is_empty());
 }
 
 /// On GB10 the kernel also mirrors the seven `acpitz` zones as hwmon
@@ -331,7 +340,7 @@ fn gb10_zones_are_read_once_by_the_thermal_adapter() {
     let mut zones = adapter(&sysfs, &clock);
     let (_, pages) = discover(&mut zones, ADAPTER, 0, deadline(&clock));
     let catalog = sources(&pages);
-    assert_eq!(catalog.len(), names.len());
+    assert_eq!(catalog.len(), 5, "TGPU and TUNC are not catalogued");
     let readings = records(&read_all(
         &mut zones,
         ADAPTER,
@@ -346,8 +355,6 @@ fn gb10_zones_are_read_once_by_the_thermal_adapter() {
         (ids::CPU_TEMPERATURE_CLUSTER, "cluster:0p"),
         (ids::CPU_TEMPERATURE_CLUSTER, "cluster:1e"),
         (ids::CPU_TEMPERATURE_CLUSTER, "cluster:1p"),
-        (ids::SENSOR_TEMPERATURE, "sensor"),
-        (ids::SENSOR_TEMPERATURE, "sensor"),
     ];
     for (index, (metric, scope)) in expected.iter().enumerate() {
         let reading = record(&readings, &zone_id(index));
@@ -387,7 +394,7 @@ fn arm_cpu_thermal_is_usable_rank_two_on_one_package() {
 fn disabled_zone_is_unsupported_and_reprobed_with_throttling() {
     let sysfs = FakeSysfs::new("thermal-disabled");
     sysfs.cpus(&[0]);
-    let zone = sysfs.thermal_zone(0, "acpitz", "30000", None);
+    let zone = sysfs.thermal_zone(0, "soc_thermal", "30000", None);
     sysfs.write(&format!("{zone}/mode"), "disabled\n");
     let counting = Arc::new(CountingFiles::new(sysfs.rooted()));
     let files: Arc<dyn SystemFiles> = counting.clone();
@@ -448,14 +455,14 @@ fn zone_identity_survives_renumbering_when_a_device_link_exists() {
     let sysfs = FakeSysfs::new("thermal-renumber");
     sysfs.cpus(&[0]);
     let device = "LNXSYSTM:00/LNXSYBUS:01/LNXTHERM:00";
-    sysfs.thermal_zone(0, "acpitz", "27800", Some(device));
+    sysfs.thermal_zone(0, "soc_thermal", "27800", Some(device));
     let clock = clock();
     let mut zones = adapter(&sysfs, &clock);
     let (generation, pages) = discover(&mut zones, ADAPTER, 0, deadline(&clock));
     let before = sources(&pages);
     sysfs.remove("/sys/class/thermal/thermal_zone0");
     sysfs.remove("/sys/devices/virtual/thermal/thermal_zone0");
-    sysfs.thermal_zone(5, "acpitz", "28800", Some(device));
+    sysfs.thermal_zone(5, "soc_thermal", "28800", Some(device));
     let (next, pages) = discover(&mut zones, ADAPTER, generation, deadline(&clock));
     assert!(next > generation);
     let after = sources(&pages);
@@ -469,7 +476,7 @@ fn zone_identity_survives_renumbering_when_a_device_link_exists() {
 fn trip_points_are_bounded_entity_attributes_not_series() {
     let sysfs = FakeSysfs::new("thermal-trips");
     sysfs.cpus(&[0]);
-    let zone = sysfs.thermal_zone(0, "acpitz", "27800", None);
+    let zone = sysfs.thermal_zone(0, "soc_thermal", "27800", None);
     for trip in 0..15 {
         sysfs.write(&format!("{zone}/trip_point_{trip}_type"), "passive\n");
         sysfs.write(
@@ -485,21 +492,22 @@ fn trip_points_are_bounded_entity_attributes_not_series() {
     let entity = pages
         .iter()
         .flat_map(|page| page.entities.iter())
-        .find(|entity| entity.entity_id.as_str() == "sensor:thermal:acpitz:temp")
+        .find(|entity| entity.entity_id.as_str() == "sensor:thermal:soc_thermal:temp")
         .unwrap();
     entity.validate().unwrap();
     assert!(entity.attributes.len() <= MAX_ATTRIBUTES);
     assert_eq!(entity.attribute("trip_0"), Some("passive 90000 mdegC"));
     assert_eq!(entity.attribute("policy"), Some("step_wise"));
-    assert_eq!(entity.attribute("type"), Some("acpitz"));
+    assert_eq!(entity.attribute("type"), Some("soc_thermal"));
+    assert_eq!(entity.parent_id.as_ref().map(|id| id.as_str()), Some("soc"));
 }
 
 #[test]
 fn zero_and_negative_zone_temperatures_are_kept() {
     let sysfs = FakeSysfs::new("thermal-cold");
     sysfs.cpus(&[0]);
-    sysfs.thermal_zone(0, "outdoor", "0", None);
-    sysfs.thermal_zone(1, "battery", "-5000", None);
+    sysfs.thermal_zone(0, "soc_thermal", "0", None);
+    sysfs.thermal_zone(1, "soc_max", "-5000", None);
     let clock = clock();
     let mut zones = adapter(&sysfs, &clock);
     discover(&mut zones, ADAPTER, 0, deadline(&clock));
@@ -511,8 +519,8 @@ fn zero_and_negative_zone_temperatures_are_kept() {
         deadline(&clock),
         Vec::new(),
     ));
-    assert_eq!(value_of(record(&readings, "thermal:outdoor:temp")), 0.0);
-    assert_eq!(value_of(record(&readings, "thermal:battery:temp")), -5000.0);
+    assert_eq!(value_of(record(&readings, "thermal:soc_thermal:temp")), 0.0);
+    assert_eq!(value_of(record(&readings, "thermal:soc_max:temp")), -5000.0);
 }
 
 #[test]

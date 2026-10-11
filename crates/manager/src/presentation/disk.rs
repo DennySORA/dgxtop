@@ -1,8 +1,8 @@
 //! Disk module projection: block-device I/O (busiest first, whose rate
-//! trends feed the panel chart) and mounted filesystems (by mount point). A
-//! mount is never presented as a device.
+//! trends feed the panel chart) with each drive's temperature, and mounted
+//! filesystems (by mount point). A mount is never presented as a device.
 
-use dgxtop_core::canonical::CatalogSnapshot;
+use dgxtop_core::canonical::{CatalogSnapshot, SnapshotEntry};
 use dgxtop_core::identity::EntityId;
 use dgxtop_core::metric::ids;
 use dgxtop_core::naming::{attributes, entity};
@@ -89,7 +89,30 @@ fn device_view(reader: &MetricReader<'_>, entity_id: &EntityId) -> DiskDeviceVie
         read_iops: cell(ids::DISK_READ_IOPS),
         write_iops: cell(ids::DISK_WRITE_IOPS),
         await_ms: cell(ids::DISK_AWAIT),
+        temperature: reader
+            .cell_or_missing(drive_temperature(reader, entity_id), ids::DISK_TEMPERATURE),
     }
+}
+
+/// The temperature of the drive a block device is (D-92): its own, or for
+/// a partition the disk's the catalog names as its parent.
+fn drive_temperature<'a>(
+    reader: &MetricReader<'a>,
+    entity_id: &EntityId,
+) -> Option<&'a SnapshotEntry> {
+    let own = |id: &str| {
+        reader
+            .index()
+            .find(ids::DISK_TEMPERATURE, id, entity::SCOPE_DEVICE)
+    };
+    own(entity_id.as_str()).or_else(|| {
+        let parent = reader.catalog().entity(entity_id)?.parent_id.as_ref()?;
+        parent
+            .as_str()
+            .starts_with(BLOCK_DEVICE_PREFIX)
+            .then(|| own(parent.as_str()))
+            .flatten()
+    })
 }
 
 fn device_name(catalog: &CatalogSnapshot, entity_id: &EntityId) -> String {
@@ -256,6 +279,56 @@ mod tests {
         assert_eq!(view.devices[0].entity_id.as_str(), "blockdev:8:16");
         assert_eq!(view.devices[0].read_bps.value_f64(), Some(0.0));
         assert_eq!(view.devices[1].name, "blockdev:8:0");
+    }
+
+    fn block_device(fixture: &mut Fixture, id: &str, name: &str, parent: Option<&str>) {
+        let mut record = entity_record(id, EntityKind::BlockDevice, name, &[]);
+        record.parent_id = parent.map(|parent| EntityId::new(parent).unwrap());
+        fixture.add_entity(record);
+        fixture.add(
+            "disk",
+            sample("disk.read.bytes_per_second", id, "device").f64(1.0),
+        );
+    }
+
+    /// A drive's temperature shows on its disk and on the partitions the
+    /// catalog places on that disk (D-92); a device without one, or below
+    /// a parent that is no block device, shows none (never 0).
+    #[test]
+    fn devices_show_their_drives_temperature() {
+        let mut fixture = Fixture::new();
+        block_device(&mut fixture, "blockdev:259:0", "nvme0n1", Some("host"));
+        block_device(
+            &mut fixture,
+            "blockdev:259:1",
+            "nvme0n1p1",
+            Some("blockdev:259:0"),
+        );
+        block_device(&mut fixture, "blockdev:8:0", "sda", Some("host"));
+        block_device(&mut fixture, "blockdev:8:1", "sda1", Some("blockdev:8:0"));
+        block_device(&mut fixture, "blockdev:253:0", "dm-0", Some("soc"));
+        fixture.add(
+            "disk",
+            sample("disk.temperature", "blockdev:259:0", "device").f64(58.85),
+        );
+        fixture.add(
+            "disk",
+            sample("disk.temperature", "soc", "device").f64(90.0),
+        );
+        let view = build(&fixture);
+        let temperature = |name: &str| {
+            let device = view
+                .devices
+                .iter()
+                .find(|device| device.name == name)
+                .unwrap();
+            (device.temperature.value_f64(), device.temperature.state)
+        };
+        assert_eq!(temperature("nvme0n1"), (Some(58.85), CellState::Ok));
+        assert_eq!(temperature("nvme0n1p1"), (Some(58.85), CellState::Ok));
+        assert_eq!(temperature("sda"), (None, CellState::Unavailable));
+        assert_eq!(temperature("sda1"), (None, CellState::Unavailable));
+        assert_eq!(temperature("dm-0"), (None, CellState::Unavailable));
     }
 
     #[test]

@@ -9,12 +9,13 @@
 //! | Adapter | Read group | Period | Emits (metric id, native unit) |
 //! |---|---|---|---|
 //! | procfs | `cpu` | 1 s | `cpu.time.*` (ticks, counter; entity `cpu`, scope `host` for the aggregate line and entity `cpu.core.N`, scope `core:N` per logical CPU; guest fields are NOT emitted because they are already inside user/nice), `cpu.load.{1m,5m,15m}` and `cpu.tasks.{running,total}` (count; entity `host`, scope `host`), `cpu.frequency.current` (kHz, gauge, per core: `cpuinfo_avg_freq` where the kernel offers it, else `scaling_cur_freq`, D-67) |
-//! | procfs | `memory` | 1 s | `memory.{total,available,buffers,cached,swap_total}`, `memory.free`, `memory.swap_free` (KiB; entity `memory`, scope `system`) |
+//! | procfs | `memory` | 1 s | `memory.{total,available,buffers,cached,swap_total}`, `memory.swap_free` (KiB; entity `memory`, scope `system`) |
 //! | procfs | `disk` | 1 s | `disk.{reads.completed,sectors.read,read.time,writes.completed,sectors.written,write.time}` (count / sectors_512 / milliseconds counters; entity `blockdev:MAJ:MIN`, scope `device` or `partition`) |
 //! | procfs | `process` | 1 s, paged | one `process.cpu.ticks` record (ticks counter) per `ProcessKey` entity (`process:NS:PID:START`, scope `process`), the rest of its `stat` and its owner as `proc.*` tags ([`crate::process_stat`], D-86) |
-//! | hwmon | `fast` | 1 s | temperatures (mdegC), power (uW), fans (count) mapped by profile: `cpu.temperature.package`/`core`, `cpu.power.package`, `cpu.power.cluster`, `cpu.power.platform`, else `sensor.*` (diagnostics); thermal-zone mirrors (`acpitz`) are left to `thermal` (D-81) |
-//! | thermal | `fast` | 1 s | zone temperatures (mdegC): `cpu.temperature.package` only when the profile proves the package, `soc.temperature` for SoC zones, GB10's `acpitz` zones by ACPI path (`cpu.temperature.cluster` scopes `cluster:0e`…`cluster:1p`, `soc.temperature`, D-68), else `sensor.temperature` |
-//! | powercap | `fast` | 1 s | `cpu.energy.package` / `cpu.energy.platform` (uJ counters with declared modulus), else `sensor.energy` |
+//! | hwmon | `fast` | 1 s | temperatures (mdegC) and power (uW) mapped by profile: `cpu.temperature.package`/`core`, `cpu.power.package`, `cpu.power.cluster`, `cpu.power.platform`; unproven channels, fans and energy counters are not read (D-92); thermal-zone mirrors (`acpitz`) are left to `thermal` (D-81) |
+//! | hwmon | `disk` | 1 s | `disk.temperature` (mdegC): an NVMe controller's `Composite` or a `drivetemp` disk's `temp1` on every whole block device of that drive (entity `blockdev:MAJ:MIN`, scope `device`), mapped through the hwmon `device` link (D-92) |
+//! | thermal | `fast` | 1 s | zone temperatures (mdegC): `cpu.temperature.package` only when the profile proves the package, `soc.temperature` for SoC zones, GB10's `acpitz` zones by ACPI path (`cpu.temperature.cluster` scopes `cluster:0e`…`cluster:1p`, `soc.temperature`, D-68); other zones are not read (D-92) |
+//! | powercap | `fast` | 1 s | `cpu.energy.package` / `cpu.energy.platform` (uJ counters with declared modulus); subdomains are not read (D-92) |
 //! | nvml | `fast` | 1 s | GPU utilization/temperature/power/clocks/fan/framebuffer/PCIe/encoder/decoder/process_allocated (entity `gpu:UUID`) |
 //! | nvml | `slow_health` | 5 s | `gpu.energy.total` (mJ counter), ECC, retired pages, `gpu.nvlink.active`, `gpu.power.limit`, `gpu.clock.maximum`, framebuffer total/reserved |
 //! | nvml | `process` | 1 s | `process.gpu.memory_allocated` (bytes) and `process.gpu.utilization` (percent): entity `gpupid:UUID:PID`, scope `gpu:UUID` (the PID is joined to a ProcessKey by the process collector) |
@@ -149,6 +150,13 @@ pub const READ_GROUPS: &[ReadGroupSpec] = &[
         collectors: &[collectors::CPU],
     },
     ReadGroupSpec {
+        adapter: adapters::HWMON,
+        group: groups::DISK,
+        period: PeriodClass::Fast,
+        paged: true,
+        collectors: &[collectors::DISK],
+    },
+    ReadGroupSpec {
         adapter: adapters::THERMAL,
         group: groups::FAST,
         period: PeriodClass::Fast,
@@ -274,8 +282,6 @@ pub mod entity {
     pub const SCOPE_FILESYSTEM: &str = "filesystem";
     pub const SCOPE_INTERFACE: &str = "interface";
     pub const SCOPE_PROCESS: &str = "process";
-    pub const SCOPE_SENSOR: &str = "sensor";
-    pub const SCOPE_PLATFORM: &str = "platform";
     /// Scopes of `gpu.temperature.threshold` and `gpu.pcie.link.maximum`.
     pub const SCOPE_SLOWDOWN: &str = "slowdown";
     pub const SCOPE_SHUTDOWN: &str = "shutdown";
@@ -323,11 +329,6 @@ pub mod entity {
         scope(format!("core:{core}"))
     }
 
-    /// CPU cluster power component (e.g. GB10 `cpu_p`/`cpu_e`).
-    pub fn scope_cluster(name: &str) -> Result<Scope, IdentityError> {
-        scope(format!("cluster:{name}"))
-    }
-
     /// GPU identified by UUID (never by enumeration index).
     pub fn gpu(uuid: &str) -> Result<EntityId, IdentityError> {
         entity(format!("gpu:{uuid}"))
@@ -361,7 +362,8 @@ pub mod entity {
         entity(format!("netif:{net_namespace}:{ifindex}"))
     }
 
-    /// Unclassified sensor channel (diagnostics only).
+    /// The metadata entity of one sensor (a thermal zone's type and trip
+    /// points), below the entity it measures.
     pub fn sensor(adapter: &str, device: &str, channel: &str) -> Result<EntityId, IdentityError> {
         entity(format!("sensor:{adapter}:{device}:{channel}"))
     }
@@ -439,14 +441,8 @@ pub mod attributes {
     pub const MAJOR_MINOR: &str = "major_minor";
     pub const IFNAME: &str = "ifname";
     pub const OPERSTATE: &str = "operstate";
-    pub const UID: &str = "uid";
-    pub const COMM: &str = "comm";
     pub const CLK_TCK: &str = "clk_tck";
-    pub const PAGE_SIZE: &str = "page_size";
     pub const CPU_MODEL: &str = "cpu_model";
-    pub const KERNEL: &str = "kernel";
-    pub const HOSTNAME: &str = "hostname";
-    pub const PID_NAMESPACE: &str = "pid_namespace";
     pub const PHYSICAL_PACKAGE: &str = "physical_package";
 }
 
@@ -498,6 +494,12 @@ mod tests {
         assert!(is_replay_adapter("replay-1"));
         assert!(!is_replay_adapter("replayer"));
         assert_eq!(read_groups_of(adapters::PROCFS).count(), 4);
+        // Drive temperatures feed the disk collector (D-92).
+        assert_eq!(
+            collectors_for(adapters::HWMON, groups::DISK),
+            &[collectors::DISK]
+        );
+        assert_eq!(collectors_for("replay", "hwmon.disk"), &[collectors::DISK]);
     }
 
     #[test]

@@ -253,7 +253,6 @@ struct Topology {
     disks: usize,
     interfaces: usize,
     filesystems: usize,
-    sensors: usize,
     gpus: usize,
 }
 
@@ -265,7 +264,6 @@ impl Topology {
             disks: 4 * multiplier,
             interfaces: 4 * multiplier,
             filesystems: 4 * multiplier,
-            sensors: 8 * multiplier,
             gpus,
         }
     }
@@ -373,10 +371,6 @@ impl KeySpec {
     fn origin(mut self, origin: String) -> Self {
         self.origin = Some(origin);
         self
-    }
-
-    fn is_diagnostic(&self) -> bool {
-        self.metric.starts_with("sensor.")
     }
 }
 
@@ -536,17 +530,6 @@ fn temperature_keys(topology: &Topology) -> Vec<KeySpec> {
             ),
         );
     }
-    for sensor in 0..topology.sensors {
-        keys.push(
-            temperature(
-                format!("sensor:hwmon:ref-board:temp{}", sensor + 1),
-                ids::SENSOR_TEMPERATURE,
-                "sensor".to_owned(),
-                "hwmon.fast",
-            )
-            .temperature("hwmon.fast", None, 1000),
-        );
-    }
     keys
 }
 
@@ -584,13 +567,6 @@ fn power_keys(topology: &Topology) -> Vec<KeySpec> {
             format!("cpu.package.{package}"),
             ids::CPU_POWER_PACKAGE,
             &format!("package:{package}"),
-        ));
-    }
-    for sensor in 0..topology.sensors {
-        keys.push(power(
-            format!("sensor:hwmon:ref-board:power{}", sensor + 1),
-            ids::SENSOR_POWER,
-            "sensor",
         ));
     }
     keys
@@ -632,13 +608,6 @@ fn energy_keys(topology: &Topology) -> Vec<KeySpec> {
         energy("host".to_owned(), ids::CPU_ENERGY_PLATFORM, "platform")
             .origin("rapl:psys".to_owned()),
     );
-    for sensor in 0..topology.sensors {
-        keys.push(energy(
-            format!("sensor:powercap:ref-zone{sensor}:energy_uj"),
-            ids::SENSOR_ENERGY,
-            "sensor",
-        ));
-    }
     keys
 }
 
@@ -660,7 +629,6 @@ fn memory_keys() -> Vec<KeySpec> {
             ids::MEMORY_AVAILABLE,
             exact(60_000_000, 110_000_000, 400_000),
         ),
-        memory(ids::MEMORY_FREE_RAW, exact(20_000_000, 60_000_000, 400_000)),
         memory(ids::MEMORY_BUFFERS, exact(100_000, 900_000, 5_000)),
         memory(ids::MEMORY_CACHED, exact(10_000_000, 40_000_000, 100_000)),
         memory(ids::MEMORY_SWAP_TOTAL, exact(8_388_604, 8_388_604, 0)),
@@ -1145,15 +1113,11 @@ impl Generator {
                 .clone()
                 .unwrap_or_else(|| format!("ref:{key_index}:a"))
         };
-        let (origin, quality) = if key.is_diagnostic() {
-            (OriginIdentity::unknown(), Quality::Unknown)
-        } else {
-            match candidate {
-                // Primary and its confirmed alias read the same physical sensor.
-                0 | 1 => (confirmed(&shared_origin())?, Quality::Verified),
-                2 => (confirmed(&format!("ref:{key_index}:b"))?, Quality::Usable),
-                _ => (OriginIdentity::unknown(), Quality::Usable),
-            }
+        let (origin, quality) = match candidate {
+            // Primary and its confirmed alias read the same physical sensor.
+            0 | 1 => (confirmed(&shared_origin())?, Quality::Verified),
+            2 => (confirmed(&format!("ref:{key_index}:b"))?, Quality::Usable),
+            _ => (OriginIdentity::unknown(), Quality::Usable),
         };
         Some(FixtureSource {
             source_id: SourceId::new(format!(
@@ -1721,8 +1685,6 @@ fn entity_record(id: &str, uuids: &[String]) -> Option<FixtureEntity> {
             id.to_owned(),
             Vec::new(),
         )
-    } else if id.starts_with("sensor:") {
-        (EntityKind::Sensor, None, id.to_owned(), Vec::new())
     } else {
         return None;
     };

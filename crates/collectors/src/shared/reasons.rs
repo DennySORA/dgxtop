@@ -139,8 +139,6 @@ pub const BATCH_PARTIAL: &str = "BATCH_PARTIAL";
 pub const GPU_PROCESS_LIST_INCOMPLETE: &str = "GPU_PROCESS_LIST_INCOMPLETE";
 pub const PLAN_COLLECTOR_MISMATCH: &str = "PLAN_COLLECTOR_MISMATCH";
 pub const INVALID_ENTITY: &str = "INVALID_ENTITY";
-/// No validated bandwidth model exists; the estimate is never fabricated.
-pub const NO_VALIDATED_MODEL: &str = "NO_VALIDATED_MODEL";
 /// The GB10 cluster entity does not name a CPU package.
 pub const FORMULA_ENTITY_UNMAPPED: &str = "FORMULA_ENTITY_UNMAPPED";
 pub const FAILURES_TRUNCATED: &str = "FAILURES_TRUNCATED";

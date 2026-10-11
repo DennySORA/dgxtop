@@ -3,7 +3,7 @@
 //! Emits `energy_uj` as exact `u64` counters (native `uJ`) in read group
 //! `fast`, with the driver-declared `max_energy_range_uj` as counter modulus.
 //! `package-N` -> `cpu.energy.package`, `psys` -> `cpu.energy.platform`,
-//! subdomains -> `sensor.energy` diagnostics. `energy_uj` is often root-only:
+//! subdomains are not catalogued (D-92). `energy_uj` is often root-only:
 //! a permission error is reported as `permission_denied` (record and
 //! capability), never as 0, and re-probed with throttling.
 
