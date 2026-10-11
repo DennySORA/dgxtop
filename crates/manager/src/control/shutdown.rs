@@ -64,7 +64,9 @@ impl ControlCore {
         // Shutdown commands submitted after the start still get their result.
         self.sessions
             .answer_shutdown_requests("shutdown in progress");
-        let settled = !self.config.has_pending() && !self.process.awaiting_control();
+        let settled = !self.config.has_pending()
+            && !self.process.awaiting_control()
+            && !self.process_history.is_writing();
         if !settled && !timed_out {
             return None;
         }

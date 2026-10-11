@@ -44,6 +44,8 @@ pub(crate) struct ProcessHistoryService {
     store: Option<Box<dyn Dispatch<ProcessHistoryJob>>>,
     logger: Arc<dyn Logger>,
     probing: bool,
+    /// Writes sent and not answered yet; the shutdown waits for them.
+    writing: usize,
     load: Load,
     backlog: ProcessHistoryJournal,
     next_append_ns: u64,
@@ -63,6 +65,7 @@ impl ProcessHistoryService {
             store: ports.store,
             logger,
             probing: false,
+            writing: 0,
             load: Load::Done,
             backlog: ProcessHistoryJournal::default(),
             next_append_ns: now_ns.saturating_add(APPEND_EVERY_NS),
@@ -138,6 +141,7 @@ impl ProcessHistoryService {
             }
             ProcessHistoryCompletion::Appended(result)
             | ProcessHistoryCompletion::Saved(result) => {
+                self.writing = self.writing.saturating_sub(1);
                 if let Err(error) = result {
                     self.warn(&format!("PROCESS_HISTORY_WRITE_FAILED: {error}"));
                 }
@@ -176,11 +180,18 @@ impl ProcessHistoryService {
         }
     }
 
+    /// Whether a write has not been answered yet (the shutdown waits, so
+    /// its answer finds the Manager listening).
+    pub(crate) fn is_writing(&self) -> bool {
+        self.writing > 0
+    }
+
     /// At shutdown: whatever is left, then the short-term file.
     pub(crate) fn flush(&mut self, now: Now) {
         if self.store.is_none() || self.load != Load::Done {
             return;
         }
+        self.book.touch_live();
         self.append();
         self.save(now);
     }
@@ -212,11 +223,14 @@ impl ProcessHistoryService {
         let Some(store) = &self.store else {
             return;
         };
-        if let Err(error) = store.try_dispatch(ProcessHistoryJob::Append(journal.clone())) {
-            self.warn(&format!("PROCESS_HISTORY_APPEND_DEFERRED: {error}"));
-            let excess = journal.buckets.len().saturating_sub(MAX_BACKLOG_BUCKETS);
-            journal.buckets.drain(..excess);
-            self.backlog = journal;
+        match store.try_dispatch(ProcessHistoryJob::Append(journal.clone())) {
+            Ok(()) => self.writing += 1,
+            Err(error) => {
+                self.warn(&format!("PROCESS_HISTORY_APPEND_DEFERRED: {error}"));
+                let excess = journal.buckets.len().saturating_sub(MAX_BACKLOG_BUCKETS);
+                journal.buckets.drain(..excess);
+                self.backlog = journal;
+            }
         }
     }
 
@@ -225,8 +239,9 @@ impl ProcessHistoryService {
             return;
         };
         let recent = self.book.recent(now);
-        if let Err(error) = store.try_dispatch(ProcessHistoryJob::SaveRecent(recent)) {
-            self.warn(&format!("PROCESS_HISTORY_SAVE_DEFERRED: {error}"));
+        match store.try_dispatch(ProcessHistoryJob::SaveRecent(recent)) {
+            Ok(()) => self.writing += 1,
+            Err(error) => self.warn(&format!("PROCESS_HISTORY_SAVE_DEFERRED: {error}")),
         }
     }
 
@@ -324,6 +339,12 @@ mod tests {
         );
         rig.service.tick(now(42));
         assert!(rig.store.is_empty(), "not due again");
+        assert!(rig.service.is_writing(), "two writes unanswered");
+        for _ in 0..2 {
+            rig.service
+                .on_completion(ProcessHistoryCompletion::Saved(Ok(())), now(43));
+        }
+        assert!(!rig.service.is_writing());
     }
 
     /// One probe at a time: the next waits for the report.
@@ -346,6 +367,7 @@ mod tests {
         rig.store.set_busy(true);
         rig.service.tick(now(11));
         rig.store.set_busy(false);
+        observe(&mut rig, 12);
         rig.service.flush(now(12));
         let jobs = rig.store.take();
         let Some(ProcessHistoryJob::Append(journal)) = jobs.first() else {
@@ -353,8 +375,13 @@ mod tests {
         };
         assert_eq!(
             journal.runs.len(),
-            1,
-            "the run journaled before the refusal"
+            2,
+            "before the refusal, then at the flush"
+        );
+        assert_eq!(
+            i128::from(journal.runs[1].last_seen_utc_ns),
+            now(12).utc_ns,
+            "the flush carries when a live run was last seen"
         );
     }
 }

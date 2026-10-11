@@ -102,6 +102,9 @@ pub struct ProcessHistoryBook {
     runs: BTreeMap<ProcessKey, Run>,
     signals: BTreeMap<ProcessKey, (Signal, u64)>,
     oom_kills: Option<u64>,
+    /// The table sampled last (cycle, read time): every committed batch
+    /// hands over the snapshot's table, sampled once.
+    last_table: Option<(u64, u64)>,
     journal: ProcessHistoryJournal,
     /// Runs whose buckets were asked of the long-term store.
     reading: BTreeSet<ProcessKey>,
@@ -114,6 +117,7 @@ impl ProcessHistoryBook {
             runs: BTreeMap::new(),
             signals: BTreeMap::new(),
             oom_kills: None,
+            last_table: None,
             journal: ProcessHistoryJournal::default(),
             reading: BTreeSet::new(),
         }
@@ -132,6 +136,11 @@ impl ProcessHistoryBook {
     /// process not yet followed; notes the live runs the table no longer
     /// lists and ends the ones gone for longer than the grace.
     pub(crate) fn observe(&mut self, table: &ProcessTable, inputs: &SampleInputs<'_>) {
+        let identity = (table.cycle_id, table.read_finished_boot_ns);
+        if self.last_table == Some(identity) {
+            return;
+        }
+        self.last_table = Some(identity);
         let utc_ns = utc_of(inputs.now);
         let mut listed = BTreeSet::new();
         for row in &table.rows {
@@ -277,6 +286,15 @@ impl ProcessHistoryBook {
         std::mem::take(&mut self.journal)
     }
 
+    /// Marks every live run changed, so the next journal carries the time
+    /// each was last seen (at shutdown: a restart dates what ended
+    /// meanwhile from it).
+    pub(crate) fn touch_live(&mut self) {
+        for run in self.runs.values_mut().filter(|run| run.is_live()) {
+            run.changed = true;
+        }
+    }
+
     /// The live runs' recent buckets, for the short-term file.
     pub(crate) fn recent(&self, now: Now) -> RecentHistory {
         RecentHistory {
@@ -318,11 +336,8 @@ impl ProcessHistoryBook {
             take_io(live, reading.io, read_boot_ns);
             return;
         }
-        let ended = live.missing_since_boot_ns.is_some()
-            || matches!(reading.liveness, ProbeLiveness::Zombie(_));
-        if !ended {
-            return;
-        }
+        // The probe read the process itself after the table did: gone is
+        // gone, also on a busy host whose tables are cut short.
         let evidence = EndEvidence {
             signal,
             status: match reading.liveness {

@@ -12,8 +12,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use crate::format::{
-    NOT_AVAILABLE, clean, display_width, format_local_datetime, format_local_short, format_span_ns,
-    format_value, truncate_to_width,
+    NOT_AVAILABLE, clean, display_width, format_local_datetime, format_local_short,
+    format_span_seconds, format_value, truncate_to_width,
 };
 use crate::modules::common::{
     ColumnSpec, Output, RowCursor, TableCell, draw_line, draw_table_header, draw_table_row,
@@ -220,7 +220,7 @@ fn list_cells(run: &RunRowView, offset_s: i32, context: &DisplayContext) -> Vec<
         TableCell::new(run.key.pid.to_string(), label),
         TableCell::new(clean(&run.name), text),
         TableCell::new(gpu_text(&run.gpus), label),
-        TableCell::new(format_span_ns(run.runtime_ns), text),
+        TableCell::new(runtime_text(run.runtime_ns), text),
         TableCell::new(bytes_text(run.peak_gpu_memory), text),
         TableCell::new(percent_text(run.mean_gpu_utilization), text),
         TableCell::new(percent_text(run.mean_cpu), text),
@@ -237,7 +237,7 @@ fn run_label(run: &RunRowView, offset_s: i32) -> String {
         clean(&run.name),
         format_local_short(run.started_utc_ns, offset_s),
         gpu_text(&run.gpus),
-        format_span_ns(run.runtime_ns),
+        runtime_text(run.runtime_ns),
         status_text(run)
     )
 }
@@ -316,7 +316,7 @@ fn detail_lines(
         theme.label_style(),
     ));
     times.push(Span::styled(
-        format_span_ns(run.runtime_ns),
+        runtime_text(run.runtime_ns),
         theme.text_style(),
     ));
     if let Some(uid) = detail.and_then(|detail| detail.info.uid) {
@@ -448,7 +448,40 @@ fn render_chart_cell(
         _ => chart.peak,
     };
     let color = slot.map(|slot| theme.process_color(slot));
-    render_chart_with_parts(frame, plot, &chart.means, (Vec::new(), color), max, context);
+    let points = fit_to_width(&chart.means, usize::from(plot.width));
+    render_chart_with_parts(frame, plot, &points, (Vec::new(), color), max, context);
+}
+
+/// The run's points fitted to `width` columns so its whole life spans the
+/// chart: a short run's points each widened to the same number of
+/// columns, a long run's merged, each column the mean of the points it
+/// covers (`None` where none has a value).
+fn fit_to_width(points: &[Option<f64>], width: usize) -> Vec<Option<f64>> {
+    if width == 0 || points.is_empty() {
+        return points.to_vec();
+    }
+    if points.len() <= width {
+        let columns = width / points.len();
+        return points
+            .iter()
+            .flat_map(|point| std::iter::repeat_n(*point, columns))
+            .collect();
+    }
+    let per_column = points.len().div_ceil(width);
+    points
+        .chunks(per_column)
+        .map(|chunk| {
+            let present: Vec<f64> = chunk.iter().flatten().copied().collect();
+            #[allow(clippy::cast_precision_loss)]
+            let count = present.len() as f64;
+            (!present.is_empty()).then(|| present.iter().sum::<f64>() / count)
+        })
+        .collect()
+}
+
+/// `2h 15m`, `3d 4h`: how long a run ran.
+fn runtime_text(runtime_ns: u64) -> String {
+    format_span_seconds(runtime_ns / 1_000_000_000)
 }
 
 fn chart_label(chart: &RunChartView) -> String {
@@ -540,4 +573,31 @@ fn line_text(line: &Line<'_>) -> String {
         .collect::<String>()
         .trim()
         .to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runs_fit_the_chart_width() {
+        let points: Vec<Option<f64>> = (0..10).map(|value| Some(f64::from(value))).collect();
+        let widened = fit_to_width(&points, 25);
+        assert_eq!(widened.len(), 20, "each point two columns wide");
+        assert_eq!(&widened[..4], &[Some(0.0), Some(0.0), Some(1.0), Some(1.0)]);
+        assert_eq!(fit_to_width(&points, 10), points);
+        assert_eq!(
+            fit_to_width(&points, 5),
+            vec![Some(0.5), Some(2.5), Some(4.5), Some(6.5), Some(8.5)]
+        );
+        let gappy = [None, None, Some(4.0), None];
+        assert_eq!(fit_to_width(&gappy, 2), vec![None, Some(4.0)]);
+        assert_eq!(fit_to_width(&points, 0), points);
+    }
+
+    #[test]
+    fn runtimes_read_in_hours_and_minutes() {
+        assert_eq!(runtime_text(135 * 60 * 1_000_000_000), "2h 15m");
+        assert_eq!(runtime_text(42 * 1_000_000_000), "42s");
+    }
 }

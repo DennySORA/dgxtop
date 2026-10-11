@@ -43,15 +43,16 @@ fn cpu_only(pid: i64) -> ProcessRow {
     row
 }
 
-fn table(rows: Vec<ProcessRow>) -> ProcessTable {
-    process_table(1, 0, rows)
+/// The table read at `second` (each table its own cycle).
+fn table(second: u64, rows: Vec<ProcessRow>) -> ProcessTable {
+    process_table(second, second * SECOND, rows)
 }
 
 /// Observes `rows` at `second`, with 100 ticks per second.
 fn observe(book: &mut ProcessHistoryBook, second: u64, rows: Vec<ProcessRow>) {
     let labels = labels();
     book.observe(
-        &table(rows),
+        &table(second, rows),
         &SampleInputs {
             now: now(second),
             clk_tck: Some(100),
@@ -251,10 +252,11 @@ fn runs_end_with_the_cause_the_probe_shows() {
     );
 }
 
-/// A zombie still listed ends at once; a listed process the probe says
-/// runs stays live.
+/// A zombie or a gone process ends at once even while the table still
+/// lists it (the probe reads after the table); one the probe says runs
+/// stays live.
 #[test]
-fn a_listed_zombie_ends_and_a_running_one_continues() {
+fn the_probe_decides_whether_a_listed_run_ended() {
     let mut book = book();
     observe(
         &mut book,
@@ -273,10 +275,13 @@ fn a_listed_zombie_ends_and_a_running_one_continues() {
         now(1),
     );
     assert_eq!(end_of(&book, 1), Some(EndCause::NotVisible));
-    assert!(
-        book.run(&key(2)).unwrap().is_live(),
-        "listed: the probe raced the table"
+    assert_eq!(end_of(&book, 2), Some(EndCause::NotVisible));
+    observe(&mut book, 2, vec![row(3, 10.0, Some(GIB))]);
+    book.on_probe(
+        &report(2, None, vec![reading(3, ProbeLiveness::Running, None)]),
+        now(2),
     );
+    assert!(book.run(&key(3)).unwrap().is_live());
 }
 
 /// Without a probe answer a lost run ends after the grace; a truncated
@@ -285,7 +290,7 @@ fn a_listed_zombie_ends_and_a_running_one_continues() {
 fn lost_runs_end_after_the_grace_unless_the_table_was_cut() {
     let mut book = book();
     observe(&mut book, 1, vec![row(1, 10.0, Some(GIB))]);
-    let mut cut = table(Vec::new());
+    let mut cut = table(30, Vec::new());
     cut.truncated = true;
     let labels = labels();
     let inputs = |second| SampleInputs {
@@ -417,4 +422,102 @@ fn runs_are_bounded() {
     );
     assert_eq!(book.runs().count(), MAX_LIVE_RUNS);
     assert_eq!(book.probe_targets().len(), MAX_LIVE_RUNS);
+}
+
+/// A restart: the run restored from the stores keeps running when the
+/// tables list it, even tables cut short (a busy host), and probes that
+/// say it runs.
+#[test]
+fn a_restored_run_listed_in_cut_tables_keeps_running() {
+    let mut writer = book();
+    observe(&mut writer, 1, vec![row(1, 10.0, Some(GIB))]);
+    let info = writer.run(&key(1)).unwrap().info().clone();
+    let recent = writer.recent(now(1));
+    let mut book = book();
+    book.restore(
+        ProcessHistoryLoad {
+            runs: vec![info],
+            buckets: Vec::new(),
+            recent: Some(recent),
+        },
+        now(100),
+    );
+    let labels = labels();
+    for second in 101..130 {
+        let mut cut = table(second, vec![row(1, 10.0, Some(GIB))]);
+        cut.truncated = true;
+        book.observe(
+            &cut,
+            &SampleInputs {
+                now: now(second),
+                clk_tck: Some(100),
+                gpu_labels: &labels,
+                host_network: [None, None],
+            },
+        );
+        book.on_probe(
+            &report(second, None, vec![reading(1, ProbeLiveness::Running, None)]),
+            now(second),
+        );
+    }
+    assert_eq!(
+        end_of(&book, 1),
+        None,
+        "{:?}",
+        book.run(&key(1)).unwrap().info().end
+    );
+    assert!(book.run(&key(1)).unwrap().is_live());
+}
+
+/// Every committed batch hands the book the snapshot's process table; a
+/// table it already sampled adds nothing.
+#[test]
+fn a_table_is_sampled_once() {
+    let mut book = book();
+    let labels = labels();
+    let table = process_table(7, 5 * SECOND, vec![row(1, 10.0, Some(GIB))]);
+    for _ in 0..5 {
+        book.observe(
+            &table,
+            &SampleInputs {
+                now: now(5),
+                clk_tck: Some(100),
+                gpu_labels: &labels,
+                host_network: [None, None],
+            },
+        );
+    }
+    let bucket = book
+        .run(&key(1))
+        .unwrap()
+        .series()
+        .buckets(Tier::Recent)
+        .next()
+        .copied()
+        .unwrap();
+    assert_eq!(bucket.value(RunMetric::Cpu).count, 1);
+}
+
+/// On a busy host every table is cut short, so the table never says a run
+/// is gone; the probe, which reads the process itself, does.
+#[test]
+fn a_probe_ends_a_run_even_when_tables_are_cut() {
+    let mut book = book();
+    let labels = labels();
+    let mut cut = table(1, vec![row(1, 10.0, Some(GIB))]);
+    cut.truncated = true;
+    book.observe(
+        &cut,
+        &SampleInputs {
+            now: now(1),
+            clk_tck: Some(100),
+            gpu_labels: &labels,
+            host_network: [None, None],
+        },
+    );
+    book.on_probe(
+        &report(2, None, vec![reading(1, ProbeLiveness::Gone, None)]),
+        now(2),
+    );
+    assert_eq!(end_of(&book, 1), Some(EndCause::NotVisible));
 }

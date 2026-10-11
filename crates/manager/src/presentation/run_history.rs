@@ -75,7 +75,7 @@ fn row_view(run: &Run, colors: &ProcessMemoryBook) -> RunRowView {
 fn detail_view(run: &Run, colors: &ProcessMemoryBook) -> RunDetailView {
     let info = run.info();
     let series = run.series();
-    let tier = chart_tier(series, info.started_utc_ns);
+    let tier = chart_tier(series);
     let buckets: Vec<&RunBucket> =
         tier.map_or_else(Vec::new, |tier| series.buckets(tier).collect());
     let step_ns = tier.map_or(0, Tier::step_ns);
@@ -101,44 +101,49 @@ fn detail_view(run: &Run, colors: &ProcessMemoryBook) -> RunDetailView {
     }
 }
 
-/// The run as one bucket: every bucket of the coarsest size held, and the
-/// finer buckets being filled, which have not reached it yet (each size
-/// merges the finer ones as they close, so every sample counts once).
+/// The run as one bucket: every bucket of the size that reaches back to
+/// the earliest data ([`chart_tier`]), and the finer buckets being filled,
+/// which have not reached it yet (each size merges the finer ones as they
+/// close, so every sample counts once). The coarsest size is no measure:
+/// after a restart it may hold only what was seen since.
 fn whole_run(series: &RunSeries) -> RunBucket {
     let mut whole = RunBucket::new(0);
-    let Some(coarsest) = [Tier::TenMinutes, Tier::Minute, Tier::Recent]
-        .into_iter()
-        .find(|tier| series.buckets(*tier).next().is_some())
-    else {
+    let Some(tier) = chart_tier(series) else {
         return whole;
     };
-    for bucket in series.buckets(coarsest) {
+    for bucket in series.buckets(tier) {
         whole.merge(bucket);
     }
-    for (tier, bucket) in series.filling() {
-        if tier < coarsest {
+    for (finer, bucket) in series.filling() {
+        if finer < tier {
             whole.merge(&bucket);
         }
     }
     whole
 }
 
-/// The finest size whose buckets reach back to the run's start (within a
-/// bucket); the coarsest held otherwise.
-fn chart_tier(series: &RunSeries, started_utc_ns: i64) -> Option<Tier> {
-    let held: Vec<Tier> = [Tier::Recent, Tier::Minute, Tier::TenMinutes]
+/// The finest size that holds the whole run: its first bucket begins
+/// inside the first bucket of every coarser size held (a coarse bucket
+/// starts at its boundary, before the run may have). The first held size
+/// otherwise, which a restart may have cut.
+fn chart_tier(series: &RunSeries) -> Option<Tier> {
+    const TIERS: [Tier; 3] = [Tier::Recent, Tier::Minute, Tier::TenMinutes];
+    let first_of = |tier: Tier| series.buckets(tier).next().map(|first| first.start_utc_ns);
+    let held: Vec<(Tier, i64)> = TIERS
         .into_iter()
-        .filter(|tier| series.buckets(*tier).next().is_some())
+        .filter_map(|tier| Some((tier, first_of(tier)?)))
         .collect();
     held.iter()
-        .copied()
-        .find(|tier| {
-            series.buckets(*tier).next().is_some_and(|first| {
-                let step = i64::try_from(tier.step_ns()).unwrap_or(i64::MAX);
-                first.start_utc_ns <= started_utc_ns.saturating_add(step)
-            })
+        .find(|(tier, first)| {
+            held.iter()
+                .filter(|(coarser, _)| coarser > tier)
+                .all(|(coarser, start)| {
+                    let step = i64::try_from(coarser.step_ns()).unwrap_or(i64::MAX);
+                    *first < start.saturating_add(step)
+                })
         })
-        .or_else(|| held.last().copied())
+        .or_else(|| held.last())
+        .map(|(tier, _)| *tier)
 }
 
 /// An even grid over buckets from the first bucket's start; a point spans
@@ -298,6 +303,63 @@ mod tests {
         let disk = &opened.charts[RunMetric::DiskRead.index()];
         assert!(disk.means.iter().all(Option::is_none), "no probe, no rate");
         assert!(!opened.loading);
+    }
+
+    /// A run that started long before dgxtop saw it charts what dgxtop saw
+    /// at the finest size, not one coarse bucket.
+    #[test]
+    fn a_run_older_than_dgxtop_charts_what_was_seen_finely() {
+        let mut book = ProcessHistoryBook::new(boot_id("boot-test"));
+        // Started 1 s after boot; seen from an hour later.
+        for second in 3_600..3_700 {
+            observe(&mut book, second, vec![row(1, 100, 4 << 30)]);
+        }
+        let mut key = test_process_key(1);
+        key.start_time_ticks = 100;
+        let opened = view(&book, Some(&key)).opened.unwrap();
+        assert_eq!(opened.step_ns, 5 * SECOND);
+        assert!(opened.charts[RunMetric::Cpu.index()].means.len() >= 20);
+    }
+
+    /// After a restart the coarsest size may hold only what the new run
+    /// saw; the run's figures come from the size that holds it all.
+    #[test]
+    fn whole_run_figures_take_the_size_that_holds_everything() {
+        let mut series = RunSeries::default();
+        for minute in 0..3 {
+            let mut bucket = RunBucket::new(minute * 60 * 1_000_000_000);
+            for _ in 0..60 {
+                bucket.add(RunMetric::Memory, Some(10.0));
+            }
+            series.restore(Tier::Minute, bucket, false);
+        }
+        let mut late = RunBucket::new(0);
+        for _ in 0..4 {
+            late.add(RunMetric::Memory, Some(0.0));
+        }
+        series.restore(Tier::TenMinutes, late, false);
+        let whole = whole_run(&series);
+        assert_eq!(whole.value(RunMetric::Memory).count, 180);
+        assert_eq!(whole.value(RunMetric::Memory).mean(), Some(10.0));
+    }
+
+    /// A ten-minute bucket starts at its ten-minute boundary, before the
+    /// run did; the minutes, which begin inside it, still cover the run.
+    #[test]
+    fn aligned_coarse_buckets_do_not_hide_finer_ones() {
+        let minute = 60 * 1_000_000_000;
+        let mut series = RunSeries::default();
+        let bucket = |start: i64| {
+            let mut bucket = RunBucket::new(start);
+            bucket.add(RunMetric::Cpu, Some(1.0));
+            bucket
+        };
+        series.restore(Tier::TenMinutes, bucket(40 * minute), false);
+        for start in 46..50 {
+            series.restore(Tier::Minute, bucket(start * minute), false);
+        }
+        series.restore(Tier::Recent, bucket(48 * minute), false);
+        assert_eq!(chart_tier(&series), Some(Tier::Minute));
     }
 
     /// A long grid merges neighbouring buckets so a chart stays bounded.
