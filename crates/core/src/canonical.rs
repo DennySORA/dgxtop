@@ -3,6 +3,7 @@
 //! collection plans/batches, store acknowledgements and immutable snapshots.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{Hash, Hasher};
 use std::ops::Bound;
 use std::sync::Arc;
 
@@ -615,28 +616,46 @@ impl CollectionBatch {
         Ok(())
     }
 
-    /// Content digest used to detect "same batch_id, different payload".
-    pub fn content_fingerprint(&self) -> String {
-        let summary = (
-            &self.collector_id,
-            self.cycle_id,
-            self.epoch,
-            self.state_base_revision,
-            self.canonical.len(),
-            self.counter_intervals.len(),
-            self.canonical
-                .iter()
-                .map(|value| {
-                    (
-                        value.key.series_selector(),
-                        value.value.map(|scalar| scalar.to_f64_lossy().to_bits()),
-                    )
-                })
-                .collect::<Vec<_>>(),
-        );
-        crate::digest::sha256_json(&summary).unwrap_or_default()
+    /// Content fingerprint used to detect "same batch_id, different
+    /// payload". It is compared in memory only, never stored or shown, so a
+    /// structural hash replaces the JSON summary's SHA-256 (D-84).
+    pub fn content_fingerprint(&self) -> BatchFingerprint {
+        let lane = |seed: u64| {
+            let mut hasher = std::hash::DefaultHasher::new();
+            seed.hash(&mut hasher);
+            self.hash_content(&mut hasher);
+            hasher.finish()
+        };
+        BatchFingerprint([lane(0), lane(FINGERPRINT_SECOND_LANE_SEED)])
+    }
+
+    /// What identifies a batch's content: its place in the commit sequence
+    /// and every canonical value's series and value bits.
+    fn hash_content(&self, hasher: &mut impl Hasher) {
+        self.collector_id.hash(hasher);
+        self.cycle_id.hash(hasher);
+        self.epoch.hash(hasher);
+        self.state_base_revision.hash(hasher);
+        self.canonical.len().hash(hasher);
+        self.counter_intervals.len().hash(hasher);
+        for value in &self.canonical {
+            value.key.metric_id.as_str().hash(hasher);
+            value.key.scope.as_str().hash(hasher);
+            value.key.entity_id.as_str().hash(hasher);
+            value
+                .value
+                .map(|scalar| scalar.to_f64_lossy().to_bits())
+                .hash(hasher);
+        }
     }
 }
+
+/// Seed of the fingerprint's second 64-bit lane, so a collision needs two.
+const FINGERPRINT_SECOND_LANE_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
+
+/// 128-bit content fingerprint of a [`CollectionBatch`] (in memory only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BatchFingerprint([u64; 2]);
 
 /// Epoch/base guard checked by the Store before committing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -915,5 +934,68 @@ mod tests {
         // Unknown groups fall back to one second.
         assert_eq!(period("replay", "slow"), 1000);
         assert_eq!(period("rep", "fast"), 1000);
+    }
+
+    fn batch(values: Vec<CanonicalValue>) -> CollectionBatch {
+        CollectionBatch {
+            batch_id: Uuid::nil(),
+            collector_id: CollectorId::new("cpu").unwrap(),
+            cycle_id: 42,
+            epoch: 1,
+            config_revision: 1,
+            catalog_revision: 1,
+            policy_revision: 1,
+            state_base_revision: 3,
+            canonical: values,
+            explanations: vec![],
+            counter_intervals: vec![],
+            inputs: vec![],
+            process_table: None,
+            next_state: CollectorState::default(),
+            failures: vec![],
+            events: vec![],
+        }
+    }
+
+    #[test]
+    fn fingerprint_is_stable_for_the_same_content_and_ignores_the_rest() {
+        let original = batch(vec![selected()]);
+        let fingerprint = original.content_fingerprint();
+        assert_eq!(original.clone().content_fingerprint(), fingerprint);
+        let mut annotated = original.clone();
+        annotated.config_revision = 9;
+        annotated.failures.push(CollectionFailure {
+            source_id: None,
+            key: None,
+            code: "demo".to_owned(),
+            message: "not part of the content".to_owned(),
+        });
+        assert_eq!(annotated.content_fingerprint(), fingerprint);
+    }
+
+    #[test]
+    fn fingerprint_changes_with_any_value_series_or_position() {
+        let fingerprint = batch(vec![selected()]).content_fingerprint();
+        let mut other_value = selected();
+        other_value.value = Some(Scalar::from_f64(68.5).unwrap());
+        let mut missing = selected();
+        missing.value = None;
+        let mut other_scope = selected();
+        other_scope.key.scope = crate::identity::Scope::new("package:1").unwrap();
+        let mut later = batch(vec![selected()]);
+        later.cycle_id = 43;
+        let mut rebased = batch(vec![selected()]);
+        rebased.state_base_revision = 4;
+        for changed in [
+            batch(vec![other_value]),
+            batch(vec![missing]),
+            batch(vec![other_scope]),
+            batch(vec![]),
+            batch(vec![selected(), selected()]),
+            later,
+            rebased,
+        ] {
+            assert_ne!(changed.content_fingerprint(), fingerprint);
+        }
     }
 }

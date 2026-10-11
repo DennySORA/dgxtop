@@ -642,7 +642,7 @@ impl StoreWriter for StateWriter {
         let now = self.advance_clock(now_boot_ns);
         let identity = (batch.batch_id, batch.collector_id.clone());
         let fingerprint = batch.content_fingerprint();
-        match self.remembered.recall(batch.batch_id, &fingerprint) {
+        match self.remembered.recall(batch.batch_id, fingerprint) {
             Recall::Duplicate(ack) => {
                 self.counters.count_duplicate();
                 self.shared.publish_counters(self.counters);
