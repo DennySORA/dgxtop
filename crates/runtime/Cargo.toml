@@ -11,7 +11,6 @@ publish = false
 [dependencies]
 dgxtop-core.workspace = true
 crossbeam-channel.workspace = true
-getrandom.workspace = true
 libc.workspace = true
 nix.workspace = true
 serde.workspace = true

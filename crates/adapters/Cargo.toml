@@ -26,7 +26,6 @@ uuid.workspace = true
 dgxtop-core = { workspace = true, features = ["test-support"] }
 # The crate's own integration tests use its test aids.
 dgxtop-adapters = { path = ".", features = ["test-support"] }
-proptest.workspace = true
 
 [lints]
 workspace = true

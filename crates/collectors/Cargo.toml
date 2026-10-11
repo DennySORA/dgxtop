@@ -10,8 +10,6 @@ publish = false
 
 [dependencies]
 dgxtop-core.workspace = true
-serde.workspace = true
-thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

@@ -611,7 +611,6 @@ dependencies = [
  "libc",
  "nix 0.31.3",
  "nvml-wrapper",
- "proptest",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -624,8 +623,6 @@ version = "2.0.2"
 dependencies = [
  "dgxtop-core",
  "proptest",
- "serde",
- "thiserror 2.0.21",
  "uuid",
 ]
 
@@ -663,8 +660,6 @@ version = "2.0.2"
 dependencies = [
  "crossbeam-channel",
  "dgxtop-core",
- "proptest",
- "serde",
  "serde_json",
  "thiserror 2.0.21",
  "uuid",
@@ -676,7 +671,6 @@ version = "2.0.2"
 dependencies = [
  "crossbeam-channel",
  "dgxtop-core",
- "getrandom 0.4.3",
  "libc",
  "nix 0.31.3",
  "proptest",
@@ -705,7 +699,6 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "sha2 0.11.0",
  "thiserror 2.0.21",
  "uuid",
 ]
