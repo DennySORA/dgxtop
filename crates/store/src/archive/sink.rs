@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use dgxtop_core::action::{PersistenceKind, PersistenceState, PersistenceStatus};
-use dgxtop_core::clock::{NANOS_PER_SECOND, TimeProvider};
+use dgxtop_core::clock::{NANOS_PER_SECOND, TimeProvider, format_utc_ns};
 use dgxtop_core::errors::InfraError;
+use dgxtop_core::overview_history::ArchivePrune;
 use dgxtop_core::ports::{ArchiveJournal, ArchiveReceipt, ArchiveSink};
 use dgxtop_core::wire::format_fixed_width;
 use rusqlite::config::DbConfig;
@@ -17,8 +18,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::limits::{ArchiveLimits, ArchiveOpenError};
 use super::queries::{
     delete_buckets_up_to, delete_empty_segments, delete_expired_buckets,
-    delete_old_current_boot_gaps, delete_orphaned_gaps, delete_stale_bridges, eviction_horizon,
-    insert_row,
+    delete_old_current_boot_gaps, delete_orphaned_gaps, delete_pruned_minutes,
+    delete_stale_bridges, eviction_horizon, insert_row,
 };
 use super::rows::{ArchiveBatch, ArchiveRow, storage_estimate};
 use crate::fs::{FileSystemOps, RealFileSystem};
@@ -51,6 +52,8 @@ pub struct ArchiveStats {
     pub transactions: u64,
     pub buckets_expired: u64,
     pub buckets_evicted: u64,
+    /// Minutes the history's compression asked to delete (D-82).
+    pub buckets_pruned: u64,
     pub bridges_deleted: u64,
     pub segments_deleted: u64,
     pub gaps_deleted: u64,
@@ -472,6 +475,28 @@ impl SqliteArchive {
         Ok(counts)
     }
 
+    /// Deletes the minutes the history's compression holds in its coarser
+    /// sizes (D-82), then the rows that depended on them. Bounded like a
+    /// retention run: what is left goes with the next prune.
+    fn prune(&mut self, prunes: &[ArchivePrune], protected_json: &str) -> Result<(), InfraError> {
+        if prunes.is_empty() {
+            return Ok(());
+        }
+        let batch = i64::from(self.limits.batch_rows);
+        let mut rounds_left = MAX_MAINTENANCE_ROUNDS;
+        let mut latest_cutoff = String::new();
+        for prune in prunes {
+            let cutoff = format_utc_ns(i128::from(prune.before_utc_ns.max(0))).unwrap_or_default();
+            let (removed, _) = self.drain(&mut rounds_left, |connection| {
+                delete_pruned_minutes(connection, &prune.series, &cutoff, batch)
+            })?;
+            self.stats.buckets_pruned = self.stats.buckets_pruned.saturating_add(removed);
+            latest_cutoff = latest_cutoff.max(cutoff);
+        }
+        self.cleanup_dependents(&latest_cutoff, None, protected_json, &mut rounds_left)?;
+        Ok(())
+    }
+
     /// Deletes the oldest whole minutes (up to one batch of buckets) and the
     /// rows that depended on them. Returns the buckets removed.
     fn evict_oldest(&mut self, protected_json: &str) -> Result<u64, InfraError> {
@@ -674,6 +699,7 @@ impl ArchiveSink for SqliteArchive {
         self.check_segment_references(&batch)?;
         self.check_fits_budget(&batch)?;
         let (written, present) = self.insert_batch(&batch)?;
+        self.prune(&journal.prunes, &protected_segments_json(&batch))?;
         self.stats.rows_written = self.stats.rows_written.saturating_add(written);
         self.stats.rows_already_present = self.stats.rows_already_present.saturating_add(present);
         self.last_issue = None;

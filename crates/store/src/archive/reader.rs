@@ -11,15 +11,20 @@
 //! so it sits where they were recorded. Boot clocks differ between boots,
 //! so the minutes are placed by their UTC stamps, which STORAGE.md §3
 //! allows for display.
+//!
+//! The history compresses the Overview series' archived minutes at startup
+//! through the same reader (D-82, [`super::backfill`]): the series earlier
+//! runs left, then each one's minutes oldest first, a bounded page a read.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use dgxtop_core::clock::TimeProvider;
-use dgxtop_core::errors::{ErrorCode, ErrorDetail};
-use dgxtop_core::history::{ArchivePoint, ArchiveQuery, ArchiveResult};
+use dgxtop_core::errors::{ErrorCode, ErrorDetail, InfraError};
+use dgxtop_core::history::{ArchivePoint, ArchiveQuery, ArchiveResult, SeriesInEveryBoot};
 use dgxtop_core::metric::descriptor;
+use dgxtop_core::overview_history::{ArchivedMinutes, ArchivedMinutesRead, ArchivedSeriesList};
 use dgxtop_core::ports::{ArchiveReader, CancelFlag};
 use rusqlite::config::DbConfig;
 use rusqlite::{Connection, OpenFlags, params};
@@ -199,6 +204,53 @@ impl ArchiveReader for SqliteArchiveReader {
             }
             error(code, message)
         })
+    }
+
+    fn archived_series(
+        &mut self,
+        list: &ArchivedSeriesList,
+    ) -> Result<Vec<SeriesInEveryBoot>, InfraError> {
+        let result = match self.connection() {
+            Ok(Some(connection)) => {
+                super::backfill::series(connection, list).map_err(Failure::Sqlite)
+            }
+            Ok(None) => Ok(Vec::new()),
+            Err(failure) => Err(failure),
+        };
+        result.map_err(|failure| self.infra_failure(&failure))
+    }
+
+    fn archived_minutes(
+        &mut self,
+        read: &ArchivedMinutesRead,
+    ) -> Result<ArchivedMinutes, InfraError> {
+        let result = match self.connection() {
+            Ok(Some(connection)) => {
+                super::backfill::minutes(connection, read).map_err(Failure::Sqlite)
+            }
+            Ok(None) => Ok(ArchivedMinutes {
+                minutes: Vec::new(),
+                more: false,
+            }),
+            Err(failure) => Err(failure),
+        };
+        result.map_err(|failure| self.infra_failure(&failure))
+    }
+}
+
+impl SqliteArchiveReader {
+    /// A failure as the history's store port reports it; a broken
+    /// connection is opened again next time.
+    fn infra_failure(&mut self, failure: &Failure) -> InfraError {
+        if failure.closes_connection() {
+            self.file = ArchiveFile::Closed;
+        }
+        let (code, message) = failure.describe();
+        if code == ErrorCode::Busy {
+            InfraError::Unavailable(message)
+        } else {
+            InfraError::Database(message)
+        }
     }
 }
 

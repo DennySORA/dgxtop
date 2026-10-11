@@ -26,6 +26,8 @@ pub const AUDIT_DATABASE_NAME: &str = "audit.sqlite3";
 pub const HISTORY_DATABASE_NAME: &str = "history.sqlite3";
 /// The process history's database (D-76).
 pub const PROCESS_HISTORY_DATABASE_NAME: &str = "process_history.sqlite3";
+/// The Overview History's buckets of every bar size (D-82).
+pub const HISTORY_TIERS_DATABASE_NAME: &str = "history_tiers.sqlite3";
 /// The process history's short-term file (D-76).
 pub const PROCESS_RECENT_FILE_NAME: &str = "process_recent.json";
 pub const LOG_FILE_NAME: &str = "dgxtop.log";
@@ -129,6 +131,8 @@ pub struct StatePaths {
     pub state_dir: PathBuf,
     pub audit_database: PathBuf,
     pub history_database: PathBuf,
+    /// The Overview History's buckets of every bar size (D-82).
+    pub history_tiers_database: PathBuf,
     /// The process history's runs and buckets (D-76).
     pub process_history_database: PathBuf,
     /// The live runs' recent buckets, replaced every 30 s (D-76).
@@ -173,6 +177,7 @@ impl StatePaths {
             namespace,
             audit_database: state_dir.join(AUDIT_DATABASE_NAME),
             history_database: state_dir.join(HISTORY_DATABASE_NAME),
+            history_tiers_database: state_dir.join(HISTORY_TIERS_DATABASE_NAME),
             process_history_database: state_dir.join(PROCESS_HISTORY_DATABASE_NAME),
             process_recent_file: state_dir.join(PROCESS_RECENT_FILE_NAME),
             log_file: state_dir.join(LOG_FILE_NAME),
@@ -373,6 +378,10 @@ mod tests {
         assert_eq!(
             paths.history_database,
             PathBuf::from("/xdg/state/dgxtop/v2/history.sqlite3")
+        );
+        assert_eq!(
+            paths.history_tiers_database,
+            PathBuf::from("/xdg/state/dgxtop/v2/history_tiers.sqlite3")
         );
         assert_eq!(
             paths.log_file,

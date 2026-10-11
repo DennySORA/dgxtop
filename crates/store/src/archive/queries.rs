@@ -31,6 +31,14 @@ const DELETE_EXPIRED_BUCKETS: &str = "DELETE FROM history_buckets WHERE rowid IN
 const SELECT_EVICTION_HORIZON: &str = "SELECT start_utc FROM history_buckets \
      ORDER BY start_utc LIMIT 1 \
      OFFSET (SELECT min(?1, count(*) - 1) FROM history_buckets)";
+// One series' minutes in every boot that started before ?5 (D-82: the
+// history's compression holds them in its coarser sizes).
+const DELETE_PRUNED_MINUTES: &str = "DELETE FROM history_buckets WHERE rowid IN (
+    SELECT b.rowid FROM history_buckets AS b
+    WHERE b.segment_id IN (SELECT s.segment_id FROM history_segments AS s
+        WHERE s.host_id = ?1 AND s.entity_id = ?2 AND s.metric_id = ?3 AND s.scope = ?4)
+      AND b.start_utc < ?5
+    LIMIT ?6)";
 const DELETE_BUCKETS_UP_TO: &str = "DELETE FROM history_buckets WHERE rowid IN (
     SELECT rowid FROM history_buckets WHERE start_utc <= ?1 LIMIT ?2)";
 // Bridges that end before the earliest remaining bucket of their segment
@@ -142,6 +150,27 @@ pub(crate) fn delete_expired_buckets(
 
 /// `start_utc` of the `offset`-th oldest bucket (the newest when fewer
 /// exist); `None` when the table is empty.
+/// Deletes up to `limit` of `series`' minutes that started before
+/// `cutoff_utc`.
+pub(crate) fn delete_pruned_minutes(
+    connection: &Connection,
+    series: &dgxtop_core::history::SeriesInEveryBoot,
+    cutoff_utc: &str,
+    limit: i64,
+) -> rusqlite::Result<u64> {
+    connection
+        .prepare_cached(DELETE_PRUNED_MINUTES)?
+        .execute(params![
+            series.host_id.as_str(),
+            series.entity_id.as_str(),
+            series.metric_id.as_str(),
+            series.scope.as_str(),
+            cutoff_utc,
+            limit
+        ])
+        .map(changed)
+}
+
 pub(crate) fn eviction_horizon(
     connection: &Connection,
     offset: i64,

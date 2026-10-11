@@ -170,6 +170,14 @@ pub struct TierRow {
     pub bucket: OverviewBucket,
 }
 
+/// One series' kept buckets as the store returns them at startup, each
+/// size oldest first.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredTierSeries {
+    pub series: SeriesInEveryBoot,
+    pub buckets: Vec<(Tier, OverviewBucket)>,
+}
+
 /// What the history asks its store to write: closed buckets, then of every
 /// (series, size) written only the latest `keep_latest` kept.
 #[derive(Debug, Clone, PartialEq)]
@@ -178,12 +186,13 @@ pub struct TierJournal {
     pub keep_latest: u32,
 }
 
-/// The Overview series the archive holds minutes of in earlier runs:
-/// segments of `host_id` started before `before_utc_ns` (this run's own
-/// minutes reach the history live).
+/// The series of `metric_ids` the archive holds minutes of in earlier
+/// runs: segments of `host_id` in their metric's canonical unit, started
+/// before `before_utc_ns` (this run's own minutes reach the history live).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchivedSeriesList {
     pub host_id: HostId,
+    pub metric_ids: Vec<String>,
     pub before_utc_ns: i64,
 }
 
@@ -229,7 +238,7 @@ pub enum HistoryTierJob {
 /// What became of a [`HistoryTierJob`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum HistoryTierCompletion {
-    Loaded(Result<Vec<TierRow>, InfraError>),
+    Loaded(Result<Vec<StoredTierSeries>, InfraError>),
     Appended(Result<(), InfraError>),
     Listed(Result<Vec<SeriesInEveryBoot>, InfraError>),
     ArchivedRead {

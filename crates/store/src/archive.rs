@@ -13,6 +13,7 @@
 //! The history view reads the archive back through [`SqliteArchiveReader`]
 //! (D-51), a read-only connection of its own, for the time before this run.
 
+mod backfill;
 mod limits;
 mod queries;
 mod reader;

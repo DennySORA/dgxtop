@@ -110,6 +110,7 @@ impl Fixture {
             buckets,
             bridges: Vec::new(),
             gaps: Vec::new(),
+            prunes: Vec::new(),
             permit: None,
         };
         self.archive.append(journal).unwrap();
@@ -486,4 +487,183 @@ fn the_point_cap_keeps_the_newest_points_and_says_so() {
     let means: Vec<_> = result.points.iter().map(|point| point.mean).collect();
     assert_eq!(means, vec![Some(20.0), Some(30.0)]);
     assert!(result.truncated);
+}
+
+fn utc_i64(utc_ns: u64) -> i64 {
+    i64::try_from(utc_ns).unwrap()
+}
+
+/// The listing names the series of the asked metrics that earlier runs
+/// left in their canonical unit, once each over every boot; this run's own
+/// segments and other metrics, units and hosts are not listed (D-82).
+#[test]
+fn the_backfill_lists_the_series_earlier_runs_left() {
+    let mut fixture = Fixture::new("listing");
+    let now = fixture.now_utc();
+    let (boot_a, boot_b) = (temperature_in("boot-a"), temperature_in("boot-b"));
+    let mut other_metric = temperature_in("boot-a");
+    other_metric.metric_id =
+        dgxtop_core::identity::MetricId::new("cpu.utilization.iowait").unwrap();
+    let mut other_host = temperature_in("boot-a");
+    other_host.host_id = HostId::new("other-host").unwrap();
+    let runs = [
+        (&boot_a, "seg-a", CanonicalUnit::DegC, now - 100 * MINUTE),
+        (&boot_b, "seg-b", CanonicalUnit::DegC, now - 50 * MINUTE),
+        (&boot_b, "seg-k", CanonicalUnit::Count, now - 50 * MINUTE),
+        (
+            &other_metric,
+            "seg-o",
+            CanonicalUnit::Percent,
+            now - 50 * MINUTE,
+        ),
+        (&other_host, "seg-h", CanonicalUnit::DegC, now - 50 * MINUTE),
+    ];
+    for (key, segment_id, unit, start_utc) in runs {
+        let run = Run {
+            key,
+            segment_id,
+            unit,
+            start_utc,
+            start_boot: MINUTE,
+        };
+        fixture.write(&run, &[Some(50.0)]);
+    }
+    let list = |before: u64| dgxtop_core::overview_history::ArchivedSeriesList {
+        host_id: boot_a.host_id.clone(),
+        metric_ids: vec!["gpu.temperature".to_owned(), "gpu.power.draw".to_owned()],
+        before_utc_ns: utc_i64(before),
+    };
+    let mut reader = fixture.reader();
+    let listed = reader.archived_series(&list(now)).unwrap();
+    assert_eq!(listed, vec![SeriesInEveryBoot::from(&boot_a)]);
+    assert!(
+        reader
+            .archived_series(&list(now - 200 * MINUTE))
+            .unwrap()
+            .is_empty(),
+        "segments started since are this run's"
+    );
+}
+
+/// A series' minutes from every boot come oldest first, from the asked
+/// start on, a page at a time, each a bucket at its minute's UTC start.
+#[test]
+fn the_backfill_reads_minutes_oldest_first_a_page_at_a_time() {
+    let mut fixture = Fixture::new("minutes");
+    let now = fixture.now_utc();
+    let (boot_a, boot_b) = (temperature_in("boot-a"), temperature_in("boot-b"));
+    let first = Run {
+        key: &boot_a,
+        segment_id: "seg-a",
+        unit: CanonicalUnit::DegC,
+        start_utc: now - 100 * MINUTE + 17 * SECOND,
+        start_boot: 7_000 * MINUTE,
+    };
+    fixture.write(&first, &[Some(40.0), None, Some(50.0)]);
+    let second = Run {
+        key: &boot_b,
+        segment_id: "seg-b",
+        unit: CanonicalUnit::DegC,
+        start_utc: now - 50 * MINUTE,
+        start_boot: MINUTE,
+    };
+    fixture.write(&second, &[Some(60.0), Some(70.0)]);
+    let read = |from: u64, max_minutes: u32| dgxtop_core::overview_history::ArchivedMinutesRead {
+        series: SeriesInEveryBoot::from(&boot_a),
+        from_utc_ns: utc_i64(from),
+        segments_before_utc_ns: utc_i64(now),
+        max_minutes,
+    };
+    let mut reader = fixture.reader();
+    let all = reader.archived_minutes(&read(0, 100)).unwrap();
+    assert!(!all.more);
+    let shape: Vec<(i64, Option<f64>, Option<f64>)> = all
+        .minutes
+        .iter()
+        .map(|minute| (minute.start_utc_ns, minute.mean(), minute.peak()))
+        .collect();
+    let at = |utc: u64| utc_i64(utc);
+    assert_eq!(
+        shape,
+        vec![
+            (at(first.start_utc), Some(40.0), Some(42.0)),
+            (at(first.start_utc + 2 * MINUTE), Some(50.0), Some(52.0)),
+            (at(second.start_utc), Some(60.0), Some(62.0)),
+            (at(second.start_utc + MINUTE), Some(70.0), Some(72.0)),
+        ],
+        "uncovered minutes left out, unaligned starts kept"
+    );
+    assert_eq!(all.minutes[0].samples, 60);
+    let page = reader.archived_minutes(&read(0, 2)).unwrap();
+    assert!(page.more);
+    assert_eq!(page.minutes.len(), 2);
+    let rest = reader
+        .archived_minutes(&read(first.start_utc + 2 * MINUTE + 1, 2))
+        .unwrap();
+    assert!(!rest.more);
+    assert_eq!(rest.minutes.len(), 2, "from the asked start on");
+}
+
+/// A prune deletes one series' minutes that started before its cutoff in
+/// every boot; other series and later minutes stay (D-82).
+#[test]
+fn a_prune_deletes_one_series_minutes_before_its_cutoff() {
+    let mut fixture = Fixture::new("prune");
+    let now = fixture.now_utc();
+    let (boot_a, boot_b) = (temperature_in("boot-a"), temperature_in("boot-b"));
+    let mut power = temperature_in("boot-b");
+    power.metric_id = dgxtop_core::identity::MetricId::new("gpu.power.draw").unwrap();
+    let runs = [
+        (&boot_a, "seg-a", CanonicalUnit::DegC, now - 100 * MINUTE),
+        (&boot_b, "seg-b", CanonicalUnit::DegC, now - 50 * MINUTE),
+        (&power, "seg-p", CanonicalUnit::Watts, now - 50 * MINUTE),
+    ];
+    for (key, segment_id, unit, start_utc) in runs {
+        let run = Run {
+            key,
+            segment_id,
+            unit,
+            start_utc,
+            start_boot: MINUTE,
+        };
+        fixture.write(&run, &[Some(50.0); 10]);
+    }
+    fixture.revision += 1;
+    let prune = dgxtop_core::overview_history::ArchivePrune {
+        series: SeriesInEveryBoot::from(&boot_a),
+        before_utc_ns: utc_i64(now - 45 * MINUTE),
+    };
+    fixture
+        .archive
+        .append(ArchiveJournal {
+            revision: fixture.revision,
+            host_id: boot_b.host_id.to_string(),
+            boot_id: boot_b.boot_id.to_string(),
+            segments: Vec::new(),
+            buckets: Vec::new(),
+            bridges: Vec::new(),
+            gaps: Vec::new(),
+            prunes: vec![prune],
+            permit: None,
+        })
+        .unwrap();
+    assert_eq!(fixture.archive.stats().buckets_pruned, 15);
+    let mut reader = fixture.reader();
+    let read = |key: &MetricKey| dgxtop_core::overview_history::ArchivedMinutesRead {
+        series: SeriesInEveryBoot::from(key),
+        from_utc_ns: 0,
+        segments_before_utc_ns: utc_i64(now),
+        max_minutes: 100,
+    };
+    let left = reader.archived_minutes(&read(&boot_a)).unwrap().minutes;
+    assert_eq!(left.len(), 5);
+    assert_eq!(left[0].start_utc_ns, utc_i64(now - 45 * MINUTE));
+    assert_eq!(
+        reader
+            .archived_minutes(&read(&power))
+            .unwrap()
+            .minutes
+            .len(),
+        10
+    );
 }

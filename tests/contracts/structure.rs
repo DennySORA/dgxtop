@@ -145,6 +145,7 @@ fn the_store_keeps_only_sqlite_and_file_modules() {
             "audit",
             "config",
             "fs",
+            "history_tiers",
             "lock",
             "paths",
             "process_history",

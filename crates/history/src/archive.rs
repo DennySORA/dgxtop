@@ -198,6 +198,7 @@ impl ArchiveQueue {
             buckets: collected.buckets,
             bridges: collected.bridges,
             gaps: collected.gaps,
+            prunes: Vec::new(),
             permit,
         })
     }

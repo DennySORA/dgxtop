@@ -44,6 +44,10 @@ use crate::identity::{AdapterId, CollectorId, MetricKey, ProcessKey, SessionId, 
 use crate::observation::{
     AdapterHealth, AdapterManifest, CatalogDelta, DiscoverRequest, ObservationBatch, ReadPlan,
 };
+use crate::overview_history::{
+    ArchivePrune, ArchivedMinutes, ArchivedMinutesRead, ArchivedSeriesList, StoredTierSeries,
+    TierJournal,
+};
 use crate::process_history::{
     ProcessHistoryJournal, ProcessHistoryLoad, RecentHistory, RunBucketRow,
 };
@@ -251,6 +255,11 @@ pub trait HistoryIngest: Send {
 /// boots left on disk, for the history view. Bounded like the history
 /// reader: `TimedOut` past the deadline, `Cancelled` when the flag is set; an
 /// archive that does not exist yet answers with no points.
+///
+/// The history compresses the Overview series' archived minutes at
+/// startup through it (D-82): which series earlier runs left, and their
+/// minutes oldest first, a bounded page at a time. An archive that does not
+/// exist yet holds none.
 pub trait ArchiveReader: Send {
     fn read(
         &mut self,
@@ -259,6 +268,23 @@ pub trait ArchiveReader: Send {
         cancel: &CancelFlag,
         clock: &dyn TimeProvider,
     ) -> Result<ArchiveResult, ErrorDetail>;
+    fn archived_series(
+        &mut self,
+        list: &ArchivedSeriesList,
+    ) -> Result<Vec<crate::history::SeriesInEveryBoot>, InfraError>;
+    fn archived_minutes(
+        &mut self,
+        read: &ArchivedMinutesRead,
+    ) -> Result<ArchivedMinutes, InfraError>;
+}
+
+/// The history's own store of the Overview series' buckets of every size
+/// (D-82): it executes what the history asks, nothing more.
+pub trait HistoryTierStore: Send {
+    /// Every series' kept buckets, read once at startup.
+    fn load(&mut self) -> Result<Vec<StoredTierSeries>, InfraError>;
+    /// Writes closed buckets and keeps the latest of each (series, size).
+    fn append(&mut self, journal: &TierJournal) -> Result<(), InfraError>;
 }
 
 /// Where the effective configuration came from at load.
@@ -397,6 +423,9 @@ pub struct ArchiveJournal {
     pub buckets: Vec<ArchivedBucket>,
     pub bridges: Vec<ArchivedBridge>,
     pub gaps: Vec<GapRecord>,
+    /// Minutes the history's compression holds in its coarser sizes, to be
+    /// deleted (D-82).
+    pub prunes: Vec<ArchivePrune>,
     pub permit: Option<BytePermit>,
 }
 
