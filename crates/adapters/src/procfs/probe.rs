@@ -21,7 +21,7 @@ use dgxtop_core::process_probe::{
 };
 use dgxtop_core::text::sanitize_display;
 
-use super::command::command_text;
+use super::command::{command_text, read_argv};
 use super::host::PID_NAMESPACE_PATH;
 use super::mechanics::namespace_link;
 use super::parse::{PidStat, parse_pid_stat};
@@ -151,15 +151,7 @@ impl ProcfsProcessProbe {
     }
 
     fn command_of(&self, key: &ProcessKey) -> Option<String> {
-        let text = self
-            .files
-            .read_to_string(&format!("/proc/{}/cmdline", key.pid))
-            .ok()?;
-        let argv: Vec<String> = text
-            .split('\0')
-            .filter(|word| !word.is_empty())
-            .map(str::to_owned)
-            .collect();
+        let argv = read_argv(self.files.as_ref(), key.pid)?;
         let command = command_text(&argv, MAX_PROBE_TEXT_BYTES);
         (!command.is_empty()).then_some(command)
     }

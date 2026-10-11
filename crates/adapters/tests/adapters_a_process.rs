@@ -66,12 +66,8 @@ fn stat_of(record: &Observation) -> ProcessStat {
 
 /// The display name before the command line in a record's channel.
 fn name_of(record: &Observation) -> String {
-    record
-        .provenance
-        .channel
-        .split(dgxtop_core::naming::PROCESS_COMMAND_SEPARATOR)
-        .next()
-        .unwrap_or_default()
+    dgxtop_core::naming::split_process_channel(&record.provenance.channel)
+        .0
         .to_owned()
 }
 

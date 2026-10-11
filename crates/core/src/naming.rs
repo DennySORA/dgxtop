@@ -32,6 +32,25 @@ pub const PROCESS_COMMAND_SEPARATOR: char = '\u{1f}';
 /// longest a process's name and command line together may be.
 pub const MAX_CHANNEL_BYTES: usize = 256;
 
+/// The channel of a process's procfs record (D-73): its display name, then
+/// its command line after [`PROCESS_COMMAND_SEPARATOR`] when it has one.
+pub fn process_channel(name: &str, command: &str) -> String {
+    if command.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{name}{PROCESS_COMMAND_SEPARATOR}{command}")
+    }
+}
+
+/// The display name and the command line of a process record's channel,
+/// as [`process_channel`] joined them; the command line is empty when the
+/// channel has none.
+pub fn split_process_channel(channel: &str) -> (&str, &str) {
+    channel
+        .split_once(PROCESS_COMMAND_SEPARATOR)
+        .unwrap_or((channel, ""))
+}
+
 pub mod adapters {
     pub const PROCFS: &str = "procfs";
     pub const HWMON: &str = "hwmon";
@@ -443,6 +462,17 @@ pub fn collector_id(name: &str) -> Result<CollectorId, IdentityError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_process_channel_splits_back_into_name_and_command() {
+        let channel = process_channel("acme_llm.train", "python -m acme_llm.train --lr 3e-4");
+        assert_eq!(
+            split_process_channel(&channel),
+            ("acme_llm.train", "python -m acme_llm.train --lr 3e-4")
+        );
+        assert_eq!(process_channel("systemd", ""), "systemd");
+        assert_eq!(split_process_channel("systemd"), ("systemd", ""));
+    }
 
     #[test]
     fn routing_covers_every_collector() {

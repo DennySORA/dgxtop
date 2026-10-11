@@ -191,23 +191,6 @@ fn host_samples<'a>(session: &mut Session<'a>) -> BTreeMap<ProcessKey, HostSampl
     samples
 }
 
-/// The display name in a process record's channel (D-73).
-fn display_name_of(channel: &str) -> &str {
-    channel
-        .split(naming::PROCESS_COMMAND_SEPARATOR)
-        .next()
-        .unwrap_or(channel)
-}
-
-/// The command line a process record's channel carries after the name
-/// (D-73), cleaned and bounded; empty when there is none.
-fn command_of(channel: &str) -> String {
-    channel
-        .split_once(naming::PROCESS_COMMAND_SEPARATOR)
-        .map(|(_, command)| sanitize_display(command, naming::MAX_CHANNEL_BYTES))
-        .unwrap_or_default()
-}
-
 /// One host row plus the next CPU tick base of the process.
 fn host_row(
     session: &Session<'_>,
@@ -219,11 +202,13 @@ fn host_row(
     let (cpu_percent, cpu_reason, base) = cpu_percent(session, key, record, clk_tck);
     let admitted = admits_tags(session, record);
     let (rss_bytes, rss_reason) = tagged_rss(session, sample, admitted);
-    let channel = &record.observation.provenance.channel;
+    let (name, command) = naming::split_process_channel(&record.observation.provenance.channel);
     let row = ProcessRow {
         key: key.clone(),
-        name: sanitize_command_name(display_name_of(channel)),
-        command: command_of(channel),
+        name: sanitize_command_name(name),
+        // Cleaned and bounded here too: a replay's channel is not the
+        // adapter's.
+        command: sanitize_display(command, naming::MAX_CHANNEL_BYTES),
         uid: sample.stat.uid.filter(|_| admitted.is_ok()),
         state: sample.stat.state,
         cpu_percent,

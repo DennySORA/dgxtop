@@ -24,7 +24,7 @@ use dgxtop_core::quality::{RawKind, ReadStatus};
 use dgxtop_core::text::sanitize_command_name;
 
 use super::catalog::{CatalogConfig, KeyContext, SourceSpec, descriptor_for};
-use super::command::{Named, command_text, name_process, needs_command_line};
+use super::command::{Named, command_text, name_process, needs_command_line, read_argv};
 use super::locator::DRIVER;
 use super::mechanics::{ReadSnapshot, invariant, io_failure, joined_error_code};
 use super::parse::{Field, PidStat, parse_pid_stat};
@@ -137,15 +137,7 @@ impl ProcessNames {
 /// working folder say when `comm` says too little) and its command line as
 /// shown (D-73), read once per process.
 fn derive_name(files: &dyn SystemFiles, pid: Pid, comm: &str) -> (Named, String) {
-    let argv: Vec<String> = files
-        .read_to_string(&format!("/proc/{pid}/cmdline"))
-        .map(|text| {
-            text.split('\0')
-                .filter(|word| !word.is_empty())
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
+    let argv = read_argv(files, pid).unwrap_or_default();
     let command = command_text(&argv, MAX_COMMAND_BYTES);
     if !needs_command_line(comm) {
         return (Named::Name(sanitize_command_name(comm)), command);
@@ -327,11 +319,7 @@ impl SeenProcess {
     /// `stat` and the owner as tags, the name and command line (D-73) in
     /// the channel.
     fn record(&self, scan: &ProcessScan<'_>, name: &str, command: &str) -> Option<Observation> {
-        let channel = if command.is_empty() {
-            name.to_owned()
-        } else {
-            format!("{name}{}{command}", naming::PROCESS_COMMAND_SEPARATOR)
-        };
+        let channel = naming::process_channel(name, command);
         let descriptor = self.identity.descriptor(scan, &channel)?;
         let mut record =
             u64_outcome_record(scan.plan, &descriptor, cpu_ticks(&self.stat), self.window)?;
