@@ -104,6 +104,9 @@ impl HistoryWriter {
         self.write().shed_raw(now_ns, keep_ns)
     }
 
+    /// Called only from the recorder's first boot-to-UTC pairing (the
+    /// recorder owns this writer), so minutes are never finished before
+    /// the wall clock can place them.
     pub(crate) fn set_minute_grid(&self, grid: MinuteGrid) {
         self.write().set_minute_grid(grid);
     }

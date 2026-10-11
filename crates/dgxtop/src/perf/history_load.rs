@@ -38,7 +38,7 @@ const MINUTE_NS: u64 = 60 * NANOS_PER_SECOND;
 /// UTC of boot 0 on the synthetic timeline: a whole minute, so the
 /// history's minutes (cut on whole UTC minutes once it is paired, D-82)
 /// are whole minutes of the boot clock, as the shape above assumes.
-const SYNTHETIC_UTC_AT_BOOT_NS: i128 = 1_790_000_040 * 1_000_000_000;
+const SYNTHETIC_UTC_AT_BOOT_NS: i128 = dgxtop_core::testing::UTC_ON_A_WHOLE_MINUTE_NS;
 const DAY_SECONDS: u64 = 86_400;
 const OUTAGE_NS: u64 = 10 * MINUTE_NS;
 /// One series in this many has an outage, another one a source change.

@@ -12,20 +12,24 @@
 //! the time before the first boundary (`[0, phase)`, only when dgxtop
 //! starts within a minute of boot) is a shorter head minute.
 
+use dgxtop_core::process_history::Tier;
+
 use crate::records::BUCKET_NS;
 
 /// Minute boundaries on the boot clock: boot 0 and `phase_ns + k × 60 s`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Where no grid is known yet the holder says so (`Option`): there is no
+/// default grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MinuteGrid {
     /// The first boundary after boot 0, below one minute.
     phase_ns: u64,
 }
 
 impl MinuteGrid {
-    /// Boundaries on whole minutes of the boot clock (tests and
-    /// compositions without a wall clock).
-    #[cfg(test)]
-    pub(crate) const BOOT: Self = Self { phase_ns: 0 };
+    /// Boundaries on whole minutes of the boot clock: the grid of a boot
+    /// that fell on a whole UTC minute, and the only minutes there are for
+    /// laying out query points before the boot is paired with UTC.
+    pub(crate) const BOOT_CLOCK: Self = Self { phase_ns: 0 };
 
     /// The grid whose boundaries fall on whole UTC minutes, given one
     /// boot-to-UTC pairing.
@@ -82,25 +86,26 @@ impl MinuteGrid {
 /// so one finished minute is exactly one UTC minute. After a wall clock
 /// step by part of a minute the grid stays, its minutes are a part of a
 /// minute off and each is filed in the nearest UTC minute; a step back
-/// files the minutes it repeats in the same UTC minutes again.
-pub(crate) fn utc_minute_ending_near(end_utc_ns: i128) -> i128 {
-    let minute = i128::from(BUCKET_NS);
-    end_utc_ns
-        .saturating_add(minute / 2)
-        .div_euclid(minute)
-        .saturating_mul(minute)
+/// files the minutes it repeats in the same UTC minutes again. Minutes are
+/// floored by the 1 minute size's own rule (one rounding rule for every
+/// minute on the wall clock).
+pub(crate) fn utc_minute_ending_near(end_utc_ns: i64) -> i64 {
+    let minute = i64::try_from(BUCKET_NS).unwrap_or(i64::MAX);
+    Tier::OneMinute
+        .align(end_utc_ns.saturating_add(minute / 2), 0)
         .saturating_sub(minute)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dgxtop_core::testing::UTC_ON_A_WHOLE_MINUTE_NS;
 
     const SECOND: u64 = 1_000_000_000;
 
     #[test]
     fn the_boot_grid_cuts_whole_boot_minutes() {
-        let grid = MinuteGrid::BOOT;
+        let grid = MinuteGrid::BOOT_CLOCK;
         assert_eq!(grid.floor(0), 0);
         assert_eq!(grid.floor(BUCKET_NS - 1), 0);
         assert_eq!(grid.floor(BUCKET_NS), BUCKET_NS);
@@ -115,7 +120,7 @@ mod tests {
     /// and every 60 s after; the 23 s before are a head minute.
     #[test]
     fn a_boot_that_started_mid_minute_has_minutes_on_whole_utc_minutes() {
-        let noon_utc_ns = 1_790_000_000 / 60 * 60 * i128::from(SECOND);
+        let noon_utc_ns = UTC_ON_A_WHOLE_MINUTE_NS;
         let boot_utc_ns = noon_utc_ns + 37 * i128::from(SECOND);
         // Paired 1000 s after boot.
         let grid = MinuteGrid::on_utc_minutes(1_000 * SECOND, boot_utc_ns + 1_000 * 1_000_000_000);
@@ -137,8 +142,8 @@ mod tests {
 
     #[test]
     fn a_minute_is_filed_in_the_utc_minute_it_ends_nearest() {
-        let minute = i128::from(BUCKET_NS);
-        let noon = 1_790_000_000 / 60 * minute;
+        let minute = i64::try_from(BUCKET_NS).unwrap();
+        let noon = i64::try_from(UTC_ON_A_WHOLE_MINUTE_NS).unwrap();
         assert_eq!(utc_minute_ending_near(noon + minute), noon);
         // Slewed or stepped by part of a minute either way.
         assert_eq!(utc_minute_ending_near(noon + minute - 2), noon);
@@ -151,6 +156,11 @@ mod tests {
             noon + minute
         );
         assert_eq!(utc_minute_ending_near(0), -minute, "before 1970");
+        assert_eq!(utc_minute_ending_near(-minute - 1), -2 * minute);
+        assert_eq!(
+            utc_minute_ending_near(i64::MAX),
+            i64::MAX / minute * minute - minute
+        );
     }
 
     #[test]

@@ -54,8 +54,8 @@ pub(crate) struct GaugeInputs<'p> {
     pub gaps: &'p [GapEntry],
     /// Query clock: the newest step is never extended into the future.
     pub now_ns: u64,
-    /// Where the series' minutes begin and end.
-    pub grid: MinuteGrid,
+    /// The minutes its cells of whole minutes lie on.
+    pub minute_grid: MinuteGrid,
 }
 
 impl<'p> GaugeInputs<'p> {
@@ -225,7 +225,7 @@ fn accumulate_buckets(
             break;
         }
         guard.charge(1)?;
-        if inputs.grid.end_of(bucket.start_ns) <= to_ns {
+        if bucket.end_ns <= to_ns {
             accumulator.add_bucket(bucket, inputs);
         }
     }
@@ -280,7 +280,7 @@ fn flush_run(
     }
 }
 
-/// Points on an absolute grid of `cell_ns` cells.
+/// Points on absolute cells of `cell_ns` (see `plan::cells`).
 pub(crate) fn gauge_cells(
     inputs: &GaugeInputs<'_>,
     plan: &RegionPlan,
@@ -291,7 +291,7 @@ pub(crate) fn gauge_cells(
     guard: &mut ScanGuard<'_>,
 ) -> Result<(), ErrorDetail> {
     let mut raw_cursor: Option<(usize, StepCursor<'_, '_>)> = None;
-    for (cell_start, cell_end) in cells(window, cell_ns, inputs.grid) {
+    for (cell_start, cell_end) in cells(window, cell_ns, inputs.minute_grid) {
         let mut run: Option<Run> = None;
         for (index, region) in plan.regions().iter().enumerate() {
             if region.end_ns <= cell_start || region.start_ns >= cell_end {

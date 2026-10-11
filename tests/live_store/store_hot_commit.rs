@@ -16,7 +16,7 @@ use dgxtop_core::identity::CollectorId;
 use dgxtop_core::metric::{CanonicalUnit, Scalar};
 use dgxtop_core::ports::{SnapshotReader, StoreWriter};
 use dgxtop_core::quality::{Namespace, SampleKind};
-use dgxtop_core::testing::{boot_id, metric_key, source_id};
+use dgxtop_core::testing::{UTC_ON_A_WHOLE_MINUTE_NS, boot_id, metric_key, source_id};
 use dgxtop_core::wire::{format_fixed_width, parse_fixed_width};
 use support::{
     Harness, MINUTE, SECOND, conflict, gauge, interval, raw_input, rx_key, temperature_key,
@@ -478,7 +478,7 @@ fn at06_archive_enabled_gets_finished_rows_and_at27_keys_sort_numerically() {
     );
     harness
         .writer
-        .observe_wall_clock(0, support::UTC_AT_BOOT_NS);
+        .observe_wall_clock(0, UTC_ON_A_WHOLE_MINUTE_NS);
     harness.maintain(250 * SECOND);
     let journal = harness.writer.take_archive_journal(8 << 20).unwrap();
     assert_eq!(journal.host_id, "test-host");

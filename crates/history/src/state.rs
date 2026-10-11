@@ -16,7 +16,7 @@ use super::grid::MinuteGrid;
 use super::output::{ArchiveRow, DropReason, HistoryReport};
 use super::records::{CounterSample, GaugeBucket};
 use super::segment::SegmentIdentity;
-use super::series::{Series, gauge_record, series_overhead_bytes};
+use super::series::{Series, SeriesOpening, gauge_record, series_overhead_bytes};
 use super::slots::{SlotHandle, SlotTable};
 
 /// Gap entries kept for keys without a series and host-wide gaps.
@@ -60,7 +60,8 @@ pub(crate) struct HistoryState {
     pub(super) by_key: BTreeMap<MetricKey, SlotHandle>,
     pub(super) global_gaps: GapList,
     pub(super) discontinuities: VecDeque<u64>,
-    /// The boot's minutes, fixed by the first boot-to-UTC pairing.
+    /// The boot's minutes, fixed by the first boot-to-UTC pairing; the one
+    /// copy, handed to each series operation that needs it.
     grid: Option<MinuteGrid>,
     reasons: ReasonInterner,
     settings: HistorySettings,
@@ -92,7 +93,7 @@ impl HistoryState {
         self.grid = Some(grid);
         for handle in self.slots.handles() {
             if let Some(series) = self.slots.get_mut(handle) {
-                series.adopt_grid(grid);
+                series.settle_on_grid(grid);
             }
         }
     }
@@ -103,7 +104,7 @@ impl HistoryState {
     }
 
     /// Start of the minute holding `time_ns`; boot 0 while the grid is
-    /// unknown (nothing is old or settled yet).
+    /// unknown (nothing can be archived, so nothing is settled yet).
     fn minute_floor(&self, time_ns: u64) -> u64 {
         self.grid.map_or(0, |grid| grid.floor(time_ns))
     }
@@ -277,8 +278,9 @@ impl HistoryState {
             kind,
             report,
         )?;
+        let grid = self.grid;
         let series = self.slots.get_mut(handle)?;
-        series.reach_back_to(append.start_ns);
+        series.reach_back_to(append.start_ns, grid);
         let admitted = series.admit_interval(append.start_ns, append.end_ns);
         if let Err(reason) = admitted {
             record_drop(report, kind, reason);
@@ -365,7 +367,10 @@ impl HistoryState {
         let created = Series::new(
             key.clone(),
             descriptor,
-            (time_ns, now_ns),
+            SeriesOpening {
+                first_time_ns: time_ns,
+                now_ns,
+            },
             self.grid,
             &self.ledger,
         );
@@ -476,11 +481,13 @@ impl HistoryState {
         }
     }
 
+    /// Finalizes the minutes of `handle` before `horizon_ns`; none before
+    /// the grid is fixed.
     fn finalize(&mut self, handle: SlotHandle, horizon_ns: u64, report: &mut HistoryReport) {
-        let Some(series) = self.slots.get(handle) else {
+        let (Some(grid), Some(series)) = (self.grid, self.slots.get(handle)) else {
             return;
         };
-        let Some(plan) = series.plan_finalization(horizon_ns) else {
+        let Some(plan) = series.plan_finalization(horizon_ns, grid) else {
             return;
         };
         let cost = series.finalization_cost(&plan);
@@ -530,11 +537,17 @@ impl HistoryState {
     }
 
     fn evict_raw_once(&mut self, report: &mut HistoryReport) -> bool {
+        let grid = self.grid;
         let victim = self
             .slots
             .handles()
             .into_iter()
-            .filter_map(|handle| Some((self.slots.get(handle)?.oldest_evictable_raw_ns()?, handle)))
+            .filter_map(|handle| {
+                Some((
+                    self.slots.get(handle)?.oldest_evictable_raw_ns(grid)?,
+                    handle,
+                ))
+            })
             .min();
         let Some((_, handle)) = victim else {
             return false;
@@ -542,19 +555,23 @@ impl HistoryState {
         let Some(series) = self.slots.get_mut(handle) else {
             return false;
         };
-        let dropped = series.evict_oldest_raw();
+        let eviction = series.evict_oldest_raw(grid);
         report.evicted_records = report
             .evicted_records
-            .saturating_add(u64::try_from(dropped).unwrap_or(u64::MAX));
-        dropped > 0
+            .saturating_add(u64::try_from(eviction.records).unwrap_or(u64::MAX));
+        if let Some(lost) = eviction.unsummarized {
+            self.record_loss_gap(handle, lost, "evicted", report);
+        }
+        eviction.records > 0
     }
 
     fn evict_rollup_once(&mut self, report: &mut HistoryReport) -> bool {
+        let grid = self.grid;
         let victim = self
             .slots
             .handles()
             .into_iter()
-            .filter_map(|handle| Some((self.slots.get(handle)?.oldest_rollup_ns()?, handle)))
+            .filter_map(|handle| Some((self.slots.get(handle)?.oldest_rollup_ns(grid)?, handle)))
             .min();
         let global_oldest = self.global_gaps.oldest_start();
         let series_first = match (victim, global_oldest) {
@@ -575,7 +592,7 @@ impl HistoryState {
         let Some(series) = self.slots.get_mut(handle) else {
             return false;
         };
-        let Some(eviction) = series.evict_oldest_rollup() else {
+        let Some(eviction) = series.evict_oldest_rollup(grid) else {
             return false;
         };
         report.evicted_records = report
@@ -598,13 +615,15 @@ impl HistoryState {
     }
 
     /// Overload relief: raw history older than `keep_ns` is dropped (only
-    /// minutes that already have rollups).
+    /// minutes that already have rollups, or by boot time while the grid is
+    /// unknown and no minute can have one yet).
     pub(crate) fn shed_raw(&mut self, now_ns: u64, keep_ns: u64) -> HistoryReport {
         let mut report = HistoryReport::default();
         let target = now_ns.saturating_sub(keep_ns);
+        let grid = self.grid;
         for handle in self.slots.handles() {
             if let Some(series) = self.slots.get_mut(handle) {
-                let dropped = series.advance_raw_floors(target);
+                let dropped = series.advance_raw_floors(target, grid);
                 report.evicted_records = report
                     .evicted_records
                     .saturating_add(u64::try_from(dropped).unwrap_or(u64::MAX));
@@ -622,13 +641,14 @@ impl HistoryState {
         let rollup_target = now_ns.saturating_sub(self.settings.aggregate_retention_ns);
         let settle_horizon = self.minute_floor(horizon);
         let archive = self.settings.archive_enabled;
+        let grid = self.grid;
         for handle in self.slots.handles() {
             self.finalize(handle, horizon, &mut report);
             let Some(series) = self.slots.get_mut(handle) else {
                 continue;
             };
-            series.advance_raw_floors(raw_target);
-            series.advance_rollup_floors(rollup_target);
+            series.advance_raw_floors(raw_target, grid);
+            series.advance_rollup_floors(rollup_target, grid);
             series.retire_unreferenced_segments();
             if archive {
                 for entry in series.gaps.settle_before(settle_horizon) {
@@ -636,7 +656,8 @@ impl HistoryState {
                 }
             }
         }
-        let rollup_floor = self.minute_floor(rollup_target);
+        // Gaps age by boot time before the grid, as the series' do.
+        let rollup_floor = grid.map_or(rollup_target, |grid| grid.floor(rollup_target));
         self.global_gaps.drop_ending_by(rollup_floor);
         if archive {
             for entry in self.global_gaps.settle_before(settle_horizon) {
@@ -685,12 +706,16 @@ impl HistoryState {
             .cloned()
     }
 
-    /// `key`'s minutes not finalized yet, up to `now_ns` (D-82).
+    /// `key`'s minutes not finalized yet, up to `now_ns` (D-82); none
+    /// before the grid is fixed (no minute has its place yet).
     pub(crate) fn provisional_minutes(&self, key: &MetricKey, now_ns: u64) -> Vec<GaugeBucket> {
+        let Some(grid) = self.grid else {
+            return Vec::new();
+        };
         self.by_key
             .get(key)
             .and_then(|handle| self.slots.get(*handle))
-            .map(|series| series.provisional_gauge_buckets(now_ns))
+            .map(|series| series.provisional_gauge_buckets(now_ns, grid))
             .unwrap_or_default()
     }
 }
@@ -718,7 +743,7 @@ mod tests {
 
     fn state(ledger: &ByteLedger) -> HistoryState {
         let mut state = HistoryState::new(settings(), ledger);
-        state.set_minute_grid(MinuteGrid::BOOT);
+        state.set_minute_grid(MinuteGrid::BOOT_CLOCK);
         state
     }
 
@@ -738,6 +763,67 @@ mod tests {
             stale_deadline_ns: (seconds + 3) * SECOND,
             value: Scalar::from_f64(value).unwrap(),
         }
+    }
+
+    /// Samples of `gpu:a` every second over `[0, seconds)`, committed as they come.
+    fn gauge_every_second(state: &mut HistoryState, seconds: u64) {
+        for second in 0..seconds {
+            let appends = HistoryAppends {
+                gauges: vec![gauge("gpu:a", second, 40.0)],
+                ..HistoryAppends::default()
+            };
+            state.apply(appends, second * SECOND, second + 1);
+        }
+    }
+
+    fn gpu_a(state: &HistoryState) -> &Series {
+        let key = metric_key("gpu:a", ids::GPU_TEMPERATURE, "gpu");
+        state.slots.get(state.handle_of(&key).unwrap()).unwrap()
+    }
+
+    /// Before the boot is paired with UTC no minute can be finalized, yet
+    /// raw history still ages by boot time instead of growing to its cap;
+    /// the minutes cut once the grid is known start where raw data does.
+    #[test]
+    fn raw_history_ages_by_boot_time_before_the_minute_grid_is_known() {
+        let ledger = ByteLedger::for_memory_limit_mib(64);
+        let mut state = HistoryState::new(settings(), &ledger);
+        gauge_every_second(&mut state, 600);
+        state.maintain(600 * SECOND);
+        let series = gpu_a(&state);
+        assert_eq!(series.gauge.raw_floor_ns, 300 * SECOND);
+        // Whole chunks of 64 records go: the one holding 256 s to 319 s stays.
+        assert_eq!(series.gauge.raw.first().unwrap().time_ns, 256 * SECOND);
+        assert!(
+            series.gauge.buckets.is_empty(),
+            "no minute without the grid"
+        );
+        let late = state.apply(
+            HistoryAppends {
+                gauges: vec![gauge("gpu:a", 299, 1.0)],
+                ..HistoryAppends::default()
+            },
+            600 * SECOND,
+            601,
+        );
+        assert_eq!(late.gauge_drops.late, 1, "older than the raw history");
+
+        state.set_minute_grid(MinuteGrid::BOOT_CLOCK);
+        state.maintain(700 * SECOND);
+        let series = gpu_a(&state);
+        let first = series.gauge.buckets.first().unwrap();
+        assert_eq!(first.start_ns, 300 * SECOND);
+        assert_eq!(first.covered_ns, 60 * SECOND);
+    }
+
+    #[test]
+    fn overload_sheds_raw_history_before_the_minute_grid_is_known() {
+        let ledger = ByteLedger::for_memory_limit_mib(64);
+        let mut state = HistoryState::new(settings(), &ledger);
+        gauge_every_second(&mut state, 200);
+        let report = state.shed_raw(200 * SECOND, 60 * SECOND);
+        assert_eq!(report.evicted_records, 128, "two whole chunks");
+        assert_eq!(gpu_a(&state).gauge.raw_floor_ns, 140 * SECOND);
     }
 
     #[test]

@@ -63,14 +63,22 @@ pub(crate) struct PinnedSeries {
     pub descriptor: &'static MetricDescriptor,
     pub segments: SegmentsView,
     pub finalized_through_ns: u64,
-    /// The series' minutes (any grid while none is known: then no minute
-    /// is final and everything is raw).
-    pub grid: MinuteGrid,
+    /// The boot's minutes; `None` until the boot is paired with UTC.
+    pub minute_grid: Option<MinuteGrid>,
     pub track: PinnedTrack,
     /// Gaps overlapping the window (series and global), ordered by start.
     pub gaps: Vec<GapEntry>,
     pub discontinuities: Vec<u64>,
     _scratch: BytePermit,
+}
+
+impl PinnedSeries {
+    /// The minutes the query's regions and point cells lie on: the boot's
+    /// grid, or before it is known the boot clock's own minutes (no minute
+    /// is final then and every point is raw, so no bucket can be split).
+    pub(crate) fn query_minutes(&self) -> MinuteGrid {
+        self.minute_grid.unwrap_or(MinuteGrid::BOOT_CLOCK)
+    }
 }
 
 /// Outcome of pinning.
@@ -160,16 +168,15 @@ impl HistoryState {
                 rollup_floor_ns: series.gauge.rollup_floor_ns,
             })
         };
-        let (grid, finalized_through_ns) = match series.grid() {
-            Some(grid) => (grid, series.finalized_through_ns),
-            None => (MinuteGrid::default(), 0),
-        };
+        let minute_grid = self.minute_grid();
+        // Before the grid no minute is final: everything is raw.
+        let finalized_through_ns = minute_grid.map_or(0, |_| series.finalized_through_ns);
         Ok(PinOutcome::Pinned(Box::new(PinnedSeries {
             revision: self.revision,
             descriptor: series.descriptor,
             segments: series.segments.view(),
             finalized_through_ns,
-            grid,
+            minute_grid,
             track,
             gaps,
             discontinuities,
@@ -191,19 +198,20 @@ mod tests {
 
     const SECOND: u64 = 1_000_000_000;
 
+    fn settings() -> HistorySettings {
+        HistorySettings {
+            raw_history_ns: 30 * SECOND,
+            aggregate_retention_ns: 24 * 3600 * SECOND,
+            max_series: 8,
+            finalize_grace_ns: 5 * SECOND,
+            gap_merge_tolerance_ns: SECOND,
+            archive_enabled: false,
+        }
+    }
+
     fn state(ledger: &ByteLedger) -> HistoryState {
-        let mut state = HistoryState::new(
-            HistorySettings {
-                raw_history_ns: 30 * SECOND,
-                aggregate_retention_ns: 24 * 3600 * SECOND,
-                max_series: 8,
-                finalize_grace_ns: 5 * SECOND,
-                gap_merge_tolerance_ns: SECOND,
-                archive_enabled: false,
-            },
-            ledger,
-        );
-        state.set_minute_grid(MinuteGrid::BOOT);
+        let mut state = HistoryState::new(settings(), ledger);
+        state.set_minute_grid(MinuteGrid::BOOT_CLOCK);
         state
     }
 
@@ -258,6 +266,41 @@ mod tests {
         drop(pinned);
         assert_eq!(ledger.used(Partition::RawHistory), 0);
         assert_eq!(ledger.used(Partition::HistoryQuery), 0);
+    }
+
+    /// A pin taken before the boot is paired with UTC says it has no grid:
+    /// nothing is final and its points lie on the boot clock's minutes;
+    /// once the grid is fixed the pin carries it.
+    #[test]
+    fn a_pin_carries_the_grid_only_once_it_is_fixed() {
+        let ledger = ByteLedger::for_memory_limit_mib(64);
+        let mut unpaired = HistoryState::new(settings(), &ledger);
+        let key = metric_key("gpu:0", ids::GPU_TEMPERATURE, "gpu");
+        let request = PinRequest {
+            key: &key,
+            start_ns: 0,
+            end_ns: 200 * SECOND,
+            stat: HistoryStat::Mean,
+            result_bytes: 0,
+        };
+        unpaired.apply(samples(&key, 200), 200 * SECOND, 1);
+        let Ok(PinOutcome::Pinned(before)) = unpaired.pin(&request, &ledger) else {
+            panic!("series must pin");
+        };
+        assert_eq!(before.minute_grid, None);
+        assert_eq!(before.finalized_through_ns, 0);
+        assert_eq!(before.query_minutes(), MinuteGrid::BOOT_CLOCK);
+
+        let paired = MinuteGrid::on_utc_minutes(0, 37 * i128::from(SECOND));
+        let mut state = HistoryState::new(settings(), &ledger);
+        state.set_minute_grid(paired);
+        state.apply(samples(&key, 200), 200 * SECOND, 1);
+        let Ok(PinOutcome::Pinned(after)) = state.pin(&request, &ledger) else {
+            panic!("series must pin");
+        };
+        assert_eq!(after.minute_grid, Some(paired));
+        assert_eq!(after.query_minutes(), paired);
+        assert!(after.finalized_through_ns > 0);
     }
 
     #[test]

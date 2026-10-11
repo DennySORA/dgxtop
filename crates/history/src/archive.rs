@@ -111,8 +111,8 @@ pub(crate) struct ArchiveQueue {
 
 fn row_span(row: &ArchiveRow) -> (u64, u64) {
     match row {
-        ArchiveRow::GaugeBucket { bucket, end_ns, .. } => (bucket.start_ns, *end_ns),
-        ArchiveRow::CounterBucket { bucket, end_ns, .. } => (bucket.start_ns, *end_ns),
+        ArchiveRow::GaugeBucket { bucket, .. } => (bucket.start_ns, bucket.end_ns),
+        ArchiveRow::CounterBucket { bucket, .. } => (bucket.start_ns, bucket.end_ns),
         ArchiveRow::Bridge { bridge, .. } => (bridge.start_ns, bridge.end_ns),
         ArchiveRow::Gap(gap) => (gap.start_boot_ns, gap.end_boot_ns),
     }
@@ -307,19 +307,15 @@ fn ensure_segment(segment: &SegmentMeta, clock: &WallClock, collected: &mut Jour
 fn collect_row(queued: QueuedRow, clock: &WallClock, collected: &mut JournalRows) {
     collected.bytes = collected.bytes.saturating_add(queued.bytes);
     match queued.row {
-        ArchiveRow::GaugeBucket {
-            segment,
-            bucket,
-            end_ns: end,
-        } => {
+        ArchiveRow::GaugeBucket { segment, bucket } => {
             ensure_segment(&segment, clock, collected);
             let covered = bucket.covered_ns > 0;
             collected.buckets.push(ArchivedBucket {
                 segment_id: segment.uuid.to_string(),
                 start_boot_ns: bucket.start_ns,
-                end_boot_ns: end,
+                end_boot_ns: bucket.end_ns,
                 start_utc: utc_text(clock, bucket.start_ns),
-                end_utc: utc_text(clock, end),
+                end_utc: utc_text(clock, bucket.end_ns),
                 covered_ns: bucket.covered_ns,
                 weighted_sum: covered.then_some(bucket.weighted_sum),
                 minimum: covered.then_some(bucket.minimum),
@@ -334,19 +330,15 @@ fn collect_row(queued: QueuedRow, clock: &WallClock, collected: &mut JournalRows
                 reason_code: None,
             });
         }
-        ArchiveRow::CounterBucket {
-            segment,
-            bucket,
-            end_ns: end,
-        } => {
+        ArchiveRow::CounterBucket { segment, bucket } => {
             ensure_segment(&segment, clock, collected);
             let exact = bucket.total.integral();
             collected.buckets.push(ArchivedBucket {
                 segment_id: segment.uuid.to_string(),
                 start_boot_ns: bucket.start_ns,
-                end_boot_ns: end,
+                end_boot_ns: bucket.end_ns,
                 start_utc: utc_text(clock, bucket.start_ns),
-                end_utc: utc_text(clock, end),
+                end_utc: utc_text(clock, bucket.end_ns),
                 covered_ns: bucket.covered_ns,
                 weighted_sum: None,
                 minimum: None,
@@ -393,7 +385,7 @@ mod tests {
     use dgxtop_core::metric::{CanonicalUnit, Scalar, ids};
     use dgxtop_core::naming::entity;
     use dgxtop_core::quality::SampleKind;
-    use dgxtop_core::testing::{metric_key, source_id};
+    use dgxtop_core::testing::{UTC_ON_A_WHOLE_MINUTE_NS, metric_key, source_id};
     use uuid::Uuid;
 
     use crate::records::{BUCKET_NS, CounterSample, GaugeBucket};
@@ -421,18 +413,17 @@ mod tests {
     }
 
     fn bucket_row(segment: &Arc<SegmentMeta>, minute: u64) -> ArchiveRow {
-        let mut bucket = GaugeBucket::empty(minute * BUCKET_NS, 0);
+        let mut bucket = GaugeBucket::empty(minute * BUCKET_NS, (minute + 1) * BUCKET_NS, 0);
         bucket.add_step(50.0, BUCKET_NS);
         ArchiveRow::GaugeBucket {
             segment: Arc::clone(segment),
             bucket,
-            end_ns: (minute + 1) * BUCKET_NS,
         }
     }
 
     fn clock() -> WallClock {
         let mut clock = WallClock::default();
-        clock.observe(0, 1_790_000_000_000_000_000);
+        clock.observe(0, UTC_ON_A_WHOLE_MINUTE_NS);
         clock
     }
 
@@ -457,7 +448,7 @@ mod tests {
         assert_eq!(journal.buckets.len(), 2);
         assert_eq!(
             journal.buckets[0].start_utc,
-            "2026-09-21T14:13:20.000000000Z"
+            "2026-09-21T14:14:00.000000000Z"
         );
         assert_eq!(journal.host_id, "test-host");
         assert!(
@@ -563,7 +554,8 @@ mod tests {
             bucket_row(&other, 0),
             gap(None),
         ]);
-        let start_of_minute_2 = 1_790_000_000_000_000_000 + 2 * i64::try_from(BUCKET_NS).unwrap();
+        let start_of_minute_2 = i64::try_from(UTC_ON_A_WHOLE_MINUTE_NS).unwrap()
+            + 2 * i64::try_from(BUCKET_NS).unwrap();
         let prune = ArchivePrune {
             series: dgxtop_core::history::SeriesInEveryBoot::from(&pruned.key),
             before_utc_ns: start_of_minute_2,
@@ -607,7 +599,7 @@ mod tests {
         let mut queue = ArchiveQueue::new(&ledger);
         let prune = ArchivePrune {
             series: dgxtop_core::history::SeriesInEveryBoot::from(&segment().key),
-            before_utc_ns: 1_790_000_000_000_000_000,
+            before_utc_ns: i64::try_from(UTC_ON_A_WHOLE_MINUTE_NS).unwrap(),
         };
         assert!(!queue.knows_identity());
         assert!(queue.take(1 << 20, &clock(), 1, Vec::new()).is_none());

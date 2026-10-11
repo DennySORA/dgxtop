@@ -11,14 +11,14 @@ use super::counter::{self, CounterInputs};
 use super::gauge::{self, GaugeInputs, GaugeStat};
 use super::guard::ScanGuard;
 use super::plan::{
-    Floors, Grid, RegionPlan, Window, choose_grid, fit_cells, grid_alignment, rollup_boundary,
+    Floors, LayoutBounds, PointLayout, RegionPlan, Window, cell_alignment, choose_layout,
+    fit_cells, rollup_boundary,
 };
 use super::points::PointSink;
-use crate::grid::MinuteGrid;
 use crate::pin::{PinnedCounter, PinnedGauge, PinnedSeries, PinnedTrack};
 
-/// Coarsening attempts when a grid still produced too many points.
-const MAX_REGRIDS: usize = 4;
+/// Coarsening attempts when a layout still produced too many points.
+const MAX_RELAYOUTS: usize = 4;
 
 /// Points plus paging state.
 struct Evaluation {
@@ -99,7 +99,7 @@ fn evaluate_gauge(
         source_filter: query.source_filter.as_ref(),
         gaps: &pin.gaps,
         now_ns: guard.now(),
-        grid: pin.grid,
+        minute_grid: pin.query_minutes(),
     };
     let Some(stat) = stat else {
         guard.admit_estimate(
@@ -119,36 +119,32 @@ fn evaluate_gauge(
         window,
         floors,
         rollup_boundary(query.resolution_ms, &floors),
-        pin.grid,
+        pin.query_minutes(),
     );
     guard.admit_estimate(
         gauge::gauge_scan_estimate(&inputs, &plan),
         &suggestion(query),
     )?;
-    let mut grid = choose_grid(query.resolution_ms, window, &plan, (cap, pin.grid));
-    for _ in 0..MAX_REGRIDS {
+    let bounds = layout_bounds(pin, cap);
+    let mut layout = choose_layout(query.resolution_ms, window, &plan, bounds);
+    for _ in 0..MAX_RELAYOUTS {
         let mut sink = PointSink::new(cap);
-        match grid {
-            Grid::Native => gauge::gauge_native(
+        match layout {
+            PointLayout::Native => gauge::gauge_native(
                 &inputs,
                 (window.start_ns, window.end_ns),
                 Some(stat),
                 &mut sink,
                 guard,
             )?,
-            Grid::Cells(cell) => {
+            PointLayout::Cells(cell) => {
                 gauge::gauge_cells(&inputs, &plan, window, cell, stat, &mut sink, guard)?
             }
         }
         if sink.overflow_start().is_none() {
             return Ok(complete(sink, HistoryMethod::TimeWeightedStep));
         }
-        grid = Grid::Cells(coarser(
-            grid,
-            window,
-            (cap, grid_alignment(&plan)),
-            pin.grid,
-        ));
+        layout = coarser(layout, window, cell_alignment(&plan), bounds);
     }
     Err(too_many_points(query))
 }
@@ -169,7 +165,7 @@ fn evaluate_counter(
         segments: &pin.segments,
         source_filter: query.source_filter.as_ref(),
         gaps: &pin.gaps,
-        grid: pin.grid,
+        minute_grid: pin.query_minutes(),
     };
     if query.stat == HistoryStat::Raw {
         guard.admit_estimate(
@@ -189,47 +185,52 @@ fn evaluate_counter(
         window,
         floors,
         rollup_boundary(query.resolution_ms, &floors),
-        pin.grid,
+        pin.query_minutes(),
     );
     plan.absorb_crossings(|boundary| inputs.crossing_at(boundary));
     guard.admit_estimate(
         counter::counter_scan_estimate(&inputs, &plan),
         &suggestion(query),
     )?;
-    let mut grid = choose_grid(query.resolution_ms, window, &plan, (cap, pin.grid));
-    for _ in 0..MAX_REGRIDS {
+    let bounds = layout_bounds(pin, cap);
+    let mut layout = choose_layout(query.resolution_ms, window, &plan, bounds);
+    for _ in 0..MAX_RELAYOUTS {
         let mut sink = PointSink::new(cap);
-        match grid {
-            Grid::Native => counter::counter_native(
+        match layout {
+            PointLayout::Native => counter::counter_native(
                 &inputs,
                 (window.start_ns, window.end_ns),
                 &mut sink,
                 guard,
             )?,
-            Grid::Cells(cell) => {
+            PointLayout::Cells(cell) => {
                 counter::counter_cells(&inputs, &plan, window, cell, &mut sink, guard)?
             }
         }
         if sink.overflow_start().is_none() {
             return Ok(complete(sink, HistoryMethod::CounterDelta));
         }
-        grid = Grid::Cells(coarser(
-            grid,
-            window,
-            (cap, grid_alignment(&plan)),
-            pin.grid,
-        ));
+        layout = coarser(layout, window, cell_alignment(&plan), bounds);
     }
     Err(too_many_points(query))
 }
 
-/// Next grid after an overflow: native points become cells sized to the
-/// cap; cells double.
-fn coarser(grid: Grid, window: Window, cap_align: (usize, u64), minutes: MinuteGrid) -> u64 {
-    match grid {
-        Grid::Native => fit_cells(NANOS_PER_MILLI, window, cap_align, minutes),
-        Grid::Cells(cell) => fit_cells(cell.saturating_mul(2), window, cap_align, minutes),
+/// The bounds the points of a query on `pin` must fit.
+fn layout_bounds(pin: &PinnedSeries, max_points: usize) -> LayoutBounds {
+    LayoutBounds {
+        max_points,
+        minute_grid: pin.query_minutes(),
     }
+}
+
+/// Next layout after an overflow: native points become cells sized to
+/// the cap; cells double.
+fn coarser(layout: PointLayout, window: Window, align: u64, bounds: LayoutBounds) -> PointLayout {
+    let wanted = match layout {
+        PointLayout::Native => NANOS_PER_MILLI,
+        PointLayout::Cells(cell) => cell.saturating_mul(2),
+    };
+    PointLayout::Cells(fit_cells(wanted, window, align, bounds))
 }
 
 fn too_many_points(query: &HistoryQuery) -> ErrorDetail {
