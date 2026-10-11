@@ -11,7 +11,7 @@
 //! | procfs | `cpu` | 1 s | `cpu.time.*` (ticks, counter; entity `cpu`, scope `host` for the aggregate line and entity `cpu.core.N`, scope `core:N` per logical CPU; guest fields are NOT emitted because they are already inside user/nice), `cpu.load.{1m,5m,15m}` and `cpu.tasks.{running,total}` (count; entity `host`, scope `host`), `cpu.frequency.current` (kHz, gauge, per core: `cpuinfo_avg_freq` where the kernel offers it, else `scaling_cur_freq`, D-67) |
 //! | procfs | `memory` | 1 s | `memory.{total,available,buffers,cached,swap_total}`, `memory.free`, `memory.swap_free` (KiB; entity `memory`, scope `system`) |
 //! | procfs | `disk` | 1 s | `disk.{reads.completed,sectors.read,read.time,writes.completed,sectors.written,write.time}` (count / sectors_512 / milliseconds counters; entity `blockdev:MAJ:MIN`, scope `device` or `partition`) |
-//! | procfs | `process` | 1 s, paged | `process.cpu.ticks` (ticks counter) and `process.rss` (bytes) per `ProcessKey` entity (`process:NS:PID:START`, scope `process`) |
+//! | procfs | `process` | 1 s, paged | one `process.cpu.ticks` record (ticks counter) per `ProcessKey` entity (`process:NS:PID:START`, scope `process`), the rest of its `stat` and its owner as `proc.*` tags ([`crate::process_stat`], D-86) |
 //! | hwmon | `fast` | 1 s | temperatures (mdegC), power (uW), fans (count) mapped by profile: `cpu.temperature.package`/`core`, `cpu.power.package`, `cpu.power.cluster`, `cpu.power.platform`, else `sensor.*` (diagnostics); thermal-zone mirrors (`acpitz`) are left to `thermal` (D-81) |
 //! | thermal | `fast` | 1 s | zone temperatures (mdegC): `cpu.temperature.package` only when the profile proves the package, `soc.temperature` for SoC zones, GB10's `acpitz` zones by ACPI path (`cpu.temperature.cluster` scopes `cluster:0e`…`cluster:1p`, `soc.temperature`, D-68), else `sensor.temperature` |
 //! | powercap | `fast` | 1 s | `cpu.energy.package` / `cpu.energy.platform` (uJ counters with declared modulus), else `sensor.energy` |
@@ -25,8 +25,8 @@ use crate::identity::{AdapterId, CollectorId, EntityId, IdentityError, Scope};
 
 /// Adapter ids.
 /// Between a process's display name and its command line in the channel of
-/// its procfs record (D-73; a replay's `process.uid` record): the channel is
-/// the only string a record carries.
+/// its procfs record (D-73): the channel is the only string a record
+/// carries.
 pub const PROCESS_COMMAND_SEPARATOR: char = '\u{1f}';
 /// Longest the channel of a record may be (observation schema), so the
 /// longest a process's name and command line together may be.

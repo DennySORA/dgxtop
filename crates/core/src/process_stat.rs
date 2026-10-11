@@ -1,6 +1,6 @@
-//! The compact per-process record of the procfs `process` group (D-79):
-//! one `process.cpu.ticks` observation per process instead of one per
-//! metric, its other `stat` facts riding along as `proc.<field>:<value>`
+//! The compact per-process record of the procfs `process` group (D-79,
+//! D-86): one `process.cpu.ticks` observation per process instead of one
+//! per metric, its other `stat` facts riding along as `proc.<field>:<value>`
 //! reason codes. The observation schema stays the spec's: a record already
 //! carries free tags this way (NVML's `gpu_usage:*`), and a tag costs a few
 //! bytes where a separate record repeats the whole key and provenance.
