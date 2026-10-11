@@ -421,10 +421,14 @@ pub struct ArchiveJournal {
 }
 
 /// Archive commit receipt.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveReceipt {
     pub revision: u64,
     pub rows: u64,
+    /// The deletions the journal asked for failed after its rows were
+    /// committed: the rows stay durable, the deletions wait for the next
+    /// request (D-96).
+    pub deletion_failure: Option<InfraError>,
 }
 
 /// Optional history archive (SQLite WAL, synchronous=NORMAL, off by default).

@@ -608,10 +608,20 @@ impl ArchiveSink for SqliteArchive {
         self.check_segment_references(&batch)?;
         self.check_fits_budget(&batch)?;
         let (written, present) = self.insert_batch(&batch)?;
-        self.prune(&journal.prunes, &protected_segments_json(&batch))?;
         self.stats.rows_written = self.stats.rows_written.saturating_add(written);
         self.stats.rows_already_present = self.stats.rows_already_present.saturating_add(present);
         self.last_issue = None;
+        // The rows are committed: a deletion that fails now is reported
+        // beside the receipt, never as a failed append (D-96).
+        let deletion_failure = self
+            .prune(&journal.prunes, &protected_segments_json(&batch))
+            .err();
+        if let Some(error) = &deletion_failure {
+            self.last_issue = Some(format!(
+                "archive deletion after the commit failed ({}): {error}",
+                error.code().as_str()
+            ));
+        }
         let revision = journal.revision;
         // The journal (and its byte permit) is released only once its rows
         // are committed.
@@ -619,6 +629,7 @@ impl ArchiveSink for SqliteArchive {
         Ok(ArchiveReceipt {
             revision,
             rows: written,
+            deletion_failure,
         })
     }
 

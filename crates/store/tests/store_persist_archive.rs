@@ -14,8 +14,9 @@ use dgxtop_core::action::{PersistenceKind, PersistenceState};
 use dgxtop_core::canonical::GapRecord;
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::errors::InfraError;
-use dgxtop_core::history::HistoryMethod;
+use dgxtop_core::history::{HistoryMethod, SeriesInEveryBoot};
 use dgxtop_core::metric::CanonicalUnit;
+use dgxtop_core::overview_history::ArchivePrune;
 use dgxtop_core::ports::{
     ArchiveJournal, ArchiveSink, ArchivedBridge, ArchivedBucket, ArchivedSegment,
 };
@@ -751,4 +752,47 @@ fn status_never_deletes_rows() {
     let reader = fixture.reader();
     assert_eq!(count(&reader, "history_segments"), 1);
     assert_eq!(count(&reader, "history_buckets"), 1);
+}
+
+/// Rows the history asked to delete that cannot be deleted do not undo a
+/// committed journal: the append still answers with its receipt, which
+/// names the failed deletion, and the status shows it (D-96).
+#[test]
+fn a_failed_deletion_after_the_commit_keeps_the_append_committed() {
+    let fixture = Fixture::new("delete-after-commit");
+    let mut archive = fixture.open(ArchiveLimits::default());
+    let old = minute_utc(&fixture, 30);
+    let old_end = minute_utc(&fixture, 29);
+    archive
+        .append(journal(
+            1,
+            vec![segment("seg-a", &old)],
+            vec![bucket("seg-a", 0, &old, &old_end)],
+        ))
+        .unwrap();
+    let writer = Connection::open(fixture.dir.database()).unwrap();
+    writer
+        .execute_batch(
+            "CREATE TRIGGER refuse_bucket_delete BEFORE DELETE ON history_buckets
+             BEGIN SELECT RAISE(ABORT, 'deletion refused by the test'); END;",
+        )
+        .unwrap();
+    let now = minute_utc(&fixture, 0);
+    let mut pruning = journal(
+        2,
+        vec![segment("seg-a", &old)],
+        vec![bucket("seg-a", 30 * MINUTE_NS, &now, &now)],
+    );
+    pruning.prunes.push(ArchivePrune {
+        series: SeriesInEveryBoot::from(&segment("seg-a", &old).key),
+        before_utc_ns: i64::try_from(fixture.clock.now_utc_ns()).unwrap(),
+    });
+    let receipt = archive.append(pruning).unwrap();
+    assert_eq!(receipt.revision, 2);
+    assert_eq!(receipt.rows, 1, "the new minute is committed");
+    assert!(receipt.deletion_failure.is_some(), "{receipt:?}");
+    let status = archive.status();
+    assert_eq!(status.state, PersistenceState::Degraded);
+    assert!(status.detail.unwrap().contains("delet"));
+    assert_eq!(count(&fixture.reader(), "history_buckets"), 2);
 }

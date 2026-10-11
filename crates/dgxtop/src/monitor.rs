@@ -30,9 +30,9 @@ use dgxtop_core::naming;
 use dgxtop_core::observation::AdapterManifest;
 use dgxtop_core::overview_history::{HistoryTierCompletion, HistoryTierJob};
 use dgxtop_core::ports::{
-    ArchiveGapCause, ArchiveJournal, ArchiveOutcome, ArchiveReader, ArchiveSink, AuditRepository,
-    Collector, ConfigJob, ConfigRepository, ControlCompletion, Dispatch, HistoryJob,
-    HistoryTierStore, IngestionCompletion, LogLevel, Logger, OverviewReader,
+    ArchiveGapCause, ArchiveJournal, ArchiveOutcome, ArchiveReader, ArchiveReceipt, ArchiveSink,
+    AuditRepository, Collector, ConfigJob, ConfigRepository, ControlCompletion, Dispatch,
+    HistoryJob, HistoryTierStore, IngestionCompletion, LogLevel, Logger, OverviewReader,
     ProcessHistoryCompletion, ProcessHistoryInput, ProcessHistoryJob, ProcessHistoryReader,
     ProcessHistoryStore, ProcessProbe, ProcessProbeJob, StoreJob, TelemetryPort,
 };
@@ -706,7 +706,10 @@ impl Wiring {
             move |archive: &mut SqliteArchive, journal: ArchiveJournal| {
                 let revision = journal.revision;
                 let outcome = match archive.append(journal) {
-                    Ok(receipt) => ArchiveOutcome::Committed { rows: receipt.rows },
+                    Ok(receipt) => {
+                        log_archive_deletion_failure(logger.as_ref(), &receipt);
+                        ArchiveOutcome::Committed { rows: receipt.rows }
+                    }
                     Err(error) => {
                         logger.log(
                             LogLevel::Warn,
@@ -1300,9 +1303,53 @@ fn log_recreated(logger: &dyn Logger, database: &Path, reason: Option<&str>) {
     }
 }
 
+/// One warning when the deletions a committed archive journal asked for
+/// failed: the rows are durable, the deletions wait for the next request
+/// (D-96).
+fn log_archive_deletion_failure(logger: &dyn Logger, receipt: &ArchiveReceipt) {
+    if let Some(error) = &receipt.deletion_failure {
+        logger.log(
+            LogLevel::Warn,
+            "archive",
+            &format!(
+                "ARCHIVE_DELETION_FAILED ({}): journal {} committed, its deletions wait for the next request: {error}",
+                error.code().as_str(),
+                receipt.revision
+            ),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A committed journal whose deletions failed is one warning with the
+    /// error code; a clean receipt says nothing.
+    #[test]
+    fn a_failed_archive_deletion_is_logged_with_its_code() {
+        let logger = dgxtop_core::testing::MemoryLogger::default();
+        let mut receipt = ArchiveReceipt {
+            revision: 7,
+            rows: 3,
+            deletion_failure: None,
+        };
+        log_archive_deletion_failure(&logger, &receipt);
+        assert!(logger.records().is_empty());
+        receipt.deletion_failure = Some(dgxtop_core::errors::InfraError::Database(
+            "archive.maintenance: locked".to_owned(),
+        ));
+        log_archive_deletion_failure(&logger, &receipt);
+        let records = logger.records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].0, LogLevel::Warn);
+        assert!(
+            records[0]
+                .2
+                .starts_with("ARCHIVE_DELETION_FAILED (PersistFailed): journal 7 committed"),
+            "{records:?}"
+        );
+    }
 
     /// A recreated database is one info line naming the file and the
     /// reason; a database opened as it was says nothing.
