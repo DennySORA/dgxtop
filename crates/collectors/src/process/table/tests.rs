@@ -17,8 +17,40 @@ fn entity_of(pid: i32, start: u64) -> String {
     format!("process:{NS}:{pid}:{start}")
 }
 
-/// procfs records of one process: ticks, RSS (KiB) and uid.
+/// The live adapter's compact record of one process (D-79): its ticks,
+/// with RSS (KiB here, sent in bytes), uid 1000 and the rest of `stat` as
+/// tags.
 fn host(pid: i32, start: u64, ticks: u64, rss_kib: u64, at: u64) -> Vec<Observation> {
+    let stat = ProcessStat {
+        rss_bytes: Some(rss_kib * 1024),
+        uid: Some(1000),
+        ppid: Some(1),
+        state: Some('S'),
+        threads: Some(4),
+        reaped_ticks: Some(0),
+    };
+    vec![compact(pid, start, ticks, stat, at)]
+}
+
+fn compact(pid: i32, start: u64, ticks: u64, stat: ProcessStat, at: u64) -> Observation {
+    let entity = entity_of(pid, start);
+    let mut observation = reading(
+        &metric_key(&entity, ids::PROCESS_CPU_TICKS, "process"),
+        "procfs",
+        &format!("procfs:{entity}:cpu.ticks"),
+        at,
+    )
+    .unit(native::TICKS)
+    .u64(ticks)
+    .build();
+    observation.provenance.channel = format!("worker-{pid}").into();
+    observation.reason_codes = stat.reason_codes();
+    observation
+}
+
+/// A replay's records of one process: ticks, RSS (KiB) and uid, one
+/// record each.
+fn legacy_host(pid: i32, start: u64, ticks: u64, rss_kib: u64, at: u64) -> Vec<Observation> {
     let entity = entity_of(pid, start);
     let record = |metric: &str, unit: &str, value: u64| {
         let mut observation = reading(
@@ -202,12 +234,86 @@ fn a_process_name_keeps_its_folder() {
     assert_eq!(row(&batch, 3).name, "evil/name");
 }
 
-/// The uid record's channel carries the command line after the name
+/// The compact record's channel carries the command line after the name
 /// (D-73): the row keeps both apart, the command cleaned.
 #[test]
 fn a_process_row_carries_its_command_line() {
     let separator = dgxtop_core::naming::PROCESS_COMMAND_SEPARATOR;
-    let procfs: Vec<Observation> = host(7, 100, 0, 10, SECOND)
+    let mut procfs = host(7, 100, 0, 10, SECOND);
+    procfs[0].provenance.channel =
+        format!("worker-7{separator}python train.py --lr 3e-4\u{1b}[2J").into();
+    let collector = ProcessCollector::new().unwrap();
+    let batch = collect(&collector, &plan(procfs, vec![], SECOND + 1).build());
+    assert_eq!(row(&batch, 7).name, "worker-7");
+    assert_eq!(row(&batch, 7).command, "python train.py --lr 3e-4");
+    let plain = collect(
+        &collector,
+        &plan(host(8, 100, 0, 10, SECOND), vec![], SECOND + 1).build(),
+    );
+    assert_eq!(row(&plain, 8).command, "", "no command line, nothing");
+}
+
+/// The compact record (D-79) gives the row everything one `stat` read
+/// says: RSS, owner, state, parent and threads.
+#[test]
+fn a_compact_record_fills_the_whole_row() {
+    let collector = ProcessCollector::new().unwrap();
+    let batch = collect(
+        &collector,
+        &plan(host(42, 500, 1_000, 2048, SECOND), vec![], SECOND + 1).build(),
+    );
+    let process = row(&batch, 42);
+    assert_eq!(process.rss_bytes, Some(2048 * 1024));
+    assert_eq!(process.uid, Some(1000));
+    assert_eq!(process.state, Some('S'));
+    assert_eq!(process.ppid, Some(1));
+    assert_eq!(process.threads, Some(4));
+    assert_eq!(process.name, "worker-42");
+}
+
+/// A field the adapter could not read is missing, never zero.
+#[test]
+fn a_compact_record_without_rss_is_missing_not_zero() {
+    let stat = ProcessStat {
+        uid: Some(7),
+        ..ProcessStat::default()
+    };
+    let collector = ProcessCollector::new().unwrap();
+    let batch = collect(
+        &collector,
+        &plan(vec![compact(9, 1, 0, stat, SECOND)], vec![], SECOND + 1).build(),
+    );
+    let process = row(&batch, 9);
+    assert_eq!(process.rss_bytes, None);
+    assert_eq!(process.uid, Some(7));
+    assert_eq!(process.ppid, None);
+    assert_eq!(process.threads, None);
+}
+
+/// Failed ticks (an overflowing counter) say nothing of the RSS and owner
+/// read from the same `stat`.
+#[test]
+fn failed_ticks_keep_the_rest_of_the_stat() {
+    let mut record = host(9, 1, 0, 3, SECOND).remove(0);
+    record.read_status = ReadStatus::Error;
+    record.value = None;
+    record
+        .reason_codes
+        .insert(0, "CPU_TICKS_OVERFLOW".to_owned());
+    let collector = ProcessCollector::new().unwrap();
+    let batch = collect(&collector, &plan(vec![record], vec![], SECOND + 1).build());
+    let process = row(&batch, 9);
+    assert_eq!(process.cpu_percent, None);
+    assert_eq!(process.rss_bytes, Some(3 * 1024));
+    assert_eq!(process.uid, Some(1000));
+}
+
+/// A replay still sends one record per metric, the command line on the
+/// uid record (D-73): its rows stay the same.
+#[test]
+fn a_replay_records_per_metric_still_make_rows() {
+    let separator = dgxtop_core::naming::PROCESS_COMMAND_SEPARATOR;
+    let procfs: Vec<Observation> = legacy_host(7, 100, 0, 10, SECOND)
         .into_iter()
         .map(|mut observation| {
             if observation.key.metric_id.as_str() == ids::PROCESS_UID {
@@ -219,13 +325,12 @@ fn a_process_row_carries_its_command_line() {
         .collect();
     let collector = ProcessCollector::new().unwrap();
     let batch = collect(&collector, &plan(procfs, vec![], SECOND + 1).build());
-    assert_eq!(row(&batch, 7).name, "worker-7");
-    assert_eq!(row(&batch, 7).command, "python train.py --lr 3e-4");
-    let plain = collect(
-        &collector,
-        &plan(host(8, 100, 0, 10, SECOND), vec![], SECOND + 1).build(),
-    );
-    assert_eq!(row(&plain, 8).command, "", "no command line, nothing");
+    let process = row(&batch, 7);
+    assert_eq!(process.name, "worker-7");
+    assert_eq!(process.command, "python train.py --lr 3e-4");
+    assert_eq!(process.rss_bytes, Some(10 * 1024));
+    assert_eq!(process.uid, Some(1000));
+    assert_eq!(process.ppid, None, "a replay sends no parent");
 }
 
 #[test]
@@ -400,9 +505,9 @@ fn missing_clk_tck_is_never_defaulted() {
 }
 
 #[test]
-fn unreadable_rss_is_missing_not_zero() {
+fn a_replay_unreadable_rss_is_missing_not_zero() {
     let collector = ProcessCollector::new().unwrap();
-    let mut records = host(9, 1, 0, 1, SECOND);
+    let mut records = legacy_host(9, 1, 0, 1, SECOND);
     records[1] = reading(
         &metric_key(&entity_of(9, 1), ids::PROCESS_RSS, "process"),
         "procfs",

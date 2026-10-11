@@ -191,6 +191,8 @@ pub fn process_row(key: ProcessKey) -> ProcessRow {
         command: String::new(),
         uid: Some(TEST_EUID),
         state: Some('S'),
+        ppid: None,
+        threads: None,
         cpu_percent: Some(1.0),
         rss_bytes: Some(1 << 20),
         missing_reason: None,

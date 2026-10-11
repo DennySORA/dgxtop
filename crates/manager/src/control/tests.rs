@@ -191,6 +191,8 @@ fn with_process_table(harness: &Harness, pids: &[i64]) {
             command: String::new(),
             uid: Some(HARNESS_EUID),
             state: Some('S'),
+            ppid: None,
+            threads: None,
             cpu_percent: Some(1.0),
             rss_bytes: Some(1 << 20),
             missing_reason: None,

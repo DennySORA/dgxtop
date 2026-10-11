@@ -3,7 +3,9 @@
 //! Host resources are sampled ONCE per `ProcessKey` per cycle from procfs
 //! records (`process:<ns>:<pid>:<start>`): CPU% = Δticks / (CLK_TCK × dt) ×
 //! 100 (may exceed 100 on several cores), RSS bytes, numeric uid and the
-//! name carried in the provenance channel. GPU usage from NVML
+//! name carried in the provenance channel. The live adapter sends one
+//! record per process, its ticks, with the rest of its `stat` as tags
+//! ([`ProcessStat`], D-79); a replay still sends one record per metric. GPU usage from NVML
 //! (`gpupid:<UUID>:<PID>`) is joined afterwards as `(ProcessKey, GPU)` links:
 //! host resources are never repeated or multiplied per GPU, compute and
 //! graphics entries of one PID on one GPU merge into one link, and a PID is
@@ -16,7 +18,7 @@ use std::collections::BTreeMap;
 
 use dgxtop_core::canonical::{
     CollectionBatch, CollectionPlan, CounterBase, GpuUsageKind, ProcessBase, ProcessGpuLink,
-    ProcessRow, ProcessTable,
+    ProcessRow, ProcessTable, RejectReason,
 };
 use dgxtop_core::clock::NANOS_PER_SECOND;
 use dgxtop_core::identity::{AdapterId, CollectorId, EntityId, IdentityError, ProcessKey};
@@ -26,6 +28,7 @@ use dgxtop_core::metric::{
 use dgxtop_core::naming::{self, adapters, attributes, entity, groups};
 use dgxtop_core::observation::BatchStatus;
 use dgxtop_core::ports::Collector;
+use dgxtop_core::process_stat::ProcessStat;
 use dgxtop_core::quality::SampleKind;
 use dgxtop_core::text::{sanitize_command_name, sanitize_display};
 
@@ -140,6 +143,13 @@ impl<'a> HostSample<'a> {
         [self.ticks, self.rss, self.uid].into_iter().flatten()
     }
 
+    /// The `stat` tags of the compact record; `None` for a replay's
+    /// one-metric records.
+    fn stat(&self) -> Option<ProcessStat> {
+        self.ticks
+            .and_then(|record| ProcessStat::from_reason_codes(&record.observation.reason_codes))
+    }
+
     fn slot(&mut self, metric: &str) -> Option<&mut Option<Record<'a>>> {
         match metric {
             ids::PROCESS_CPU_TICKS => Some(&mut self.ticks),
@@ -219,9 +229,15 @@ fn host_row(
         Some(record) => cpu_percent(session, key, record, clk_tck),
         None => (None, Some(reasons::MISSING_INPUT), None),
     };
-    let (rss_bytes, rss_reason) = match sample.rss {
-        Some(record) => rss_bytes(session, record),
-        None => (None, Some(reasons::MISSING_INPUT)),
+    let stat = sample.stat();
+    let (rss_bytes, rss_reason) = match (stat, sample.ticks, sample.rss) {
+        (Some(stat), Some(record), _) => tagged_rss(session, record, stat.rss_bytes),
+        (None, _, Some(record)) => rss_bytes(session, record),
+        _ => (None, Some(reasons::MISSING_INPUT)),
+    };
+    let uid = match (stat, sample.ticks) {
+        (Some(stat), Some(record)) => stat.uid.filter(|_| admits_tags(session, record).is_ok()),
+        _ => sample.uid.and_then(|record| uid_of(session, record)),
     };
     let named = sample.ticks.or(sample.rss).or(sample.uid);
     let row = ProcessRow {
@@ -230,11 +246,20 @@ fn host_row(
             || "?".to_owned(),
             |record| sanitize_command_name(display_name_of(&record.observation.provenance.channel)),
         ),
-        command: sample.uid.map_or_else(String::new, |record| {
-            command_of(&record.observation.provenance.channel)
-        }),
-        uid: sample.uid.and_then(|record| uid_of(session, record)),
-        state: None,
+        // A replay's uid record carries the command line; the compact
+        // record carries it itself.
+        command: sample
+            .uid
+            .or(sample.ticks)
+            .map_or_else(String::new, |record| {
+                command_of(&record.observation.provenance.channel)
+            }),
+        uid,
+        state: stat.and_then(|stat| stat.state),
+        ppid: stat
+            .and_then(|stat| stat.ppid)
+            .and_then(|ppid| i32::try_from(ppid).ok()),
+        threads: stat.and_then(|stat| stat.threads),
         cpu_percent,
         rss_bytes,
         missing_reason: cpu_reason.or(rss_reason).map(str::to_owned),
@@ -249,6 +274,38 @@ fn host_row(
             .unwrap_or(0),
     };
     (row, base)
+}
+
+/// Whether the tags of a compact record may be used: its source is
+/// admitted. Its read status speaks of the ticks only, so failed ticks do
+/// not discard the RSS and owner read from the same `stat`.
+fn admits_tags(session: &Session<'_>, record: Record<'_>) -> Result<(), &'static str> {
+    let candidate = session.candidate(record);
+    match arbitration::check_admission(&candidate, record.key(), session.policy()) {
+        Ok(()) | Err(RejectReason::ReadFailed { .. }) => Ok(()),
+        Err(reason) => Err(reasons::reject_code(
+            &reason,
+            record.observation.native_unit.as_str(),
+        )),
+    }
+}
+
+/// The RSS a compact record's tags carry, already in bytes.
+fn tagged_rss(
+    session: &Session<'_>,
+    record: Record<'_>,
+    bytes: Option<u64>,
+) -> (Option<u64>, Option<&'static str>) {
+    if let Err(code) = admits_tags(session, record) {
+        return (None, Some(code));
+    }
+    if !counter_inputs::is_fresh(session, record) {
+        return (None, Some(reasons::STALE));
+    }
+    match bytes {
+        Some(bytes) => (Some(bytes), None),
+        None => (None, Some(reasons::MISSING_INPUT)),
+    }
 }
 
 /// CPU% of one instance. The first sample of a `ProcessKey` (and therefore of
