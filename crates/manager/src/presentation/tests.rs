@@ -195,7 +195,6 @@ fn filled(model: &ViewModel) -> Vec<&'static str> {
         ("network", modules.network.is_some()),
         ("processes", modules.processes.is_some()),
         ("history", modules.history.is_some()),
-        ("sources", modules.sources.is_some()),
         ("settings", modules.settings.is_some()),
         ("actions", modules.actions.is_some()),
     ]
@@ -317,33 +316,6 @@ fn processes_view_copies_only_the_window() {
     assert!(model.estimated_bytes() < 64 * 1024);
 }
 
-#[test]
-fn sources_view_is_bounded_on_reference_load() {
-    let mut fixture = reference_fixture(128, 16);
-    for core in 0..128_u32 {
-        let key = metric_key(
-            &format!("cpu.core.{core}"),
-            "cpu.utilization.total",
-            &format!("core:{core}"),
-        );
-        let candidates = (0..4)
-            .map(|index| candidate(&format!("procfs:cpu{core}:{index}"), "procfs").build())
-            .collect();
-        fixture.explain("cpu", explanation_for(&key, candidates));
-    }
-    fixture.session.view = ViewKind::Sources;
-    let model = build_view_model(&fixture.context());
-    let sources = model.modules.sources.as_ref().unwrap();
-    let candidates: usize = sources
-        .metrics
-        .iter()
-        .map(|metric| metric.candidates.len())
-        .sum();
-    assert!(sources.metrics.len() <= 48);
-    assert!(candidates + sources.unclassified.len() <= 200);
-    assert!(model.estimated_bytes() < ONE_MIB);
-}
-
 /// The bound replaces writing the JSON only where that changes nothing: a
 /// projection is published at most at `max_projection_bytes` of real JSON,
 /// trimmed exactly as the exact length would trim it, for every budget and
@@ -354,7 +326,7 @@ fn the_accounted_size_never_exceeds_the_budget_nor_trims_differently() {
         ViewKind::Overview,
         ViewKind::Processes,
         ViewKind::GpuDetail,
-        ViewKind::Sources,
+        ViewKind::Settings,
     ];
     for view in views {
         for max_bytes in [8_192_u32, 32_768, 65_536, 131_072, 262_144, 1_048_576] {

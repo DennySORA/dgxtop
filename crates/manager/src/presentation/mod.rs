@@ -27,7 +27,6 @@ mod reader;
 mod run_history;
 mod run_inputs;
 mod settings;
-mod sources;
 #[cfg(test)]
 mod testkit;
 #[cfg(test)]
@@ -46,7 +45,7 @@ use std::sync::Arc;
 use dgxtop_core::action::PersistenceStatus;
 use dgxtop_core::canonical::{CatalogSnapshot, ImmutableSnapshot};
 use dgxtop_core::commands::ViewKind;
-use dgxtop_core::config::{Config, ValueOrigin};
+use dgxtop_core::config::{BUILTIN_MODULES, Config, ValueOrigin};
 use dgxtop_core::identity::{MetricKey, ModuleId};
 use dgxtop_core::naming::adapters;
 use dgxtop_core::ports::ProcessMemoryReader;
@@ -62,7 +61,6 @@ use gpu::{GpuEnvironment, GpuTrendWidths};
 use gpu_directory::GpuDirectory;
 use plan::{ViewPlan, ViewportLayout};
 use reader::MetricReader;
-use sources::SourcesInputs;
 
 /// Bounded recent values per trend series (sparklines), fed by the Manager
 /// from committed snapshots. Gaps are kept as `None`.
@@ -362,15 +360,6 @@ fn build_modules(
             },
         )));
     }
-    if plan.shows(plan::SOURCES) {
-        modules.sources = Some(Arc::new(sources::build_sources_view(&SourcesInputs {
-            reader,
-            directory: inputs.directory,
-            session: context.session,
-            hosts: context.hosts,
-            intervals: context.intervals,
-        })));
-    }
     if plan.shows(plan::SETTINGS) {
         modules.settings = Some(Arc::new(settings::build_settings_view(
             &context.settings,
@@ -424,9 +413,12 @@ fn build_gpu(context: &PresentationContext<'_>, inputs: &ModuleInputs<'_>) -> Gp
     )
 }
 
+/// The enabled built-in modules; a retired id a saved file still enables
+/// is left out (D-91).
 fn enabled_module_ids(enabled: &[String]) -> Vec<ModuleId> {
     enabled
         .iter()
+        .filter(|module| BUILTIN_MODULES.contains(&module.as_str()))
         .filter_map(|module| ModuleId::new(module.as_str()).ok())
         .collect()
 }

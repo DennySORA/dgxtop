@@ -235,7 +235,7 @@ pub enum CandidateDisposition {
     Rejected(RejectReason),
 }
 
-/// Per-candidate evidence shown by the sources view.
+/// Per-candidate evidence of one arbitration (why a source was selected).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CandidateExplanation {
     pub source_id: SourceId,

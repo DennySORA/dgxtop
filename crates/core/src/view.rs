@@ -15,7 +15,7 @@ use crate::config::{Theme, ValueOrigin};
 use crate::identity::{EntityId, MetricKey, ModuleId, ProcessKey, SessionId};
 use crate::metric::{CanonicalUnit, Scalar};
 use crate::process_history::{BarSize, RunEnd, RunInfo, RunMetric};
-use crate::quality::{Freshness, Quality, SampleKind, SelectionState};
+use crate::quality::{Quality, SampleKind};
 
 /// Why a cell has (or lacks) a value; always rendered as text, never only color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -676,39 +676,6 @@ pub struct HistoryView {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CandidateView {
-    pub source_id: String,
-    pub adapter_id: String,
-    pub value: Option<Scalar>,
-    pub unit: Option<CanonicalUnit>,
-    pub native: String,
-    pub quality: Quality,
-    pub kind: SampleKind,
-    pub freshness: Freshness,
-    pub measurement_freshness: Freshness,
-    pub age_ms: Option<u64>,
-    pub origin: String,
-    pub rank: u16,
-    /// "selected", "standby", "alias of X", "conflicting", "rejected: reason".
-    pub disposition: String,
-    pub suspect_reasons: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SourceMetricView {
-    pub key: MetricKey,
-    pub label: String,
-    pub selection_state: SelectionState,
-    pub selected_source: Option<String>,
-    pub pinned_source: Option<String>,
-    pub policy_revision: u32,
-    pub conflict_spread: Option<f64>,
-    pub tolerance: Option<f64>,
-    pub candidates: Vec<CandidateView>,
-    pub switch_note: Option<String>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HostState {
@@ -757,17 +724,6 @@ pub struct IntervalView {
     pub configured_ms: u32,
     pub effective_ms: u32,
     pub reason: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SourcesView {
-    pub metrics: Vec<SourceMetricView>,
-    pub hosts: Vec<HostStatus>,
-    pub intervals: Vec<IntervalView>,
-    pub policy_revision: u32,
-    pub selected: Option<String>,
-    pub filter: String,
-    pub unclassified: Vec<CandidateView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -911,7 +867,6 @@ pub struct ModuleViews {
     pub history: Option<Arc<HistoryView>>,
     /// Built beside `history`, for the Process History tab (D-76).
     pub process_history: Option<Arc<ProcessHistoryView>>,
-    pub sources: Option<Arc<SourcesView>>,
     pub settings: Option<Arc<SettingsView>>,
     pub actions: Option<Arc<ActionsView>>,
 }

@@ -23,7 +23,7 @@ use dgxtop_core::action::{PersistenceKind, PersistenceState, PersistenceStatus};
 use dgxtop_core::canonical::CatalogSnapshot;
 use dgxtop_core::clock::NANOS_PER_SECOND;
 use dgxtop_core::commands::CommandResult;
-use dgxtop_core::config::{BUILTIN_MODULES, Config, ValidationIssue, ValueOrigin};
+use dgxtop_core::config::{BUILTIN_MODULES, Config, ValidationIssue, ValueOrigin, is_known_module};
 use dgxtop_core::errors::{ErrorCode, ErrorDetail};
 use dgxtop_core::identity::ModuleId;
 use dgxtop_core::ports::{ConfigJob, Dispatch, DispatchError, PersistError};
@@ -582,7 +582,7 @@ fn registry_or_pin_problem(candidate: &Config, catalog: &CatalogSnapshot) -> Opt
         .viewer
         .enabled_modules
         .iter()
-        .find(|module| !BUILTIN_MODULES.contains(&module.as_str()))
+        .find(|module| !is_known_module(module))
     {
         return Some(format!(
             "viewer.enabled_modules: {unknown} is not in the built-in registry"
@@ -727,6 +727,39 @@ mod tests {
             ConfigDecision::Reply(result) => result.code,
             ConfigDecision::Pending => panic!("expected an immediate reply"),
         }
+    }
+
+    /// A retired module id (D-91) may stay enabled in a saved file, as in
+    /// the spec's default, but cannot be toggled: it is no longer listed.
+    #[test]
+    fn retired_modules_are_accepted_but_not_toggled() {
+        let mut saved = Config::defaults().unwrap();
+        assert!(
+            saved
+                .viewer
+                .enabled_modules
+                .iter()
+                .any(|module| module == "sources")
+        );
+        assert_eq!(registry_or_pin_problem(&saved, &catalog()), None);
+        saved.viewer.enabled_modules.push("plugin".into());
+        assert!(registry_or_pin_problem(&saved, &catalog()).is_some());
+        let mut bench = bench();
+        let toggled = bench.service.submit(
+            Uuid::new_v4(),
+            ConfigRequest::SetModule {
+                module_id: ModuleId::new("sources").unwrap(),
+                enabled: false,
+                expected_revision: 1,
+            },
+            &catalog(),
+            NOW,
+        );
+        assert_eq!(
+            rejected_code(&toggled),
+            ResultCode::from(ErrorCode::ValidationFailed)
+        );
+        assert!(bench.port.is_empty());
     }
 
     #[test]

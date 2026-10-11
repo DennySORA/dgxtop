@@ -24,7 +24,7 @@ pub use banners::{BannerBlock, wrap_words};
 pub use hitmap::{HitMap, MAX_HIT_TARGETS};
 pub use isolation::in_isolated_render;
 pub use layout::{MIN_COLUMNS, MIN_ROWS, SizeTier, size_tier};
-pub use ui_state::{FilterTarget, ModeView, Notice, UiState};
+pub use ui_state::{ModeView, Notice, UiState};
 
 use crate::num::saturate_u16;
 use crate::registry::{

@@ -318,10 +318,10 @@ fn k_without_a_visible_selection_does_nothing() {
             .text
             .contains("no visible selected process")
     );
-    let mut sources = Harness::new(ViewKind::Sources);
-    sources.keys(&[shift('K')]);
+    let mut settings = Harness::new(ViewKind::Settings);
+    settings.keys(&[shift('K')]);
     assert!(
-        sources.submitted().is_empty(),
+        settings.submitted().is_empty(),
         "K is not bound outside process views"
     );
 }

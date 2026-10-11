@@ -439,36 +439,6 @@ fn history_says_when_it_loads_fails_is_partly_recorded_or_has_no_series() {
 }
 
 #[test]
-fn sources_view_explains_arbitration() {
-    let rendered = render(&model(ViewKind::Sources), (160, 50));
-    for text in [
-        "Sources · policy r3",
-        "≠ conflict",
-        "26.0 > 5.0",
-        "conflicting",
-        "fresh/unknown",
-        "quarantined (requires intervention)",
-        "overload x2",
-        "2 s",
-        "hwmon:nct6775:temp7",
-    ] {
-        assert!(
-            rendered.contains(text),
-            "missing {text:?}\n{}",
-            rendered.text()
-        );
-    }
-    for size in [(100, 30), (80, 24), (40, 10)] {
-        let rendered = render(&model(ViewKind::Sources), size);
-        assert!(
-            rendered.contains("Sources"),
-            "{size:?}\n{}",
-            rendered.text()
-        );
-    }
-}
-
-#[test]
 fn settings_view_shows_origins_restart_and_pending() {
     let rendered = render(&model(ViewKind::Settings), (160, 50));
     for text in [
@@ -775,7 +745,7 @@ impl DisplayModule for PanickingModule {
 }
 
 #[test]
-fn an_eleventh_fixture_module_is_registered_and_laid_out() {
+fn a_further_fixture_module_is_registered_and_laid_out() {
     let mut viewer = Viewer::builtin();
     viewer
         .registry_mut()
@@ -784,7 +754,10 @@ fn an_eleventh_fixture_module_is_registered_and_laid_out() {
             DISPLAY_MODULE_API_VERSION,
         )))
         .unwrap();
-    assert_eq!(viewer.registry().len(), 11);
+    assert_eq!(
+        viewer.registry().len(),
+        dgxtop_core::config::BUILTIN_MODULES.len() + 1
+    );
     let rendered = render_with(
         &viewer,
         Some(&model(ViewKind::Overview)),

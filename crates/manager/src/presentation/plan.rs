@@ -13,7 +13,6 @@ pub(crate) const DISK: &str = "disk";
 pub(crate) const NETWORK: &str = "network";
 pub(crate) const PROCESSES: &str = "processes";
 pub(crate) const HISTORY: &str = "history";
-pub(crate) const SOURCES: &str = "sources";
 pub(crate) const SETTINGS: &str = "settings";
 pub(crate) const ACTIONS: &str = "actions";
 
@@ -32,7 +31,8 @@ pub fn visible_modules(view: ViewKind) -> &'static [&'static str] {
         ViewKind::GpuDetail => &[GPU],
         ViewKind::Processes => &[PROCESSES],
         ViewKind::History => &[HISTORY],
-        ViewKind::Sources => &[SOURCES],
+        // Retired view: the wire keeps its value, nothing is shown (D-91).
+        ViewKind::Sources => &[],
         ViewKind::Settings => &[SETTINGS],
         ViewKind::Actions => &[ACTIONS],
     }

@@ -416,7 +416,8 @@ pub fn render_footer(
     ];
     let badge = match &ui.mode {
         ModeView::Normal => None,
-        ModeView::Filter { target, .. } => Some(format!(" FILTER {} ", target.label())),
+        // The process table is the only filtered list (D-91).
+        ModeView::Filter { .. } => Some(" FILTER process name ".to_owned()),
         ModeView::Confirm { .. } => Some(" CONFIRM ".to_owned()),
         ModeView::Help { .. } => Some(" HELP ".to_owned()),
     };

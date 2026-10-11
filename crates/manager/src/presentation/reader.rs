@@ -41,16 +41,8 @@ impl<'a> MetricReader<'a> {
         &self.index
     }
 
-    pub(crate) fn snapshot(&self) -> &'a ImmutableSnapshot {
-        self.snapshot
-    }
-
     pub(crate) fn catalog(&self) -> &'a CatalogSnapshot {
         self.catalog
-    }
-
-    pub(crate) fn now_boot_ns(&self) -> u64 {
-        self.now_boot_ns
     }
 
     pub(crate) fn explanation(&self, key: &MetricKey) -> Option<&'a Explanation> {

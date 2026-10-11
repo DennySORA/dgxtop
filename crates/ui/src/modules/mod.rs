@@ -1,4 +1,4 @@
-//! The ten built-in display modules. Each renders exactly one core view type
+//! The built-in display modules. Each renders exactly one core view type
 //! from the immutable projection; a missing topic renders "no data" text.
 
 mod actions;
@@ -13,7 +13,6 @@ mod network;
 mod process_memory;
 mod processes;
 mod settings;
-mod sources;
 
 use dgxtop_core::identity::IdentityError;
 use thiserror::Error;
@@ -32,7 +31,6 @@ pub use memory::MemoryModule;
 pub use network::NetworkModule;
 pub use processes::ProcessesModule;
 pub use settings::SettingsModule;
-pub use sources::SourcesModule;
 
 use crate::registry::{DisplayModule, ManifestError};
 
@@ -49,7 +47,7 @@ fn boxed<M: DisplayModule + 'static>(module: M) -> Box<dyn DisplayModule> {
     Box::new(module)
 }
 
-/// Constructs the ten built-ins in `config::BUILTIN_MODULES` order.
+/// Constructs the built-ins in `config::BUILTIN_MODULES` order.
 pub fn builtin_modules() -> Vec<Result<Box<dyn DisplayModule>, ModuleBuildError>> {
     vec![
         CpuModule::new().map(boxed),
@@ -59,7 +57,6 @@ pub fn builtin_modules() -> Vec<Result<Box<dyn DisplayModule>, ModuleBuildError>
         NetworkModule::new().map(boxed),
         ProcessesModule::new().map(boxed),
         HistoryModule::new().map(boxed),
-        SourcesModule::new().map(boxed),
         SettingsModule::new().map(boxed),
         ActionsModule::new().map(boxed),
     ]

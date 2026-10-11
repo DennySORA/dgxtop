@@ -143,8 +143,6 @@ pub mod controls {
     pub const PROCESS_ROW_SELECTED: &str = "processes.row.selected";
     /// A GPU card or GPU selector chip (carries the GPU entity id).
     pub const GPU_CARD: &str = "gpu.card";
-    /// A source-diagnostics metric row (entity id = series selector).
-    pub const SOURCES_METRIC: &str = "sources.metric";
     /// A module toggle row in settings (entity id = module id).
     pub const SETTINGS_MODULE: &str = "settings.module";
     /// Expands or collapses the module that drew the target.
@@ -219,8 +217,7 @@ impl ModuleRegistry {
         }
     }
 
-    /// The ten built-in modules: cpu, gpu, memory, disk, network, processes,
-    /// history, sources, settings, actions.
+    /// The built-in modules (`config::BUILTIN_MODULES`).
     pub fn builtin() -> Self {
         let mut registry = Self::empty();
         for candidate in crate::modules::builtin_modules() {
@@ -333,7 +330,7 @@ pub const fn detail_module_id(view: ViewKind) -> Option<&'static str> {
         ViewKind::GpuDetail => Some("gpu"),
         ViewKind::Processes => Some("processes"),
         ViewKind::History => Some("history"),
-        ViewKind::Sources => Some("sources"),
+        ViewKind::Sources => None,
         ViewKind::Settings => Some("settings"),
         ViewKind::Actions => Some("actions"),
     }
@@ -342,6 +339,7 @@ pub const fn detail_module_id(view: ViewKind) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dgxtop_core::config::BUILTIN_MODULES;
 
     struct StubModule {
         manifest: DisplayModuleManifest,
@@ -381,14 +379,14 @@ mod tests {
     }
 
     #[test]
-    fn builtin_registers_the_ten_modules_without_warnings() {
+    fn builtin_registers_every_builtin_module_without_warnings() {
         let registry = ModuleRegistry::builtin();
         let ids: Vec<String> = registry
             .module_ids()
             .iter()
             .map(|id| id.as_str().to_owned())
             .collect();
-        assert_eq!(ids, dgxtop_core::config::BUILTIN_MODULES.map(str::to_owned));
+        assert_eq!(ids, BUILTIN_MODULES.map(str::to_owned));
         assert!(registry.warnings().is_empty(), "{:?}", registry.warnings());
         for module in registry.iter() {
             module.manifest().validate().unwrap();
@@ -400,7 +398,7 @@ mod tests {
         let mut registry = ModuleRegistry::builtin();
         let error = registry.register(stub("cpu", 1)).unwrap_err();
         assert_eq!(error, RegistryError::DuplicateId("cpu".into()));
-        assert_eq!(registry.len(), 10);
+        assert_eq!(registry.len(), BUILTIN_MODULES.len());
         assert!(registry.warnings()[0].contains("already registered"));
     }
 
@@ -417,10 +415,10 @@ mod tests {
     }
 
     #[test]
-    fn an_eleventh_module_can_be_registered() {
+    fn a_further_module_can_be_registered() {
         let mut registry = ModuleRegistry::builtin();
         registry.register(stub("fixture", 1)).unwrap();
-        assert_eq!(registry.len(), 11);
+        assert_eq!(registry.len(), BUILTIN_MODULES.len() + 1);
         assert!(registry.get("fixture").is_some());
     }
 

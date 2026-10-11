@@ -207,11 +207,10 @@ const LIST_VIEWS: &[ViewKind] = &[
     ViewKind::Overview,
     ViewKind::GpuDetail,
     ViewKind::Processes,
-    ViewKind::Sources,
     ViewKind::Settings,
 ];
 const PROCESS_VIEWS: &[ViewKind] = &[ViewKind::Overview, ViewKind::Processes];
-const FILTER_VIEWS: &[ViewKind] = &[ViewKind::Overview, ViewKind::Processes, ViewKind::Sources];
+const FILTER_VIEWS: &[ViewKind] = &[ViewKind::Overview, ViewKind::Processes];
 
 /// Table-row constructor: positional arguments keep the table one line per binding.
 #[allow(clippy::too_many_arguments)]

@@ -35,8 +35,8 @@ pub const MAX_COMMAND_BYTES: u64 = 64 * 1024;
 /// Smallest acceptable effective per-command cap (fits a full config candidate).
 pub const MIN_COMMAND_BYTES: u64 = 8 * 1024;
 
-/// The ten built-in display modules.
-pub const BUILTIN_MODULES: [&str; 10] = [
+/// The built-in display modules, in registration order.
+pub const BUILTIN_MODULES: [&str; 9] = [
     "cpu",
     "gpu",
     "memory",
@@ -44,10 +44,20 @@ pub const BUILTIN_MODULES: [&str; 10] = [
     "network",
     "processes",
     "history",
-    "sources",
     "settings",
     "actions",
 ];
+
+/// Module ids of removed views a configuration may still enable (the
+/// spec's `config.default.json` does): accepted and ignored, never listed
+/// or toggled (D-91).
+pub const RETIRED_MODULES: [&str; 1] = ["sources"];
+
+/// Whether `module` may appear in `viewer.enabled_modules`: a built-in or
+/// a retired module (D-91).
+pub fn is_known_module(module: &str) -> bool {
+    BUILTIN_MODULES.contains(&module) || RETIRED_MODULES.contains(&module)
+}
 
 /// Configuration keys an earlier version wrote that this one ignores (D-88).
 pub const RETIRED_KEYS: [&str; 1] = ["store.raw_candidate_seconds"];
@@ -1245,6 +1255,19 @@ mod tests {
         assert_eq!(defaults.runtime.max_history_result_bytes, 4 * 1024 * 1024);
         assert_eq!(defaults.runtime.history_workers, 2);
         assert_eq!(defaults.runtime.compute_workers, 2);
+    }
+
+    /// Built-in and retired module ids are known (D-91); anything else is not.
+    #[test]
+    fn retired_modules_are_known_but_not_built_in() {
+        for module in BUILTIN_MODULES.iter().chain(&RETIRED_MODULES) {
+            assert!(is_known_module(module), "{module}");
+        }
+        for module in RETIRED_MODULES {
+            assert!(!BUILTIN_MODULES.contains(&module), "{module}");
+        }
+        assert!(!is_known_module("plugin"));
+        assert!(!is_known_module(""));
     }
 
     #[test]
