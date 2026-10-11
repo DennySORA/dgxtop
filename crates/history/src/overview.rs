@@ -490,13 +490,13 @@ fn flush(book: &mut TierBook, link: &mut StoreLink) {
             return;
         }
     }
-    let rows: Vec<TierRow> = book.take_unsent();
+    let rows: Arc<Vec<TierRow>> = Arc::new(book.take_unsent());
     if rows.is_empty() && link.forget.is_empty() {
         return;
     }
     let journal = TierJournal {
         forget: link.forget.clone(),
-        rows: rows.clone(),
+        rows: Arc::clone(&rows),
         keep_latest: u32::try_from(TIER_BUCKETS).unwrap_or(u32::MAX),
     };
     match link.port.try_dispatch(HistoryTierJob::Append(journal)) {
@@ -505,7 +505,9 @@ fn flush(book: &mut TierBook, link: &mut StoreLink) {
             link.forget.clear();
         }
         Err(DispatchError::Busy) => {
-            book.return_unsent(rows);
+            // The refused journal is dropped already: the rows come back
+            // without a copy.
+            book.return_unsent(Arc::unwrap_or_clone(rows));
             link.keep_unsent_within_budget(book);
         }
         Err(error) => link.stop(book, &error),

@@ -12,6 +12,8 @@
 //! the history asks its store to keep, the archived minutes it compresses
 //! at startup and the reads the Manager asks of it.
 
+use std::sync::Arc;
+
 use crate::errors::InfraError;
 use crate::history::SeriesInEveryBoot;
 use crate::identity::HostId;
@@ -190,11 +192,12 @@ pub struct StoredTierSeries {
 /// What the history asks its store to write: first every bucket of the
 /// `forget` series deleted (the history's cache let them go, so they are
 /// not read back), then the closed buckets, then of every (series, size)
-/// written only the latest `keep_latest` kept.
+/// written only the latest `keep_latest` kept. The rows are shared: the
+/// history keeps them (without a copy) when the store's queue is full.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TierJournal {
     pub forget: Vec<SeriesInEveryBoot>,
-    pub rows: Vec<TierRow>,
+    pub rows: Arc<Vec<TierRow>>,
     pub keep_latest: u32,
 }
 

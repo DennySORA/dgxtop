@@ -40,7 +40,7 @@ pub(super) fn append(
             delete_series(transaction, series)?;
         }
         let mut touched = BTreeSet::new();
-        for row in &journal.rows {
+        for row in journal.rows.iter() {
             let Some(tier) = stored_tier(row.tier) else {
                 continue;
             };

@@ -110,7 +110,7 @@ impl Disk {
                         operation: "test",
                     }));
                 }
-                for row in journal.rows {
+                for row in journal.rows.iter() {
                     self.tiers
                         .insert((row.tier, row.bucket.start_utc_ns), row.bucket);
                 }
@@ -853,4 +853,28 @@ fn unsent_buckets_are_bounded_by_bytes() {
     assert!(!book.shed_unsent(all / 2), "nothing more to drop");
     assert_eq!(book.take_unsent().last().cloned(), latest);
     assert_eq!(book.unsent_bytes(), 0);
+}
+
+/// A journal the busy store refused is not lost: its rows go with the next
+/// one, once each and oldest first.
+#[test]
+fn rows_a_busy_store_refused_go_with_the_next_journal() {
+    let mut disk = Disk::default();
+    let run = Run::start(&mut disk, MIDNIGHT);
+    run.port.set_busy(true);
+    run.tiers.feed((0..4).map(live).collect());
+    run.tiers.feed((4..8).map(live).collect());
+    assert!(run.port.is_empty(), "the store is busy");
+    run.port.set_busy(false);
+    run.tiers.feed(vec![live(8)]);
+    let jobs = run.port.take();
+    let sent = appends(&jobs);
+    assert_eq!(sent.len(), 1);
+    let minutes: Vec<i64> = sent[0]
+        .rows
+        .iter()
+        .filter(|row| row.tier == Tier::OneMinute)
+        .map(|row| (row.bucket.start_utc_ns - MIDNIGHT) / MINUTE)
+        .collect();
+    assert_eq!(minutes, (0..8).collect::<Vec<i64>>());
 }

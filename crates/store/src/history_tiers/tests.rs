@@ -67,7 +67,7 @@ fn row(entity: &str, tier: Tier, bucket: OverviewBucket) -> TierRow {
 fn journal(rows: Vec<TierRow>) -> TierJournal {
     TierJournal {
         forget: Vec::new(),
-        rows,
+        rows: std::sync::Arc::new(rows),
         keep_latest: u32::try_from(TIER_BUCKETS).unwrap(),
     }
 }
@@ -132,7 +132,7 @@ fn each_size_keeps_its_latest_buckets() {
     store
         .append(&TierJournal {
             forget: Vec::new(),
-            rows,
+            rows: std::sync::Arc::new(rows),
             keep_latest: 4,
         })
         .unwrap();
