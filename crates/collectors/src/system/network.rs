@@ -87,7 +87,7 @@ fn publish_byte_rates(session: &mut Session<'_>) {
         let keys = session.pending_keys(|key| key.metric_id.as_str() == counter_metric);
         for key in keys {
             // Every candidate's counter base advances, so switching sources
-            // later still starts from an exact base; but the store rejects a
+            // later still starts from an exact base; but the state rejects a
             // batch carrying a key twice, so one rate is published per key.
             let steps: Vec<Step<'_>> = session
                 .records(key)
@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn candidate_byte_counters_publish_each_rate_key_once() {
         // REF workloads give one interface counter up to four candidate
-        // sources; the store rejects a whole batch that carries a key twice.
+        // sources; the state rejects a whole batch that carries a key twice.
         let collector = NetworkCollector::new().unwrap();
         let eth = "netif:ns:5";
         let candidates = |value: u64, at: u64| -> Vec<Observation> {

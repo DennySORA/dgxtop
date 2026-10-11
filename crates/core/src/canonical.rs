@@ -405,7 +405,7 @@ pub struct DescendantTicks {
 }
 
 /// Bounded collector state. It becomes the next delta base only after the
-/// Store acknowledges the commit that carried it (`next_state`).
+/// state acknowledges the commit that carried it (`next_state`).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct CollectorState {
     pub revision: u64,

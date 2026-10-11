@@ -201,7 +201,7 @@ fn rate_value(
     }
 }
 
-/// Exact interval for the store's window totals; live data only (replay
+/// Exact interval for the history's window totals; live data only (replay
 /// never feeds live history).
 pub(crate) fn emit_interval(
     session: &mut Session<'_>,
