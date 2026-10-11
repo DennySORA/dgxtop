@@ -19,7 +19,7 @@ use dgxtop_core::ports::ArchiveReader;
 use rusqlite::config::DbConfig;
 use rusqlite::{Connection, OpenFlags};
 
-use crate::sqlite::{FaultKind, SCHEMA_USER_VERSION, describe, fault_kind};
+use crate::sqlite::{FaultKind, SchemaKind, describe, fault_kind};
 
 /// The writer holds the lock only for its short batches.
 const BUSY_TIMEOUT: Duration = Duration::from_millis(50);
@@ -77,12 +77,13 @@ fn open(path: &Path) -> rusqlite::Result<Opened> {
     connection.pragma_update(None, "query_only", true)?;
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     Ok(match version {
-        SCHEMA_USER_VERSION => Opened::Ready(connection),
+        version if version == SchemaKind::History.user_version() => Opened::Ready(connection),
         // The writer applies the schema in one transaction right after
         // creating the file.
         0 => Opened::NotYet,
         other => Opened::Refused(format!(
-            "history archive schema version {other} is not {SCHEMA_USER_VERSION}"
+            "history archive schema version {other} is not {}",
+            SchemaKind::History.user_version()
         )),
     })
 }

@@ -63,7 +63,7 @@ impl SqliteHistoryTiers {
         let spec = DatabaseSpec {
             path,
             kind: SchemaKind::HistoryTiers,
-            profile: ConnectionProfile::archive(WAL_CHECKPOINT_BYTES),
+            profile: ConnectionProfile::best_effort(WAL_CHECKPOINT_BYTES),
             policy: CapacityPolicy {
                 limit_bytes: LIMIT_BYTES,
                 reserve_bytes: 0,

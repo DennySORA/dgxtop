@@ -203,19 +203,14 @@ impl SqliteArchive {
         clock: Arc<dyn TimeProvider>,
         free_space: Arc<dyn FreeSpaceProbe>,
     ) -> Result<Self, ArchiveOpenError> {
-        Self::open_with_filesystem(path, limits, clock, free_space, &RealFileSystem)
-    }
-
-    /// Like [`Self::open`] with an explicit filesystem for the pre-creation
-    /// and recreation steps (fault injection).
-    pub fn open_with_filesystem(
-        path: &Path,
-        limits: ArchiveLimits,
-        clock: Arc<dyn TimeProvider>,
-        free_space: Arc<dyn FreeSpaceProbe>,
-        fs: &dyn FileSystemOps,
-    ) -> Result<Self, ArchiveOpenError> {
-        Self::open_inner(path, limits, clock, free_space, fs, ensure_sqlite_version)
+        Self::open_inner(
+            path,
+            limits,
+            clock,
+            free_space,
+            &RealFileSystem,
+            ensure_sqlite_version,
+        )
     }
 
     pub(crate) fn open_inner(
@@ -232,7 +227,7 @@ impl SqliteArchive {
         let spec = DatabaseSpec {
             path,
             kind: SchemaKind::History,
-            profile: ConnectionProfile::archive(limits.wal_checkpoint_bytes),
+            profile: ConnectionProfile::best_effort(limits.wal_checkpoint_bytes),
             policy,
         };
         let opened = open_database(&spec, fs, gate);
@@ -650,18 +645,12 @@ impl SqliteArchive {
 
     fn state_and_detail(&mut self) -> (PersistenceState, Option<String>) {
         if let Some(unusable) = &self.unusable {
-            return (unusable.state, Some(unusable.reason.clone()));
+            return (PersistenceState::Failed, Some(unusable.reason.clone()));
         }
         self.maybe_run_retention();
         let view = match self.capacity_view() {
             Ok(view) => view,
-            Err(error) => {
-                let state = self
-                    .unusable
-                    .as_ref()
-                    .map_or(PersistenceState::Failed, |unusable| unusable.state);
-                return (state, Some(error.to_string()));
-            }
+            Err(error) => return (PersistenceState::Failed, Some(error.to_string())),
         };
         match self
             .policy

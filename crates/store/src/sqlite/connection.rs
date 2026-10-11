@@ -8,15 +8,16 @@ use rusqlite::{Connection, OpenFlags};
 
 /// `PRAGMA synchronous` level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Synchronous {
+pub(crate) enum Synchronous {
     /// Audit: an intent is durable once COMMIT returns.
     Full,
-    /// Archive: power loss may drop the most recent transactions (declared).
+    /// The archive, the tiers and the process history: power loss may drop
+    /// the most recent transactions (declared).
     Normal,
 }
 
 impl Synchronous {
-    pub const fn pragma_value(self) -> i64 {
+    pub(crate) const fn pragma_value(self) -> i64 {
         match self {
             Self::Full => 2,
             Self::Normal => 1,
@@ -26,7 +27,7 @@ impl Synchronous {
 
 /// PRAGMA settings of one partition's writer connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ConnectionProfile {
+pub(crate) struct ConnectionProfile {
     pub synchronous: Synchronous,
     /// Page cache size in KiB (applied as a negative `cache_size`).
     pub cache_size_kib: u32,
@@ -37,7 +38,7 @@ pub struct ConnectionProfile {
 
 impl ConnectionProfile {
     /// Audit: FULL, 2 MiB cache, 100 ms busy timeout.
-    pub const fn audit(journal_size_limit_bytes: u64) -> Self {
+    pub(crate) const fn audit(journal_size_limit_bytes: u64) -> Self {
         Self {
             synchronous: Synchronous::Full,
             cache_size_kib: 2048,
@@ -46,8 +47,9 @@ impl ConnectionProfile {
         }
     }
 
-    /// Archive: NORMAL, 4 MiB cache, 50 ms busy timeout.
-    pub const fn archive(journal_size_limit_bytes: u64) -> Self {
+    /// The archive, the tiers and the process history: NORMAL, 4 MiB cache,
+    /// 50 ms busy timeout.
+    pub(crate) const fn best_effort(journal_size_limit_bytes: u64) -> Self {
         Self {
             synchronous: Synchronous::Normal,
             cache_size_kib: 4096,

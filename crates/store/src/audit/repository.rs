@@ -116,11 +116,10 @@ fn validate_path(path: &Path) -> Result<(), AuditOpenError> {
 }
 
 fn unusable_failure(unusable: &Unusable) -> AuditFailure {
-    let code = match unusable.state {
-        PersistenceState::ReadOnlyDiagnostic => ErrorCode::Unavailable,
-        _ => ErrorCode::PersistFailed,
-    };
-    failure(code, format!("audit unavailable: {}", unusable.reason))
+    failure(
+        ErrorCode::PersistFailed,
+        format!("audit unavailable: {}", unusable.reason),
+    )
 }
 
 /// Existing intent for the same request: the same payload yields the
@@ -186,19 +185,14 @@ impl SqliteAuditRepository {
         clock: Arc<dyn TimeProvider>,
         free_space: Arc<dyn FreeSpaceProbe>,
     ) -> Result<Self, AuditOpenError> {
-        Self::open_with_filesystem(path, limits, clock, free_space, &RealFileSystem)
-    }
-
-    /// Like [`Self::open`] with an explicit filesystem for the pre-creation
-    /// and recreation steps (fault injection).
-    pub fn open_with_filesystem(
-        path: &Path,
-        limits: AuditLimits,
-        clock: Arc<dyn TimeProvider>,
-        free_space: Arc<dyn FreeSpaceProbe>,
-        fs: &dyn FileSystemOps,
-    ) -> Result<Self, AuditOpenError> {
-        Self::open_inner(path, limits, clock, free_space, fs, ensure_sqlite_version)
+        Self::open_inner(
+            path,
+            limits,
+            clock,
+            free_space,
+            &RealFileSystem,
+            ensure_sqlite_version,
+        )
     }
 
     pub(crate) fn open_inner(
@@ -414,18 +408,12 @@ impl SqliteAuditRepository {
 
     fn state_and_detail(&mut self) -> (PersistenceState, Option<String>) {
         if let Some(unusable) = &self.unusable {
-            return (unusable.state, Some(unusable.reason.clone()));
+            return (PersistenceState::Failed, Some(unusable.reason.clone()));
         }
         self.maybe_run_retention();
         let view = match self.capacity_view(WriteClass::NewRecord) {
             Ok(view) => view,
-            Err(error) => {
-                let state = self
-                    .unusable
-                    .as_ref()
-                    .map_or(PersistenceState::Failed, |unusable| unusable.state);
-                return (state, Some(error.message));
-            }
+            Err(error) => return (PersistenceState::Failed, Some(error.message)),
         };
         if let Err(refusal) =
             self.policy

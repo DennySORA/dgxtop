@@ -23,13 +23,12 @@
 use std::io;
 use std::path::Path;
 
-use dgxtop_core::action::PersistenceState;
 use rusqlite::Connection;
 
 use super::capacity::{CapacityPolicy, PageUsage, shm_path, wal_path};
 use super::connection::{ConnectionProfile, apply_profile, open_connection};
 use super::errors::{FaultKind, describe, fault_kind};
-use super::schema::{SchemaKind, SchemaPlan, apply_ddl, integrity_problem, plan};
+use super::schema::{SchemaKind, SchemaPlan, apply_ddl, plan, quick_check_problem};
 use super::version::{SqliteGateError, SqliteVersion};
 use crate::fs::{FileKind, FileSystemOps};
 use crate::paths::verify_private_directory;
@@ -47,17 +46,16 @@ pub(crate) struct DatabaseSpec<'a> {
     pub policy: CapacityPolicy,
 }
 
-/// A database that must not be written; the partition reports this state.
+/// A database that must not be written: the partition reports `Failed`
+/// with this reason (D-85 left no read-only state).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Unusable {
-    pub state: PersistenceState,
     pub reason: String,
 }
 
 impl Unusable {
     pub(crate) fn failed(reason: impl AsRef<str>) -> Self {
         Self {
-            state: PersistenceState::Failed,
             reason: dgxtop_core::text::sanitize_message(reason.as_ref()),
         }
     }
@@ -248,7 +246,7 @@ fn inspect(connection: &Connection, kind: SchemaKind) -> Result<SchemaPlan, Open
 }
 
 fn verify_integrity(connection: &Connection) -> Result<(), OpenFailure> {
-    match integrity_problem(connection, true) {
+    match quick_check_problem(connection) {
         Err(error) => Err(OpenFailure::sqlite("integrity check", &error)),
         Ok(Some(problem)) => Err(OpenFailure::File(format!(
             "integrity check failed: {problem}"

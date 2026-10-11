@@ -91,7 +91,7 @@ impl ProcessHistoryFiles {
         let spec = DatabaseSpec {
             path: database_path,
             kind: SchemaKind::ProcessHistory,
-            profile: ConnectionProfile::archive(WAL_CHECKPOINT_BYTES),
+            profile: ConnectionProfile::best_effort(WAL_CHECKPOINT_BYTES),
             policy: CapacityPolicy {
                 limit_bytes: LIMIT_BYTES,
                 reserve_bytes: 0,

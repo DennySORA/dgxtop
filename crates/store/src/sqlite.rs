@@ -31,12 +31,8 @@ mod transaction;
 mod version;
 
 pub use capacity::{StorageFootprint, shm_path, wal_path};
-pub use connection::{ConnectionProfile, Synchronous};
 pub use free_space::{FreeSpaceProbe, StatvfsFreeSpace};
-pub use schema::{
-    AUDIT_DDL, FORMAT_MAGIC, HISTORY_DDL, HISTORY_TIERS_DDL, PROCESS_HISTORY_DDL,
-    SCHEMA_USER_VERSION, SchemaKind, format_of, format_stamp,
-};
+pub use schema::{AUDIT_DDL, HISTORY_DDL, SchemaKind, format_stamp};
 pub use time::{format_utc_rfc3339, is_rfc3339_utc, parse_utc_rfc3339_ns, utc_cutoff};
 pub use version::{
     MIN_SQLITE_VERSION_NUMBER, SqliteGateError, SqliteVersion, check_version_number,
@@ -46,6 +42,9 @@ pub use version::{
 pub(crate) use capacity::{
     CapacityPolicy, CapacityView, PageUsage, Refusal, WriteClass, pages_and_backlog,
 };
+pub(crate) use connection::ConnectionProfile;
 pub(crate) use database::{DatabaseSpec, Unusable, VersionGate, open_database, path_problem};
 pub(crate) use errors::{FaultKind, describe, fault_kind};
+#[cfg(test)]
+pub(crate) use schema::PROCESS_HISTORY_DDL;
 pub(crate) use transaction::{StepError, TxError, immediate_transaction};
