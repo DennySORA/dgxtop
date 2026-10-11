@@ -826,6 +826,9 @@ pub mod ids {
     pub const DISK_READ_IOPS: &str = "disk.read.iops";
     pub const DISK_WRITE_IOPS: &str = "disk.write.iops";
     pub const DISK_AWAIT: &str = "disk.await";
+    /// A drive's own temperature (NVMe `Composite`, SATA/SAS `drivetemp`)
+    /// on each block device of the drive, scope `device` (D-92).
+    pub const DISK_TEMPERATURE: &str = "disk.temperature";
     // Disk (raw counters from /proc/diskstats)
     pub const DISK_READS_COMPLETED: &str = "disk.reads.completed";
     pub const DISK_SECTORS_READ: &str = "disk.sectors.read";
@@ -1670,6 +1673,15 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         Disk,
         false,
         "Await"
+    ),
+    descriptor!(
+        ids::DISK_TEMPERATURE,
+        DegC,
+        Canonical,
+        Gauge,
+        Disk,
+        false,
+        "Drive temperature"
     ),
     descriptor!(
         ids::DISK_READS_COMPLETED,

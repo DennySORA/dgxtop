@@ -22,6 +22,7 @@ use crate::hwmon::mapping::resolve;
 use crate::hwmon::reader::{ReadSpec, ValueFormat};
 use crate::hwmon::sysfs::{
     attribute, canonical, device_key, is_missing, list_names, read_label, read_optional,
+    static_group,
 };
 use crate::hwmon::table::{EntityDraft, ScanOutput, ScannedDevice, SourceDraft};
 
@@ -200,6 +201,7 @@ fn zone_drafts(
             format!("{}/{CHANNEL}", zone.instance),
             ValueFormat::UnsignedCounter,
         ),
+        read_group: static_group(naming::groups::FAST),
     };
     Some((source, entities))
 }

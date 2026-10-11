@@ -25,7 +25,7 @@ use crate::hwmon::mapping::{Mapping, resolve};
 use crate::hwmon::reader::{ReadSpec, ValueFormat};
 use crate::hwmon::sysfs::{
     attribute, canonical, canonical_link, device_key, disambiguate, is_missing, list_names,
-    numbered, read_label, read_optional,
+    numbered, read_label, read_optional, static_group,
 };
 use crate::hwmon::table::{EntityDraft, ScanOutput, ScannedDevice, SourceDraft};
 
@@ -283,6 +283,7 @@ fn zone_drafts(
             gate_path: metadata.has_mode.then(|| format!("{instance}/mode")),
             ..ReadSpec::value(format!("{instance}/temp"), ValueFormat::SignedGauge)
         },
+        read_group: static_group(naming::groups::FAST),
     };
     Some((source, entities))
 }

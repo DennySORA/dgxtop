@@ -13,6 +13,7 @@
 //! | procfs | `disk` | 1 s | `disk.{reads.completed,sectors.read,read.time,writes.completed,sectors.written,write.time}` (count / sectors_512 / milliseconds counters; entity `blockdev:MAJ:MIN`, scope `device` or `partition`) |
 //! | procfs | `process` | 1 s, paged | one `process.cpu.ticks` record (ticks counter) per `ProcessKey` entity (`process:NS:PID:START`, scope `process`), the rest of its `stat` and its owner as `proc.*` tags ([`crate::process_stat`], D-86) |
 //! | hwmon | `fast` | 1 s | temperatures (mdegC) and power (uW) mapped by profile: `cpu.temperature.package`/`core`, `cpu.power.package`, `cpu.power.cluster`, `cpu.power.platform`; unproven channels, fans and energy counters are not read (D-92); thermal-zone mirrors (`acpitz`) are left to `thermal` (D-81) |
+//! | hwmon | `disk` | 1 s | `disk.temperature` (mdegC): an NVMe controller's `Composite` or a `drivetemp` disk's `temp1` on every whole block device of that drive (entity `blockdev:MAJ:MIN`, scope `device`), mapped through the hwmon `device` link (D-92) |
 //! | thermal | `fast` | 1 s | zone temperatures (mdegC): `cpu.temperature.package` only when the profile proves the package, `soc.temperature` for SoC zones, GB10's `acpitz` zones by ACPI path (`cpu.temperature.cluster` scopes `cluster:0e`…`cluster:1p`, `soc.temperature`, D-68); other zones are not read (D-92) |
 //! | powercap | `fast` | 1 s | `cpu.energy.package` / `cpu.energy.platform` (uJ counters with declared modulus); subdomains are not read (D-92) |
 //! | nvml | `fast` | 1 s | GPU utilization/temperature/power/clocks/fan/framebuffer/PCIe/encoder/decoder/process_allocated (entity `gpu:UUID`) |
@@ -147,6 +148,13 @@ pub const READ_GROUPS: &[ReadGroupSpec] = &[
         period: PeriodClass::Fast,
         paged: true,
         collectors: &[collectors::CPU],
+    },
+    ReadGroupSpec {
+        adapter: adapters::HWMON,
+        group: groups::DISK,
+        period: PeriodClass::Fast,
+        paged: true,
+        collectors: &[collectors::DISK],
     },
     ReadGroupSpec {
         adapter: adapters::THERMAL,
@@ -486,6 +494,12 @@ mod tests {
         assert!(is_replay_adapter("replay-1"));
         assert!(!is_replay_adapter("replayer"));
         assert_eq!(read_groups_of(adapters::PROCFS).count(), 4);
+        // Drive temperatures feed the disk collector (D-92).
+        assert_eq!(
+            collectors_for(adapters::HWMON, groups::DISK),
+            &[collectors::DISK]
+        );
+        assert_eq!(collectors_for("replay", "hwmon.disk"), &[collectors::DISK]);
     }
 
     #[test]

@@ -7,7 +7,7 @@
 
 use std::io;
 
-use dgxtop_core::identity::{AdapterId, EntityId};
+use dgxtop_core::identity::{AdapterId, EntityId, ReadGroup};
 use dgxtop_core::naming::{attributes, entity};
 use dgxtop_core::observation::{
     AdapterManifest, AdapterOperation, Attribute, EntityKind, Isolation,
@@ -53,6 +53,14 @@ fn static_adapter_id(adapter: &'static str) -> AdapterId {
     match AdapterId::new(adapter) {
         Ok(id) => id,
         Err(error) => panic!("built-in adapter id {adapter:?} is invalid: {error}"),
+    }
+}
+
+/// Typed read group of a compile-time group name (`naming::groups`).
+pub(crate) fn static_group(group: &'static str) -> ReadGroup {
+    match ReadGroup::new(group) {
+        Ok(group) => group,
+        Err(error) => panic!("built-in read group {group:?} is invalid: {error}"),
     }
 }
 

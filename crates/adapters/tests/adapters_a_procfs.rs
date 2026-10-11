@@ -441,6 +441,67 @@ fn diskstats_scopes_partitions_and_skips_loop_and_ram() {
     );
 }
 
+/// A partition hangs below the disk holding it (the `dev` of its sysfs
+/// parent directory), so the disk's own facts such as its temperature reach
+/// it (D-92); a disk, or a partition whose disk cannot be read, hangs below
+/// the host.
+#[test]
+fn a_partition_hangs_below_the_disk_holding_it() {
+    let tree = FakeTree::new("procfs-partition-parent");
+    standard_procfs(&tree);
+    let disk = "/sys/devices/pci0000:00/0000:00:1d.0/0000:02:00.0/nvme/nvme0/nvme0n1";
+    tree.write(&format!("{disk}/dev"), "259:0\n");
+    tree.write(&format!("{disk}/nvme0n1p1/dev"), "259:1\n");
+    tree.write(&format!("{disk}/nvme0n1p1/partition"), "1\n");
+    for (name, target) in [
+        ("nvme0n1", disk.to_owned()),
+        ("nvme0n1p1", format!("{disk}/nvme0n1p1")),
+    ] {
+        let link = format!("/sys/class/block/{name}");
+        tree.remove(&link);
+        tree.symlink(&link, tree.path(&target).to_str().unwrap());
+    }
+    let clock = FakeClock::new(DISCOVERY_NS);
+    let mut adapter = procfs_with(&clock, tree.files());
+    let mut parent = ParentCatalog::default();
+    parent.sync(&mut adapter, ADAPTER);
+    let parent_of = |entity: &str| {
+        parent
+            .entity(entity)
+            .parent_id
+            .as_ref()
+            .map(|id| id.as_str().to_owned())
+    };
+    assert_eq!(
+        parent_of("blockdev:259:1").as_deref(),
+        Some("blockdev:259:0")
+    );
+    assert_eq!(parent_of("blockdev:259:0").as_deref(), Some("host"));
+    assert_eq!(parent_of("blockdev:8:0").as_deref(), Some("host"));
+    assert_eq!(
+        parent
+            .source("procfs:blockdev.259.1:sectors_read")
+            .metric
+            .as_ref()
+            .unwrap()
+            .scope
+            .as_str(),
+        "partition"
+    );
+
+    // The standard tree's partition is no link into a disk: its disk is
+    // unknown and it stays below the host.
+    let (_tree, _clock, _adapter, standard) = standard();
+    assert_eq!(
+        standard
+            .entity("blockdev:259:1")
+            .parent_id
+            .as_ref()
+            .map(|id| id.as_str()),
+        Some("host")
+    );
+}
+
 #[test]
 fn renamed_block_device_is_a_new_generation() {
     let (tree, _clock, mut adapter, mut parent) = standard();

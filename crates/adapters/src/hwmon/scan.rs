@@ -1,7 +1,10 @@
 //! hwmon enumeration: `/sys/class/hwmon/hwmonN` devices, their value
 //! channels (`temp*_input`, `power*_input`, `power*_average`) with
 //! fault/alarm companions, and profile classification. Channels no profile
-//! proves, fans and energy counters are not catalogued (D-92).
+//! proves, fans and energy counters are not catalogued (D-92). A drive
+//! sensor's temperature (`nvme`, `drivetemp`) becomes `disk.temperature` on
+//! each disk its device link proves it measures, in read group `disk`
+//! (see [`super::drives`]).
 //!
 //! Static metadata (`name`, `device` link, `update_interval`, `*_label`) is
 //! read once per enumeration instance (canonical hwmon path) and cached until
@@ -19,16 +22,17 @@ use dgxtop_core::metric::{NativeUnit, native};
 use dgxtop_core::naming;
 use dgxtop_core::quality::RawKind;
 
+use super::drives::{BlockCache, BlockDisk, DriveDriver};
 use super::engine::{ScanContext, Scanner, codes};
 use super::mapping::{Mapping, resolve};
 use super::profile::{
-    ChannelFacts, ChannelKind, DeviceFacts, HostFacts, classify, is_amd_temperature_driver,
-    label_is, package_label,
+    ChannelFacts, ChannelKind, DeviceFacts, HostFacts, classify, drive_temperature,
+    is_amd_temperature_driver, label_is, package_label,
 };
 use super::reader::{AlarmPath, ReadSpec, ValueFormat, reasons};
 use super::sysfs::{
     canonical, canonical_link, device_key, disambiguate, is_missing, list_names, numbered,
-    read_label, read_optional,
+    read_label, read_optional, static_group,
 };
 use super::table::{EntityDraft, ScanOutput, ScannedDevice, SourceDraft};
 use crate::common::{SystemFiles, reason_of};
@@ -114,6 +118,7 @@ fn is_thermal_zone_mirror(metadata: &DeviceMetadata) -> bool {
 #[derive(Debug, Default)]
 pub(crate) struct HwmonScanner {
     cache: BTreeMap<String, DeviceMetadata>,
+    blocks: BlockCache,
 }
 
 impl Scanner for HwmonScanner {
@@ -149,7 +154,7 @@ impl Scanner for HwmonScanner {
         self.cache
             .retain(|instance, _| live.contains(instance.as_str()));
         let mut output = self.build_output(context, &found);
-        output.partial_failures = partial_failures;
+        output.partial_failures = output.partial_failures.saturating_add(partial_failures);
         output
     }
 }
@@ -247,6 +252,7 @@ impl HwmonScanner {
         disambiguate(&mut keys);
         let host = host_facts(found, &self.cache);
         let mut output = ScanOutput::complete();
+        let drive_disks = self.drive_disks(context.files, found, &mut output);
         for (device, (key, _)) in found.iter().zip(keys) {
             let Some(metadata) = self.cache.get_mut(&device.instance) else {
                 continue;
@@ -257,16 +263,49 @@ impl HwmonScanner {
                 device_key: key.clone(),
                 instance: device.instance.clone(),
             });
+            let disks = metadata
+                .device_path
+                .as_ref()
+                .and_then(|path| drive_disks.get(path))
+                .map_or(&[][..], Vec::as_slice);
             let builder = DeviceDrafts {
                 context,
                 device,
                 metadata: &metadata,
                 device_key: &key,
                 host: &host,
+                drive_disks: disks,
             };
             builder.append_to(&mut output);
         }
         output
+    }
+
+    /// The disks of each drive sensor, by its device path; the block class
+    /// is read only when the host has a drive sensor. An unreadable class
+    /// is a partial failure: the drives are left out this round.
+    fn drive_disks(
+        &mut self,
+        files: &dyn SystemFiles,
+        found: &[FoundDevice],
+        output: &mut ScanOutput,
+    ) -> BTreeMap<String, Vec<BlockDisk>> {
+        let sensors: Vec<&str> = found
+            .iter()
+            .filter_map(|device| self.cache.get(&device.instance))
+            .filter(|metadata| DriveDriver::of(&metadata.name).is_some())
+            .filter_map(|metadata| metadata.device_path.as_deref())
+            .collect();
+        if sensors.is_empty() {
+            return BTreeMap::new();
+        }
+        match self.blocks.assign(files, sensors) {
+            Ok(disks) => disks,
+            Err(_) => {
+                output.partial_failures = output.partial_failures.saturating_add(1);
+                BTreeMap::new()
+            }
+        }
     }
 }
 
@@ -348,10 +387,16 @@ struct DeviceDrafts<'a> {
     metadata: &'a DeviceMetadata,
     device_key: &'a str,
     host: &'a HostFacts,
+    /// The disks this device measures when it is a drive sensor.
+    drive_disks: &'a [BlockDisk],
 }
 
 impl DeviceDrafts<'_> {
     fn append_to(&self, output: &mut ScanOutput) {
+        if let Some(driver) = DriveDriver::of(&self.metadata.name) {
+            self.append_drive(driver, output);
+            return;
+        }
         let facts = DeviceFacts {
             name: &self.metadata.name,
             device_key: self.device_key,
@@ -378,12 +423,39 @@ impl DeviceDrafts<'_> {
             ) else {
                 continue;
             };
-            match self.source_draft(channel, label, &mapping) {
-                Some((source, entity)) => {
-                    output.sources.push(source);
-                    output.entities.extend(entity);
-                }
-                None => output.partial_failures = output.partial_failures.saturating_add(1),
+            let draft = self.source_draft(
+                channel,
+                label,
+                &mapping,
+                &channel.source_channel(),
+                naming::groups::FAST,
+            );
+            push_draft(output, draft);
+        }
+    }
+
+    /// One `disk.temperature` source per disk of the drive (D-92), keyed by
+    /// the disk's device number; the drive's other channels are not read.
+    fn append_drive(&self, driver: DriveDriver, output: &mut ScanOutput) {
+        for channel in &self.device.channels {
+            let label = label_of(self.metadata, channel);
+            if !driver.is_drive_temperature(channel.kind, channel.index, label) {
+                continue;
+            }
+            for disk in self.drive_disks {
+                let draft =
+                    drive_temperature(self.device_key, channel.index, *disk).and_then(|mapping| {
+                        let source_channel =
+                            format!("{}@{}:{}", channel.base(), disk.major, disk.minor);
+                        self.source_draft(
+                            channel,
+                            label,
+                            &mapping,
+                            &source_channel,
+                            naming::groups::DISK,
+                        )
+                    });
+                push_draft(output, draft);
             }
         }
     }
@@ -393,9 +465,10 @@ impl DeviceDrafts<'_> {
         channel: &ChannelFiles,
         label: Option<&str>,
         mapping: &Mapping,
+        source_channel: &str,
+        read_group: &'static str,
     ) -> Option<(SourceDraft, Option<EntityDraft>)> {
-        let source_id =
-            naming::source_id(ADAPTER, self.device_key, &channel.source_channel()).ok()?;
+        let source_id = naming::source_id(ADAPTER, self.device_key, source_channel).ok()?;
         let resolved = resolve(self.context, mapping)?;
         let entity_draft = resolved.shared_entity.clone();
         let (unit, raw_kind, format) = channel_units(channel.kind);
@@ -418,6 +491,7 @@ impl DeviceDrafts<'_> {
             counter_modulus: None,
             update_interval_ms: self.metadata.update_interval_ms,
             read: self.read_spec(channel, format),
+            read_group: static_group(read_group),
         };
         Some((source, entity_draft))
     }
@@ -441,6 +515,17 @@ impl DeviceDrafts<'_> {
                 .collect(),
             gate_path: None,
         }
+    }
+}
+
+/// Adds a draft, or counts a channel whose identity was invalid.
+fn push_draft(output: &mut ScanOutput, draft: Option<(SourceDraft, Option<EntityDraft>)>) {
+    match draft {
+        Some((source, entity)) => {
+            output.sources.push(source);
+            output.entities.extend(entity);
+        }
+        None => output.partial_failures = output.partial_failures.saturating_add(1),
     }
 }
 

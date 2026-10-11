@@ -1,12 +1,16 @@
 //! Versioned hwmon profiles: which channels a profile proves to be a CPU
-//! metric, with what origin, quality and rank. A channel no profile proves
-//! is not catalogued (D-92) — `temp1` is not necessarily the CPU.
+//! metric or a drive's temperature, with what origin, quality and rank. A
+//! channel no profile proves is not catalogued (D-92) — `temp1` is not
+//! necessarily the CPU.
 //!
 //! Pure functions over driver facts, so every rule is unit-tested without a
 //! filesystem.
 
 use dgxtop_core::metric::ids;
+use dgxtop_core::naming::entity;
 use dgxtop_core::quality::Quality;
+
+use super::drives::BlockDisk;
 
 use super::mapping::{Mapping, ProfileSpec, Target};
 
@@ -61,6 +65,12 @@ pub(crate) const AMD_K10TEMP: ProfileSpec = ProfileSpec {
 };
 pub(crate) const NVIDIA_GB10: ProfileSpec = ProfileSpec {
     id: "nvidia-gb10-hwmon",
+    revision: 1,
+};
+/// A drive's own temperature on its block devices (D-92): NVMe
+/// `Composite` and `drivetemp`, both defined by the drive's interface.
+pub(crate) const DRIVE: ProfileSpec = ProfileSpec {
+    id: "hwmon-drive",
     revision: 1,
 };
 
@@ -219,6 +229,24 @@ fn gb10(device: &DeviceFacts<'_>, channel: &ChannelFacts<'_>) -> Option<Mapping>
     })
 }
 
+/// The drive temperature of channel `index` of the drive sensor
+/// `device_key` on one of the drive's disks; every disk of the drive shares
+/// the channel's origin. `None` when the disk has no valid identity.
+pub(crate) fn drive_temperature(device_key: &str, index: u32, disk: BlockDisk) -> Option<Mapping> {
+    let entity = entity::block_device(disk.major, disk.minor).ok()?;
+    Some(Mapping {
+        target: Target {
+            entity: entity.as_str().to_owned(),
+            metric: ids::DISK_TEMPERATURE,
+            scope: entity::SCOPE_DEVICE.to_owned(),
+        },
+        origin: Some(format!("hwmon:{device_key}:temp{index}")),
+        quality: Quality::Verified,
+        profile: DRIVE,
+        rank: 0,
+    })
+}
+
 fn power_origin(device: &DeviceFacts<'_>, channel: &ChannelFacts<'_>) -> String {
     format!("hwmon:{}:power{}", device.device_key, channel.index)
 }
@@ -275,6 +303,31 @@ mod tests {
         let mut k10 = device("k10temp");
         k10.has_tdie = true;
         assert_eq!(classify(&host, &k10, &temp(Some("Tdie"))), None);
+    }
+
+    /// Every disk of one drive gets its own `disk.temperature` key with the
+    /// sensor's one confirmed origin.
+    #[test]
+    fn a_drive_temperature_names_the_disk_and_the_sensor() {
+        let disk = BlockDisk {
+            major: 259,
+            minor: 3,
+        };
+        let mapping = drive_temperature("nvme@pci/nvme/nvme0", 1, disk).unwrap();
+        assert_eq!(
+            mapping.target,
+            Target {
+                entity: "blockdev:259:3".to_owned(),
+                metric: ids::DISK_TEMPERATURE,
+                scope: "device".to_owned(),
+            }
+        );
+        assert_eq!(
+            mapping.origin.as_deref(),
+            Some("hwmon:nvme@pci/nvme/nvme0:temp1")
+        );
+        assert_eq!(mapping.quality, Quality::Verified);
+        assert_eq!(mapping.profile, DRIVE);
     }
 
     #[test]

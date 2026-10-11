@@ -82,14 +82,18 @@ fn hardware_hwmon_smoke() {
     );
     let (_, pages) = discover(&mut adapter, "hwmon", 0, deadline(&clock));
     let catalog = sources(&pages);
-    let readings = records(&read_all(
-        &mut adapter,
-        "hwmon",
-        "fast",
-        1,
-        deadline(&clock),
-        Vec::new(),
-    ));
+    // The CPU channels (`fast`) and the drive temperatures (`disk`, D-92).
+    let mut readings = Vec::new();
+    for group in ["fast", "disk"] {
+        readings.extend(records(&read_all(
+            &mut adapter,
+            "hwmon",
+            group,
+            1,
+            deadline(&clock),
+            Vec::new(),
+        )));
+    }
     print_catalog("hwmon", &pages, &catalog, &readings);
     assert_contract(&readings);
     let coretemp: Vec<&SourceDescriptor> = catalog

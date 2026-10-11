@@ -10,12 +10,17 @@
 //! zones (a device whose `device` is a `thermal_zoneN`, such as `acpitz`) is
 //! skipped: the thermal adapter reads those sensors (D-81).
 //!
+//! A drive's own temperature (NVMe `Composite`, `drivetemp`) is emitted as
+//! `disk.temperature` on each disk its device link proves it measures, in
+//! read group `disk`, which feeds the disk collector (D-92, [`drives`]).
+//!
 //! The submodules `sysfs`, `reader`, `mapping`, `catalog`, `table` and
 //! `engine` are the sysfs mechanics shared with the thermal, powercap (and,
 //! for catalog publication, replay) adapters; they live here only because of
 //! module ownership and are candidates for `common.rs`.
 
 pub(crate) mod catalog;
+mod drives;
 pub(crate) mod engine;
 pub(crate) mod mapping;
 mod profile;

@@ -1814,7 +1814,9 @@ mod tests {
         bench.scheduler.on_host_status(&hwmon, 1, false, bench.now);
         bench.now += 5_000 * MS;
         bench.scheduler.on_host_status(&hwmon, 1, true, bench.now);
-        let counts = bench.drive(10, 10, true);
+        // One job per 1 ms tick: hwmon's due read groups (`fast`, `disk`)
+        // may go out before the discovery.
+        let counts = bench.drive(10, 1, true);
         assert_eq!(counts.discoveries.get("hwmon"), Some(&1));
     }
 

@@ -3,23 +3,25 @@
 //! A driver-specific [`Scanner`] finds devices, channels, static metadata and
 //! the profile mapping; [`SysfsAdapter`] owns everything else: catalog
 //! identity ([`SourceTable`]), delta publication ([`CatalogPublisher`]),
-//! capability probing, the paged `fast` read path and health.
+//! capability probing, the paged read path of each read group the adapter
+//! serves (`naming::READ_GROUPS`: `fast`, and hwmon's `disk`) and health.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::identity::{BootId, EntityId, HostId, MetricId, MetricKey, Scope};
+use dgxtop_core::naming;
 use dgxtop_core::observation::{
     AdapterHealth, AdapterManifest, CatalogDelta, DiscoverRequest, MAX_RECORDS_PER_BATCH,
-    Observation, ObservationBatch, ReadPlan, groups, split_page,
+    Observation, ObservationBatch, ReadPlan, split_page,
 };
 use dgxtop_core::quality::{Availability, Quality, ReadStatus};
 
 use super::catalog::CatalogPublisher;
 use super::reader::{ReadFailure, Reading, reasons};
 use super::table::{SOURCE_REMOVED, ScanOutput, SourceEntry, SourceTable};
-use crate::common::{Pager, RecordFactory, SystemFiles, group};
+use crate::common::{Pager, RecordFactory, SystemFiles};
 use crate::registry::AdapterOptions;
 
 /// Batch/discovery error codes of the sysfs adapters.
@@ -78,6 +80,8 @@ pub(crate) struct SysfsAdapter<S> {
     clock: Arc<dyn TimeProvider>,
     host_id: HostId,
     page_size: usize,
+    /// The read groups scheduled for this adapter.
+    read_groups: Vec<&'static str>,
     scanner: S,
     table: SourceTable,
     publisher: CatalogPublisher,
@@ -95,11 +99,13 @@ impl<S: Scanner> SysfsAdapter<S> {
         options: &AdapterOptions,
         scanner: S,
     ) -> Self {
-        let fast = group(groups::FAST)
-            .unwrap_or_else(|| panic!("built-in read group {:?} is invalid", groups::FAST));
         let page_size = options.page_size.clamp(1, MAX_RECORDS_PER_BATCH);
+        let read_groups = naming::read_groups_of(manifest.adapter_id.as_str())
+            .map(|spec| spec.group)
+            .collect();
         Self {
-            table: SourceTable::new(manifest.adapter_id.clone(), fast, options),
+            table: SourceTable::new(manifest.adapter_id.clone(), options),
+            read_groups,
             publisher: CatalogPublisher::new(manifest.adapter_id.clone(), page_size),
             manifest,
             files,
@@ -192,7 +198,7 @@ impl<S: Scanner> SysfsAdapter<S> {
         } else {
             encoded_page
         };
-        if base_group != groups::FAST {
+        if !self.read_groups.contains(&base_group) {
             return RecordFactory::failed_batch(plan, now_boot_ns, codes::UNKNOWN_READ_GROUP);
         }
         if page > 0 {
@@ -204,7 +210,9 @@ impl<S: Scanner> SysfsAdapter<S> {
         let publisher = &self.publisher;
         let targets = self
             .table
-            .targets(&plan.source_slots, |source_id| publisher.holds(source_id));
+            .targets(base_group, &plan.source_slots, |source_id| {
+                publisher.holds(source_id)
+            });
         let mut records = Vec::with_capacity(targets.current.len() + targets.departed.len());
         for source_id in &targets.current {
             let started = self.clock.now_boot_ns();
