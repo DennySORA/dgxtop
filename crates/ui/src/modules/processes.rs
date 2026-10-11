@@ -26,7 +26,7 @@ use crate::format::{
 };
 use crate::num::saturate_u16;
 use crate::registry::{
-    DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot, Topic,
+    DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot,
     controls,
 };
 
@@ -66,11 +66,10 @@ impl ProcessesModule {
             manifest: build_manifest(ManifestSpec {
                 id: "processes",
                 title: "Processes (GPU first)",
-                topics: &[Topic::Processes, Topic::Gpu],
                 min_columns: 40,
                 min_rows: 5,
                 priority: 75,
-                slots: &[Slot::Overview, Slot::Detail, Slot::Sidebar],
+                slots: &[Slot::Overview],
             })?,
         })
     }
@@ -116,14 +115,7 @@ impl DisplayModule for ProcessesModule {
             output.label("processes: no data");
             return output.finish();
         };
-        let overview = context.slot == Slot::Overview;
-        let inner = panel_with_keys(
-            frame,
-            area,
-            &title_text(view, overview),
-            PROCESS_KEYS,
-            context,
-        );
+        let inner = panel_with_keys(frame, area, &title_text(view), PROCESS_KEYS, context);
         output.label(format!(
             "processes: {} rows, sort {} {}",
             view.total_rows,
@@ -301,12 +293,8 @@ impl DisplayWindow {
     }
 }
 
-fn title_text(view: &ProcessesView, overview: bool) -> String {
-    let mut title = if overview {
-        "GPU Processes".to_owned()
-    } else {
-        "Processes".to_owned()
-    };
+fn title_text(view: &ProcessesView) -> String {
+    let mut title = "GPU Processes".to_owned();
     let arrow = if view.ascending { "▲" } else { "▼" };
     title.push_str(&format!(" · sort {} {arrow}", view.sort.label()));
     if let Some((_, label)) = &view.gpu_filter {

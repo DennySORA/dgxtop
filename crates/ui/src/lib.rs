@@ -41,7 +41,7 @@ mod test_fixtures;
 pub use controller::{CommandSink, Controller, ControllerContext, UiState};
 pub use registry::{
     DISPLAY_MODULE_API_VERSION, DisplayContext, DisplayModule, DisplayModuleManifest, HitTarget,
-    ManifestError, ModuleRegistry, RegistryError, RenderOutput, Slot, Topic,
+    ManifestError, ModuleRegistry, RegistryError, RenderOutput, Slot,
 };
 pub use terminal::{
     FrameStats, FrameStatsSummary, InputSource, LoopClock, OUTPUT_BUFFER_CAPACITY, SystemClock,

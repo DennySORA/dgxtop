@@ -18,7 +18,7 @@ use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
 
 use super::*;
-use crate::registry::{DISPLAY_MODULE_API_VERSION, DisplayModule, RenderOutput, Topic, controls};
+use crate::registry::{DISPLAY_MODULE_API_VERSION, DisplayModule, RenderOutput, controls};
 use crate::test_fixtures::{self, process_key};
 
 const SIZES: [(u16, u16); 5] = [(160, 50), (100, 30), (80, 24), (40, 10), (20, 5)];
@@ -673,13 +673,11 @@ impl FixtureModule {
                 module_id: ModuleId::new(id).unwrap(),
                 api_version,
                 title: "Fixture health".into(),
-                topics: vec![Topic::Health],
                 min_columns: 20,
                 min_rows: 3,
                 priority: 10,
                 slots: vec![Slot::Overview],
                 enabled_by_default: true,
-                supports_compact: true,
             },
         }
     }
@@ -792,6 +790,27 @@ fn a_panicking_module_is_isolated_as_a_module_error() {
     );
     assert!(rendered.contains("module error"), "{}", rendered.text());
     assert!(rendered.contains("fixture failure"), "{}", rendered.text());
+    // The frame names the module by its manifest title, not its id.
+    assert!(
+        rendered.contains("module error · Fixture health"),
+        "{}",
+        rendered.text()
+    );
+    assert!(
+        rendered.contains("module error: Fixture health failed while rendering"),
+        "{}",
+        rendered.text()
+    );
+    assert!(
+        !rendered.contains("module error · crashy"),
+        "{}",
+        rendered.text()
+    );
+    assert_eq!(
+        rendered.report.module_errors,
+        vec!["crashy: fixture failure".to_owned()],
+        "the report keeps the id for diagnostics"
+    );
     assert!(
         !rendered.contains("half-drawn garbage"),
         "{}",

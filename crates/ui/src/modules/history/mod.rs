@@ -42,9 +42,7 @@ use super::common::{
 };
 use crate::format::{CellTone, clean, display_width, format_span_ns};
 use crate::num::saturate_u16;
-use crate::registry::{
-    DisplayContext, DisplayModule, DisplayModuleManifest, RenderOutput, Slot, Topic,
-};
+use crate::registry::{DisplayContext, DisplayModule, DisplayModuleManifest, RenderOutput, Slot};
 
 /// Module id of the History view, whose pages are the Overview History and
 /// Process History tabs (D-75).
@@ -63,7 +61,6 @@ impl HistoryModule {
             manifest: build_manifest(ManifestSpec {
                 id: HISTORY_MODULE_ID,
                 title: "History of the overview charts",
-                topics: &[Topic::History, Topic::Sources],
                 min_columns: 40,
                 min_rows: 6,
                 priority: 45,

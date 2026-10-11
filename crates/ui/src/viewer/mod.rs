@@ -262,7 +262,8 @@ impl Viewer {
             }
             Err(message) => {
                 frame.render_widget(Clear, placement.area);
-                chrome::render_module_error(frame, placement.area, &module_id, &message, palette);
+                let title = &module.manifest().title;
+                chrome::render_module_error(frame, placement.area, title, &message, palette);
                 report.module_errors.push(format!("{module_id}: {message}"));
             }
         }

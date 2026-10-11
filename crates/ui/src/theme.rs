@@ -41,9 +41,8 @@ const PROCESS_COLORS: [Color; PROCESS_COLOR_SLOTS] = [
 
 /// Title colors of the resources (D-74), bright and the same in every
 /// theme, so a resource's panels look alike on every page.
-const SECTION_COLORS: [(&str, Color); 10] = [
+const SECTION_COLORS: [(&str, Color); 9] = [
     ("GPU Processes", Color::Rgb(0xff, 0x9e, 0x64)),
-    ("Processes", Color::Rgb(0xff, 0x9e, 0x64)),
     ("CPU", Color::Rgb(0x7a, 0xa2, 0xf7)),
     ("Memory", Color::Rgb(0x9e, 0xce, 0x6a)),
     ("GPUs", Color::Rgb(0xe0, 0xaf, 0x68)),

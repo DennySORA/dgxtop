@@ -21,7 +21,7 @@ use super::host_status::{host_status_rows, render_host_status};
 use crate::format::{clean, format_bytes, truncate_to_width};
 use crate::num::saturate_u16;
 use crate::registry::{
-    DisplayContext, DisplayModule, DisplayModuleManifest, RenderOutput, Slot, Topic, controls,
+    DisplayContext, DisplayModule, DisplayModuleManifest, RenderOutput, Slot, controls,
 };
 
 const MODULE_LIST_WIDTH: u16 = 26;
@@ -50,7 +50,6 @@ impl SettingsModule {
             manifest: build_manifest(ManifestSpec {
                 id: "settings",
                 title: "Settings",
-                topics: &[Topic::Settings],
                 min_columns: 40,
                 min_rows: 6,
                 priority: 35,

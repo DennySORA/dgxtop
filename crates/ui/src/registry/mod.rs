@@ -15,7 +15,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use thiserror::Error;
 
-pub use manifest::{DISPLAY_MODULE_API_VERSION, DisplayModuleManifest, ManifestError, Slot, Topic};
+pub use manifest::{DISPLAY_MODULE_API_VERSION, DisplayModuleManifest, ManifestError, Slot};
 
 use crate::theme::ThemePalette;
 
@@ -365,13 +365,11 @@ mod tests {
                 module_id: ModuleId::new(id).unwrap(),
                 api_version,
                 title: "Stub".into(),
-                topics: vec![Topic::Health],
                 min_columns: 20,
                 min_rows: 3,
                 priority: 10,
                 slots: vec![Slot::Overview],
                 enabled_by_default: true,
-                supports_compact: true,
             },
         })
     }

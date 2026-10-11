@@ -17,7 +17,7 @@ use super::common::{
 use crate::format::{clean, format_compact_count, state_label_for_width};
 use crate::num::saturate_u16;
 use crate::registry::{
-    DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot, Topic,
+    DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot,
 };
 
 /// Table rows asked for before the rest scrolls into "+N more".
@@ -49,7 +49,6 @@ impl NetworkModule {
             manifest: build_manifest(ManifestSpec {
                 id: "network",
                 title: "Network interfaces",
-                topics: &[Topic::Network],
                 min_columns: 36,
                 min_rows: 4,
                 priority: 55,

@@ -21,7 +21,7 @@ use super::common::{
 use crate::format::{clean, state_label_for_width, value_text};
 use crate::num::saturate_u16;
 use crate::registry::{
-    DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot, Topic,
+    DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot,
 };
 
 /// Table rows asked for before the rest scrolls into "+N more".
@@ -55,7 +55,6 @@ impl DiskModule {
             manifest: build_manifest(ManifestSpec {
                 id: "disk",
                 title: "Disk I/O and filesystem capacity",
-                topics: &[Topic::Disk],
                 min_columns: 36,
                 min_rows: 4,
                 priority: 60,
