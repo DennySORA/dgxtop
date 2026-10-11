@@ -1,11 +1,12 @@
 //! Network module in the reference layout (D-38): interfaces (busiest first,
-//! `●` up, `○` otherwise) with receive and transmit rates and errors, then
-//! the rates of the busiest interface, the one the title names.
+//! `●` up, `○` otherwise) with receive and transmit rates, errors, drops and
+//! packet totals, then the rates of the busiest interface, the one the title
+//! names. A narrow panel gives up the packets, then the drops.
 
 use dgxtop_core::view::{InterfaceView, MetricCell, NetworkView, ViewModel};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 
 use super::ModuleBuildError;
 use super::common::{
@@ -13,7 +14,7 @@ use super::common::{
     cell_label, draw_colored_header, draw_table_row, fit_columns, message, metric_table_cell,
     no_data, panel, rate_rows, render_rate_rows,
 };
-use crate::format::{clean, state_label_for_width};
+use crate::format::{clean, format_compact_count, state_label_for_width};
 use crate::num::saturate_u16;
 use crate::registry::{
     DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot, Topic,
@@ -24,12 +25,16 @@ const PREFERRED_TABLE_ROWS: u16 = 4;
 /// Operational state of an interface that carries traffic.
 const UP: &str = "up";
 
-const COLUMNS: [ColumnSpec; 4] = [
+const COLUMNS: [ColumnSpec; 6] = [
     ColumnSpec::left("Interface", 10, 100).flexible().prefer(14),
     ColumnSpec::right("RX/s", 11, 95),
     ColumnSpec::right("TX/s", 11, 95),
     ColumnSpec::right("Errors", 7, 60),
+    ColumnSpec::right("Drops", 8, 40),
+    ColumnSpec::right("Packets RX/TX", 13, 30),
 ];
+const ERRORS_WIDTH: usize = 7;
+const DROPS_WIDTH: usize = 8;
 /// Spec indexes of the receive and transmit columns (the chart legend).
 const RX_COLUMN: usize = 1;
 const TX_COLUMN: usize = 2;
@@ -207,7 +212,7 @@ fn render_table(
     }
 }
 
-fn interface_cells(interface: &InterfaceView, context: &DisplayContext) -> [TableCell; 4] {
+fn interface_cells(interface: &InterfaceView, context: &DisplayContext) -> [TableCell; 6] {
     let palette = &context.theme;
     let up = interface.state.as_deref() == Some(UP);
     let (dot, dot_style) = if up {
@@ -221,35 +226,141 @@ fn interface_cells(interface: &InterfaceView, context: &DisplayContext) -> [Tabl
         metric_table_cell(&interface.rx_bps, palette, 11),
         metric_table_cell(&interface.tx_bps, palette, 11),
         errors_cell(&interface.rx_errors, &interface.tx_errors, context),
+        drops_cell(&interface.rx_drops, &interface.tx_drops, context),
+        packets_cell(&interface.rx_packets, &interface.tx_packets, context),
     ]
 }
 
-/// Receive plus transmit errors, red when any; a side without a value shows
-/// its state instead of being counted as zero.
+/// Receive plus transmit errors, red when any.
 fn errors_cell(rx: &MetricCell, tx: &MetricCell, context: &DisplayContext) -> TableCell {
+    let alarm = context.theme.danger;
+    counter_sum_cell((rx, tx), alarm, ERRORS_WIDTH, context)
+}
+
+/// Receive plus transmit drops, amber when any: a full queue, not a fault.
+fn drops_cell(rx: &MetricCell, tx: &MetricCell, context: &DisplayContext) -> TableCell {
+    let alarm = context.theme.warning;
+    counter_sum_cell((rx, tx), alarm, DROPS_WIDTH, context)
+}
+
+/// The sum of both directions' totals, in `alarm` when any; a side without
+/// a value shows its state instead of being counted as zero.
+fn counter_sum_cell(
+    (rx, tx): (&MetricCell, &MetricCell),
+    alarm: Color,
+    width: usize,
+    context: &DisplayContext,
+) -> TableCell {
     let palette = &context.theme;
-    let value = |cell: &MetricCell| cell.value_f64().filter(|_| cell.state.has_value());
-    match (value(rx), value(tx)) {
+    match (counter_value(rx), counter_value(tx)) {
         (Some(rx), Some(tx)) => {
             let total = rx + tx;
             let style = if total > 0.0 {
-                Style::new().fg(palette.danger)
+                Style::new().fg(alarm)
             } else {
                 palette.label_style()
             };
             TableCell::new(format!("{total:.0}"), style)
         }
-        (None, _) => TableCell::new(state_label_for_width(rx.state, 7), palette.muted_style()),
-        (_, None) => TableCell::new(state_label_for_width(tx.state, 7), palette.muted_style()),
+        (None, _) => TableCell::new(
+            state_label_for_width(rx.state, width),
+            palette.muted_style(),
+        ),
+        (_, None) => TableCell::new(
+            state_label_for_width(tx.state, width),
+            palette.muted_style(),
+        ),
     }
+}
+
+/// Packets received and sent since the interface came up (`123k/654k`);
+/// each side without a value shows its state.
+fn packets_cell(rx: &MetricCell, tx: &MetricCell, context: &DisplayContext) -> TableCell {
+    let side = |cell: &MetricCell| {
+        counter_value(cell).map_or_else(
+            || state_label_for_width(cell.state, 4).to_owned(),
+            format_compact_count,
+        )
+    };
+    TableCell::new(
+        format!("{}/{}", side(rx), side(tx)),
+        context.theme.label_style(),
+    )
+}
+
+fn counter_value(cell: &MetricCell) -> Option<f64> {
+    cell.value_f64().filter(|_| cell.state.has_value())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_fixtures::{display_context, exact, missing};
+    use crate::test_fixtures::{self, display_context, exact, missing};
+    use dgxtop_core::commands::ViewKind;
     use dgxtop_core::metric::CanonicalUnit;
     use dgxtop_core::view::CellState;
+
+    fn header_and_first_row(width: u16) -> (String, String) {
+        let model = test_fixtures::view_model(ViewKind::Overview, 1);
+        let text = test_fixtures::render_text(&NetworkModule::new().unwrap(), &model, (width, 10));
+        let lines: Vec<&str> = text.lines().collect();
+        (lines[1].to_owned(), lines[2].to_owned())
+    }
+
+    /// A wide panel shows the drops and the packet totals beside the
+    /// rates and errors.
+    #[test]
+    fn a_wide_panel_shows_drops_and_packets() {
+        let (header, row) = header_and_first_row(100);
+        for title in ["Errors", "Drops", "Packets RX/TX"] {
+            assert!(header.contains(title), "{header}");
+        }
+        // The fixture's receive drops are unavailable: shown, not counted.
+        assert!(row.contains("unavail."), "{row}");
+        assert!(row.contains("123k/654k"), "{row}");
+    }
+
+    /// A narrow panel gives up the packets, then the drops, and keeps the
+    /// rates and errors.
+    #[test]
+    fn a_narrow_panel_drops_packets_then_drops() {
+        let (header, _) = header_and_first_row(66);
+        assert!(
+            header.contains("Drops") && !header.contains("Packets"),
+            "{header}"
+        );
+        let (header, _) = header_and_first_row(50);
+        assert!(
+            header.contains("Errors") && !header.contains("Drops"),
+            "{header}"
+        );
+    }
+
+    #[test]
+    fn drops_add_both_directions_in_amber() {
+        let context = display_context();
+        let count = |value: u64| exact(value, CanonicalUnit::Count);
+        let none = drops_cell(&count(0), &count(0), &context);
+        assert_eq!(none.text, "0");
+        let some = drops_cell(&count(1), &count(2), &context);
+        assert_eq!(some.text, "3");
+        assert_eq!(some.style.fg, Some(context.theme.warning));
+    }
+
+    #[test]
+    fn packets_show_each_direction_or_its_state() {
+        let context = display_context();
+        let count = |value: u64| exact(value, CanonicalUnit::Count);
+        assert_eq!(
+            packets_cell(&count(412), &count(12_345), &context).text,
+            "412/12.3k"
+        );
+        let unknown = missing(CanonicalUnit::Count, CellState::Unavailable);
+        assert_eq!(
+            packets_cell(&unknown, &count(0), &context).text,
+            "unavail./0"
+        );
+    }
 
     #[test]
     fn errors_add_both_directions_and_never_hide_a_missing_side() {

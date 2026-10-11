@@ -1,7 +1,8 @@
 //! Source diagnostics: per-metric arbitration (selected/pinned source,
 //! conflict spread vs tolerance, policy revision), every candidate with its
-//! disposition, freshness, age, origin and rank, adapter host health,
-//! configured/effective intervals and unclassified sensors.
+//! disposition, freshness, age, origin and rank, adapter host health
+//! (with its last success and the backoff left), configured/effective
+//! intervals and unclassified sensors.
 
 use dgxtop_core::identity::EntityId;
 use dgxtop_core::quality::{Freshness, SelectionState};
@@ -18,8 +19,8 @@ use super::common::{
     draw_table_header, draw_table_row, fit_columns, message, no_data, panel, split_columns,
 };
 use crate::format::{
-    CONFLICT_SYMBOL, NOT_AVAILABLE, clean, fixed, format_age, format_interval_ms, format_scalar,
-    kind_tag, quality_word,
+    CONFLICT_SYMBOL, NOT_AVAILABLE, clean, fixed, format_age, format_countdown_ms,
+    format_interval_ms, format_scalar, kind_tag, quality_word,
 };
 use crate::num::saturate_u16;
 use crate::registry::{
@@ -54,7 +55,7 @@ const CANDIDATE_COLUMNS: [ColumnSpec; 11] = [
         .prefer(28),
 ];
 
-const HOST_COLUMNS: [ColumnSpec; 8] = [
+const HOST_COLUMNS: [ColumnSpec; 10] = [
     ColumnSpec::left("ADAPTER", 9, 100),
     ColumnSpec::left("STATE", 12, 99).flexible().prefer(35),
     ColumnSpec::right("GEN", 4, 40),
@@ -62,8 +63,13 @@ const HOST_COLUMNS: [ColumnSpec; 8] = [
     ColumnSpec::right("FAILS", 5, 70),
     ColumnSpec::right("RESTARTS", 8, 60),
     ColumnSpec::right("TIMEOUTS", 8, 55),
+    ColumnSpec::right("LAST OK", 10, 45),
+    ColumnSpec::right("BACKOFF", 7, 35),
     ColumnSpec::left("DETAIL", 10, 30).flexible(),
 ];
+/// Text of a host that is not backing off.
+const NO_BACKOFF: &str = "–";
+const NANOS_PER_MILLI: u64 = 1_000_000;
 
 const INTERVAL_COLUMNS: [ColumnSpec; 5] = [
     ColumnSpec::left("ADAPTER", 9, 100),
@@ -192,7 +198,17 @@ impl DisplayModule for SourcesModule {
             &mut output,
         );
         render_candidates(frame, areas.candidates, selected, context, &mut output);
-        render_hosts(frame, areas.hosts, &sources.hosts, context, &mut output);
+        // The projection's clock moved on by its age since it was built.
+        let now_boot_ns = model
+            .generated_boot_ns
+            .saturating_add(context.projection_age_ms.saturating_mul(NANOS_PER_MILLI));
+        render_hosts(
+            frame,
+            areas.hosts,
+            (&sources.hosts, now_boot_ns),
+            context,
+            &mut output,
+        );
         render_intervals(
             frame,
             areas.intervals,
@@ -499,7 +515,7 @@ fn render_candidates(
 fn render_hosts(
     frame: &mut Frame<'_>,
     area: Rect,
-    hosts: &[HostStatus],
+    (hosts, now_boot_ns): (&[HostStatus], u64),
     context: &DisplayContext,
     output: &mut Output,
 ) {
@@ -550,6 +566,8 @@ fn render_hosts(
             TableCell::new(host.consecutive_failures.to_string(), palette.label_style()),
             TableCell::new(host.restarts_total.to_string(), palette.label_style()),
             TableCell::new(host.timeouts_total.to_string(), palette.label_style()),
+            TableCell::new(last_success_text(host, now_boot_ns), palette.label_style()),
+            TableCell::new(backoff_text(host, now_boot_ns), palette.label_style()),
             TableCell::new(
                 host.detail.as_deref().map_or_else(String::new, clean),
                 palette.muted_style(),
@@ -562,6 +580,24 @@ fn render_hosts(
             host.state.label()
         ));
     }
+}
+
+/// How long ago the host last read successfully, `never` before its first.
+fn last_success_text(host: &HostStatus, now_boot_ns: u64) -> String {
+    host.last_success_boot_ns.map_or_else(
+        || "never".to_owned(),
+        |success| format_age(now_boot_ns.saturating_sub(success) / NANOS_PER_MILLI),
+    )
+}
+
+/// Time left before a backed-off host is tried again.
+fn backoff_text(host: &HostStatus, now_boot_ns: u64) -> String {
+    host.backoff_until_boot_ns
+        .filter(|until| *until > now_boot_ns)
+        .map_or_else(
+            || NO_BACKOFF.to_owned(),
+            |until| format_countdown_ms((until - now_boot_ns).div_ceil(NANOS_PER_MILLI)),
+        )
 }
 
 fn render_intervals(
@@ -675,6 +711,70 @@ fn render_unclassified(
 mod tests {
     use super::*;
     use crate::test_fixtures;
+
+    fn host(last_success: Option<u64>, backoff_until: Option<u64>) -> HostStatus {
+        HostStatus {
+            last_success_boot_ns: last_success,
+            backoff_until_boot_ns: backoff_until,
+            ..test_fixtures::sources_view().hosts[0].clone()
+        }
+    }
+
+    const SECOND: u64 = 1_000_000_000;
+
+    #[test]
+    fn last_success_is_an_age_or_never() {
+        let now = 100 * SECOND;
+        assert_eq!(last_success_text(&host(None, None), now), "never");
+        assert_eq!(
+            last_success_text(&host(Some(97 * SECOND), None), now),
+            "3s ago"
+        );
+        assert_eq!(last_success_text(&host(Some(now), None), now), "<1s ago");
+        // A success stamped after the frame's clock is not a negative age.
+        assert_eq!(
+            last_success_text(&host(Some(now + SECOND), None), now),
+            "<1s ago"
+        );
+    }
+
+    #[test]
+    fn backoff_counts_down_and_ends() {
+        let now = 100 * SECOND;
+        assert_eq!(backoff_text(&host(None, None), now), NO_BACKOFF);
+        assert_eq!(backoff_text(&host(None, Some(107 * SECOND)), now), "7s");
+        // Part of a second left still shows a second, never 0s.
+        assert_eq!(backoff_text(&host(None, Some(now + 1)), now), "1s");
+        assert_eq!(backoff_text(&host(None, Some(now)), now), NO_BACKOFF);
+    }
+
+    /// The host table shows the last success and the backoff, on the
+    /// projection's clock moved on by its age; a narrow one gives them up.
+    #[test]
+    fn hosts_show_last_success_and_backoff_by_width() {
+        let model = test_fixtures::view_model(dgxtop_core::commands::ViewKind::Sources, 1);
+        let module = SourcesModule::new().unwrap();
+        let wide = test_fixtures::render_text(&module, &model, (200, 40));
+        let header = wide
+            .lines()
+            .find(|line| line.contains("RESTARTS"))
+            .expect("the host header");
+        assert!(
+            header.contains("LAST OK") && header.contains("BACKOFF"),
+            "{header}"
+        );
+        let row = |name: &str| {
+            wide.lines()
+                .find(|line| line.trim_start_matches('│').starts_with(name))
+                .unwrap_or_else(|| panic!("{name} row in {wide}"))
+                .to_owned()
+        };
+        assert!(row("procfs").contains("3s ago"), "{wide}");
+        let nvml = row("nvml");
+        assert!(nvml.contains("never") && nvml.contains("7s"), "{nvml}");
+        let narrow = test_fixtures::render_text(&module, &model, (80, 40));
+        assert!(!narrow.contains("BACKOFF"), "{narrow}");
+    }
 
     #[test]
     fn spread_text_compares_with_tolerance() {

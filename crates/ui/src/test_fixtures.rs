@@ -42,6 +42,35 @@ pub(crate) fn display_context() -> crate::registry::DisplayContext {
     }
 }
 
+/// The text `module` draws for `model` in a `width` x `height` area, one
+/// line a row.
+pub(crate) fn render_text(
+    module: &dyn crate::registry::DisplayModule,
+    model: &ViewModel,
+    (width, height): (u16, u16),
+) -> String {
+    let context = crate::registry::DisplayContext {
+        viewport: ratatui::layout::Rect::new(0, 0, width, height),
+        ..display_context()
+    };
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|frame| {
+            module.render(&context, model, frame.area(), frame);
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..height)
+        .map(|y| {
+            (0..width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub(crate) fn entity(value: &str) -> EntityId {
     EntityId::new(value).unwrap()
 }
@@ -815,7 +844,8 @@ pub(crate) fn sources_view() -> SourcesView {
                 timeouts_total: 3,
                 consecutive_failures: 3,
                 restarts_total: 2,
-                backoff_until_boot_ns: None,
+                // 7 s after the projection was generated.
+                backoff_until_boot_ns: Some(12_000_000_000),
                 detail: Some("child not reaped".into()),
             },
             HostStatus {
@@ -823,7 +853,8 @@ pub(crate) fn sources_view() -> SourcesView {
                 state: HostState::Healthy,
                 generation: 1,
                 pid: Some(5000),
-                last_success_boot_ns: Some(1),
+                // 3 s before the projection was generated.
+                last_success_boot_ns: Some(2_000_000_000),
                 timeouts_total: 0,
                 consecutive_failures: 0,
                 restarts_total: 0,
