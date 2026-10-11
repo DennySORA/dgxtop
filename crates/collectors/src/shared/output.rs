@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use dgxtop_core::canonical::{
-    CanonicalValue, CollectionFailure, CollectorEvent, CounterInterval, Explanation, ProcessTable,
+    CanonicalValue, CollectionFailure, CounterInterval, Explanation, ProcessTable,
 };
 use dgxtop_core::identity::{MetricKey, SourceId};
 
@@ -20,7 +20,6 @@ pub(crate) struct Output {
     pub explanations: Vec<Explanation>,
     pub intervals: Vec<CounterInterval>,
     pub failures: Vec<CollectionFailure>,
-    pub events: Vec<CollectorEvent>,
     pub process_table: Option<ProcessTable>,
     reported: BTreeSet<(String, String)>,
     truncated: bool,

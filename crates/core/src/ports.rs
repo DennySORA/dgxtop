@@ -33,8 +33,8 @@ use uuid::Uuid;
 
 use crate::action::{
     ActionAttempt, ActionCompletion, ActionError, ActionHandle, ActionIntent, ActionOutcomeRecord,
-    ActionRecordSummary, AuditCompletion, AuditFailure, CapabilityContext, DurableReceipt,
-    ExitObservation, PersistenceStatus, PreparedProcess, RecoveredIntent, Signal, SignalOutcome,
+    AuditCompletion, AuditFailure, CapabilityContext, DurableReceipt, ExitObservation,
+    PersistenceStatus, PreparedProcess, RecoveredIntent, Signal, SignalOutcome,
 };
 use crate::budget::{BytePermit, CapacityError};
 use crate::canonical::{
@@ -48,7 +48,7 @@ use crate::identity::{
     AdapterId, CollectorId, EntityId, MetricKey, ProcessKey, SessionId, SourceId,
 };
 use crate::observation::{
-    AdapterHealth, AdapterManifest, CatalogDelta, DiscoverRequest, ObservationBatch, ReadPlan,
+    AdapterManifest, CatalogDelta, DiscoverRequest, ObservationBatch, ReadPlan,
 };
 use crate::overview_history::{
     ArchivePrune, ArchivedMinutes, ArchivedMinutesRead, ArchivedSeriesList, OverviewAnswer,
@@ -68,7 +68,6 @@ pub trait TelemetryPort: Send {
     fn manifest(&self) -> &AdapterManifest;
     fn discover(&mut self, request: &DiscoverRequest) -> CatalogDelta;
     fn read(&mut self, plan: &ReadPlan) -> ObservationBatch;
-    fn health(&self) -> AdapterHealth;
     fn shutdown(&mut self);
 }
 
@@ -314,6 +313,9 @@ pub struct PersistReceipt {
     pub revision: u32,
     pub sha256: String,
     pub path: String,
+    /// Size of the committed file (the Settings view shows it beside the
+    /// limit, UI.md §6).
+    pub file_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -359,7 +361,6 @@ pub trait AuditRepository: Send {
         now_boot_ns: u64,
         now_utc: &str,
     ) -> Result<Vec<RecoveredIntent>, AuditFailure>;
-    fn lookup(&mut self, request_id: Uuid) -> Result<Option<ActionRecordSummary>, AuditFailure>;
     fn status(&mut self) -> PersistenceStatus;
 }
 
@@ -697,8 +698,6 @@ pub enum AdapterFailureKind {
     HostUnavailable,
     Protocol,
     CapacityExceeded,
-    Quarantined,
-    CircuitOpen,
     Shutdown,
 }
 

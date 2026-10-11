@@ -13,8 +13,8 @@ use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::identity::{BootId, EntityId, HostId, MetricId, MetricKey, Scope};
 use dgxtop_core::naming;
 use dgxtop_core::observation::{
-    AdapterHealth, AdapterManifest, CatalogDelta, DiscoverRequest, MAX_RECORDS_PER_BATCH,
-    Observation, ObservationBatch, ReadPlan, split_page,
+    AdapterManifest, CatalogDelta, DiscoverRequest, MAX_RECORDS_PER_BATCH, Observation,
+    ObservationBatch, ReadPlan, split_page,
 };
 use dgxtop_core::quality::{Availability, Quality, ReadStatus};
 
@@ -277,25 +277,6 @@ impl<S: Scanner> SysfsAdapter<S> {
         }
     }
 
-    pub(crate) fn health(&self) -> AdapterHealth {
-        if self.shut_down {
-            return AdapterHealth {
-                availability: Availability::Unavailable,
-                detail: Some("shut down".to_owned()),
-            };
-        }
-        if !self.discovered {
-            return AdapterHealth {
-                availability: Availability::Unavailable,
-                detail: Some("discovery pending".to_owned()),
-            };
-        }
-        AdapterHealth {
-            availability: self.table.availability(),
-            detail: Some(self.table.summary()),
-        }
-    }
-
     pub(crate) fn shutdown(&mut self) {
         self.shut_down = true;
         self.pager = Pager::new();
@@ -365,10 +346,6 @@ macro_rules! sysfs_telemetry_port {
                 plan: &dgxtop_core::observation::ReadPlan,
             ) -> dgxtop_core::observation::ObservationBatch {
                 self.inner.read(plan)
-            }
-
-            fn health(&self) -> dgxtop_core::observation::AdapterHealth {
-                self.inner.health()
             }
 
             fn shutdown(&mut self) {

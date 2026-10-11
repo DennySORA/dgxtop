@@ -15,8 +15,8 @@ use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::identity::{HostId, ProfileId};
 use dgxtop_core::naming::{adapters, groups};
 use dgxtop_core::observation::{
-    AdapterHealth, AdapterManifest, Capability, CatalogDelta, DiscoverRequest, Observation,
-    ObservationBatch, ReadPlan, SourceDescriptor,
+    AdapterManifest, Capability, CatalogDelta, DiscoverRequest, Observation, ObservationBatch,
+    ReadPlan, SourceDescriptor,
 };
 use dgxtop_core::ports::TelemetryPort;
 use dgxtop_core::quality::{Availability, Support};
@@ -26,6 +26,9 @@ use self::interfaces::{
     read_interface,
 };
 use crate::common::{RecordFactory, SystemFiles};
+#[cfg(any(test, feature = "test-support"))]
+use crate::procfs::CatalogStats;
+use crate::procfs::availability_of;
 use crate::procfs::catalog::{
     CatalogBook, CatalogConfig, KeyContext, LiveSource, Selected, SnapshotBuilder,
 };
@@ -34,7 +37,6 @@ use crate::procfs::mechanics::{
     plan_target, rejected_discovery, rejected_plan,
 };
 use crate::procfs::records::removed_record;
-use crate::procfs::{CatalogStats, availability_of};
 use crate::registry::{AdapterOptions, compile_time_adapter_id, kernel_file_manifest};
 
 pub use self::interfaces::LOOPBACK_ATTRIBUTE;
@@ -72,7 +74,6 @@ pub struct NetworkAdapter {
     net_namespace: Option<String>,
     read_gate: ReprobeGate,
     pagers: GroupPagers,
-    health: AdapterHealth,
     shut_down: bool,
 }
 
@@ -99,16 +100,13 @@ impl NetworkAdapter {
             net_namespace: None,
             read_gate: ReprobeGate::new(options.unsupported_probe_ms),
             pagers: GroupPagers::default(),
-            health: AdapterHealth {
-                availability: Availability::Unavailable,
-                detail: Some("NOT_DISCOVERED".to_owned()),
-            },
             shut_down: false,
             options,
         }
     }
 
-    /// Size of the catalog bookkeeping (diagnostics, boundedness tests).
+    /// Size of the catalog bookkeeping (boundedness tests).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn catalog_stats(&self) -> CatalogStats {
         self.book.stats()
     }
@@ -144,12 +142,7 @@ impl NetworkAdapter {
             }
         };
         builder.capability(statistics_capability(availability));
-        let delta = builder.finish(request, availability);
-        self.health = AdapterHealth {
-            availability,
-            detail: delta.error_code.clone(),
-        };
-        delta
+        builder.finish(request, availability)
     }
 
     fn read_fast(
@@ -308,17 +301,9 @@ impl TelemetryPort for NetworkAdapter {
         self.read_fast(plan, &target, now_boot_ns)
     }
 
-    fn health(&self) -> AdapterHealth {
-        self.health.clone()
-    }
-
     fn shutdown(&mut self) {
         self.shut_down = true;
         self.pagers.clear();
         self.book.clear_pending();
-        self.health = AdapterHealth {
-            availability: Availability::Unavailable,
-            detail: Some("SHUT_DOWN".to_owned()),
-        };
     }
 }

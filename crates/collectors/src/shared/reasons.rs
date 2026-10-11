@@ -85,7 +85,6 @@ pub const EXCLUDED_BY_POLICY: &str = "EXCLUDED_BY_POLICY";
 pub const UNPROVEN_PURPOSE: &str = "UNPROVEN_PURPOSE";
 pub const NAMESPACE_MISMATCH: &str = "NAMESPACE_MISMATCH";
 pub const SOURCE_KEY_MISMATCH: &str = "SOURCE_KEY_MISMATCH";
-pub const LOWER_PRIORITY: &str = "LOWER_PRIORITY";
 
 // Derived values.
 
@@ -171,7 +170,6 @@ pub fn reject_code(reason: &RejectReason, native_unit: &str) -> &'static str {
         RejectReason::UnknownUnit => UNKNOWN_UNIT,
         RejectReason::Excluded => EXCLUDED_BY_POLICY,
         RejectReason::UnprovenPurpose => UNPROVEN_PURPOSE,
-        RejectReason::LowerPriority => LOWER_PRIORITY,
         RejectReason::Hysteresis => HELD_BY_HYSTERESIS,
     }
 }

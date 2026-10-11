@@ -17,7 +17,6 @@ mod config;
 mod control;
 mod effects;
 mod error;
-mod events;
 mod history;
 mod hosts;
 mod ingestion;
@@ -40,7 +39,6 @@ mod time_format;
 mod views;
 
 pub use error::ManagerError;
-pub use events::EventFeed;
 pub use manager::{Manager, ManagerChannels};
 pub use session::SessionHandle;
 pub use setup::{

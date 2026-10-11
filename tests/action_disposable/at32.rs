@@ -12,7 +12,6 @@ use std::time::Duration;
 
 use dgxtop_core::action::{ActionState, ConfirmationToken};
 use dgxtop_core::commands::{CommandBody, CommandEnvelope, CommandResult, CommandStatus};
-use dgxtop_core::diagnostics::names;
 use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::ports::SessionPort;
 use uuid::Uuid;
@@ -20,7 +19,7 @@ use uuid::Uuid;
 use crate::child::DisposableChild;
 use crate::expect::{
     assert_nothing_sent, assert_one_sigterm_to, assert_rejected, assert_signal_sent,
-    assert_single_sigterm_through_held_pidfd, kinds,
+    assert_single_sigterm_through_held_pidfd,
 };
 use crate::stack::{ActionStack, Prepared, SessionDriver, StackOptions, StateDir};
 
@@ -192,18 +191,6 @@ fn at32_crash_after_a_durable_intent_is_unknown_after_restart_and_never_resent()
     assert_eq!(recovered.state, ActionState::Unknown);
     assert_eq!(recovered.target, target.summary());
     assert!(recovered.result.contains("never retried"), "{recovered:?}");
-    let recovery_events = second.action_events(&[lost_confirm]);
-    assert_eq!(kinds(&recovery_events), ["ActionOutcomeUnknown"]);
-    assert!(
-        recovery_events[0].reason.contains("never retried"),
-        "{recovery_events:?}"
-    );
-    assert_eq!(
-        second
-            .diagnostics()
-            .counter(names::ACTION_UNKNOWN_TOTAL, "recovered"),
-        1
-    );
     let stale = second.confirm(&prepared.token);
     assert_rejected(&second.result(stale), ErrorCode::ConfirmationExpired);
     assert_nothing_sent(&second, &mut [&mut child]);
@@ -261,14 +248,6 @@ fn at32_signal_sent_is_reported_without_waiting_for_exit() {
         steps.outcomes_for(confirm_id),
         [ActionState::SignalSent, ActionState::StillRunning],
         "\"sent\" and \"still running\" are separate outcome rows"
-    );
-    assert_eq!(
-        kinds(&stack.action_events(&[prepared.request_id, confirm_id])),
-        [
-            "ActionPrepared",
-            "ActionIntentCommitted",
-            "ActionSignalSent"
-        ]
     );
     let mut trail = stack.stop().audit_trail();
     let intent = trail.record(confirm_id).expect("the intent");

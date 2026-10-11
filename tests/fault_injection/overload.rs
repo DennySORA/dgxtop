@@ -16,13 +16,12 @@ use dgxtop_core::budget::{ByteLedger, BytePermit, MIB, Partition, QueueGate, Que
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::commands::CommandBody;
 use dgxtop_core::config::Config;
-use dgxtop_core::diagnostics::{Diagnostics, names};
 use dgxtop_core::errors::{ErrorCode, ErrorDetail};
-use dgxtop_core::event::EventKind;
 use dgxtop_core::identity::SessionId;
-use dgxtop_core::ports::{ConfigRepository, ControlCompletion, IngestionCompletion};
+use dgxtop_core::ports::{ConfigRepository, ControlCompletion, IngestionCompletion, Logger};
 use dgxtop_core::quality::Namespace;
 use dgxtop_core::testing::FakeClock;
+use dgxtop_core::testing::MemoryLogger;
 use dgxtop_core::view::{HostState, HostStatus, OverloadState, ViewModel};
 use dgxtop_manager::{INGESTION_INBOX_CAPACITY, ManagerChannels, ManagerInboxes, ManagerPorts};
 use dgxtop_store::config::FileConfigRepository;
@@ -53,7 +52,7 @@ struct OverloadRig {
     ingress: QueueGate,
     ingress_budget: u64,
     inboxes: ManagerInboxes,
-    diagnostics: Diagnostics,
+    logger: Arc<MemoryLogger>,
     _workers: WorkerSet,
     _dir: TempDir,
 }
@@ -69,7 +68,7 @@ impl OverloadRig {
         let identity = Identity::fault_host(time.as_ref());
         let ledger = ByteLedger::for_memory_limit_mib(u64::from(config.store.memory_limit_mib));
         let ingress = ingress_gate(&config, &ledger);
-        let diagnostics = Diagnostics::new();
+        let logger = Arc::new(MemoryLogger::default());
         let channels = ManagerChannels::create();
         let inboxes = channels.inboxes();
         let completions = Completions::from_inboxes(&inboxes);
@@ -109,7 +108,7 @@ impl OverloadRig {
             config: Box::new(config_worker),
             audit: Box::new(audit),
             history: Box::new(history_pool),
-            diagnostics: diagnostics.clone(),
+            logger: Arc::clone(&logger) as Arc<dyn Logger>,
             ..inert_ports(time, Arc::new(snapshots), &ledger, ingress.clone())
         };
         // A real live manifest gives the scheduler its fast read groups (the
@@ -125,7 +124,7 @@ impl OverloadRig {
             ingress,
             ingress_budget: u64::from(config.queues.ingress_bytes),
             inboxes,
-            diagnostics,
+            logger,
             _workers: workers,
             _dir: dir,
         }
@@ -193,9 +192,16 @@ impl OverloadRig {
         hogs
     }
 
-    fn transitions(&self, label: &str) -> u64 {
-        self.diagnostics
-            .counter(names::OVERLOAD_TRANSITIONS_TOTAL, label)
+    /// Overload transitions the Manager logged that start with `prefix`
+    /// (`overload <from> -> <to> (fast multiplier x<n>)`).
+    fn transitions(&self, prefix: &str) -> usize {
+        self.logger
+            .records()
+            .iter()
+            .filter(|(_, target, message)| {
+                *target == "manager.overload" && message.starts_with(prefix)
+            })
+            .count()
     }
 }
 
@@ -294,17 +300,6 @@ fn at30_overload_escalates_recovers_one_level_per_30s_and_keeps_control_flowing(
         pushed > u64::try_from(INGESTION_INBOX_CAPACITY).expect("fits"),
         "only {pushed} telemetry completions"
     );
-    assert!(
-        rig.diagnostics
-            .counter(names::STALE_RESULT_DROPPED_TOTAL, "host_unknown")
-            > 0
-    );
-    assert!(
-        rig.manager
-            .event_kinds()
-            .iter()
-            .any(|kind| matches!(kind, EventKind::ConfigApplied { revision: 2, .. }))
-    );
     let model = rig.tick();
     assert_eq!(model.header.configured_interval_ms, 2_000);
     assert_eq!(level(&model), (OverloadState::Throttled, 8_000));
@@ -339,16 +334,16 @@ fn at30_overload_escalates_recovers_one_level_per_30s_and_keeps_control_flowing(
         at[0] >= 30 && at[1] - at[0] >= 30 && at[2] - at[1] >= 30,
         "{steps:?}"
     );
-    for label in [
-        "normal_to_throttled",
-        "throttled_x4",
-        "throttled_x2",
-        "throttled_to_recovering",
-        "recovering_to_normal",
+    for transition in [
+        "overload normal -> throttled",
+        "overload throttled -> throttled (fast multiplier x4)",
+        "overload throttled -> throttled (fast multiplier x2)",
+        "overload throttled -> recovering",
+        "overload recovering -> normal",
     ] {
-        assert_eq!(rig.transitions(label), 1, "{label}");
+        assert_eq!(rig.transitions(transition), 1, "{transition}");
     }
-    assert_eq!(rig.transitions("normal_to_pressured"), 0);
+    assert_eq!(rig.transitions("overload normal -> pressured"), 0);
 }
 
 /// RUNTIME.md §7 enters `pressured` when any queue's bytes stay >= 75 % for

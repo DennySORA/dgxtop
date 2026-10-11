@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+# Test aids: reading audit records back and the fail-point file system.
+test-support = []
+
 [dependencies]
 dgxtop-core.workspace = true
 libc.workspace = true
@@ -15,12 +19,13 @@ nix.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 dgxtop-core = { workspace = true, features = ["test-support"] }
+# The crate's own integration tests use its test aids.
+dgxtop-store = { path = ".", features = ["test-support"] }
 
 [lints]
 workspace = true

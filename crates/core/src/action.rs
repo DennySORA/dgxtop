@@ -223,8 +223,6 @@ pub enum ActionError {
     ForceNotAllowed,
     #[error("pidfd is not supported by this kernel")]
     PidfdUnsupported,
-    #[error("permission denied by the kernel")]
-    PermissionDenied,
     #[error("unknown action handle")]
     UnknownHandle,
     #[error("invalid confirmation token format")]
@@ -245,7 +243,6 @@ impl ActionError {
             Self::IdentityChanged => ErrorCode::ProcessIdentityChanged,
             Self::Exited => ErrorCode::ProcessExited,
             Self::PidfdUnsupported => ErrorCode::Unsupported,
-            Self::PermissionDenied => ErrorCode::PermissionDenied,
             Self::UnknownHandle | Self::InvalidToken => ErrorCode::ValidationFailed,
             Self::Unavailable(_) => ErrorCode::Unavailable,
         }
@@ -493,7 +490,6 @@ pub enum AuditOp {
     AppendOutcome(ActionOutcomeRecord),
     AppendAttempt(ActionAttempt),
     RecoverUnknown { now_boot_ns: u64, now_utc: String },
-    Lookup { request_id: Uuid },
     Status,
 }
 
@@ -515,10 +511,6 @@ pub enum AuditCompletion {
     },
     Recovered {
         result: Result<Vec<RecoveredIntent>, AuditFailure>,
-    },
-    Lookup {
-        request_id: Uuid,
-        result: Result<Option<ActionRecordSummary>, AuditFailure>,
     },
     Status(PersistenceStatus),
 }

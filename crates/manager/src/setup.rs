@@ -9,12 +9,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
-use dgxtop_core::action::{ActionOp, AuditOp};
+use dgxtop_core::action::{ActionOp, AuditOp, PersistenceStatus};
 use dgxtop_core::budget::{ByteLedger, QueueGate};
 use dgxtop_core::canonical::CollectionPlan;
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::config::{Config, ValueOrigin};
-use dgxtop_core::diagnostics::Diagnostics;
 use dgxtop_core::identity::{BootId, HostId, PidNamespace};
 use dgxtop_core::observation::AdapterManifest;
 use dgxtop_core::ports::{
@@ -54,7 +53,6 @@ pub struct ManagerPorts {
     /// colors; `None` without one (tests and tools).
     pub process_history: Option<ProcessHistoryHandles>,
     pub logger: Arc<dyn Logger>,
-    pub diagnostics: Diagnostics,
     pub ledger: ByteLedger,
     /// Ingress admission gate shared with the runtime (observed for overload).
     pub ingress: QueueGate,
@@ -69,6 +67,9 @@ pub struct ManagerSetup {
     pub effective_config: Config,
     /// Field provenance; `CliOverride` paths are re-applied after every swap.
     pub value_origins: BTreeMap<String, ValueOrigin>,
+    /// The configuration file as its repository reported it after loading
+    /// (`ConfigRepository::status`: state, size and limit).
+    pub config_file: PersistenceStatus,
     pub host_id: HostId,
     pub boot_id: BootId,
     pub pid_namespace: PidNamespace,

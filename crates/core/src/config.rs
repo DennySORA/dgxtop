@@ -899,11 +899,6 @@ impl Config {
         self.sampling != candidate.sampling
     }
 
-    /// Whether arbitration policy fields differ (requires a new policy revision).
-    pub fn policy_changed(&self, candidate: &Config) -> bool {
-        self.quality != candidate.quality
-    }
-
     /// Whether action policy changed in a way that must revoke pending tokens.
     pub fn action_policy_changed(&self, candidate: &Config) -> bool {
         self.actions != candidate.actions
@@ -977,10 +972,6 @@ impl CliOverrides {
             applied.push("actions.read_only");
         }
         applied
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self == &Self::default()
     }
 }
 
@@ -1565,7 +1556,6 @@ mod tests {
             "absent --interval must not overwrite"
         );
         assert!(!config.sampling.gpu_enabled);
-        assert!(CliOverrides::default().is_empty());
     }
 
     #[test]

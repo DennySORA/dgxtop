@@ -574,7 +574,6 @@ fn unreadable_enumeration_file_keeps_previous_devices() {
     );
     assert!(code.contains("MEMINFO_UNREADABLE"), "{code}");
     assert!(parent.entities.contains_key("blockdev:8:0"));
-    assert_eq!(adapter.health().availability, Availability::Available);
     let records = read_group(&mut adapter, "disk", 1);
     assert!(
         records
@@ -602,7 +601,6 @@ fn missing_proc_stat_makes_the_adapter_unavailable_but_keeps_other_groups() {
     );
     assert!(parent.entities.contains_key("memory"));
     assert!(!parent.entities.contains_key("cpu"));
-    assert_eq!(adapter.health().availability, Availability::Unavailable);
 }
 
 #[test]
@@ -618,7 +616,6 @@ fn guards_reject_unservable_plans() {
     };
     let before = adapter.read(&read_plan(ADAPTER, "cpu", 1, 0, Vec::new()));
     assert_eq!(failed_code(&before), "CATALOG_NOT_DISCOVERED");
-    assert_eq!(adapter.health().availability, Availability::Unavailable);
     ParentCatalog::default().sync(&mut adapter, ADAPTER);
     let wrong = adapter.read(&read_plan("network", "cpu", 1, 0, Vec::new()));
     assert_eq!(failed_code(&wrong), "ADAPTER_ID_MISMATCH");
@@ -636,7 +633,6 @@ fn guards_reject_unservable_plans() {
     assert_eq!(delta.error_code.as_deref(), Some("ADAPTER_SHUT_DOWN"));
     assert!(!delta.complete);
     assert!(delta.removed_sources.is_empty());
-    assert_eq!(adapter.health().availability, Availability::Unavailable);
 }
 
 #[test]
@@ -691,9 +687,5 @@ fn denied_proc_stat_reports_permission_denied_availability() {
             .as_deref()
             .unwrap()
             .contains("PROC_STAT_UNREADABLE:PERMISSION_DENIED")
-    );
-    assert_eq!(
-        adapter.health().availability,
-        Availability::PermissionDenied
     );
 }

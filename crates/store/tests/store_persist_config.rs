@@ -7,7 +7,6 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use dgxtop_core::action::PersistenceState;
 use dgxtop_core::config::{Config, ConfigError, LegacyMappingStatus, MAX_CONFIG_REVISION, Theme};
@@ -104,6 +103,7 @@ fn cas_success_increments_revision_with_private_modes() {
     assert_eq!(receipt.path, dir.config_path().display().to_string());
     let bytes = std::fs::read(dir.config_path()).unwrap();
     assert_eq!(receipt.sha256, sha256_hex(&bytes));
+    assert_eq!(receipt.file_bytes, u64::try_from(bytes.len()).unwrap());
     assert_eq!(mode(&dir.config_path()), 0o600);
     assert_eq!(mode(dir.config_path().parent().unwrap()), 0o700);
     assert_eq!(mode(&dir.path().join("dgxtop")), 0o700);
@@ -172,8 +172,7 @@ fn another_process_holding_the_commit_lock_times_out_cleanly() {
         .try_lock_directory(dir.config_path().parent().unwrap())
         .unwrap()
         .unwrap();
-    let mut repository = FileConfigRepository::new(dir.config_path(), real())
-        .with_lock_wait(Duration::from_millis(50));
+    let mut repository = FileConfigRepository::new(dir.config_path(), real());
     let result = repository.compare_and_swap(2, &current);
     assert!(matches!(
         result,

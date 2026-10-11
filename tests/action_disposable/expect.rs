@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::audit_trail::AuditTrail;
 use crate::child::DisposableChild;
 use crate::journal::{SignalCall, Steps};
-use crate::stack::{ActionEvent, ActionStack, EXIT_WAIT};
+use crate::stack::{ActionStack, EXIT_WAIT};
 
 pub fn assert_rejected(result: &CommandResult, code: ErrorCode) {
     assert_eq!(
@@ -106,8 +106,4 @@ pub fn assert_refusal_audited(trail: &mut AuditTrail, request_id: Uuid, code: Er
     assert_eq!(audited.intent_id, None, "a refusal never writes an intent");
     assert_eq!(audited.state, ActionState::Rejected, "{audited:?}");
     assert_eq!(audited.result_code, code.as_str(), "{audited:?}");
-}
-
-pub fn kinds(events: &[ActionEvent]) -> Vec<&'static str> {
-    events.iter().map(|event| event.kind).collect()
 }

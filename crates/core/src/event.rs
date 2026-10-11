@@ -1,6 +1,6 @@
-//! Typed Manager events (`event.schema.json`). Control and audit events are
-//! never treated as droppable view events; each event is at most 64 KiB and
-//! never carries a full command line.
+//! Typed Manager events (`event.schema.json`): the sealed wire contract
+//! only. The Manager keeps no event log (D-93); these types stay so the
+//! contract tests keep checking the schema and its examples.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -9,8 +9,6 @@ use crate::identity::BootId;
 
 /// Event schema version.
 pub const EVENT_SCHEMA_VERSION: u32 = 1;
-/// Maximum encoded event size.
-pub const MAX_EVENT_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -97,22 +95,6 @@ pub enum EventKind {
     ActionSignalSent(ActionEventPayload),
     ActionExitObserved(ActionEventPayload),
     ActionOutcomeUnknown(ActionEventPayload),
-}
-
-impl EventKind {
-    /// Control/audit events must never be dropped to make room for telemetry.
-    pub const fn is_control(&self) -> bool {
-        matches!(
-            self,
-            Self::ConfigApplied { .. }
-                | Self::CommandCompleted { .. }
-                | Self::ActionPrepared(_)
-                | Self::ActionIntentCommitted(_)
-                | Self::ActionSignalSent(_)
-                | Self::ActionExitObserved(_)
-                | Self::ActionOutcomeUnknown(_)
-        )
-    }
 }
 
 /// One event envelope.

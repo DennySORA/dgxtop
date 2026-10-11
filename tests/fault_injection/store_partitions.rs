@@ -23,9 +23,7 @@ use dgxtop_core::config::Config;
 use dgxtop_core::errors::{ErrorCode, InfraError, ResultCode};
 use dgxtop_core::identity::{CollectorId, MetricKey};
 use dgxtop_core::metric::{CanonicalUnit, Scalar, ids};
-use dgxtop_core::ports::{
-    AuditRepository, Dispatch, IngestionCompletion, SnapshotReader, StoreJob,
-};
+use dgxtop_core::ports::{Dispatch, IngestionCompletion, SnapshotReader, StoreJob};
 use dgxtop_core::quality::{Freshness, Namespace, Quality, SampleKind, SelectionState};
 use dgxtop_core::testing::{FakeClock, metric_key, source_id};
 use dgxtop_manager::INGESTION_INBOX_CAPACITY;
@@ -182,7 +180,6 @@ impl ArchivedStore {
             process_table: None,
             next_state: CollectorState::default(),
             failures: Vec::new(),
-            events: Vec::new(),
         };
         let guard = CommitGuard {
             expected_epoch: 1,

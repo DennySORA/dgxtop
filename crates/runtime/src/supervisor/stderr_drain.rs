@@ -18,7 +18,6 @@ pub(crate) struct StderrDrain {
     window_start_ns: u64,
     lines_in_window: u32,
     suppressed: u64,
-    suppressed_total: u64,
 }
 
 impl StderrDrain {
@@ -31,7 +30,6 @@ impl StderrDrain {
             window_start_ns: now_ns,
             lines_in_window: 0,
             suppressed: 0,
-            suppressed_total: 0,
         }
     }
 
@@ -55,10 +53,6 @@ impl StderrDrain {
         }
     }
 
-    pub(crate) const fn suppressed_total(&self) -> u64 {
-        self.suppressed_total
-    }
-
     fn finish_line(&mut self, now_ns: u64, emit: &mut dyn FnMut(String)) {
         let raw = std::mem::take(&mut self.line);
         let truncated = std::mem::take(&mut self.truncated);
@@ -75,7 +69,6 @@ impl StderrDrain {
         }
         if self.lines_in_window >= self.lines_per_window {
             self.suppressed += 1;
-            self.suppressed_total += 1;
             return;
         }
         self.lines_in_window += 1;
@@ -125,7 +118,6 @@ mod tests {
         assert!(lines[0].len() <= MAX_STDERR_LINE_BYTES + 12);
         let flood = collect(&mut drain, b"a\nb\nc\nd\n", 10);
         assert_eq!(flood, ["a"]);
-        assert_eq!(drain.suppressed_total(), 3);
         let next = collect(&mut drain, b"e\n", 1000);
         assert_eq!(next, ["suppressed 3 stderr lines in the last window", "e"]);
     }

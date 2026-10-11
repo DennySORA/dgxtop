@@ -197,7 +197,8 @@ pub(crate) struct Selection<'a, L> {
     pub unknown_slots: usize,
 }
 
-/// Size of the bookkeeping, for diagnostics and boundedness tests.
+/// Size of the bookkeeping, for boundedness tests.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CatalogStats {
     /// Committed catalog generation (0 before the first complete discovery).
@@ -382,6 +383,7 @@ impl<L: Clone> CatalogBook<L> {
         selection
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn stats(&self) -> CatalogStats {
         CatalogStats {
             generation: self.committed.generation,

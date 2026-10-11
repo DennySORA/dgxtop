@@ -50,17 +50,6 @@ pub(crate) struct OverloadTransition {
     pub(crate) multiplier: u32,
 }
 
-impl OverloadTransition {
-    /// Bounded diagnostics label, e.g. `normal_to_pressured`.
-    pub(crate) fn label(&self) -> String {
-        if self.from == self.to {
-            format!("{}_x{}", self.to.label(), self.multiplier)
-        } else {
-            format!("{}_to_{}", self.from.label(), self.to.label())
-        }
-    }
-}
-
 #[derive(Debug, Default)]
 struct Streak {
     count: u32,
@@ -284,7 +273,10 @@ mod tests {
         assert_eq!(overload.state(), OverloadState::Normal);
         let transitions = run(&mut overload, 3, 4, queue(0.8));
         assert_eq!(transitions.len(), 1);
-        assert_eq!(transitions[0].label(), "normal_to_pressured");
+        assert_eq!(
+            (transitions[0].from, transitions[0].to),
+            (OverloadState::Normal, OverloadState::Pressured)
+        );
         assert_eq!(overload.state(), OverloadState::Pressured);
         assert_eq!(overload.max_fps(4), 2);
         assert!(overload.defer_metadata());
@@ -302,7 +294,10 @@ mod tests {
         assert!(run(&mut overload, 0, 3, held).is_empty());
         let transitions = run(&mut overload, 3, 4, held);
         assert_eq!(transitions.len(), 1, "{transitions:?}");
-        assert_eq!(transitions[0].label(), "normal_to_pressured");
+        assert_eq!(
+            (transitions[0].from, transitions[0].to),
+            (OverloadState::Normal, OverloadState::Pressured)
+        );
         // Just below the boundary is not pressure.
         let mut calm = controller();
         let below = OverloadSignals {
@@ -333,7 +328,10 @@ mod tests {
         // Persisting for >= 3 samples and >= 3 s escalates to x4.
         let escalations = run(&mut overload, 1, 6, memory(0.95));
         assert_eq!(escalations.len(), 1);
-        assert_eq!(escalations[0].label(), "throttled_x4");
+        assert_eq!(
+            (escalations[0].to, escalations[0].multiplier),
+            (OverloadState::Throttled, 4)
+        );
         assert_eq!(overload.multiplier(), 4);
         // Healthy from t=10 s: x4 -> x2 at 40 s, -> recovering at 70 s,
         // -> normal at 100 s; never more than one level per 30 s.

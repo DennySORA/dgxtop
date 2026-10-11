@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::commands::ViewKind;
-use dgxtop_core::diagnostics::names;
 use dgxtop_core::view::{CellState, HostState};
 use dgxtop_runtime::clock::{BootClock, host_identity};
 use dgxtop_runtime::supervisor::StopOutcome;
@@ -151,12 +150,8 @@ fn at24_hung_gpu_host_is_isolated_restarted_only_after_reap_and_leaks_nothing() 
             window.gpu_commit_changes, 0,
             "no GPU data while its host hangs"
         );
-        let counter =
-            |metric: &'static str, adapter: &str| rig.diagnostics.counter(metric, adapter);
-        assert!(counter(names::ADAPTER_TIMEOUT_TOTAL, GPU_HOST) >= 1);
-        assert!(counter(names::GAP_RECORDED_TOTAL, GPU_HOST) >= 1);
-        assert_eq!(counter(names::ADAPTER_TIMEOUT_TOTAL, SYSTEM_HOST), 0);
-        assert_eq!(counter(names::GAP_RECORDED_TOTAL, SYSTEM_HOST), 0);
+        assert!(rig.host(GPU_HOST).timeouts_total >= 1);
+        assert_eq!(rig.host(SYSTEM_HOST).timeouts_total, 0);
         let projection = rig.manager.projection_where(
             "the GPU host counted as unhealthy",
             STARTUP_WAIT,

@@ -18,8 +18,10 @@ const INSERT_EVENT: &str = "INSERT INTO action_events (event_id, request_id, occ
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
 // `action_events` has no request_id index (DDL is verbatim); the time index
 // bounds the scan to events at or after the intent's creation.
+#[cfg(any(test, feature = "test-support"))]
 const SELECT_LATEST_RESULT_SINCE: &str = "SELECT result_code FROM action_events \
      WHERE occurred_utc >= ?2 AND request_id = ?1 ORDER BY rowid DESC LIMIT 1";
+#[cfg(any(test, feature = "test-support"))]
 const SELECT_LATEST_RESULT_ANY: &str = "SELECT result_code FROM action_events \
      WHERE request_id = ?1 ORDER BY rowid DESC LIMIT 1";
 const SELECT_ATTEMPT: &str =
@@ -141,6 +143,7 @@ pub(crate) fn insert_event(connection: &Connection, row: &EventRow) -> rusqlite:
     Ok(())
 }
 
+#[cfg(any(test, feature = "test-support"))]
 /// Result code of the most recent event recorded since `created_utc`.
 pub(crate) fn latest_result_since(
     connection: &Connection,
@@ -153,6 +156,7 @@ pub(crate) fn latest_result_since(
         .optional()
 }
 
+#[cfg(any(test, feature = "test-support"))]
 /// Same without the time bound (full scan; only for clock-step fallbacks).
 pub(crate) fn latest_result_any(
     connection: &Connection,

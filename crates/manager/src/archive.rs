@@ -1,27 +1,18 @@
 //! Visible state of the optional history archive (STORAGE.md §1). A store
 //! acknowledgement only says "memory committed, archive pending"; the fate
 //! of each archive journal (committed or a gap) is reported afterwards and
-//! surfaces as the archive's persistence status and `archive_gap_total`.
+//! surfaces as the archive's persistence status.
 
 use dgxtop_core::action::{PersistenceKind, PersistenceState, PersistenceStatus};
-use dgxtop_core::diagnostics::{Diagnostics, names};
 use dgxtop_core::ports::ArchiveOutcome;
 use dgxtop_core::text::sanitize_message;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct ArchiveTracker {
     status: Option<PersistenceStatus>,
-    diagnostics: Diagnostics,
 }
 
 impl ArchiveTracker {
-    pub(crate) fn new(diagnostics: Diagnostics) -> Self {
-        Self {
-            status: None,
-            diagnostics,
-        }
-    }
-
     /// Applies one journal outcome; returns whether the visible status changed.
     pub(crate) fn on_outcome(
         &mut self,
@@ -31,9 +22,7 @@ impl ArchiveTracker {
     ) -> bool {
         let next = match outcome {
             ArchiveOutcome::Committed { .. } => status,
-            ArchiveOutcome::Gap { cause, detail } => {
-                self.diagnostics
-                    .increment(names::ARCHIVE_GAP_TOTAL, cause.label(), 1);
+            ArchiveOutcome::Gap { detail, .. } => {
                 // A busy worker reports no status of its own.
                 Some(status.unwrap_or_else(|| gap_status(revision, detail)))
             }
@@ -77,14 +66,13 @@ mod tests {
 
     #[test]
     fn nothing_is_shown_before_the_archive_reports() {
-        let tracker = ArchiveTracker::new(Diagnostics::new());
+        let tracker = ArchiveTracker::default();
         assert!(tracker.status().is_none());
     }
 
     #[test]
     fn committed_journals_report_the_archive_status_without_gaps() {
-        let diagnostics = Diagnostics::new();
-        let mut tracker = ArchiveTracker::new(diagnostics.clone());
+        let mut tracker = ArchiveTracker::default();
         let healthy = PersistenceStatus::healthy(PersistenceKind::Archive);
         assert!(tracker.on_outcome(
             5,
@@ -94,16 +82,11 @@ mod tests {
         // An unchanged status needs no redraw.
         assert!(!tracker.on_outcome(6, &ArchiveOutcome::Committed { rows: 1 }, Some(healthy)));
         assert_eq!(tracker.status().unwrap().state, PersistenceState::Healthy);
-        assert_eq!(
-            diagnostics.counter(names::ARCHIVE_GAP_TOTAL, "worker_busy"),
-            0
-        );
     }
 
     #[test]
-    fn gaps_are_counted_by_bounded_cause_and_made_visible() {
-        let diagnostics = Diagnostics::new();
-        let mut tracker = ArchiveTracker::new(diagnostics.clone());
+    fn gaps_are_made_visible() {
+        let mut tracker = ArchiveTracker::default();
         let busy = ArchiveOutcome::Gap {
             cause: ArchiveGapCause::WorkerBusy,
             detail: "archive worker busy".to_owned(),
@@ -119,13 +102,5 @@ mod tests {
         };
         assert!(tracker.on_outcome(8, &write_failed, Some(failed("free disk below 64 MiB"))));
         assert_eq!(tracker.status().unwrap().state, PersistenceState::Failed);
-        assert_eq!(
-            diagnostics.counter(names::ARCHIVE_GAP_TOTAL, "worker_busy"),
-            1
-        );
-        assert_eq!(
-            diagnostics.counter(names::ARCHIVE_GAP_TOTAL, "write_failed"),
-            1
-        );
     }
 }

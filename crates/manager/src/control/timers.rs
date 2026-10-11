@@ -4,7 +4,6 @@
 
 use dgxtop_core::canonical::{CatalogSnapshot, GapRecord, ImmutableSnapshot};
 use dgxtop_core::clock::ms_to_ns;
-use dgxtop_core::diagnostics::names;
 use dgxtop_core::identity::SessionId;
 use dgxtop_core::ports::LogLevel;
 use dgxtop_core::process_model::ProcessHistoryModel;
@@ -76,13 +75,6 @@ impl ControlCore {
             policy: self.policy.snapshot(),
         };
         let report = self.ingestion.pump(now_ns, &context);
-        if report.stale_inputs > 0 {
-            self.diagnostics.increment(
-                names::STALE_RESULT_DROPPED_TOTAL,
-                "old_epoch_input",
-                u64::from(report.stale_inputs),
-            );
-        }
         for gap in report.gaps {
             self.record_gap(gap);
         }
@@ -113,22 +105,9 @@ impl ControlCore {
     }
 
     fn handle_tick_report(&mut self, report: TickReport, now_ns: u64) {
-        if report.skipped > 0 {
-            self.diagnostics
-                .increment(names::QUEUE_DROPPED_TOTAL, "skipped_due", report.skipped);
-        }
-        for (reason, count) in report.deferred.by_reason() {
-            self.diagnostics
-                .increment(names::ADAPTER_DISPATCH_DEFERRED_TOTAL, reason, count);
-        }
         for expired in report.expired {
             match expired.kind {
                 RequestKind::Read { .. } => {
-                    self.diagnostics.increment(
-                        names::ADAPTER_TIMEOUT_TOTAL,
-                        expired.adapter_id.as_str(),
-                        1,
-                    );
                     let records = self
                         .ingestion
                         .pages()
@@ -195,12 +174,9 @@ impl ControlCore {
             memory_utilization: self.ledger.total_utilization(),
             service_overrun: self.ingestion.service_overrun(period_ns),
         };
-        self.record_queue_gauges(levels, backlog);
         let Some(transition) = self.overload.sample(now_ns, signals) else {
             return;
         };
-        self.diagnostics
-            .increment(names::OVERLOAD_TRANSITIONS_TOTAL, &transition.label(), 1);
         self.logger.log(
             LogLevel::Warn,
             "manager.overload",
@@ -220,30 +196,12 @@ impl ControlCore {
         self.sessions.mark_all_dirty();
     }
 
-    fn record_queue_gauges(&self, levels: QueueLevels, backlog: f64) {
-        self.diagnostics
-            .set_gauge(names::QUEUE_ITEMS, "commands", levels.commands);
-        self.diagnostics
-            .set_gauge(names::QUEUE_ITEMS, "ingestion_inbox", levels.ingestion);
-        self.diagnostics
-            .set_gauge(names::QUEUE_ITEMS, "collector_backlog", backlog);
-        #[allow(clippy::cast_precision_loss)]
-        let ingress_bytes = self.ingress.queued_bytes() as f64;
-        self.diagnostics
-            .set_gauge(names::QUEUE_BYTES, self.ingress.name(), ingress_bytes);
-    }
-
     fn periodic(&mut self, now_ns: u64) {
         if now_ns >= self.timers.next_maintain_ns {
             self.timers.next_maintain_ns = now_ns.saturating_add(MAINTAIN_NS);
-            if self.ingestion.retry_sampling().is_err() {
-                self.diagnostics
-                    .increment(names::QUEUE_DROPPED_TOTAL, "store_sampling_busy", 1);
-            }
-            if self.ingestion.request_maintenance().is_err() {
-                self.diagnostics
-                    .increment(names::QUEUE_DROPPED_TOTAL, "store_maintenance_busy", 1);
-            }
+            // Refused for a full store queue: asked again next period.
+            let _ = self.ingestion.retry_sampling();
+            let _ = self.ingestion.request_maintenance();
             // The process history's writes leave on time without commits.
             self.process_history.tick();
         }
@@ -299,13 +257,6 @@ impl ControlCore {
             PublishOutcome::Published { .. } => {
                 self.sessions
                     .record_frame(session_id, frame_revision, now_ns);
-                if let Some(commit_ns) = self.pending_commit_ns.take() {
-                    self.diagnostics.observe_us(
-                        names::COMMIT_TO_PROJECTION_MS,
-                        "projection",
-                        now_ns.saturating_sub(commit_ns) / 1_000,
-                    );
-                }
             }
             PublishOutcome::TooLarge { bytes } | PublishOutcome::LedgerFull { bytes } => {
                 self.sessions.frame_skipped(session_id, now_ns);

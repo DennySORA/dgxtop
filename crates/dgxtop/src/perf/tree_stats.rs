@@ -1,4 +1,4 @@
-//! Process-tree resource sampling (`PERFORMANCE.md` §2, `OPERATIONS.md` §3).
+//! Process-tree resource sampling for the benches (`PERFORMANCE.md` §2).
 //!
 //! The performance gates are defined over the parent *plus every adapter
 //! host*, including quarantined ones, so the composition root samples

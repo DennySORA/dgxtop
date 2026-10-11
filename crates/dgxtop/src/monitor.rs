@@ -24,7 +24,6 @@ use dgxtop_core::budget::{ByteLedger, Partition, QueueGate};
 use dgxtop_core::canonical::CollectionPlan;
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::config::Config;
-use dgxtop_core::diagnostics::Diagnostics;
 use dgxtop_core::identity::{AdapterId, BootId, HostId};
 use dgxtop_core::naming;
 use dgxtop_core::observation::AdapterManifest;
@@ -364,12 +363,20 @@ impl Application {
         self.trigger.trigger("frontend exited");
         if let Some(thread) = self.manager_thread.take() {
             match join_within(thread, control.remaining(SHUTDOWN_BUDGET)) {
-                Some(Some(summary)) => warnings.extend(
-                    summary
-                        .unfinished
-                        .into_iter()
-                        .map(|item| format!("unfinished at shutdown: {item}")),
-                ),
+                Some(Some(summary)) => {
+                    if summary.timed_out {
+                        warnings.push(
+                            "manager shutdown ended before every control completion arrived"
+                                .to_owned(),
+                        );
+                    }
+                    warnings.extend(
+                        summary
+                            .unfinished
+                            .into_iter()
+                            .map(|item| format!("unfinished at shutdown: {item}")),
+                    );
+                }
                 Some(None) => warnings.push("manager stopped by a fail-stop".to_owned()),
                 None => {
                     warnings.push("manager did not stop within the 3 s shutdown budget".to_owned())
@@ -466,7 +473,6 @@ fn resolve_paths(cli: &Cli, replay_root: Option<&Path>) -> Result<StatePaths, St
 struct Wiring {
     clock: Arc<dyn TimeProvider>,
     logger: Arc<dyn Logger>,
-    diagnostics: Diagnostics,
     ledger: ByteLedger,
     ingress: QueueGate,
     namespace: Namespace,
@@ -493,7 +499,6 @@ impl Wiring {
             clock,
             fail_stop: FailStop::new(Arc::clone(&logger)),
             logger,
-            diagnostics: Diagnostics::new(),
             ledger,
             ingress,
             namespace,
@@ -572,6 +577,7 @@ impl Wiring {
         let history =
             self.spawn_history(effective, Arc::new(history_index), completions.clone())?;
         workers.push(Box::new(("history".to_owned(), history.clone())));
+        let config_file = config_repository.status();
         let config = spawn_config(config_repository, completions.clone())?;
         workers.push(Box::new(("config".to_owned(), config.clone())));
         let audit = self.spawn_audit(effective, paths, sqlite_ok, completions.clone())?;
@@ -604,7 +610,6 @@ impl Wiring {
             inboxes.ingestion.clone(),
             Arc::clone(&self.clock),
             Arc::clone(&self.logger),
-            self.diagnostics.clone(),
         )
         .map_err(|error| StartError::failure(error.to_string()))?;
 
@@ -612,6 +617,7 @@ impl Wiring {
             saved_config: loaded.saved.clone(),
             effective_config: effective.clone(),
             value_origins: loaded.origins.clone(),
+            config_file,
             host_id: host_id.clone(),
             boot_id: boot_id.clone(),
             pid_namespace,
@@ -634,7 +640,6 @@ impl Wiring {
             actions: Box::new(actions),
             process_history: Some(process_history),
             logger: Arc::clone(&self.logger),
-            diagnostics: self.diagnostics.clone(),
             ledger: self.ledger.clone(),
             ingress: self.ingress.clone(),
         };
@@ -1173,9 +1178,8 @@ fn replay_host(
             None,
         ) {
             Ok(adapter) => Box::new(adapter.with_in_process(true)),
-            Err(error) => Box::new(crate::replay_unavailable::UnavailableReplay::new(
+            Err(_) => Box::new(crate::replay_unavailable::UnavailableReplay::new(
                 factory_adapter.clone(),
-                error.to_string(),
             )),
         }
     });

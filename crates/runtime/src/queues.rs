@@ -155,10 +155,6 @@ impl<J> PoolHandle<J> {
         self.shared.jobs.len()
     }
 
-    pub fn is_stopped(&self) -> bool {
-        self.shared.stopped.load(Ordering::Acquire)
-    }
-
     pub fn stats(&self) -> PoolStats {
         let counters = &self.shared.counters;
         PoolStats {

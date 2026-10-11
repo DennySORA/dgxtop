@@ -10,7 +10,7 @@ use dgxtop_core::identity::{ProcessKey, SessionId};
 use dgxtop_core::tiers::BarSize;
 use uuid::Uuid;
 
-use super::{ControlCore, Route};
+use super::ControlCore;
 use crate::config::{ConfigDecision, ConfigRequest};
 use crate::effects::Effects;
 use crate::process::{Now, PrepareRequest, TokenCommand};
@@ -25,11 +25,7 @@ pub(crate) const REPLACE_CONFIG_REFUSED: &str = "ReplaceConfig is not supported 
 
 impl ControlCore {
     pub(crate) fn on_command(&mut self, queued: QueuedCommand) {
-        let QueuedCommand {
-            envelope,
-            accepted_boot_ns,
-            _permit,
-        } = queued;
+        let QueuedCommand { envelope, _permit } = queued;
         if !self.is_running() {
             self.reject_for_shutdown(&envelope);
             return;
@@ -42,7 +38,6 @@ impl ControlCore {
                 ErrorCode::Unavailable,
                 "session closed",
             );
-            self.count_rejection(&result);
             self.deliver(&envelope.session_id, result);
             return;
         }
@@ -66,33 +61,22 @@ impl ControlCore {
                     ErrorCode::Conflict,
                     "request_id reused with a different payload",
                 );
-                self.count_rejection(&result);
                 self.deliver(&envelope.session_id, result);
                 return;
             }
         }
         self.results.begin(request_id, digest.clone());
-        self.routes.insert(
-            request_id,
-            Route {
-                session_id: envelope.session_id.clone(),
-                accepted_ns: accepted_boot_ns,
-                command: envelope.body.name(),
-                notify: !envelope.body.is_coalescible_navigation(),
-            },
-        );
+        self.routes.insert(request_id, envelope.session_id.clone());
         self.dispatch_command(envelope, digest, now);
     }
 
     /// Answers a command accepted before shutdown started.
     pub(super) fn reject_for_shutdown(&mut self, envelope: &CommandEnvelope) {
-        self.rejected_commands = self.rejected_commands.saturating_add(1);
         let result = CommandResult::rejected(
             envelope.request_id,
             ErrorCode::Unavailable,
             "dgxtop is shutting down",
         );
-        self.count_rejection(&result);
         self.deliver(&envelope.session_id, result);
     }
 
@@ -188,11 +172,12 @@ impl ControlCore {
                 );
                 self.apply(fx);
             }
-            // Frontends send Shutdown out of band; a queued one still works.
-            CommandBody::Shutdown { reason } => {
-                self.shutdown.request(&reason);
-                self.finish(CommandResult::completed(request_id, "shutdown started"));
-            }
+            // The session refuses it before the queue (D-93); kept total.
+            CommandBody::Shutdown { .. } => self.finish(CommandResult::rejected(
+                request_id,
+                ErrorCode::Unsupported,
+                "Shutdown is not a queued command; quit through request_shutdown",
+            )),
         }
     }
 

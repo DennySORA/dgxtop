@@ -619,13 +619,12 @@ impl<'a> Session<'a> {
         }
     }
 
-    /// Publishes an arbitration outcome. Canonical metrics get a value,
-    /// explanation and events; raw inputs nothing. Returns the selection.
+    /// Publishes an arbitration outcome. Canonical metrics get a value
+    /// and explanation; raw inputs nothing. Returns the selection.
     pub fn publish(&mut self, outcome: Outcome) -> Option<Selection> {
         let Outcome {
             canonical,
             explanation,
-            events,
             selection,
             has_namespace_evidence,
             ..
@@ -636,11 +635,8 @@ impl<'a> Session<'a> {
         if canonical_metric {
             self.output.explanations.push(explanation);
         }
-        if canonical_metric && has_namespace_evidence {
-            self.output.events.extend(events);
-            if !self.already_committed(&canonical) {
-                self.publish_value(canonical);
-            }
+        if canonical_metric && has_namespace_evidence && !self.already_committed(&canonical) {
+            self.publish_value(canonical);
         }
         selection
     }
@@ -805,7 +801,6 @@ impl<'a> Session<'a> {
             process_table: output.process_table,
             next_state: self.next_state,
             failures: output.failures,
-            events: output.events,
         }
     }
 }

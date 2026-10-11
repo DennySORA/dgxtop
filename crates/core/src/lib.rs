@@ -15,7 +15,6 @@ pub mod canonical;
 pub mod clock;
 pub mod commands;
 pub mod config;
-pub mod diagnostics;
 pub mod digest;
 pub mod errors;
 pub mod event;

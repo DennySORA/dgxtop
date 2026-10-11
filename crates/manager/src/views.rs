@@ -316,13 +316,6 @@ impl ViewSessionService {
             record.shared.mark_shutdown_requested();
         }
     }
-
-    pub(crate) fn answer_shutdown_requests(&self, message: &str) -> usize {
-        self.sessions
-            .values()
-            .map(|record| record.shared.answer_shutdown_requests(message))
-            .sum()
-    }
 }
 
 fn default_state(session_id: SessionId) -> SessionState {
@@ -829,7 +822,6 @@ mod tests {
         assert_eq!(bench.service.open_ids().len(), 2);
         assert!(bench.service.reap_closed().is_empty());
         bench.service.mark_shutdown_requested_all();
-        assert_eq!(bench.service.answer_shutdown_requests("bye"), 0);
         assert!(bench.service.contains(&bench.session));
         assert!(bench.service.shared(&bench.session).is_some());
     }

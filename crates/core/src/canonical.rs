@@ -196,7 +196,6 @@ pub enum RejectReason {
     UnknownUnit,
     Excluded,
     UnprovenPurpose,
-    LowerPriority,
     Hysteresis,
 }
 
@@ -213,7 +212,6 @@ impl RejectReason {
             Self::UnknownUnit => "unknown_unit",
             Self::Excluded => "excluded_by_policy",
             Self::UnprovenPurpose => "unproven_purpose",
-            Self::LowerPriority => "lower_priority",
             Self::Hysteresis => "held_by_hysteresis",
         }
     }
@@ -568,26 +566,6 @@ pub struct CollectionFailure {
     pub message: String,
 }
 
-/// Domain events produced by collectors and committed with the batch.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind")]
-pub enum CollectorEvent {
-    SourceChanged {
-        key: MetricKey,
-        previous_source: Option<SourceId>,
-        source_id: SourceId,
-        policy_revision: u32,
-    },
-    SourceConflict {
-        key: MetricKey,
-        source_ids: Vec<SourceId>,
-    },
-    SourceUnavailable {
-        source_id: SourceId,
-        reason: String,
-    },
-}
-
 /// Output of one collector job; committed atomically or not at all.
 #[derive(Debug, Clone)]
 pub struct CollectionBatch {
@@ -609,7 +587,6 @@ pub struct CollectionBatch {
     /// Replacement state; becomes the base only after a successful Ack.
     pub next_state: CollectorState,
     pub failures: Vec<CollectionFailure>,
-    pub events: Vec<CollectorEvent>,
 }
 
 impl CollectionBatch {
@@ -958,7 +935,6 @@ mod tests {
             process_table: None,
             next_state: CollectorState::default(),
             failures: vec![],
-            events: vec![],
         }
     }
 

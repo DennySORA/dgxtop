@@ -168,14 +168,6 @@ impl CommandBody {
         }
     }
 
-    /// Destructive commands are never coalesced or silently dropped.
-    pub const fn is_destructive(&self) -> bool {
-        matches!(
-            self,
-            Self::PrepareSignal { .. } | Self::ConfirmSignal { .. }
-        )
-    }
-
     /// Pure navigation that may be coalesced under input bursts.
     pub const fn is_coalescible_navigation(&self) -> bool {
         matches!(self, Self::UpdateViewSession { .. })

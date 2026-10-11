@@ -19,6 +19,10 @@ path = "src/lib.rs"
 name = "dgxtop"
 path = "src/main.rs"
 
+[features]
+# The benchmark harness (`dgxtop::perf`); the benches require it.
+bench-support = ["dgxtop-core/test-support"]
+
 [dependencies]
 dgxtop-core.workspace = true
 dgxtop-runtime.workspace = true
@@ -38,6 +42,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 dgxtop-core = { workspace = true, features = ["test-support"] }
+dgxtop-store = { workspace = true, features = ["test-support"] }
 jsonschema.workspace = true
 nix.workspace = true
 libc.workspace = true
@@ -99,21 +104,25 @@ path = "../../tests/live_store/store_hot_query_limits.rs"
 name = "ref"
 path = "../../benches/ref/main.rs"
 harness = false
+required-features = ["bench-support"]
 
 [[bench]]
 name = "history"
 path = "../../benches/history/main.rs"
 harness = false
+required-features = ["bench-support"]
 
 [[bench]]
 name = "arbitration"
 path = "../../benches/arbitration/main.rs"
 harness = false
+required-features = ["bench-support"]
 
 [[bench]]
 name = "projection"
 path = "../../benches/projection/main.rs"
 harness = false
+required-features = ["bench-support"]
 
 [lints]
 workspace = true

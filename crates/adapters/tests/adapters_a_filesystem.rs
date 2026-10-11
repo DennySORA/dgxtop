@@ -11,7 +11,6 @@ use dgxtop_adapters::filesystem::{
 use dgxtop_adapters::registry::AdapterOptions;
 use dgxtop_core::metric::ids;
 use dgxtop_core::observation::{BatchStatus, EntityKind};
-use dgxtop_core::ports::TelemetryPort;
 use dgxtop_core::quality::{Availability, RawKind, ReadStatus, Support};
 use dgxtop_core::testing::{FakeClock, host_id};
 use support::*;
@@ -318,7 +317,6 @@ fn missing_mount_namespace_is_unavailable() {
         pages[0].error_code.as_deref(),
         Some("MOUNT_NAMESPACE_UNKNOWN")
     );
-    assert_eq!(adapter.health().availability, Availability::Unavailable);
 }
 
 #[test]

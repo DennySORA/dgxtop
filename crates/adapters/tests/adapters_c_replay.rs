@@ -23,6 +23,14 @@ use dgxtop_core::quality::{Namespace, Quality, RawKind, ReadStatus, SampleKind};
 use dgxtop_core::testing::adapter_id;
 use support::*;
 
+/// Violation code of an invalid fixture; other errors have none.
+fn code_of(error: &ReplayError) -> Option<&'static str> {
+    match error {
+        ReplayError::Invalid(violation) => Some(violation.code),
+        _ => None,
+    }
+}
+
 const ADAPTER: &str = "replay";
 const DEMO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/replay/demo.json");
 const PROCESS_ENTITY: &str = "process:pid:[1]:42:7";
@@ -380,7 +388,7 @@ fn validation_rejects_live_sample_kinds() {
             ReplayAdapter::from_fixture(fixture, adapter_id(ADAPTER), time(&clock), host(), None)
                 .err()
                 .unwrap();
-        assert_eq!(error.violation_code(), Some("LIVE_SAMPLE_KIND"));
+        assert_eq!(code_of(&error), Some("LIVE_SAMPLE_KIND"));
     }
 }
 
@@ -411,14 +419,12 @@ fn validation_rejects_unknown_metric_ids() {
         .unwrap()
         .replace("cpu.temperature.package", "cpu.temperature.bogus");
     let error = ReplayFixture::from_json_slice(text.as_bytes()).unwrap_err();
-    assert_eq!(error.violation_code(), Some("UNKNOWN_METRIC"));
+    assert_eq!(code_of(&error), Some("UNKNOWN_METRIC"));
     let malformed = String::from_utf8(base_fixture().to_json_bytes().unwrap())
         .unwrap()
         .replace("cpu.temperature.package", "Not-A-Metric");
     assert_eq!(
-        ReplayFixture::from_json_slice(malformed.as_bytes())
-            .unwrap_err()
-            .violation_code(),
+        code_of(&ReplayFixture::from_json_slice(malformed.as_bytes()).unwrap_err()),
         Some("DECODE")
     );
 }
@@ -430,12 +436,10 @@ fn validation_rejects_oversize_inputs() {
     let file = std::fs::File::create(&path).unwrap();
     file.set_len(replay::MAX_FIXTURE_BYTES + 1).unwrap();
     let error = ReplayFixture::load(&path).unwrap_err();
-    assert_eq!(error.violation_code(), Some("FILE_TOO_LARGE"));
+    assert_eq!(code_of(&error), Some("FILE_TOO_LARGE"));
     let bytes = vec![b' '; usize::try_from(replay::MAX_FIXTURE_BYTES).unwrap() + 1];
     assert_eq!(
-        ReplayFixture::from_json_slice(&bytes)
-            .unwrap_err()
-            .violation_code(),
+        code_of(&ReplayFixture::from_json_slice(&bytes).unwrap_err()),
         Some("FILE_TOO_LARGE")
     );
     let missing = ReplayFixture::load(Path::new("/nonexistent/dgxtop/fixture.json")).unwrap_err();

@@ -9,6 +9,7 @@
 //! and mode 0600, directories with mode 0700, and never follows a symlink in
 //! the final path component when reading or creating.
 
+#[cfg(any(test, feature = "test-support"))]
 mod failpoint;
 
 use std::ffi::OsString;
@@ -22,6 +23,7 @@ use nix::errno::Errno;
 use nix::fcntl::{Flock, FlockArg};
 use thiserror::Error;
 
+#[cfg(any(test, feature = "test-support"))]
 pub use failpoint::{Failpoint, FailpointFileSystem, Trigger};
 
 /// Mode of every file the persistence layer creates.
@@ -86,12 +88,6 @@ pub struct PrivateFile {
 impl PrivateFile {
     pub fn path(&self) -> &Path {
         &self.path
-    }
-
-    /// Borrow of the underlying descriptor for operations outside the trait
-    /// (for example letting SQLite write into a pre-created file).
-    pub fn as_file(&self) -> &File {
-        &self.file
     }
 }
 

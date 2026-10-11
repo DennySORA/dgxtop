@@ -12,9 +12,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use dgxtop_adapters::process_action::{PidfdActionAdapter, PidfdReadiness, PidfdSyscalls};
 use dgxtop_core::action::{
     ActionAttempt, ActionError, ActionHandle, ActionIntent, ActionOp, ActionOutcomeRecord,
-    ActionRecordSummary, AuditFailure, CapabilityContext, DurableReceipt, ExitObservation,
-    PersistenceKind, PersistenceState, PersistenceStatus, PreparedProcess, RecoveredIntent, Signal,
-    SignalOutcome,
+    AuditFailure, CapabilityContext, DurableReceipt, ExitObservation, PersistenceKind,
+    PersistenceState, PersistenceStatus, PreparedProcess, RecoveredIntent, Signal, SignalOutcome,
 };
 use dgxtop_core::errors::{ErrorCode, InfraError};
 use dgxtop_core::identity::ProcessKey;
@@ -22,7 +21,6 @@ use dgxtop_core::ports::{AuditRepository, Dispatch, DispatchError, ProcessAction
 use dgxtop_runtime::queues::PoolHandle;
 use dgxtop_store::sqlite::{FreeSpaceProbe, StatvfsFreeSpace};
 use nix::errno::Errno;
-use uuid::Uuid;
 
 use crate::journal::{Journal, Step, WorkCounter};
 
@@ -268,13 +266,6 @@ impl AuditRepository for AuditSpy {
             return Err(dead_process(false));
         }
         self.repository.recover_unknown(now_boot_ns, now_utc)
-    }
-
-    fn lookup(&mut self, request_id: Uuid) -> Result<Option<ActionRecordSummary>, AuditFailure> {
-        if self.faults.has_crashed() {
-            return Err(dead_process(false));
-        }
-        self.repository.lookup(request_id)
     }
 
     fn status(&mut self) -> PersistenceStatus {

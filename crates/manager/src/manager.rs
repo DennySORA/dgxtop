@@ -23,7 +23,6 @@ use dgxtop_core::ports::{ControlCompletion, IngestionCompletion};
 
 use crate::control::{ControlCore, QueueLevels};
 use crate::error::ManagerError;
-use crate::events::EventFeed;
 use crate::session::{CommandInbox, InboxParts, Outstanding, QueuedCommand, SessionHandle};
 use crate::setup::{
     CONTROL_INBOX_CAPACITY, INGESTION_INBOX_CAPACITY, ManagerInboxes, ManagerPorts, ManagerSetup,
@@ -144,9 +143,7 @@ impl Manager {
             outstanding,
             command_byte_cap: effective.effective_command_bytes(),
             ledger: ports.ledger.clone(),
-            clock: Arc::clone(&ports.clock),
             shutdown: Arc::clone(&shutdown),
-            diagnostics: ports.diagnostics.clone(),
         }));
         let core = ControlCore::new(setup, ports, inbox, shutdown);
         let manager = Manager {
@@ -172,11 +169,6 @@ impl Manager {
     /// Clonable, thread-safe shutdown request (e.g. for a signal watcher).
     pub fn shutdown_trigger(&self) -> ShutdownTrigger {
         self.core.shutdown_trigger()
-    }
-
-    /// Read access to the bounded event log.
-    pub fn event_feed(&self) -> EventFeed {
-        self.core.event_feed()
     }
 
     /// Runs the control loop on the calling thread until the bounded

@@ -18,9 +18,7 @@ use dgxtop_core::canonical::{
 };
 use dgxtop_core::commands::{CommandBody, CommandResult, CommandStatus, SortKey, ViewKind};
 use dgxtop_core::config::Config;
-use dgxtop_core::diagnostics::names;
 use dgxtop_core::errors::{ErrorCode, ResultCode};
-use dgxtop_core::event::EventKind;
 use dgxtop_core::identity::{Pid, PidNamespace, ProcessKey};
 use dgxtop_core::observation::{
     BatchStatus, IPC_PROTOCOL_VERSION, Observation, ObservationBatch, PAGE_CONTINUES, ReadPlan,
@@ -152,7 +150,6 @@ fn collected(plan: &CollectionPlan) -> Box<CollectionBatch> {
         process_table: None,
         next_state: CollectorState::default(),
         failures: Vec::new(),
-        events: Vec::new(),
     })
 }
 
@@ -206,16 +203,6 @@ fn with_process_table(harness: &Harness, pids: &[i64]) {
     });
 }
 
-fn events(harness: &Harness) -> Vec<EventKind> {
-    harness
-        .manager
-        .event_feed()
-        .recent(512)
-        .into_iter()
-        .map(|event| event.kind)
-        .collect()
-}
-
 // ----- AT22 -----------------------------------------------------------------
 
 #[test]
@@ -232,11 +219,12 @@ fn at22_at08_late_reply_of_the_old_epoch_is_dropped_after_a_config_change() {
     let jobs = harness.ports.config.take();
     let ConfigJob::Persist { request_id, .. } = &jobs[0];
     assert_eq!(*request_id, request);
-    // Before the durable receipt nothing changed.
+    // Before the durable receipt nothing is answered.
     assert!(
-        !events(&harness)
+        harness
+            .results()
             .iter()
-            .any(|kind| matches!(kind, EventKind::ConfigApplied { .. }))
+            .all(|result| result.request_id != request)
     );
     harness.control(ControlCompletion::Config {
         request_id: request,
@@ -244,6 +232,7 @@ fn at22_at08_late_reply_of_the_old_epoch_is_dropped_after_a_config_change() {
             revision: 2,
             sha256: "0".repeat(64),
             path: "/x".into(),
+            file_bytes: 1,
         }),
     });
     harness.settle();
@@ -251,25 +240,11 @@ fn at22_at08_late_reply_of_the_old_epoch_is_dropped_after_a_config_change() {
     assert!(result.code.is_ok());
     assert_eq!(result.config_revision, Some(2));
     assert_eq!(result.effective_interval_ms, Some(2000));
-    assert!(events(&harness).iter().any(|kind| matches!(
-        kind,
-        EventKind::ConfigApplied {
-            revision: 2,
-            epoch: 2
-        }
-    )));
-    // The reply to the old-epoch request arrives late: dropped and counted.
+    // The reply to the old-epoch request arrives late: dropped.
     let collectors_before = harness.ports.collectors.len();
     let now = harness.now_ns();
     harness.ingest(batch_reply(&stale_plan, Vec::new(), false, now));
     harness.settle();
-    assert_eq!(
-        harness
-            .ports
-            .diagnostics
-            .counter(names::STALE_RESULT_DROPPED_TOTAL, "old_epoch"),
-        1
-    );
     assert_eq!(
         harness.ports.collectors.len(),
         collectors_before,
@@ -299,6 +274,7 @@ fn apply_interval(harness: &mut Harness, interval_ms: u32) {
             revision: 2,
             sha256: "0".repeat(64),
             path: "/x".into(),
+            file_bytes: 1,
         }),
     });
     harness.settle();
@@ -369,55 +345,32 @@ fn at22_host_restart_drops_the_request_records_a_gap_and_rediscovers() {
         discovery_within(&mut harness, 200),
         "the new incarnation is rediscovered early (earliest-deadline order)"
     );
+    let collectors_before = harness.ports.collectors.len();
     let now = harness.now_ns();
     harness.ingest(batch_reply(&lost, Vec::new(), false, now));
     harness.settle();
-    assert!(
-        harness
-            .ports
-            .diagnostics
-            .counter(names::STALE_RESULT_DROPPED_TOTAL, "other_request")
-            + harness
-                .ports
-                .diagnostics
-                .counter(names::STALE_RESULT_DROPPED_TOTAL, "no_request")
-            >= 1
+    assert_eq!(
+        harness.ports.collectors.len(),
+        collectors_before,
+        "the lost request's late reply is never collected"
     );
 }
 
-fn counter_total(harness: &Harness, metric: &str) -> u64 {
-    harness
-        .ports
-        .diagnostics
-        .snapshot()
-        .counters
-        .get(metric)
-        .map_or(0, |series| series.values().sum())
-}
-
 #[test]
-fn a_refused_read_dispatch_is_deferred_and_retried_never_counted_as_a_drop() {
+fn a_refused_read_dispatch_is_deferred_and_retried() {
     let mut harness = ready_harness(HarnessOptions::default());
     harness.ports.store.take();
     harness.ports.adapters.set_busy(true);
-    let deferred = |harness: &Harness| {
-        harness
-            .ports
-            .diagnostics
-            .counter(names::ADAPTER_DISPATCH_DEFERRED_TOTAL, "worker_busy")
-    };
     for _ in 0..200 {
-        if deferred(&harness) > 0 {
+        if harness.ports.adapters.refused() > 0 {
             break;
         }
         harness.ports.clock.advance_ms(10);
         harness.settle();
     }
-    assert!(deferred(&harness) > 0, "a due read met the busy worker");
-    assert_eq!(
-        counter_total(&harness, names::QUEUE_DROPPED_TOTAL),
-        0,
-        "the scheduler keeps refused work, so nothing was dropped"
+    assert!(
+        harness.ports.adapters.refused() > 0,
+        "a due read met the busy worker"
     );
     harness.ports.adapters.set_busy(false);
     harness.ports.clock.advance_ms(30);
@@ -516,13 +469,6 @@ fn at05_pages_accumulate_into_one_job_and_state_advances_only_after_the_ack() {
         reason: None,
     }));
     harness.settle();
-    assert!(events(&harness).iter().any(|kind| matches!(
-        kind,
-        EventKind::CollectionCommitted {
-            snapshot_revision: 2,
-            ..
-        }
-    )));
     let trend = harness.manager.core().trends.book().trend(&cpu, 10);
     assert_eq!(trend.points, vec![Some(42.0)]);
     let next = next_read_of(&mut harness, "cpu");
@@ -808,11 +754,6 @@ fn at10_full_action_path_through_commands_sends_once() {
     let result = harness.result_for(confirm);
     assert_eq!(result.status, CommandStatus::Completed);
     assert_eq!(result.action_state, Some(ActionState::SignalSent));
-    assert!(
-        events(&harness)
-            .iter()
-            .any(|kind| matches!(kind, EventKind::ActionSignalSent(_)))
-    );
 }
 
 #[test]
@@ -1072,14 +1013,9 @@ fn history_view_queries_and_drops_stale_generations() {
         session_generation: job.session_generation + 1,
         result: Ok(answer),
     });
+    projections(&harness);
     harness.settle();
-    assert_eq!(
-        harness
-            .ports
-            .diagnostics
-            .counter(names::STALE_RESULT_DROPPED_TOTAL, "history"),
-        1
-    );
+    assert_eq!(projections(&harness), 0, "a stale answer draws nothing");
 }
 
 // ----- construction ----------------------------------------------------------------

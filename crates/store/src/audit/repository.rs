@@ -4,10 +4,11 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[cfg(any(test, feature = "test-support"))]
+use dgxtop_core::action::ActionRecordSummary;
 use dgxtop_core::action::{
-    ActionAttempt, ActionIntent, ActionOutcomeRecord, ActionRecordSummary, ActionState,
-    AuditFailure, DurableReceipt, PersistenceKind, PersistenceState, PersistenceStatus,
-    RecoveredIntent,
+    ActionAttempt, ActionIntent, ActionOutcomeRecord, ActionState, AuditFailure, DurableReceipt,
+    PersistenceKind, PersistenceState, PersistenceStatus, RecoveredIntent,
 };
 use dgxtop_core::clock::{NANOS_PER_SECOND, TimeProvider};
 use dgxtop_core::errors::ErrorCode;
@@ -19,13 +20,16 @@ use uuid::Uuid;
 use super::limits::{AuditLimits, AuditOpenError};
 use super::queries::{
     StoredIntent, UnresolvedIntent, find_attempt, find_event, find_intent, insert_attempt,
-    insert_event, insert_intent, latest_result_any, latest_result_since, unresolved_intents,
-    update_status,
+    insert_event, insert_intent, unresolved_intents, update_status,
 };
+#[cfg(any(test, feature = "test-support"))]
+use super::queries::{latest_result_any, latest_result_since};
 use super::records::{
-    AttemptRow, EventRow, IntentRow, StoredTarget, attempt_state, failure, invalid, parse_signal,
-    state_from_status, transition_allowed, uuid_text,
+    AttemptRow, EventRow, IntentRow, StoredTarget, failure, invalid, parse_signal,
+    transition_allowed, uuid_text,
 };
+#[cfg(any(test, feature = "test-support"))]
+use super::records::{attempt_state, state_from_status};
 use super::retention::delete_expired;
 use crate::fs::{FileSystemOps, RealFileSystem};
 use crate::sqlite::{
@@ -420,6 +424,21 @@ impl SqliteAuditRepository {
     }
 }
 
+/// Reading a request's audit record back is a test aid: the Manager never
+/// asks (single-use tokens make a replayed confirmation harmless, D-93).
+#[cfg(any(test, feature = "test-support"))]
+impl SqliteAuditRepository {
+    /// The audit record of `request_id`: its intent, else its attempt.
+    pub fn lookup(
+        &mut self,
+        request_id: Uuid,
+    ) -> Result<Option<ActionRecordSummary>, AuditFailure> {
+        let request = uuid_text(request_id);
+        let found = lookup_summary(self.connection()?, &request, request_id);
+        found.map_err(|error| self.sqlite_failure("audit lookup", &error))
+    }
+}
+
 impl AuditRepository for SqliteAuditRepository {
     fn append_intent(&mut self, intent: &ActionIntent) -> Result<DurableReceipt, AuditFailure> {
         let boot_id = self.clock.boot_id();
@@ -605,12 +624,6 @@ impl AuditRepository for SqliteAuditRepository {
         Ok(reported)
     }
 
-    fn lookup(&mut self, request_id: Uuid) -> Result<Option<ActionRecordSummary>, AuditFailure> {
-        let request = uuid_text(request_id);
-        let found = lookup_summary(self.connection()?, &request, request_id);
-        found.map_err(|error| self.sqlite_failure("audit lookup", &error))
-    }
-
     fn status(&mut self) -> PersistenceStatus {
         let (state, detail) = self.state_and_detail();
         let footprint = StorageFootprint::measure(&self.path).unwrap_or_default();
@@ -625,6 +638,7 @@ impl AuditRepository for SqliteAuditRepository {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 /// Result code when no event was found since the intent's creation: an
 /// intent still waiting for its first outcome reports `Ok`; otherwise the
 /// wall clock stepped back and the unbounded scan is used.
@@ -642,6 +656,7 @@ fn latest_result(
     Ok(latest_result_any(connection, request)?.unwrap_or_else(|| "Ok".to_owned()))
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn lookup_summary(
     connection: &Connection,
     request: &str,

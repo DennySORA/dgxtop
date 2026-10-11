@@ -10,7 +10,6 @@ use dgxtop_collectors::registry::default_collectors;
 use dgxtop_core::budget::ByteLedger;
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::config::Config;
-use dgxtop_core::diagnostics::Diagnostics;
 use dgxtop_core::identity::{CollectorId, HostId};
 use dgxtop_core::observation::AdapterManifest;
 use dgxtop_core::ports::SnapshotReader;
@@ -105,7 +104,6 @@ pub struct TelemetryRig {
     pub workers: WorkerSet,
     pub supervisor: SupervisorHandle,
     pub snapshots: SharedSnapshot,
-    pub diagnostics: Diagnostics,
 }
 
 impl TelemetryRig {
@@ -114,7 +112,6 @@ impl TelemetryRig {
         let clock = plan.clock;
         let ledger = ByteLedger::for_memory_limit_mib(u64::from(config.store.memory_limit_mib));
         let ingress = ingress_gate(config, &ledger);
-        let diagnostics = Diagnostics::new();
         let logger = Arc::new(MemoryLogger::default());
         let channels = ManagerChannels::create();
         let inboxes = channels.inboxes();
@@ -154,7 +151,6 @@ impl TelemetryRig {
             inboxes.ingestion.clone(),
             Arc::clone(&clock),
             logger.clone(),
-            diagnostics.clone(),
             plan.launcher,
         )
         .expect("start the adapter-host supervisor");
@@ -167,7 +163,6 @@ impl TelemetryRig {
             store: Box::new(store),
             history: Box::new(history_pool),
             logger,
-            diagnostics: diagnostics.clone(),
             ..inert_ports(
                 Arc::clone(&clock),
                 Arc::new(snapshots.clone()),
@@ -181,7 +176,6 @@ impl TelemetryRig {
             workers,
             supervisor,
             snapshots,
-            diagnostics,
         }
     }
 

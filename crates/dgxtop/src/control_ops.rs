@@ -29,10 +29,6 @@ pub fn run_audit_op(repository: &mut dyn AuditRepository, op: AuditOp) -> AuditC
         } => AuditCompletion::Recovered {
             result: repository.recover_unknown(now_boot_ns, &now_utc),
         },
-        AuditOp::Lookup { request_id } => AuditCompletion::Lookup {
-            request_id,
-            result: repository.lookup(request_id),
-        },
         AuditOp::Status => AuditCompletion::Status(repository.status()),
     }
 }

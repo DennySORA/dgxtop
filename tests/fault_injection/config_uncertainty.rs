@@ -12,7 +12,6 @@ use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::commands::{CommandBody, CommandResult, CommandStatus, ViewKind};
 use dgxtop_core::config::Config;
 use dgxtop_core::errors::{ErrorCode, ResultCode};
-use dgxtop_core::event::EventKind;
 use dgxtop_core::ports::ConfigRepository;
 use dgxtop_core::quality::Namespace;
 use dgxtop_core::view::{SettingsView, ViewModel};
@@ -146,12 +145,6 @@ fn at36_uncertain_commit_adopts_the_disk_version_and_cas_blocks_concurrent_write
             .as_deref()
             .is_some_and(|text| text.contains("adopted on-disk revision 2")),
         "{settings:?}"
-    );
-    assert!(
-        rig.manager
-            .event_kinds()
-            .iter()
-            .any(|kind| matches!(kind, EventKind::ConfigApplied { revision: 2, .. }))
     );
     let on_disk = rig.reload_from_disk();
     assert_eq!((on_disk.revision, on_disk.sampling.interval_ms), (2, 2_000));

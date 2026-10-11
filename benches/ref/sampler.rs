@@ -9,8 +9,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use dgxtop::perf::threads::{HarnessCpu, ThreadTicks, process_thread_ticks};
+use dgxtop::perf::tree_stats::ProcessTreeStats;
 use dgxtop_core::budget::ByteLedger;
-use dgxtop_runtime::stats::ProcessTreeStats;
 use dgxtop_runtime::supervisor::SupervisorHandle;
 use serde::Serialize;
 

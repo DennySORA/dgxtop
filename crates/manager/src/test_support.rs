@@ -13,7 +13,6 @@ use dgxtop_core::canonical::{
 };
 use dgxtop_core::commands::{CommandBody, CommandEnvelope, CommandRejection, CommandResult};
 use dgxtop_core::config::{Config, ValueOrigin};
-use dgxtop_core::diagnostics::Diagnostics;
 use dgxtop_core::identity::PidNamespace;
 use dgxtop_core::identity::{AdapterId, CollectorId};
 use dgxtop_core::identity::{EntityId, MetricKey, OriginIdentity, ProfileId};
@@ -214,7 +213,6 @@ impl Collector for FakeCollector {
             process_table: None,
             next_state: (*plan.state).clone(),
             failures: Vec::new(),
-            events: Vec::new(),
         }
     }
 }
@@ -327,7 +325,6 @@ pub(crate) struct Ports {
     pub(crate) process_history: Arc<StaticProcessHistory>,
     pub(crate) snapshots: Arc<FakeSnapshots>,
     pub(crate) logger: Arc<MemoryLogger>,
-    pub(crate) diagnostics: Diagnostics,
     pub(crate) ledger: ByteLedger,
     pub(crate) ingress: QueueGate,
 }
@@ -370,6 +367,9 @@ pub(crate) fn harness_setup(options: &HarnessOptions) -> ManagerSetup {
         saved_config: options.saved.clone(),
         effective_config: options.effective.clone(),
         value_origins: options.origins.clone(),
+        config_file: dgxtop_core::action::PersistenceStatus::healthy(
+            dgxtop_core::action::PersistenceKind::Config,
+        ),
         host_id: host_id("test-host"),
         boot_id: boot_id("fake-boot"),
         pid_namespace: PidNamespace::new("pid:[4026531836]").unwrap(),
@@ -401,7 +401,6 @@ pub(crate) fn harness_ports(options: &HarnessOptions) -> (ManagerPorts, Ports) {
         process_history: StaticProcessHistory::new(Default::default()),
         snapshots: Arc::new(FakeSnapshots::default()),
         logger: Arc::new(MemoryLogger::default()),
-        diagnostics: Diagnostics::new(),
         ingress: QueueGate::new(
             "ingress",
             32,
@@ -428,7 +427,6 @@ pub(crate) fn harness_ports(options: &HarnessOptions) -> (ManagerPorts, Ports) {
             memory: Arc::clone(&ports.process_history) as Arc<dyn ProcessMemoryReader>,
         }),
         logger: ports.logger.clone(),
-        diagnostics: ports.diagnostics.clone(),
         ledger: ports.ledger.clone(),
         ingress: ports.ingress.clone(),
     };

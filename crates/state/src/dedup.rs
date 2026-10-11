@@ -136,7 +136,6 @@ mod tests {
             process_table: None,
             next_state: dgxtop_core::canonical::CollectorState::default(),
             failures: vec![],
-            events: vec![],
         };
         batch.content_fingerprint()
     }

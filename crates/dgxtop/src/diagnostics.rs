@@ -12,7 +12,6 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, bounded};
 use dgxtop_core::budget::{ByteLedger, Partition, QueueGate};
 use dgxtop_core::clock::TimeProvider;
-use dgxtop_core::diagnostics::Diagnostics;
 use dgxtop_core::identity::AdapterId;
 use dgxtop_core::naming;
 use dgxtop_core::observation::{CatalogDelta, DiscoverRequest};
@@ -144,7 +143,6 @@ fn discover_adapters(
         sender,
         Arc::clone(&clock),
         Arc::new(NullLogger),
-        Diagnostics::new(),
     )
     .map_err(|error| error.to_string())?;
     let deadline = Instant::now() + DISCOVERY_BUDGET;

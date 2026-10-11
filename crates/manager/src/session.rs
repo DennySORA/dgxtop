@@ -7,8 +7,9 @@
 //!   bounded by the reservations (outstanding commands), so delivering a result
 //!   can never fail or drop.
 //! * Projections use the core latest-only [`ProjectionSlot`].
-//! * Shutdown is out of band: a flag plus a wake token, never queued behind
-//!   ordinary commands.
+//! * Shutdown is out of band: `SessionPort::request_shutdown` raises a flag
+//!   plus a wake token, never queued behind ordinary commands. The sealed
+//!   `Shutdown` command body is refused (D-93): one way to quit.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -17,11 +18,9 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use crossbeam_channel::{Sender, TrySendError};
 use dgxtop_core::budget::{ByteLedger, BytePermit, Partition};
-use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::commands::{
     CommandBody, CommandEnvelope, CommandRejection, CommandResult, CommandSyntaxError,
 };
-use dgxtop_core::diagnostics::{Diagnostics, names};
 use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::identity::SessionId;
 use dgxtop_core::ports::SessionPort;
@@ -31,8 +30,6 @@ use uuid::Uuid;
 
 use crate::shutdown::ShutdownSignal;
 
-/// Result slots per session reserved for out-of-band `Shutdown` commands.
-pub(crate) const OUT_OF_BAND_SHUTDOWN_SLOTS: usize = 4;
 /// Viewport assumed until the frontend reports its terminal size.
 const DEFAULT_VIEWPORT: (u16, u16) = (80, 24);
 
@@ -40,7 +37,6 @@ const DEFAULT_VIEWPORT: (u16, u16) = (80, 24);
 #[derive(Debug)]
 pub(crate) struct QueuedCommand {
     pub(crate) envelope: CommandEnvelope,
-    pub(crate) accepted_boot_ns: u64,
     /// Reserve-partition bytes of the payload, held until it is processed.
     pub(crate) _permit: Option<BytePermit>,
 }
@@ -83,23 +79,12 @@ impl Outstanding {
     }
 }
 
-/// Which budget a delivered result occupies until it is drained.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Reservation {
-    Pending,
-    OutOfBand,
-}
-
-#[derive(Debug)]
-struct MailboxEntry {
-    result: CommandResult,
-    reservation: Reservation,
-}
-
+/// Results waiting for the frontend; each holds one `Outstanding` slot
+/// until it is drained.
 #[derive(Debug, Default)]
 struct Mailbox {
     closed: bool,
-    entries: VecDeque<MailboxEntry>,
+    entries: VecDeque<CommandResult>,
 }
 
 /// State shared by every clone of one session's handle and the Manager.
@@ -108,8 +93,6 @@ pub(crate) struct SessionShared {
     id: SessionId,
     outstanding: Arc<Outstanding>,
     mailbox: Mutex<Mailbox>,
-    out_of_band_reserved: AtomicUsize,
-    shutdown_requests: Mutex<Vec<Uuid>>,
     projection: ProjectionSlot,
     viewport: AtomicU32,
     shutdown_requested: AtomicBool,
@@ -121,8 +104,6 @@ impl SessionShared {
             id,
             outstanding,
             mailbox: Mutex::new(Mailbox::default()),
-            out_of_band_reserved: AtomicUsize::new(0),
-            shutdown_requests: Mutex::new(Vec::new()),
             projection: ProjectionSlot::new(),
             viewport: AtomicU32::new(pack_viewport(DEFAULT_VIEWPORT.0, DEFAULT_VIEWPORT.1)),
             shutdown_requested: AtomicBool::new(false),
@@ -135,24 +116,13 @@ impl SessionShared {
 
     /// Delivers the single result of a command accepted through the queue.
     pub(crate) fn deliver(&self, result: CommandResult) {
-        self.push(result, Reservation::Pending);
-    }
-
-    /// Answers every recorded out-of-band `Shutdown` command.
-    pub(crate) fn answer_shutdown_requests(&self, message: &str) -> usize {
-        let requests = std::mem::take(
-            &mut *self
-                .shutdown_requests
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner),
-        );
-        for request_id in &requests {
-            self.push(
-                CommandResult::completed(*request_id, message),
-                Reservation::OutOfBand,
-            );
+        let mut mailbox = self.mailbox.lock().unwrap_or_else(PoisonError::into_inner);
+        if mailbox.closed {
+            drop(mailbox);
+            self.outstanding.release();
+            return;
         }
-        requests.len()
+        mailbox.entries.push_back(result);
     }
 
     pub(crate) fn publish(&self, projection: Arc<ViewModel>) {
@@ -191,32 +161,16 @@ impl SessionShared {
             .closed
     }
 
-    fn push(&self, result: CommandResult, reservation: Reservation) {
-        let mut mailbox = self.mailbox.lock().unwrap_or_else(PoisonError::into_inner);
-        if mailbox.closed {
-            drop(mailbox);
-            self.release(reservation);
-            return;
-        }
-        mailbox.entries.push_back(MailboxEntry {
-            result,
-            reservation,
-        });
-    }
-
     fn drain(&self, max: usize) -> Vec<CommandResult> {
-        let taken: Vec<MailboxEntry> = {
+        let taken: Vec<CommandResult> = {
             let mut mailbox = self.mailbox.lock().unwrap_or_else(PoisonError::into_inner);
             let count = max.min(mailbox.entries.len());
             mailbox.entries.drain(..count).collect()
         };
+        for _ in &taken {
+            self.outstanding.release();
+        }
         taken
-            .into_iter()
-            .map(|entry| {
-                self.release(entry.reservation);
-                entry.result
-            })
-            .collect()
     }
 
     fn close(&self) {
@@ -225,37 +179,8 @@ impl SessionShared {
             mailbox.closed = true;
             std::mem::take(&mut mailbox.entries)
         };
-        for entry in entries {
-            self.release(entry.reservation);
-        }
-    }
-
-    fn reserve_out_of_band(&self, request_id: Uuid) -> bool {
-        let reserved = self
-            .out_of_band_reserved
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                (current < OUT_OF_BAND_SHUTDOWN_SLOTS).then_some(current + 1)
-            })
-            .is_ok();
-        if reserved {
-            self.shutdown_requests
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push(request_id);
-        }
-        reserved
-    }
-
-    fn release(&self, reservation: Reservation) {
-        match reservation {
-            Reservation::Pending => self.outstanding.release(),
-            Reservation::OutOfBand => {
-                let _ = self.out_of_band_reserved.fetch_update(
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                    |current| Some(current.saturating_sub(1)),
-                );
-            }
+        for _ in entries {
+            self.outstanding.release();
         }
     }
 }
@@ -269,9 +194,7 @@ pub(crate) struct CommandInbox {
     outstanding: Arc<Outstanding>,
     command_byte_cap: u64,
     ledger: ByteLedger,
-    clock: Arc<dyn TimeProvider>,
     shutdown: Arc<ShutdownSignal>,
-    diagnostics: Diagnostics,
 }
 
 /// Construction inputs of [`CommandInbox`].
@@ -280,9 +203,7 @@ pub(crate) struct InboxParts {
     pub(crate) outstanding: Arc<Outstanding>,
     pub(crate) command_byte_cap: u64,
     pub(crate) ledger: ByteLedger,
-    pub(crate) clock: Arc<dyn TimeProvider>,
     pub(crate) shutdown: Arc<ShutdownSignal>,
-    pub(crate) diagnostics: Diagnostics,
 }
 
 impl CommandInbox {
@@ -293,9 +214,7 @@ impl CommandInbox {
             outstanding: parts.outstanding,
             command_byte_cap: parts.command_byte_cap,
             ledger: parts.ledger,
-            clock: parts.clock,
             shutdown: parts.shutdown,
-            diagnostics: parts.diagnostics,
         }
     }
 
@@ -334,7 +253,6 @@ impl CommandInbox {
         };
         let queued = QueuedCommand {
             envelope,
-            accepted_boot_ns: self.clock.now_boot_ns(),
             _permit: Some(permit),
         };
         let closed = self.closed.read().unwrap_or_else(PoisonError::into_inner);
@@ -358,32 +276,7 @@ impl CommandInbox {
         }
     }
 
-    fn admit_shutdown(
-        &self,
-        shared: &SessionShared,
-        request_id: Uuid,
-        reason: &str,
-    ) -> Result<(), CommandRejection> {
-        let closed = self.closed.read().unwrap_or_else(PoisonError::into_inner);
-        if *closed {
-            return Err(self.reject(request_id, ErrorCode::Unavailable, "manager stopped"));
-        }
-        // The flag goes up first: shutdown proceeds even without a result slot.
-        self.shutdown.request(reason);
-        if shared.reserve_out_of_band(request_id) {
-            Ok(())
-        } else {
-            Err(self.reject(
-                request_id,
-                ErrorCode::Busy,
-                "shutdown already requested; result slots exhausted",
-            ))
-        }
-    }
-
     fn reject(&self, request_id: Uuid, code: ErrorCode, message: &str) -> CommandRejection {
-        self.diagnostics
-            .increment(names::COMMAND_REJECTED_TOTAL, code.as_str(), 1);
         CommandRejection {
             request_id,
             code,
@@ -465,8 +358,12 @@ impl SessionPort for SessionHandle {
             let error = CommandSyntaxError::TooLarge(self.inbox.command_byte_cap);
             return Err(self.syntax_rejection(request_id, &error));
         }
-        if let CommandBody::Shutdown { reason } = &command.body {
-            return self.inbox.admit_shutdown(&self.shared, request_id, reason);
+        if matches!(command.body, CommandBody::Shutdown { .. }) {
+            return Err(self.inbox.reject(
+                request_id,
+                ErrorCode::Unsupported,
+                "Shutdown is not a queued command; quit through request_shutdown",
+            ));
         }
         self.inbox.enqueue(command, encoded_len)
     }
@@ -508,7 +405,6 @@ mod tests {
     use super::*;
     use dgxtop_core::budget::ByteLedger;
     use dgxtop_core::commands::{SortKey, ViewKind};
-    use dgxtop_core::testing::FakeClock;
 
     struct Fixture {
         handle: SessionHandle,
@@ -531,9 +427,7 @@ mod tests {
             outstanding: Arc::clone(&outstanding),
             command_byte_cap: 64 * 1024,
             ledger: ledger.clone(),
-            clock: FakeClock::new(1_000),
             shutdown: Arc::clone(&signal),
-            diagnostics: Diagnostics::new(),
         }));
         let shared = Arc::new(SessionShared::new(
             SessionId::new("s1").unwrap(),
@@ -661,22 +555,30 @@ mod tests {
             fixture.handle.submit(navigation("s1")).unwrap_err().code,
             ErrorCode::Busy
         );
+        fixture.handle.request_shutdown("user");
+        assert!(fixture.signal.is_requested());
+        assert!(fixture.wake.try_recv().is_ok());
+        fixture.handle.request_shutdown("again");
+        assert_eq!(fixture.signal.reason(), "user");
+    }
+
+    /// D-93: quitting has one path; the sealed command body is refused
+    /// without taking a slot or requesting a shutdown.
+    #[test]
+    fn a_shutdown_command_is_refused_as_unsupported() {
+        let fixture = fixture(4, 4);
         let shutdown = CommandEnvelope::new(
             SessionId::new("s1").unwrap(),
             CommandBody::Shutdown {
                 reason: "user".into(),
             },
         );
-        let shutdown_id = shutdown.request_id;
-        fixture.handle.submit(shutdown).unwrap();
-        assert!(fixture.signal.is_requested());
-        assert!(fixture.wake.try_recv().is_ok());
-        assert_eq!(fixture.shared.answer_shutdown_requests("bye"), 1);
-        let results = fixture.handle.drain_results(8);
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].request_id, shutdown_id);
-        fixture.handle.request_shutdown("again");
-        assert_eq!(fixture.signal.reason(), "user");
+        let rejection = fixture.handle.submit(shutdown).unwrap_err();
+        assert_eq!(rejection.code, ErrorCode::Unsupported);
+        assert!(rejection.message.contains("request_shutdown"));
+        assert!(!fixture.signal.is_requested());
+        assert_eq!(fixture.inbox.outstanding.current(), 0);
+        assert!(fixture.receiver.try_recv().is_err());
     }
 
     #[test]
@@ -685,14 +587,6 @@ mod tests {
         fixture.inbox.close();
         assert_eq!(
             fixture.handle.submit(navigation("s1")).unwrap_err().code,
-            ErrorCode::Unavailable
-        );
-        let shutdown = CommandEnvelope::new(
-            SessionId::new("s1").unwrap(),
-            CommandBody::Shutdown { reason: "x".into() },
-        );
-        assert_eq!(
-            fixture.handle.submit(shutdown).unwrap_err().code,
             ErrorCode::Unavailable
         );
         assert_eq!(fixture.inbox.outstanding.current(), 0);

@@ -41,11 +41,22 @@ impl LeftoverKind {
     }
 }
 
-/// One file to delete.
+/// One file to delete. Only [`find_leftovers`] makes one, so
+/// [`remove_leftover`] can delete nothing but what it found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Leftover {
-    pub path: PathBuf,
-    pub kind: LeftoverKind,
+    path: PathBuf,
+    kind: LeftoverKind,
+}
+
+impl Leftover {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub const fn kind(&self) -> LeftoverKind {
+        self.kind
+    }
 }
 
 /// The leftovers in the state directory, sorted by path.
@@ -184,8 +195,8 @@ mod tests {
         found
             .iter()
             .map(|leftover| {
-                let name = leftover.path.file_name().unwrap().to_string_lossy();
-                (name.into_owned(), leftover.kind)
+                let name = leftover.path().file_name().unwrap().to_string_lossy();
+                (name.into_owned(), leftover.kind())
             })
             .collect()
     }

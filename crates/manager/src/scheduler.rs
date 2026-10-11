@@ -468,7 +468,6 @@ impl HostSchedule {
                 || group.pending_since_ns.is_some()
             {
                 group.skipped_due = group.skipped_due.saturating_add(1);
-                report.skipped = report.skipped.saturating_add(1);
             } else {
                 group.pending_since_ns = Some(slot_ns);
             }
@@ -557,7 +556,7 @@ impl HostSchedule {
                 self.rr_cursor = (index + 1) % (self.groups.len() + 1);
             }
             Err(error) => {
-                report.deferred.record(&error);
+                report.deferred = report.deferred.saturating_add(1);
                 if error == DispatchError::Closed {
                     self.dispatchable = false;
                 } else {
@@ -744,18 +743,6 @@ pub(crate) enum StaleReason {
     OldEpoch,
 }
 
-impl StaleReason {
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::UnknownAdapter => "unknown_adapter",
-            Self::NoRequest => "no_request",
-            Self::OtherRequest => "other_request",
-            Self::OldGeneration => "old_generation",
-            Self::OldEpoch => "old_epoch",
-        }
-    }
-}
-
 /// Why the next page of a cycle/round could not be requested.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ContinueError {
@@ -811,41 +798,11 @@ pub(crate) struct LostRequest {
 pub(crate) struct TickReport {
     pub(crate) expired: Vec<ExpiredRequest>,
     pub(crate) missed: Vec<MissedSlot>,
-    pub(crate) skipped: u64,
     pub(crate) dispatched: u32,
-    pub(crate) deferred: DeferredDispatches,
-}
-
-/// Dispatches a worker refused in one tick, by reason. Refused work stays
-/// pending and is retried, so a refusal is a deferral, never a dropped item;
-/// a slot the deferral makes a group miss is recorded as a gap (D-37).
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct DeferredDispatches {
-    pub(crate) worker_busy: u64,
-    pub(crate) capacity: u64,
-    pub(crate) closed: u64,
-}
-
-impl DeferredDispatches {
-    fn record(&mut self, error: &DispatchError) {
-        let count = match error {
-            DispatchError::Busy => &mut self.worker_busy,
-            DispatchError::Capacity(_) => &mut self.capacity,
-            DispatchError::Closed => &mut self.closed,
-        };
-        *count = count.saturating_add(1);
-    }
-
-    /// The non-zero counts with their bounded diagnostics labels.
-    pub(crate) fn by_reason(&self) -> impl Iterator<Item = (&'static str, u64)> {
-        [
-            ("worker_busy", self.worker_busy),
-            ("capacity", self.capacity),
-            ("closed", self.closed),
-        ]
-        .into_iter()
-        .filter(|(_, count)| *count > 0)
-    }
+    /// Dispatches a worker refused. Refused work stays pending and is
+    /// retried, so a refusal is a deferral, never a dropped item; a slot
+    /// the deferral makes a group miss is recorded as a gap (D-37).
+    pub(crate) deferred: u32,
 }
 
 /// Inputs of a tick that come from other services.
@@ -1821,37 +1778,14 @@ mod tests {
     }
 
     #[test]
-    fn refused_dispatches_are_deferrals_labelled_by_reason() {
-        let mut deferred = DeferredDispatches::default();
-        assert_eq!(
-            deferred.by_reason().count(),
-            0,
-            "nothing refused, no labels"
-        );
-        deferred.record(&DispatchError::Busy);
-        deferred.record(&DispatchError::Busy);
-        deferred.record(&DispatchError::Closed);
-        deferred.record(&DispatchError::Capacity(
-            dgxtop_core::budget::CapacityError::ItemsExhausted {
-                queue: "ingress",
-                limit: 4,
-            },
-        ));
-        assert_eq!(
-            deferred.by_reason().collect::<Vec<_>>(),
-            vec![("worker_busy", 2), ("capacity", 1), ("closed", 1)]
-        );
-    }
-
-    #[test]
     fn a_busy_worker_defers_the_due_read_until_the_retry_instant() {
         let config = Config::defaults().unwrap();
         let mut bench = bench(&[manifest("network", 100)], &config);
         bench.host_up("network");
         bench.drive(1, 1, true);
         bench.port.set_busy(true);
-        let mut deferred = DeferredDispatches::default();
-        while deferred.worker_busy == 0 {
+        let mut deferred = 0;
+        while deferred == 0 {
             bench.now += 10 * MS;
             deferred = bench.scheduler.tick(bench.now, context()).deferred;
         }
@@ -1862,7 +1796,7 @@ mod tests {
             .scheduler
             .tick(bench.now + DISPATCH_RETRY_NS, context());
         assert_eq!(retry.dispatched, 1, "the kept work goes out on retry");
-        assert_eq!(retry.deferred, DeferredDispatches::default());
+        assert_eq!(retry.deferred, 0);
     }
 
     #[test]

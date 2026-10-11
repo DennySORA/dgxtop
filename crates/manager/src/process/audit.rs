@@ -20,7 +20,6 @@ impl ProcessService {
         &mut self,
         result: Result<Vec<RecoveredIntent>, AuditFailure>,
         now: Now,
-        fx: &mut Effects,
     ) {
         let intents = match result {
             Ok(intents) => intents,
@@ -33,25 +32,11 @@ impl ProcessService {
         self.recovered = true;
         let count = u32::try_from(intents.len()).unwrap_or(u32::MAX);
         self.unknown_outcomes = self.unknown_outcomes.saturating_add(count);
-        if count > 0 {
-            self.diagnostics
-                .increment(names::ACTION_UNKNOWN_TOTAL, "recovered", u64::from(count));
-        }
         for (position, intent) in intents.into_iter().enumerate() {
             let reason = format!(
                 "outcome unknown after restart (was {}); never retried",
                 sanitize_display(&intent.previous_status, 32)
             );
-            if position < MAX_UNKNOWN_EVENTS {
-                fx.event(
-                    intent.request_id,
-                    EventKind::ActionOutcomeUnknown(ActionEventPayload {
-                        request_id: intent.request_id,
-                        intent_id: Some(intent.intent_id),
-                        reason: reason.clone(),
-                    }),
-                );
-            }
             if position < MAX_RECENT_ACTIONS {
                 self.records.push(recovered_record(intent, &reason, now));
             }
@@ -87,11 +72,12 @@ impl ProcessService {
             occurred_utc: crate::time_format::format_utc(now.utc_ns),
         };
         // Attempts never produced an intent: best effort, never backlogged.
-        match self.audit.try_dispatch(AuditOp::AppendAttempt(attempt)) {
-            Ok(()) => self.audit_outstanding = self.audit_outstanding.saturating_add(1),
-            Err(_) => self
-                .diagnostics
-                .increment(names::QUEUE_DROPPED_TOTAL, "audit_attempt", 1),
+        if self
+            .audit
+            .try_dispatch(AuditOp::AppendAttempt(attempt))
+            .is_ok()
+        {
+            self.audit_outstanding = self.audit_outstanding.saturating_add(1);
         }
     }
     /// Appends the outcome that closes a dispatched intent (never dropped
@@ -144,8 +130,6 @@ impl ProcessService {
         }
         if self.audit_backlog.len() >= AUDIT_BACKLOG_LIMIT {
             self.audit_backlog.pop_front();
-            self.diagnostics
-                .increment(names::QUEUE_DROPPED_TOTAL, "audit_outcome", 1);
         }
         self.audit_backlog.push_back(op);
         self.audit_retry_ns = now.boot_ns.saturating_add(AUDIT_RETRY_NS);

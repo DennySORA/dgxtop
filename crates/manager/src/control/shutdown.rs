@@ -11,7 +11,7 @@ use dgxtop_core::errors::{ErrorCode, ErrorDetail};
 use dgxtop_core::ports::LogLevel;
 use uuid::Uuid;
 
-use super::{ControlCore, Draining, Phase, SHUTDOWN_WAIT_NS, SUMMARY_EVENTS};
+use super::{ControlCore, Draining, Phase, SHUTDOWN_WAIT_NS};
 use crate::effects::Effects;
 use crate::session::QueuedCommand;
 use crate::shutdown::ShutdownSummary;
@@ -28,7 +28,7 @@ impl ControlCore {
         let now = self.now();
         let reason = self.shutdown.reason();
         let mut fx = Effects::default();
-        self.revoked_tokens = self.process.begin_shutdown(now, &mut fx);
+        self.process.begin_shutdown(now, &mut fx);
         self.apply(fx);
         // The process actor's store worker writes these while the shutdown
         // drains.
@@ -37,7 +37,6 @@ impl ControlCore {
         self.ingestion.stop();
         self.history.cancel_all();
         self.sessions.mark_shutdown_requested_all();
-        self.sessions.answer_shutdown_requests("shutdown started");
         self.logger.log(
             LogLevel::Info,
             "manager.shutdown",
@@ -62,9 +61,6 @@ impl ControlCore {
         };
         let timed_out = self.clock.now_boot_ns() >= draining.deadline_ns
             || Instant::now() >= draining.real_deadline;
-        // Shutdown commands submitted after the start still get their result.
-        self.sessions
-            .answer_shutdown_requests("shutdown in progress");
         let settled = !self.config.has_pending()
             && !self.process.awaiting_control()
             && self.process_history.settled();
@@ -115,10 +111,8 @@ impl ControlCore {
                     "dgxtop is shutting down",
                 )
             };
-            self.rejected_commands = self.rejected_commands.saturating_add(1);
             self.finish(result);
         }
-        self.sessions.answer_shutdown_requests("shutdown complete");
         self.sessions.mark_shutdown_requested_all();
         self.phase = Phase::Finished;
         if !unfinished.is_empty() {
@@ -134,9 +128,6 @@ impl ControlCore {
             finished_boot_ns: now.boot_ns,
             timed_out,
             unfinished,
-            revoked_tokens: self.revoked_tokens,
-            rejected_commands: self.rejected_commands,
-            recent_events: self.events.feed().recent(SUMMARY_EVENTS),
         }
     }
 }

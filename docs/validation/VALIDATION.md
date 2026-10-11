@@ -250,7 +250,7 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 |---|---|---|
 | S1 every partition's quota is queryable | `dgxtop/store_hot_commit::at06_partition_usage_is_visible_in_store_health`, `dgxtop/store_hot_memory::a_tiny_budget_holds_hours_of_history_within_its_partitions`, `dgxtop-store/store_persist_audit::database_files_are_private`, `dgxtop-store/store_persist_archive::batch_insert_writes_every_table_in_bounded_transactions`, `dgxtop-store/store_persist_config::cas_success_increments_revision_with_private_modes` | Memory partitions report usage and limit; audit and archive report db+wal+shm against their limits |
 | S2 archive off does not affect the hot store | `dgxtop/store_hot_commit::at06_archive_disabled_does_not_affect_the_hot_store` |  |
-| F1 archive full: current values keep refreshing | `fault_injection::store_partitions::at06_stuck_then_full_archive_never_stalls_hot_store_commits`, `dgxtop-store/store_persist_archive::low_free_disk_refuses_appends_and_recovers`, `dgxtop-manager::archive::tests::gaps_are_counted_by_bounded_cause_and_made_visible` | Real hot store and SQLite archive actors |
+| F1 archive full: current values keep refreshing | `fault_injection::store_partitions::at06_stuck_then_full_archive_never_stalls_hot_store_commits`, `dgxtop-store/store_persist_archive::low_free_disk_refuses_appends_and_recovers`, `dgxtop-manager::archive::tests::gaps_are_made_visible` | Real hot store and SQLite archive actors |
 | F2 audit cannot persist: no signal | `action_disposable::at10::at10_audit_refusing_the_intent_sends_nothing`, `action_disposable::at10::at10_unavailable_audit_store_sends_nothing`, `fault_injection::store_partitions::at06_at31_audit_below_low_water_refuses_actions_before_the_action_worker`, `fault_injection::store_partitions::at06_at31_low_water_after_prepare_refuses_the_intent_and_recovers`, `dgxtop-manager::process::tests::intent_write_failure_never_sends` | Real Manager, SQLite audit, pidfd and disposable child |
 | F3 the Manager never stalls | `fault_injection::store_partitions::at06_at39_stuck_audit_times_out_the_intent_and_its_late_receipt_never_sends`, `fault_injection::safe_shutdown::at39_shutdown_with_hung_config_and_audit_storage_is_bounded_and_honest` | Views answered in < 1 s while audit storage hangs |
 
@@ -420,14 +420,14 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 ### AT17 — R17 Observability, privacy and capacity targets
 
-**Status: NOT_RUN.** Evidence: `gate-test`. S2 is not implemented: the diagnostics registry is never written out while monitoring, and nine OPERATIONS.md §3 metrics are never recorded (`source_age_ms` is not even defined). S3 has no test that scans the files written to disk.
+**Status: NOT_RUN.** Evidence: `gate-test`. S1 and S2 are not implemented: by owner decision dgxtop keeps no metrics registry, so no OPERATIONS.md §3 metric is recorded or output (D-93); what the user needs is shown in the views and the log. S3 has no test that scans the files written to disk.
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 bounded labels | `dgxtop-core::diagnostics::tests::labels_are_bounded`, `dgxtop-manager::scheduler::tests::refused_dispatches_are_deferrals_labelled_by_reason` | Deferred dispatches carry one of three reasons (D-37) |
-| S2 every queue/latency/quota/coverage metric output |  | NOT IMPLEMENTED (feature gap) |
+| S1 bounded labels |  | NOT IMPLEMENTED (D-93: no metrics, so no labels) |
+| S2 every queue/latency/quota/coverage metric output |  | NOT IMPLEMENTED (D-93) |
 | S3 cmdline and environment secrets never on disk | `dgxtop-store::audit::records::tests::intent_row_keeps_only_identity_uid_and_basename`, `dgxtop-core::text::tests::audit_command_names_drop_paths_but_keep_kernel_slashes`, `dgxtop-adapters::procfs::command::tests::{option_values_never_become_a_name, other_interpreters_skip_option_values}`, `adapters_a_process::processes_are_named_by_what_they_run_and_command_lines_are_read_once`, `dgxtop-store::process_history::tests::runs_and_buckets_survive_a_restart` | PARTIAL: the procfs adapter reads cmdline to name a process (D-65, D-73); by owner decision the process history stores the cleaned, bounded command line, working folder and program of GPU processes (the latest 2000 runs, D-77) in its private 0600 database (D-76); environ is never read; no disk scan |
-| F1 100 000 short-lived PIDs stay bounded | `dgxtop-core::diagnostics::tests::labels_are_bounded`, `dgxtop-manager::results::tests::capacity_evicts_oldest_completed_but_never_pending`, `dgxtop-collectors::process::table::tests::bases_stay_bounded_under_heavy_process_churn` |  |
+| F1 100 000 short-lived PIDs stay bounded | `dgxtop-manager::results::tests::capacity_evicts_oldest_completed_but_never_pending`, `dgxtop-collectors::process::table::tests::bases_stay_bounded_under_heavy_process_churn` |  |
 | F2 control characters escaped | `dgxtop-core::text::tests::audit_escapes_keep_hostile_bytes_visible_and_unambiguous`, `dgxtop-store::audit::records::tests::intent_rows_keep_an_escaped_command_name_with_its_slashes` | D-20 |
 | F3 a full debug log counts drops | `dgxtop-runtime::logger::file::tests::pressure_drops_low_priority_first_and_counts_errors_separately` |  |
 
@@ -596,12 +596,12 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 3 × 1800 s, every metric within budget | `dgxtop::perf::tests::budgets_gate_runs_from_the_spec_file`, `dgxtop::perf::report::tests::gates_cover_limits_duration_and_sample_minimums`, `dgxtop-manager::control::tests::a_refused_read_dispatch_is_deferred_and_retried_never_counted_as_a_drop`, `dgxtop-manager::scheduler::tests::a_busy_worker_defers_the_due_read_until_the_retry_instant` | NEEDS_LONG_RUN. Smoke 3 × 60 s on the desktop with its GPUs idle and no other heavy process, right after the gates and hardware suites (load average 1.37 at start): CPU 4.550/4.667/4.767 % (<= 5), coverage 100.000/100.000/100.000 % (>= 99.9), frame p95 0.617/0.597/0.830 ms (<= 16), projection p95 51.994/51.887/51.987 ms (<= 100), RSS 212.484/236.598/250.336 MiB (<= 384). A refused dispatch is retried and is not an unexplained drop (D-37). |
+| S1 3 × 1800 s, every metric within budget | `dgxtop::perf::verdict::tests::measured_values_pass_or_fail_on_the_spec_bounds`, `dgxtop::perf::report::tests::gates_cover_limits_duration_and_sample_minimums`, `dgxtop-manager::control::tests::a_refused_read_dispatch_is_deferred_and_retried`, `dgxtop-manager::scheduler::tests::a_busy_worker_defers_the_due_read_until_the_retry_instant` | NEEDS_LONG_RUN. Smoke 3 × 60 s on the desktop with its GPUs idle and no other heavy process, right after the gates and hardware suites (load average 1.37 at start): CPU 4.550/4.667/4.767 % (<= 5), coverage 100.000/100.000/100.000 % (>= 99.9), frame p95 0.617/0.597/0.830 ms (<= 16), projection p95 51.994/51.887/51.987 ms (<= 100), RSS 212.484/236.598/250.336 MiB (<= 384). A refused dispatch is retried and is not an unexplained drop (D-37). |
 | S2 sample minimums met | `dgxtop::perf::report::tests::gates_cover_limits_duration_and_sample_minimums` | Logic only |
 | S3 raw evidence hashes verifiable | `dgxtop::perf::evidence::tests::files_are_fingerprinted_and_confined` |  |
 | F1 kind = synthetic_example rejected | `dgxtop::perf::report::tests::only_a_complete_full_report_is_measured` | The spec evaluator's rejection tests ran in `spec-package-validation` |
 | F2 missing proof rejected | `dgxtop::perf::report::tests::missing_metrics_unsampled_metrics_and_unknown_commits_block_measured` |  |
-| F3 coverage < 99.9 fails | `dgxtop::perf::tests::budgets_gate_runs_from_the_spec_file`, `dgxtop::perf::coverage::tests::missing_reads_lower_coverage_and_extra_reads_never_raise_it`, `dgxtop::perf::coverage::tests::a_window_report_is_final_only_once_its_last_reads_could_commit` | D-33 |
+| F3 coverage < 99.9 fails | `dgxtop::perf::verdict::tests::measured_values_pass_or_fail_on_the_spec_bounds`, `dgxtop::perf::coverage::tests::missing_reads_lower_coverage_and_extra_reads_never_raise_it`, `dgxtop::perf::coverage::tests::a_window_report_is_final_only_once_its_last_reads_could_commit` | D-33 |
 | F4 throttle > 0 fails | `dgxtop::perf::report::tests::any_adaptive_throttle_event_fails_its_gate` |  |
 | F5 never keep only the best run | `dgxtop::perf::report::tests::only_exactly_three_runs_of_the_reference_workload_can_be_measured` |  |
 
@@ -634,7 +634,7 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 | S4 effective interval and gaps visible | `dgxtop-ui::viewer::tests::header_shows_the_host_and_warnings_and_the_footer_the_interval`, `dgxtop-manager::ingestion::tests::backlog_is_bounded_and_overflow_is_a_gap` |  |
 | F1 no flapping | `dgxtop-manager::overload::tests::alternating_spikes_never_flap` |  |
 | F2 reject, never OOM or retry forever | `dgxtop-manager::scheduler::tests::busy_host_records_skipped_due_and_never_sends_a_second_request`, `dgxtop-core::budget::tests::reserve_release_and_never_overcommit` |  |
-| F3 control/audit never dropped for telemetry | `dgxtop-manager::events::tests::telemetry_is_evicted_before_control` |  |
+| F3 control/audit never dropped for telemetry | `fault_injection::overload::at30_overload_escalates_recovers_one_level_per_30s_and_keeps_control_flowing`, `dgxtop-manager::control::tests::at23_iteration_is_fair_8_control_8_commands_4_ingestion` | No event log to evict from (D-93); control completions keep their own inbox and slice |
 
 <a id="at31"></a>
 
@@ -861,9 +861,8 @@ Micro benchmarks that measure no budgeted metric report a note instead:
 
 ## Known gaps and next steps
 
-1. **AT17 S2, missing feature.** The diagnostics registry is never written out while
-   monitoring. Nine OPERATIONS.md §3 metrics are never recorded, and `source_age_ms` is not
-   defined.
+1. **AT17 S1/S2, not implemented by owner decision (D-93).** dgxtop keeps no metrics
+   registry, so no OPERATIONS.md §3 metric is recorded or output.
 2. **AT21 F3.** IPC decoding builds arrays beyond their schema limits before the record and
    decoded-size checks. The fix:
    - enforce the record and reason-code limits while deserializing;

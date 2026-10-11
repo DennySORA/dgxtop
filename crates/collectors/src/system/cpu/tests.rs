@@ -1,6 +1,6 @@
 //! CPU collector tests.
 
-use dgxtop_core::canonical::{CandidateDisposition, CollectionBatch, CollectorEvent, RejectReason};
+use dgxtop_core::canonical::{CandidateDisposition, CollectionBatch, RejectReason};
 use dgxtop_core::identity::{MetricKey, OriginId, OriginIdentity};
 use dgxtop_core::metric::{CanonicalUnit, ids, native};
 use dgxtop_core::observation::Observation;
@@ -418,12 +418,6 @@ fn architecture_example_independent_sources_conflict_without_value() {
     let value = value_of(&batch, &package_temperature()).unwrap();
     assert_eq!(value.selection_state, SelectionState::Conflict);
     assert_eq!(value.value, None);
-    assert!(
-        batch
-            .events
-            .iter()
-            .any(|event| matches!(event, CollectorEvent::SourceConflict { .. }))
-    );
     let explanation = batch
         .explanations
         .iter()

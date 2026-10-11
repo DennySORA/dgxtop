@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+# Test aids: the read-counting file system and catalog bookkeeping sizes.
+test-support = []
+
 [dependencies]
 dgxtop-core.workspace = true
 libc.workspace = true
@@ -20,7 +24,8 @@ uuid.workspace = true
 
 [dev-dependencies]
 dgxtop-core = { workspace = true, features = ["test-support"] }
-proptest.workspace = true
+# The crate's own integration tests use its test aids.
+dgxtop-adapters = { path = ".", features = ["test-support"] }
 
 [lints]
 workspace = true

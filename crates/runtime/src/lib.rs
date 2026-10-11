@@ -16,7 +16,6 @@
 //! | [`queues`] | fixed worker pools and single-owner actors behind bounded channels |
 //! | [`terminal`] | non-blocking terminal output transport |
 //! | [`logger`] | bounded, rate-limited file logger and adapter-host stderr logger |
-//! | [`stats`] | process-tree resource sampling from `/proc` |
 //! | [`signals`] | async-signal-safe termination flag |
 //!
 //! Every channel is bounded by item count *and* bytes (`dgxtop_core::budget`);
@@ -33,7 +32,6 @@ pub mod ipc;
 pub mod logger;
 pub mod queues;
 pub mod signals;
-pub mod stats;
 pub mod supervisor;
 pub mod terminal;
 pub mod timezone;
@@ -43,14 +41,12 @@ pub use clock::{
     BootClock, current_euid, host_identity, host_name, kernel_release, pid_namespace_of,
 };
 pub use host::{
-    HOST_GENERATION_ARG, HOST_NONCE_ENV, HostExit, host_generation_from_args, host_nonce_from_env,
-    run_adapter_host,
+    HOST_GENERATION_ARG, HOST_NONCE_ENV, HostExit, host_nonce_from_env, run_adapter_host,
 };
 pub use ipc::{FrameDecoder, IpcError, IpcLimits, decode_bounded, encode_frame};
-pub use logger::{FileLogger, StderrLogger};
+pub use logger::FileLogger;
 pub use queues::{PoolHandle, spawn_actor, spawn_pool};
 pub use signals::install_termination_flag;
-pub use stats::{ProcessTreeStats, TreeSample};
 pub use supervisor::{
     HostLaunch, HostSpec, ShutdownReport, Supervisor, SupervisorConfig, SupervisorHandle,
 };

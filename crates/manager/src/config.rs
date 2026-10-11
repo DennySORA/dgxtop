@@ -21,7 +21,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use dgxtop_core::action::{PersistenceKind, PersistenceState, PersistenceStatus};
+use dgxtop_core::action::{PersistenceState, PersistenceStatus};
 use dgxtop_core::canonical::CatalogSnapshot;
 use dgxtop_core::clock::NANOS_PER_SECOND;
 use dgxtop_core::commands::CommandResult;
@@ -131,6 +131,7 @@ impl ConfigurationService {
         saved: Config,
         effective: Config,
         origins: BTreeMap<String, ValueOrigin>,
+        file: PersistenceStatus,
     ) -> Self {
         let effective_json = serde_json::to_value(&effective).unwrap_or(Value::Null);
         let cli_values = origins
@@ -148,7 +149,7 @@ impl ConfigurationService {
             effective,
             origins,
             cli_values,
-            status: PersistenceStatus::healthy(PersistenceKind::Config),
+            status: file,
             pending: None,
             last_result: None,
             restart_pending,
@@ -169,6 +170,16 @@ impl ConfigurationService {
 
     pub(crate) fn status(&self) -> &PersistenceStatus {
         &self.status
+    }
+
+    /// The file's status in `state`; its size and limit stay those last
+    /// reported (a failed save leaves the previous file in place).
+    fn file_status(&self, state: PersistenceState, detail: Option<&str>) -> PersistenceStatus {
+        PersistenceStatus {
+            state,
+            detail: detail.map(sanitize_message),
+            ..self.status.clone()
+        }
     }
 
     pub(crate) fn restart_pending(&self) -> &[String] {
@@ -325,7 +336,10 @@ impl ConfigurationService {
                 let mut saved = pending.candidate;
                 saved.revision = receipt.revision;
                 let previous = self.adopt(saved, &pending.explicit_paths);
-                self.status = PersistenceStatus::healthy(PersistenceKind::Config);
+                self.status = PersistenceStatus {
+                    bytes_used: receipt.file_bytes,
+                    ..self.file_status(PersistenceState::Healthy, None)
+                };
                 self.last_result = Some(format!(
                     "applied revision {} ({})",
                     receipt.revision, pending.description
@@ -352,7 +366,7 @@ impl ConfigurationService {
         message: &str,
         on_disk: Option<Box<Config>>,
     ) -> PersistOutcome {
-        self.status = status_with(PersistenceState::Degraded, message);
+        self.status = self.file_status(PersistenceState::Degraded, Some(message));
         let adoptable = on_disk.filter(|config| config.validate().is_ok());
         match adoptable {
             Some(config) => {
@@ -410,7 +424,7 @@ impl ConfigurationService {
             other => other.to_string(),
         };
         if matches!(error, PersistError::Io(_)) {
-            self.status = status_with(PersistenceState::Failed, &message);
+            self.status = self.file_status(PersistenceState::Failed, Some(&message));
         }
         self.last_result = Some(format!("not saved: {message}"));
         if pending.answered {
@@ -429,7 +443,10 @@ impl ConfigurationService {
         }
         pending.answered = true;
         let request_id = pending.request_id;
-        self.status = status_with(PersistenceState::Failed, "config worker did not answer");
+        self.status = self.file_status(
+            PersistenceState::Failed,
+            Some("config worker did not answer"),
+        );
         self.last_result = Some("save outcome unknown: config worker did not answer".to_owned());
         let detail = ErrorDetail::new(
             ErrorCode::PersistFailed,
@@ -508,14 +525,6 @@ pub(crate) fn applied_result(change: &AppliedChange, effective_interval_ms: u32)
     result.config_revision = Some(change.revision);
     result.effective_interval_ms = Some(effective_interval_ms);
     result
-}
-
-fn status_with(state: PersistenceState, detail: &str) -> PersistenceStatus {
-    PersistenceStatus {
-        state,
-        detail: Some(sanitize_message(detail)),
-        ..PersistenceStatus::healthy(PersistenceKind::Config)
-    }
 }
 
 fn restart_paths(running: &Config, saved: &Config) -> Vec<String> {
@@ -660,6 +669,7 @@ fn set_at(root: &mut Value, path: &str, value: Value) {
 mod tests {
     use super::*;
     use crate::test_support::source_descriptor;
+    use dgxtop_core::action::PersistenceKind;
     use dgxtop_core::config::{PinnedSource, Theme};
     use dgxtop_core::errors::ResultCode;
     use dgxtop_core::ports::PersistReceipt;
@@ -679,7 +689,13 @@ mod tests {
         origins: BTreeMap<String, ValueOrigin>,
     ) -> Bench {
         let port = CapturingDispatch::new();
-        let service = ConfigurationService::new(Box::new(port.clone()), saved, effective, origins);
+        let service = ConfigurationService::new(
+            Box::new(port.clone()),
+            saved,
+            effective,
+            origins,
+            config_file(),
+        );
         Bench { service, port }
     }
 
@@ -693,7 +709,17 @@ mod tests {
             revision,
             sha256: "0".repeat(64),
             path: "/tmp/config.json".into(),
+            file_bytes: 2_048,
         })
+    }
+
+    /// The loaded file as the repository reports it.
+    fn config_file() -> PersistenceStatus {
+        PersistenceStatus {
+            bytes_used: 1_024,
+            bytes_limit: 1_048_576,
+            ..PersistenceStatus::healthy(PersistenceKind::Config)
+        }
     }
 
     fn catalog() -> CatalogSnapshot {
@@ -789,6 +815,39 @@ mod tests {
             bench.service.on_persist_result(id, receipt(2)),
             PersistOutcome::Stale
         );
+    }
+
+    /// UI.md §6 Settings: the file's size against its limit, from the
+    /// repository at load and from each durable save; a failed save keeps
+    /// the previous file and so its size.
+    #[test]
+    fn the_status_shows_the_file_size_and_limit_through_saves_and_failures() {
+        let mut bench = bench();
+        assert_eq!(bench.service.status(), &config_file());
+        let interval = |interval_ms, expected_revision| ConfigRequest::SetInterval {
+            interval_ms,
+            expected_revision,
+        };
+        let saved = Uuid::new_v4();
+        bench
+            .service
+            .submit(saved, interval(2000, 1), &catalog(), NOW);
+        bench.service.on_persist_result(saved, receipt(2));
+        let status = bench.service.status();
+        assert_eq!(status.state, PersistenceState::Healthy);
+        assert_eq!((status.bytes_used, status.bytes_limit), (2_048, 1_048_576));
+        let failed = Uuid::new_v4();
+        bench
+            .service
+            .submit(failed, interval(3000, 2), &catalog(), NOW);
+        let error = PersistError::Io(dgxtop_core::errors::InfraError::DiskFull {
+            operation: "config.write",
+        });
+        bench.service.on_persist_result(failed, Err(error));
+        let status = bench.service.status();
+        assert_eq!(status.state, PersistenceState::Failed);
+        assert!(status.detail.as_deref().unwrap().contains("disk full"));
+        assert_eq!((status.bytes_used, status.bytes_limit), (2_048, 1_048_576));
     }
 
     #[test]

@@ -39,18 +39,6 @@ pub fn sanitize_display(input: &str, max_bytes: usize) -> String {
     output
 }
 
-/// Returns the final path component of a command or executable path, sanitized.
-pub fn sanitize_basename(path_or_comm: &str) -> String {
-    let trimmed = path_or_comm.trim_end_matches('/');
-    let base = trimmed.rsplit('/').next().unwrap_or(trimmed);
-    let cleaned = sanitize_display(base, MAX_BASENAME_BYTES);
-    if cleaned.is_empty() {
-        "?".to_owned()
-    } else {
-        cleaned
-    }
-}
-
 /// Sanitizes a kernel command name (`comm`). Unlike a path it may contain
 /// `/` (e.g. `kworker/0:1H`), so nothing is split; empty names become `?`.
 pub fn sanitize_command_name(comm: &str) -> String {

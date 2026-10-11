@@ -162,41 +162,6 @@ impl ErrorDetail {
     }
 }
 
-/// Domain-layer failures: rule, policy and state violations.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum DomainError {
-    #[error("validation failed: {0}")]
-    Validation(String),
-    #[error("revision conflict: expected {expected}, current {current}")]
-    RevisionConflict { expected: u64, current: u64 },
-    #[error("stale epoch or base revision: {0}")]
-    Stale(String),
-    #[error("capability denied: {0}")]
-    CapabilityDenied(String),
-    #[error("capacity exceeded: {0}")]
-    Capacity(String),
-    #[error("invariant violated: {0}")]
-    Invariant(String),
-}
-
-impl DomainError {
-    pub fn code(&self) -> ErrorCode {
-        match self {
-            Self::Validation(_) => ErrorCode::ValidationFailed,
-            Self::RevisionConflict { .. } | Self::Stale(_) => ErrorCode::Conflict,
-            Self::CapabilityDenied(_) => ErrorCode::CapabilityDenied,
-            Self::Capacity(_) => ErrorCode::CapacityExceeded,
-            Self::Invariant(_) => ErrorCode::InternalError,
-        }
-    }
-}
-
-impl From<DomainError> for ErrorDetail {
-    fn from(error: DomainError) -> Self {
-        ErrorDetail::new(error.code(), error.to_string())
-    }
-}
-
 /// Infrastructure-layer failures: filesystem, IPC, database, driver.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum InfraError {
@@ -211,8 +176,6 @@ pub enum InfraError {
     Protocol(String),
     #[error("database error: {0}")]
     Database(String),
-    #[error("driver error: {0}")]
-    Driver(String),
     #[error("timed out after {elapsed_ms} ms during {operation}")]
     Timeout {
         operation: &'static str,
@@ -231,7 +194,7 @@ impl InfraError {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Io { .. } | Self::DiskFull { .. } | Self::Database(_) => ErrorCode::PersistFailed,
-            Self::Protocol(_) | Self::Driver(_) | Self::Unavailable(_) => ErrorCode::Unavailable,
+            Self::Protocol(_) | Self::Unavailable(_) => ErrorCode::Unavailable,
             Self::Timeout { .. } => ErrorCode::TimedOut,
             Self::Uncertain { .. } => ErrorCode::PersistFailed,
         }

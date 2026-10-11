@@ -87,10 +87,6 @@ impl FailpointFileSystem {
         self.lock_state().armed.insert(failpoint, trigger);
     }
 
-    pub fn disarm(&self, failpoint: Failpoint) {
-        self.lock_state().armed.remove(&failpoint);
-    }
-
     /// How many times `failpoint` injected a failure.
     pub fn fired(&self, failpoint: Failpoint) -> u64 {
         self.lock_state()

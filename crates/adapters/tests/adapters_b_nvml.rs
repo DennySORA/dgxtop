@@ -1215,8 +1215,6 @@ fn init_failure_reports_unavailable_with_every_capability_unsupported() {
                 .as_deref()
                 .is_some_and(|reason| reason.starts_with("NVML_DRIVER_MISSING"))
     }));
-    let health = harness.adapter.health();
-    assert_eq!(health.availability, Availability::Unavailable);
     let batch = harness.read("fast");
     assert_eq!(batch.status, BatchStatus::Failed);
     assert!(batch.records.is_empty());
@@ -1227,10 +1225,6 @@ fn permission_denied_init_is_reported_as_such() {
     let mut harness = Harness::with_failure(Vec::new(), Some(ConnectError::NoPermission));
     let delta = harness.discover();
     assert_eq!(delta.availability, Some(Availability::PermissionDenied));
-    assert_eq!(
-        harness.adapter.health().availability,
-        Availability::PermissionDenied
-    );
 }
 
 #[test]
@@ -1579,10 +1573,6 @@ fn session_loss_drops_the_backend_and_reconnects_at_once() {
             .iter()
             .all(|record| !record.read_status.is_ok())
     );
-    assert_eq!(
-        harness.adapter.health().availability,
-        Availability::Unavailable
-    );
     let delta = harness.discover();
     assert_eq!(harness.connects.load(Ordering::SeqCst), 2);
     assert_eq!(delta.availability, Some(Availability::Available));
@@ -1636,10 +1626,6 @@ fn shutdown_releases_the_backend() {
     let mut harness = Harness::new(vec![FakeDevice::healthy("GPU-a")]);
     harness.discover();
     harness.adapter.shutdown();
-    assert_eq!(
-        harness.adapter.health().availability,
-        Availability::Unavailable
-    );
     assert_eq!(harness.read("fast").status, BatchStatus::Failed);
 }
 

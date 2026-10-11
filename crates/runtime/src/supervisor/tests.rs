@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::Receiver;
 use dgxtop_core::budget::{ByteLedger, MIB, Partition, QueueGate};
 use dgxtop_core::clock::{TimeProvider, ms_to_ns};
-use dgxtop_core::diagnostics::{Diagnostics, names as core_names};
 use dgxtop_core::observation::{DiscoverRequest, Isolation, ReadPlan};
 use dgxtop_core::ports::{
     AdapterFailureKind, AdapterJob, Dispatch, DispatchError, IngestionCompletion, IngressBatch,
@@ -30,7 +29,6 @@ struct Harness {
     completions: Receiver<IngestionCompletion>,
     ledger: ByteLedger,
     gate: QueueGate,
-    diagnostics: Diagnostics,
     clock: Arc<dyn TimeProvider>,
 }
 
@@ -71,7 +69,6 @@ fn start(config: SupervisorConfig, specs: Vec<HostSpec>, ingress_bytes: u64) -> 
     );
     let (sender, completions) = crossbeam_channel::bounded(256);
     let clock: Arc<dyn TimeProvider> = Arc::new(BootClock::new().unwrap());
-    let diagnostics = Diagnostics::new();
     let handle = Supervisor::start(
         config,
         specs,
@@ -80,7 +77,6 @@ fn start(config: SupervisorConfig, specs: Vec<HostSpec>, ingress_bytes: u64) -> 
         sender,
         Arc::clone(&clock),
         Arc::new(MemoryLogger::default()),
-        diagnostics.clone(),
     )
     .unwrap();
     Harness {
@@ -88,7 +84,6 @@ fn start(config: SupervisorConfig, specs: Vec<HostSpec>, ingress_bytes: u64) -> 
         completions,
         ledger,
         gate,
-        diagnostics,
         clock,
     }
 }
@@ -383,14 +378,8 @@ fn timeout_reports_failure_and_discards_the_late_reply() {
     let slow = harness.plan("replay", 1, 1, 200);
     harness.dispatch_when_ready(AdapterJob::Read(slow.clone()));
     let failure = harness.batch_for(slow.request_id).unwrap_err();
+    // The failure is emitted at the deadline, before the late reply arrives.
     assert_eq!(failure.kind, AdapterFailureKind::TimedOut);
-    assert_eq!(
-        harness
-            .diagnostics
-            .counter(core_names::STALE_RESULT_DROPPED_TOTAL, "replay"),
-        0,
-        "the failure is emitted at the deadline, before the late reply"
-    );
     let degraded = harness.wait_state("replay", HostState::Degraded);
     assert_eq!(degraded.timeouts_total, 1);
     // The late reply is still outstanding inside the host: no second request.
@@ -403,12 +392,6 @@ fn timeout_reports_failure_and_discards_the_late_reply() {
     let recovered = harness.plan("replay", 1, 3, 2_000);
     harness.dispatch_when_ready(AdapterJob::Read(recovered.clone()));
     assert!(harness.batch_for(recovered.request_id).is_ok());
-    assert_eq!(
-        harness
-            .diagnostics
-            .counter(core_names::STALE_RESULT_DROPPED_TOTAL, "replay"),
-        1
-    );
     harness.wait_state("replay", HostState::Healthy);
     harness.handle.shutdown(Duration::from_secs(2));
 }
@@ -488,12 +471,6 @@ fn crashed_host_is_restarted_with_a_new_generation() {
     };
     assert_eq!(status.restarts_total, 1);
     assert!(status.consecutive_failures >= 1);
-    assert_eq!(
-        harness
-            .diagnostics
-            .counter(names::HOST_RESTART_TOTAL, "replay"),
-        1
-    );
     harness.handle.shutdown(Duration::from_secs(2));
 }
 
@@ -512,7 +489,6 @@ fn start_rejects_too_many_or_duplicate_hosts() {
             sender,
             Arc::clone(&clock),
             Arc::new(MemoryLogger::default()),
-            Diagnostics::new(),
         )
     };
     let calls = Arc::new(Calls::default());
