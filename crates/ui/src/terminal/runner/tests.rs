@@ -622,6 +622,51 @@ fn idle_polls_are_bounded_and_never_zero() {
             *timeout >= MIN_POLL,
             "never a 0 ms poll without a pending event"
         );
-        assert!(*timeout <= MAX_IDLE_POLL);
+        assert!(*timeout <= LONGEST_IDLE_POLL);
     }
+}
+
+/// An idle loop wakes a few times a second, not every 50 ms: right after a
+/// draw it sleeps until a new projection could be drawn, then looks for one
+/// every [`MAX_IDLE_POLL`].
+#[test]
+fn an_idle_loop_sleeps_until_a_new_projection_could_be_drawn() {
+    let mut rig = Rig::new(Mode::AcceptAll, (80, 24));
+    rig.publish_revision(ViewKind::Overview, 1);
+    rig.steps_until(20, |rig| rig.frames() == 1);
+    rig.polls.lock().unwrap().clear();
+    let start = rig.time.now();
+    rig.steps_until(1000, |rig| {
+        rig.time.now() >= start + Duration::from_secs(10)
+    });
+    let wakes = rig.polls.lock().unwrap().len();
+    assert!(
+        wakes <= 100,
+        "{wakes} wakes in 10 s, 200 at the old 50 ms poll"
+    );
+    // A projection published while the loop sleeps is still drawn promptly.
+    rig.publish_revision(ViewKind::Overview, 2);
+    let published = rig.time.now();
+    let frames = rig.frames();
+    rig.steps_until(100, |rig| rig.frames() > frames);
+    assert!(rig.time.now() - published <= LONGEST_IDLE_POLL);
+}
+
+/// While a command's result is awaited the loop looks for it at the input
+/// cadence, so a reply is never seen later than before.
+#[test]
+fn an_awaited_result_is_polled_at_the_input_cadence() {
+    let mut rig = Rig::new(Mode::AcceptAll, (80, 24));
+    rig.publish_revision(ViewKind::Overview, 1);
+    rig.steps_until(20, |rig| rig.frames() == 1);
+    rig.script.key('2');
+    rig.steps_until(20, |rig| !rig.submitted_bodies().is_empty());
+    assert!(rig.tui.controller().awaits_results());
+    rig.polls.lock().unwrap().clear();
+    rig.steps_until(20, |_| false);
+    let polls = rig.polls.lock().unwrap();
+    assert!(
+        polls.iter().all(|(timeout, _)| *timeout <= RESULT_POLL),
+        "{polls:?}"
+    );
 }

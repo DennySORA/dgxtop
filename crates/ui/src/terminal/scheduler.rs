@@ -63,11 +63,7 @@ impl RenderScheduler {
         let interval = if interactive {
             INPUT_REDRAW_INTERVAL
         } else if key.frame_revision != last.frame_revision {
-            if pressured {
-                self.data_interval.max(PRESSURED_INTERVAL)
-            } else {
-                self.data_interval
-            }
+            self.data_interval(pressured)
         } else {
             AGE_TICK
         };
@@ -76,6 +72,24 @@ impl RenderScheduler {
             Decision::Draw
         } else {
             Decision::WaitUntil(due)
+        }
+    }
+
+    /// The earliest a projection that arrives now could be drawn: a new
+    /// revision waits for the data interval after the last draw.
+    pub fn next_data_draw(&self, pressured: bool) -> Duration {
+        self.last_draw_at
+            .map_or(Duration::ZERO, |last| {
+                last.saturating_add(self.data_interval(pressured))
+            })
+            .max(self.not_before)
+    }
+
+    fn data_interval(&self, pressured: bool) -> Duration {
+        if pressured {
+            self.data_interval.max(PRESSURED_INTERVAL)
+        } else {
+            self.data_interval
         }
     }
 
@@ -132,6 +146,18 @@ mod tests {
         );
         let fast = RenderScheduler::new(100);
         assert_eq!(fast.data_interval, ms(50), "fps is capped at 20");
+    }
+
+    /// Nothing that arrives before the data interval is up can be drawn.
+    #[test]
+    fn the_next_data_draw_follows_the_last_draw() {
+        let mut scheduler = RenderScheduler::new(4);
+        assert_eq!(scheduler.next_data_draw(false), Duration::ZERO);
+        scheduler.drawn(key(1, 0), ms(1_000));
+        assert_eq!(scheduler.next_data_draw(false), ms(1_250));
+        assert_eq!(scheduler.next_data_draw(true), ms(1_500));
+        scheduler.defer_until(ms(3_000));
+        assert_eq!(scheduler.next_data_draw(false), ms(3_000));
     }
 
     #[test]
