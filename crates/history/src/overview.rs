@@ -163,6 +163,15 @@ impl StoreLink {
         }
     }
 
+    /// Takes the series being read, with whether its first page is still
+    /// to come, when the answer is about it.
+    fn take_reading(&mut self, series: &SeriesInEveryBoot) -> Option<(SeriesInEveryBoot, bool)> {
+        let Phase::Backfilling { reading, .. } = &mut self.phase else {
+            return None;
+        };
+        reading.take_if(|(read, _)| read == series)
+    }
+
     /// Sends a startup job, holding it while the queue is full.
     fn send(&mut self, book: &mut TierBook, job: HistoryTierJob) {
         match self.port.try_dispatch(job.clone()) {
@@ -422,11 +431,7 @@ fn archived_read(
     read: &ArchivedMinutesRead,
     result: Result<ArchivedMinutes, InfraError>,
 ) {
-    let Phase::Backfilling { reading, .. } = &mut link.phase else {
-        return;
-    };
-    let Some((series, first_page)) = reading.take().filter(|(series, _)| *series == read.series)
-    else {
+    let Some((series, first_page)) = link.take_reading(&read.series) else {
         return;
     };
     if link.let_go.contains(&series) {
@@ -436,20 +441,12 @@ fn archived_read(
     match result {
         Ok(page) => {
             book.add_archived(&series, &page.minutes, first_page);
-            match page.minutes.last().filter(|_| page.more) {
-                Some(last) => {
-                    let next = ArchivedMinutesRead {
-                        from_utc_ns: last.start_utc_ns.saturating_add(1),
-                        ..read.clone()
-                    };
-                    if let Phase::Backfilling { reading, .. } = &mut link.phase {
-                        *reading = Some((series, false));
-                    }
-                    link.send(book, HistoryTierJob::ReadArchived(next));
-                    return;
-                }
-                None => book.finish(&series, true, true),
+            if let Some(last) = page.minutes.last().filter(|_| page.more) {
+                let from_utc_ns = last.start_utc_ns.saturating_add(1);
+                read_next_page(book, link, read, series, from_utc_ns);
+                return;
             }
+            book.finish(&series, true, true);
         }
         Err(error) => {
             link.issue = Some(format!("history archive: {error}"));
@@ -457,6 +454,24 @@ fn archived_read(
         }
     }
     next_backfill(book, link);
+}
+
+/// Asks for the page of `series` after the one just read.
+fn read_next_page(
+    book: &mut TierBook,
+    link: &mut StoreLink,
+    read: &ArchivedMinutesRead,
+    series: SeriesInEveryBoot,
+    from_utc_ns: i64,
+) {
+    if let Phase::Backfilling { reading, .. } = &mut link.phase {
+        *reading = Some((series, false));
+    }
+    let next = ArchivedMinutesRead {
+        from_utc_ns,
+        ..read.clone()
+    };
+    link.send(book, HistoryTierJob::ReadArchived(next));
 }
 
 /// Reads the next series' archived minutes; with none left the startup is
