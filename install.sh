@@ -2,8 +2,12 @@
 # dgxtop installer.
 #
 #   curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
-#   ./install.sh --version v0.2.0
+#   ./install.sh --version v2.0.0
 #   ./install.sh --rollback
+#
+# Hosts: Linux on x86_64 or aarch64 with glibc, WSL 2 included. Other systems,
+# WSL 1 and musl are refused before anything is downloaded, and so are the
+# releases before v2.0.0 (the earlier dgxtop, packaged differently).
 #
 # Safety properties (spec/dgxtop-v2/OPERATIONS.md §4):
 # * downloads into a temporary directory on the SAME filesystem as the target,
@@ -20,6 +24,7 @@ set -euo pipefail
 
 REPO="DennySORA/dgxtop"
 BINARY="dgxtop"
+FIRST_RELEASE="v2.0.0"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 VERSION=""
 BASE_URL=""
@@ -65,39 +70,72 @@ require() {
     command -v "$1" >/dev/null 2>&1 || fail "required tool not found: $1"
 }
 
+is_musl() {
+    [ -f /etc/alpine-release ] && return 0
+    # musl's `ldd --version` prints its banner on stderr and exits 1, so the
+    # output is captured whatever the exit status.
+    local report
+    report="$(ldd --version 2>&1 || true)"
+    case "$report" in
+        *[Mm][Uu][Ss][Ll]*) return 0 ;;
+    esac
+    return 1
+}
+
 detect_target() {
-    [ "$(uname -s)" = "Linux" ] || fail "dgxtop supports Linux only (found $(uname -s))"
-    local arch
+    local system arch
+    system="$(uname -s)"
+    [ "$system" = "Linux" ] || fail "dgxtop supports Linux only (found ${system})"
+    case "$(uname -r)" in
+        # WSL 1 translates system calls without a Linux kernel: no pidfd, no GPU.
+        *-Microsoft) fail "WSL 1 is not supported (kernel $(uname -r)); use WSL 2" ;;
+    esac
     case "$(uname -m)" in
         x86_64|amd64) arch="x86_64" ;;
         aarch64|arm64) arch="aarch64" ;;
         *) fail "unsupported architecture: $(uname -m)" ;;
     esac
-    if ldd --version 2>&1 | grep -qi musl || [ -f /etc/alpine-release ]; then
+    if is_musl; then
         fail "musl libc detected: only GNU builds are published (no musl fallback)"
     fi
     echo "${arch}-unknown-linux-gnu"
 }
 
+note_wsl2() {
+    case "$(uname -r)" in
+        *[Mm]icrosoft*) info "WSL 2 detected: GPUs need the NVIDIA driver installed on Windows; CPU temperature and power are usually not available" ;;
+    esac
+}
+
 resolve_version() {
-    if [ -n "$VERSION" ]; then
-        echo "$VERSION"
-        return
-    fi
     local tag
-    tag="$(curl -fsSL --proto '=https' --tlsv1.2 "https://api.github.com/repos/${REPO}/releases/latest" \
-        | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)"
-    [ -n "$tag" ] || fail "could not determine the latest release; pass --version"
+    if [ -n "$VERSION" ]; then
+        case "$VERSION" in
+            v*) tag="$VERSION" ;;
+            *) tag="v${VERSION}" ;;
+        esac
+    else
+        tag="$(curl -fsSL --proto '=https' --tlsv1.2 "https://api.github.com/repos/${REPO}/releases/latest" \
+            | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)"
+        [ -n "$tag" ] || fail "could not determine the latest release; pass --version"
+    fi
+    case "$tag" in
+        v0.*|v1.*) fail "${tag} is a release of the earlier dgxtop, packaged differently; install ${FIRST_RELEASE} or later" ;;
+    esac
     echo "$tag"
 }
 
 fetch() {
     local url="$1" destination="$2"
     case "$url" in
-        file://*) cp -- "${url#file://}" "$destination" ;;
+        file://*) cp -- "${url#file://}" "$destination" 2>/dev/null ;;
         https://*) curl -fsSL --proto '=https' --tlsv1.2 -o "$destination" "$url" ;;
         *) fail "refusing non-https URL: $url" ;;
     esac
+}
+
+host_glibc() {
+    getconf GNU_LIBC_VERSION 2>/dev/null || echo "an unknown glibc"
 }
 
 verify_checksum() {
@@ -128,18 +166,26 @@ verify_archive_layout() {
 
 verify_binary() {
     local candidate="$1" version="$2" target="$3" report
-    report="$("$candidate" --version --verbose 2>&1)" || fail "new binary does not run on this host: $report"
+    if ! report="$("$candidate" --version --verbose 2>&1)"; then
+        case "$report" in
+            *GLIBC_*) fail "new binary needs a newer glibc than this host has ($(host_glibc)): $report" ;;
+        esac
+        fail "new binary does not run on this host: $report"
+    fi
     # Whole-line fixed strings: v0.2 must not accept 0.2.0, nor '.' any byte.
     printf '%s\n' "$report" | grep -qxF "dgxtop ${version#v}" || fail "binary version does not match ${version}"
     printf '%s\n' "$report" | grep -qxF "target: ${target}" || fail "binary target does not match ${target}"
 }
 
 install_release() {
+    local target version base archive_name
+    # The host is checked first, so an unsupported system hears that rather
+    # than which of the tools below it lacks.
+    target="$(detect_target)"
+    note_wsl2
     require curl
     require tar
     require sha256sum
-    local target version base archive_name
-    target="$(detect_target)"
     version="$(resolve_version)"
     base="${BASE_URL:-https://github.com/${REPO}/releases/download/${version}}"
     archive_name="${BINARY}-${version}-${target}.tar.gz"
@@ -149,8 +195,10 @@ install_release() {
     local staging="$STAGING"
 
     info "downloading ${archive_name}"
-    fetch "${base}/${archive_name}" "${staging}/${archive_name}"
-    fetch "${base}/SHA256SUMS" "${staging}/SHA256SUMS"
+    fetch "${base}/${archive_name}" "${staging}/${archive_name}" \
+        || fail "could not download ${archive_name} from ${base}: release ${version} or its ${target} build does not exist"
+    fetch "${base}/SHA256SUMS" "${staging}/SHA256SUMS" \
+        || fail "could not download SHA256SUMS from ${base}"
     verify_checksum "${staging}/${archive_name}" "${staging}/SHA256SUMS"
     verify_archive_layout "${staging}/${archive_name}"
 

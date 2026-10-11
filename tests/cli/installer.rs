@@ -1,8 +1,11 @@
 //! `install.sh` against a local release directory (`--base-url file://…`) in
 //! a temporary HOME and install directory: checksum and archive checks, the
-//! version and target check, the musl refusal, the atomic replacement that
-//! keeps `dgxtop.previous`, and rollback (AT18, AT20; OPERATIONS.md §4).
-//! Nothing touches the real `~/.local/bin` and nothing goes to the network.
+//! version and target check, the host checks (non-Linux, WSL 1, musl, a too
+//! old glibc) and the release checks (releases before v2, a missing archive),
+//! the atomic replacement that keeps `dgxtop.previous`, and rollback (AT18,
+//! AT20; OPERATIONS.md §4). Fake `uname` and `ldd` tools on PATH stand in for
+//! other hosts. Nothing touches the real `~/.local/bin` and nothing goes to
+//! the network.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -95,11 +98,47 @@ impl Sandbox {
         std::fs::write(self.release_dir().join("SHA256SUMS"), sums.stdout).unwrap();
     }
 
-    /// A fake `ldd` reporting musl, placed first on PATH.
+    /// Places an executable script named `name` first on PATH.
+    fn add_tool(&self, name: &str, script: &str) {
+        let tool = self.root.join("tools").join(name);
+        std::fs::write(&tool, script).unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// A fake `ldd` that behaves like musl's: `ldd --version` prints the
+    /// banner on stderr and exits 1.
     fn pretend_musl(&self) {
-        let ldd = self.root.join("tools/ldd");
-        std::fs::write(&ldd, "#!/bin/sh\necho 'musl libc (x86_64)'\n").unwrap();
-        std::fs::set_permissions(&ldd, std::fs::Permissions::from_mode(0o755)).unwrap();
+        self.add_tool(
+            "ldd",
+            "#!/bin/sh\necho 'musl libc (x86_64)' >&2\necho 'Version 1.2.5' >&2\nexit 1\n",
+        );
+    }
+
+    /// A fake `uname` that answers `flag` with `value` and passes every other
+    /// question to the real `uname`.
+    fn pretend_uname(&self, flag: &str, value: &str) {
+        let real = ["/usr/bin/uname", "/bin/uname"]
+            .into_iter()
+            .find(|path| Path::new(path).exists())
+            .expect("a real uname");
+        self.add_tool(
+            "uname",
+            &format!(
+                "#!/bin/sh\nif [ \"$1\" = '{flag}' ]; then echo '{value}'; exit 0; fi\nexec {real} \"$@\"\n"
+            ),
+        );
+    }
+
+    /// A "binary" that fails to load the way a build for a newer glibc does.
+    fn binary_for_a_newer_glibc(&self) -> PathBuf {
+        let path = self.root.join("needs-newer-glibc");
+        std::fs::write(
+            &path,
+            "#!/bin/sh\necho 'dgxtop: libc.so.6: version GLIBC_2.99 not found (required by dgxtop)' >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
     }
 
     /// A previously installed "binary" that reports another version.
@@ -330,4 +369,112 @@ fn rollback_without_a_previous_binary_fails_cleanly() {
     let refused = sandbox.rollback();
     assert!(!refused.status.success());
     assert!(stderr_of(&refused).contains("no previous binary"));
+}
+
+#[test]
+fn non_linux_hosts_are_refused_before_anything_is_installed() {
+    let sandbox = Sandbox::new("darwin");
+    sandbox.pretend_uname("-s", "Darwin");
+    sandbox.publish(&current_tag(), Path::new(BINARY), &[]);
+    let refused = sandbox.install(&current_tag());
+    assert!(!refused.status.success());
+    assert!(
+        stderr_of(&refused).contains("dgxtop supports Linux only (found Darwin)"),
+        "{}",
+        stderr_of(&refused)
+    );
+    assert!(sandbox.install_dir_entries().is_empty());
+}
+
+#[test]
+fn wsl1_hosts_are_refused() {
+    let sandbox = Sandbox::new("wsl1");
+    sandbox.pretend_uname("-r", "4.4.0-19041-Microsoft");
+    sandbox.publish(&current_tag(), Path::new(BINARY), &[]);
+    let refused = sandbox.install(&current_tag());
+    assert!(!refused.status.success());
+    assert!(
+        stderr_of(&refused).contains("WSL 1 is not supported"),
+        "{}",
+        stderr_of(&refused)
+    );
+    assert!(sandbox.install_dir_entries().is_empty());
+}
+
+#[test]
+fn wsl2_hosts_get_the_linux_build_and_a_driver_note() {
+    let sandbox = Sandbox::new("wsl2");
+    sandbox.pretend_uname("-r", "5.15.153.1-microsoft-standard-WSL2");
+    sandbox.publish(&current_tag(), Path::new(BINARY), &[]);
+    let installed = sandbox.install(&current_tag());
+    assert!(installed.status.success(), "{}", stderr_of(&installed));
+    assert!(
+        String::from_utf8_lossy(&installed.stdout).contains("WSL 2 detected"),
+        "{}",
+        String::from_utf8_lossy(&installed.stdout)
+    );
+    assert_eq!(
+        reported_version(&sandbox.installed()),
+        format!("dgxtop {}", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[test]
+fn releases_before_v2_are_refused_before_downloading() {
+    for old in ["v0.2.5", "0.1.0", "v1.0.0"] {
+        let sandbox = Sandbox::new("old-release");
+        let refused = sandbox.install(old);
+        assert!(!refused.status.success(), "{old} was accepted");
+        let stderr = stderr_of(&refused);
+        assert!(stderr.contains("earlier dgxtop"), "{old}: {stderr}");
+        assert!(!stderr.contains("could not download"), "{old}: {stderr}");
+        assert!(sandbox.install_dir_entries().is_empty());
+    }
+}
+
+#[test]
+fn a_version_without_the_v_prefix_installs_that_release() {
+    let sandbox = Sandbox::new("no-v-prefix");
+    sandbox.publish(&current_tag(), Path::new(BINARY), &[]);
+    let installed = sandbox.install(env!("CARGO_PKG_VERSION"));
+    assert!(installed.status.success(), "{}", stderr_of(&installed));
+    assert_eq!(
+        reported_version(&sandbox.installed()),
+        format!("dgxtop {}", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[test]
+fn a_missing_release_names_the_archive_it_could_not_download() {
+    let sandbox = Sandbox::new("missing");
+    let refused = sandbox.install(&current_tag());
+    assert!(!refused.status.success());
+    let expected = format!(
+        "could not download dgxtop-{}-{}.tar.gz",
+        current_tag(),
+        release_target()
+    );
+    assert!(
+        stderr_of(&refused).contains(&expected),
+        "{}",
+        stderr_of(&refused)
+    );
+    assert!(sandbox.install_dir_entries().is_empty());
+}
+
+#[test]
+fn a_build_for_a_newer_glibc_is_reported_as_such() {
+    let sandbox = Sandbox::new("glibc");
+    sandbox.install_previous_release();
+    let binary = sandbox.binary_for_a_newer_glibc();
+    sandbox.publish(&current_tag(), &binary, &[]);
+    let refused = sandbox.install(&current_tag());
+    assert!(!refused.status.success());
+    assert!(
+        stderr_of(&refused).contains("needs a newer glibc"),
+        "{}",
+        stderr_of(&refused)
+    );
+    assert_eq!(reported_version(&sandbox.installed()), "dgxtop 0.1.0");
+    assert_eq!(sandbox.install_dir_entries(), ["dgxtop"]);
 }
