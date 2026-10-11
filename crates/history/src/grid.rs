@@ -99,6 +99,7 @@ pub(crate) fn utc_minute_ending_near(end_utc_ns: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dgxtop_core::testing::UTC_ON_A_WHOLE_MINUTE_NS;
 
     const SECOND: u64 = 1_000_000_000;
 
@@ -119,7 +120,7 @@ mod tests {
     /// and every 60 s after; the 23 s before are a head minute.
     #[test]
     fn a_boot_that_started_mid_minute_has_minutes_on_whole_utc_minutes() {
-        let noon_utc_ns = 1_790_000_000 / 60 * 60 * i128::from(SECOND);
+        let noon_utc_ns = UTC_ON_A_WHOLE_MINUTE_NS;
         let boot_utc_ns = noon_utc_ns + 37 * i128::from(SECOND);
         // Paired 1000 s after boot.
         let grid = MinuteGrid::on_utc_minutes(1_000 * SECOND, boot_utc_ns + 1_000 * 1_000_000_000);
@@ -142,7 +143,7 @@ mod tests {
     #[test]
     fn a_minute_is_filed_in_the_utc_minute_it_ends_nearest() {
         let minute = i64::try_from(BUCKET_NS).unwrap();
-        let noon = 1_790_000_000 / 60 * minute;
+        let noon = i64::try_from(UTC_ON_A_WHOLE_MINUTE_NS).unwrap();
         assert_eq!(utc_minute_ending_near(noon + minute), noon);
         // Slewed or stepped by part of a minute either way.
         assert_eq!(utc_minute_ending_near(noon + minute - 2), noon);

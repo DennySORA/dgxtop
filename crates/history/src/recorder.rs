@@ -187,13 +187,25 @@ mod tests {
     use dgxtop_core::metric::{CanonicalUnit, Scalar, descriptor, ids};
     use dgxtop_core::ports::{GaugeAppend, SegmentIdentity};
     use dgxtop_core::quality::SampleKind;
-    use dgxtop_core::testing::{metric_key, source_id};
+    use dgxtop_core::testing::{UTC_ON_A_WHOLE_MINUTE_NS, metric_key, source_id};
 
     use crate::History;
 
     const SECOND: u64 = 1_000_000_000;
     const MINUTE: u64 = 60 * SECOND;
-    const UTC_AT_BOOT: i128 = 1_790_000_000_000_000_000;
+    /// 20 s into a UTC minute: the boot's minutes start at boot 40 s, not
+    /// on the boot clock's own minutes.
+    const UTC_AT_BOOT: i128 = UTC_ON_A_WHOLE_MINUTE_NS + 20 * SECOND as i128;
+
+    /// A query clock at boot `now_ns` on the wall clock the tests pair.
+    fn clock_at(now_ns: u64) -> std::sync::Arc<dgxtop_core::testing::FakeClock> {
+        use dgxtop_core::clock::TimeProvider;
+
+        let clock = dgxtop_core::testing::FakeClock::new(now_ns);
+        let utc = UTC_AT_BOOT + i128::from(now_ns);
+        clock.step_utc_ns(i64::try_from(utc - clock.now_utc_ns()).unwrap());
+        clock
+    }
 
     fn history(archive_enabled: bool) -> (History, ByteLedger) {
         let config = Config::defaults().unwrap();
@@ -338,7 +350,6 @@ mod tests {
         use dgxtop_core::overview_history::{OverviewAnswer, OverviewRequest};
         use dgxtop_core::ports::{CancelFlag, OverviewReader};
         use dgxtop_core::process_history::Tier;
-        use dgxtop_core::testing::FakeClock;
 
         let (mut history, _ledger) = history(false);
         let offset_s = 5_400;
@@ -365,8 +376,7 @@ mod tests {
         }
         let now = 6 * MINUTE;
         history.recorder.maintain(now);
-        let clock = FakeClock::new(now);
-        clock.step_utc_ns(i64::try_from(now).unwrap());
+        let clock = clock_at(now);
         let shift = i64::from(offset_s) * 1_000_000_000;
         let from = Tier::OneMinute.align(utc_at_boot, shift);
         let request = OverviewRequest::Bars {
@@ -423,7 +433,6 @@ mod tests {
         use dgxtop_core::overview_history::{OverviewAnswer, OverviewRequest};
         use dgxtop_core::ports::{CancelFlag, OverviewReader};
         use dgxtop_core::process_history::Tier;
-        use dgxtop_core::testing::FakeClock;
 
         let (mut history, _ledger) = history(false);
         history.recorder.observe_wall_clock(0, UTC_AT_BOOT);
@@ -437,8 +446,7 @@ mod tests {
         }
         let now = 5 * MINUTE;
         history.recorder.maintain(now);
-        let clock = FakeClock::new(now);
-        clock.step_utc_ns(i64::try_from(now).unwrap());
+        let clock = clock_at(now);
         let series = SeriesInEveryBoot::from(&metric_key("gpu:0", ids::GPU_TEMPERATURE, "gpu"));
         let utc_at_boot = i64::try_from(UTC_AT_BOOT).unwrap();
         let hour = Tier::OneHour.align(utc_at_boot, 0);

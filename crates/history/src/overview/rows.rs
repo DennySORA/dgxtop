@@ -138,15 +138,12 @@ mod tests {
     use dgxtop_core::history::HistoryMethod;
     use dgxtop_core::metric::{CanonicalUnit, ids};
     use dgxtop_core::quality::SampleKind;
-    use dgxtop_core::testing::{metric_key, source_id};
+    use dgxtop_core::testing::{UTC_ON_A_WHOLE_MINUTE_NS as UTC_AT_BOOT, metric_key, source_id};
     use uuid::Uuid;
 
     use super::*;
     use crate::records::{BUCKET_NS, CounterBucket, GaugeBucket};
     use crate::segment::SegmentIdentity;
-
-    /// A whole UTC minute, so the boot grid's minutes are UTC minutes.
-    const UTC_AT_BOOT: i128 = 1_790_000_040_000_000_000;
 
     fn segment(metric: &str, unit: CanonicalUnit) -> Arc<SegmentMeta> {
         Arc::new(SegmentMeta {

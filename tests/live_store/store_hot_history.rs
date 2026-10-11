@@ -7,6 +7,7 @@ mod support;
 use dgxtop_core::history::{HistoryMethod, HistoryStat};
 use dgxtop_core::metric::Scalar;
 use dgxtop_core::ports::SnapshotReader;
+use dgxtop_core::testing::UTC_ON_A_WHOLE_MINUTE_NS;
 use support::{
     Harness, MILLI, MINUTE, SECOND, assert_well_formed, config, gauge, gauge_from, interval,
     rx_key, temperature_key, value_f64, value_u64, with_boot,
@@ -303,7 +304,7 @@ fn at07_generation_changes_cut_segments_and_utc_steps_are_discontinuities() {
         if second == 5 {
             harness.writer.observe_wall_clock(
                 5 * SECOND,
-                support::UTC_AT_BOOT_NS + 5 * SECOND as i128 - 86_400 * SECOND as i128,
+                UTC_ON_A_WHOLE_MINUTE_NS + 5 * SECOND as i128 - 86_400 * SECOND as i128,
             );
         }
     }
@@ -458,7 +459,7 @@ fn at27_minutes_on_whole_utc_minutes_keep_every_window_exact() {
     // The pairing arrives late; nothing was finished before it.
     harness.writer.observe_wall_clock(
         250 * SECOND,
-        support::UTC_AT_BOOT_NS + i128::from(37 * SECOND + 250 * SECOND),
+        UTC_ON_A_WHOLE_MINUTE_NS + i128::from(37 * SECOND + 250 * SECOND),
     );
     harness.maintain(400 * SECOND);
 

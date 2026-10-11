@@ -21,7 +21,9 @@ use dgxtop_core::identity::{BootId, CollectorId, MetricKey};
 use dgxtop_core::metric::{CanonicalUnit, Scalar, descriptor, ids};
 use dgxtop_core::ports::{CancelFlag, HistoryReader, IngressBatch, SnapshotReader, StoreWriter};
 use dgxtop_core::quality::{Freshness, Namespace, Quality, SampleKind, SelectionState};
-use dgxtop_core::testing::{FakeClock, ObservationBuilder, batch_of, metric_key, source_id};
+use dgxtop_core::testing::{
+    FakeClock, ObservationBuilder, UTC_ON_A_WHOLE_MINUTE_NS, batch_of, metric_key, source_id,
+};
 use dgxtop_history::HistoryIndex;
 use dgxtop_state::{SharedSnapshot, StateWriter};
 use uuid::Uuid;
@@ -29,10 +31,6 @@ use uuid::Uuid;
 pub const SECOND: u64 = 1_000_000_000;
 pub const MINUTE: u64 = 60 * SECOND;
 pub const MILLI: u64 = 1_000_000;
-/// UTC at boot 0 of the harness's wall clock: a whole minute, so the
-/// history's minutes (cut on whole UTC minutes, D-82) are whole minutes of
-/// the boot clock too.
-pub const UTC_AT_BOOT_NS: i128 = 1_790_000_040_000_000_000;
 
 pub fn config() -> Config {
     Config::defaults().unwrap_or_else(|error| panic!("embedded defaults: {error}"))
@@ -80,7 +78,9 @@ impl Harness {
     /// monitor's first maintenance step does).
     pub fn build(config: Config, ledger: ByteLedger, namespace: Namespace, archive: bool) -> Self {
         let mut harness = Self::unpaired(config, ledger, namespace, archive);
-        harness.writer.observe_wall_clock(0, UTC_AT_BOOT_NS);
+        harness
+            .writer
+            .observe_wall_clock(0, UTC_ON_A_WHOLE_MINUTE_NS);
         harness
     }
 

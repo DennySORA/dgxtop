@@ -26,6 +26,12 @@ use crate::process_model::{MemoryPart, ProcessHistoryModel};
 use crate::process_probe::{ProbeReading, ProbeState};
 use crate::quality::{Quality, ReadStatus, SampleKind};
 
+/// UTC on a whole minute (2026-09-21T14:14:00Z), in nanoseconds. Boot 0
+/// paired with it puts the history's minutes, which are cut on whole UTC
+/// minutes (D-82), on whole minutes of the boot clock; tests and the
+/// synthetic history preload count with that.
+pub const UTC_ON_A_WHOLE_MINUTE_NS: i128 = 1_790_000_040_000_000_000;
+
 /// Manually advanced clock. UTC can be stepped independently of boot time.
 #[derive(Debug)]
 pub struct FakeClock {

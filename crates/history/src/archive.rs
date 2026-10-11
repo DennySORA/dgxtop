@@ -385,7 +385,7 @@ mod tests {
     use dgxtop_core::metric::{CanonicalUnit, Scalar, ids};
     use dgxtop_core::naming::entity;
     use dgxtop_core::quality::SampleKind;
-    use dgxtop_core::testing::{metric_key, source_id};
+    use dgxtop_core::testing::{UTC_ON_A_WHOLE_MINUTE_NS, metric_key, source_id};
     use uuid::Uuid;
 
     use crate::records::{BUCKET_NS, CounterSample, GaugeBucket};
@@ -423,7 +423,7 @@ mod tests {
 
     fn clock() -> WallClock {
         let mut clock = WallClock::default();
-        clock.observe(0, 1_790_000_000_000_000_000);
+        clock.observe(0, UTC_ON_A_WHOLE_MINUTE_NS);
         clock
     }
 
@@ -448,7 +448,7 @@ mod tests {
         assert_eq!(journal.buckets.len(), 2);
         assert_eq!(
             journal.buckets[0].start_utc,
-            "2026-09-21T14:13:20.000000000Z"
+            "2026-09-21T14:14:00.000000000Z"
         );
         assert_eq!(journal.host_id, "test-host");
         assert!(
@@ -554,7 +554,8 @@ mod tests {
             bucket_row(&other, 0),
             gap(None),
         ]);
-        let start_of_minute_2 = 1_790_000_000_000_000_000 + 2 * i64::try_from(BUCKET_NS).unwrap();
+        let start_of_minute_2 = i64::try_from(UTC_ON_A_WHOLE_MINUTE_NS).unwrap()
+            + 2 * i64::try_from(BUCKET_NS).unwrap();
         let prune = ArchivePrune {
             series: dgxtop_core::history::SeriesInEveryBoot::from(&pruned.key),
             before_utc_ns: start_of_minute_2,
@@ -598,7 +599,7 @@ mod tests {
         let mut queue = ArchiveQueue::new(&ledger);
         let prune = ArchivePrune {
             series: dgxtop_core::history::SeriesInEveryBoot::from(&segment().key),
-            before_utc_ns: 1_790_000_000_000_000_000,
+            before_utc_ns: i64::try_from(UTC_ON_A_WHOLE_MINUTE_NS).unwrap(),
         };
         assert!(!queue.knows_identity());
         assert!(queue.take(1 << 20, &clock(), 1, Vec::new()).is_none());

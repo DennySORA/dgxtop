@@ -18,7 +18,7 @@ use dgxtop_core::ports::{
     ArchiveJournal, HistoryAppends, HistoryIngest, HistoryOutcome, SnapshotReader, StoreWriter,
 };
 use dgxtop_core::quality::{Freshness, Namespace, Quality, SampleKind, SelectionState};
-use dgxtop_core::testing::{metric_key, source_id};
+use dgxtop_core::testing::{UTC_ON_A_WHOLE_MINUTE_NS, metric_key, source_id};
 use dgxtop_state::{LiveState, SharedSnapshot, StateWriter};
 use uuid::Uuid;
 
@@ -306,7 +306,7 @@ fn maintenance_relief_sampling_and_clock_are_forwarded() {
     rig.writer.relieve_pressure(20 * SECOND);
     rig.writer.set_sampling(&config.sampling);
     rig.writer
-        .observe_wall_clock(30 * SECOND, 1_790_000_000_000_000_000);
+        .observe_wall_clock(30 * SECOND, UTC_ON_A_WHOLE_MINUTE_NS);
     let calls = rig.history.calls();
     assert_eq!(calls[0], Call::Maintain(10 * SECOND));
     assert!(calls.contains(&Call::ShedRaw {
@@ -318,7 +318,7 @@ fn maintenance_relief_sampling_and_clock_are_forwarded() {
     assert!(calls.contains(&Call::FinalizeGrace(grace)));
     assert_eq!(
         calls.last(),
-        Some(&Call::WallClock(30 * SECOND, 1_790_000_000_000_000_000))
+        Some(&Call::WallClock(30 * SECOND, UTC_ON_A_WHOLE_MINUTE_NS))
     );
 }
 
