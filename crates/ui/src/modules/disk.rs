@@ -1,7 +1,10 @@
 //! Disk module in the reference layout (D-38): one table of block devices
 //! (busiest first) with the capacity of the filesystem each one holds, then
 //! the read and write rates of the busiest device, the one the title names.
-//! Filesystems on no listed device follow as rows of their own.
+//! Filesystems on no listed device follow as rows of their own. The
+//! filesystem type, its free space (reserved blocks included, beside what
+//! is available to users) and the device's await time are the first
+//! columns a narrow panel gives up.
 
 use dgxtop_core::identity::EntityId;
 use dgxtop_core::view::{DiskDeviceView, DiskView, FilesystemView, MetricCell, ViewModel};
@@ -26,18 +29,21 @@ const PREFERRED_TABLE_ROWS: u16 = 4;
 /// Text of a cell that does not apply to the row (no filesystem, no device).
 const NOT_APPLICABLE: &str = "–";
 
-const COLUMNS: [ColumnSpec; 7] = [
+const COLUMNS: [ColumnSpec; 10] = [
     ColumnSpec::left("Device", 8, 100).flexible().prefer(12),
+    ColumnSpec::left("Type", 5, 20),
     ColumnSpec::right("Used", 8, 70),
-    ColumnSpec::right("Free", 8, 60),
+    ColumnSpec::right("Free", 8, 25),
+    ColumnSpec::right("Avail", 8, 60),
     ColumnSpec::right("Use%", 6, 80),
     ColumnSpec::right("Read", 10, 90),
     ColumnSpec::right("Write", 10, 90),
     ColumnSpec::right("IOPS", 10, 40),
+    ColumnSpec::right("Await", 8, 35),
 ];
 /// Spec indexes of the read and write columns (their titles are the legend).
-const READ_COLUMN: usize = 4;
-const WRITE_COLUMN: usize = 5;
+const READ_COLUMN: usize = 6;
+const WRITE_COLUMN: usize = 7;
 
 pub struct DiskModule {
     manifest: DisplayModuleManifest,
@@ -235,7 +241,7 @@ fn render_table(frame: &mut Frame<'_>, area: Rect, rows: &[DiskRow<'_>], context
     }
 }
 
-fn row_cells(row: &DiskRow<'_>, context: &DisplayContext) -> [TableCell; 7] {
+fn row_cells(row: &DiskRow<'_>, context: &DisplayContext) -> [TableCell; 10] {
     let palette = &context.theme;
     let absent = || TableCell::new(NOT_APPLICABLE, palette.muted_style());
     let capacity = |cell: fn(&FilesystemView) -> &MetricCell, width: usize| {
@@ -243,11 +249,18 @@ fn row_cells(row: &DiskRow<'_>, context: &DisplayContext) -> [TableCell; 7] {
             metric_table_cell(cell(filesystem), palette, width)
         })
     };
-    let rate = |cell: fn(&DiskDeviceView) -> &MetricCell| {
+    let rate = |cell: fn(&DiskDeviceView) -> &MetricCell, width: usize| {
         row.device.map_or_else(absent, |device| {
-            metric_table_cell(cell(device), palette, 10)
+            metric_table_cell(cell(device), palette, width)
         })
     };
+    let fs_type = row
+        .filesystem
+        .map(|filesystem| clean(&filesystem.fs_type))
+        .filter(|fs_type| !fs_type.is_empty())
+        .map_or_else(absent, |fs_type| {
+            TableCell::new(fs_type, palette.label_style())
+        });
     let name_style = if row.device.is_some() {
         palette.text_style()
     } else {
@@ -255,14 +268,17 @@ fn row_cells(row: &DiskRow<'_>, context: &DisplayContext) -> [TableCell; 7] {
     };
     [
         TableCell::new(row.name(), name_style),
+        fs_type,
         capacity(|filesystem| &filesystem.used, 8),
+        capacity(|filesystem| &filesystem.free, 8),
         capacity(|filesystem| &filesystem.available, 8),
         capacity(|filesystem| &filesystem.use_percent, 6),
-        rate(|device| &device.read_bps),
-        rate(|device| &device.write_bps),
+        rate(|device| &device.read_bps, 10),
+        rate(|device| &device.write_bps, 10),
         row.device.map_or_else(absent, |device| {
             TableCell::new(iops_text(device), palette.text_style())
         }),
+        rate(|device| &device.await_ms, 8),
     ]
 }
 
@@ -288,6 +304,11 @@ fn add_labels(output: &mut Output, disk: &DiskView, context: &DisplayContext) {
             &device.write_bps,
             context,
         ));
+        output.label(cell_label(
+            &format!("disk {name} await"),
+            &device.await_ms,
+            context,
+        ));
     }
     for filesystem in disk.filesystems.iter().take(8) {
         output.label(format!(
@@ -301,7 +322,55 @@ fn add_labels(output: &mut Output, disk: &DiskView, context: &DisplayContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_fixtures::{disk_view, entity};
+    use crate::test_fixtures::{self, disk_view, entity};
+    use dgxtop_core::commands::ViewKind;
+
+    fn header_and_root_row(width: u16) -> (String, String) {
+        let model = test_fixtures::view_model(ViewKind::Overview, 1);
+        let text = test_fixtures::render_text(&DiskModule::new().unwrap(), &model, (width, 12));
+        let lines: Vec<&str> = text.lines().collect();
+        (lines[1].to_owned(), lines[2].to_owned())
+    }
+
+    /// A wide panel shows the filesystem type, its free and available
+    /// space and the device's await time beside the I/O rates.
+    #[test]
+    fn a_wide_panel_shows_type_free_space_and_await() {
+        let (header, row) = header_and_root_row(120);
+        for title in ["Type", "Free", "Avail", "Await"] {
+            assert!(header.contains(title), "{header}");
+        }
+        for value in ["ext4", "988 GiB", "900 GiB", "0.4 ms"] {
+            assert!(row.contains(value), "{value} missing in {row}");
+        }
+    }
+
+    /// A narrow panel gives up the type, the free space and the await time
+    /// first and keeps the capacity and the rates.
+    #[test]
+    fn a_narrow_panel_drops_the_detail_columns_first() {
+        let (header, row) = header_and_root_row(70);
+        for title in ["Used", "Avail", "Use%", "Read", "Write"] {
+            assert!(header.contains(title), "{header}");
+        }
+        for title in ["Type", "Free", "Await"] {
+            assert!(!header.contains(title), "{title} kept in {header}");
+        }
+        assert!(!row.contains("ext4"), "{row}");
+        let (header, _) = header_and_root_row(36);
+        assert!(header.contains("Device"), "{header}");
+    }
+
+    /// A row without a filesystem, or a filesystem without a type, shows
+    /// the not-applicable mark instead of an empty type.
+    #[test]
+    fn a_missing_filesystem_type_is_not_left_blank() {
+        let context = test_fixtures::display_context();
+        let mut disk = disk_view();
+        disk.filesystems[0].fs_type = String::new();
+        let rows = table_rows(&disk);
+        assert_eq!(row_cells(&rows[0], &context)[1].text, NOT_APPLICABLE);
+    }
 
     #[test]
     fn devices_carry_the_capacity_of_the_filesystem_they_hold() {

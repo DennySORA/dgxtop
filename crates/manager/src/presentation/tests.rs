@@ -6,7 +6,6 @@ use std::sync::Arc;
 use dgxtop_core::action::Signal;
 use dgxtop_core::commands::{SortKey, ViewKind};
 use dgxtop_core::config::BUILTIN_MODULES;
-use dgxtop_core::history::HistoryMethod;
 use dgxtop_core::naming::attributes;
 use dgxtop_core::observation::EntityKind;
 use dgxtop_core::testing::metric_key;
@@ -217,6 +216,21 @@ fn confirmation() -> ConfirmationView {
     }
 }
 
+/// D-87: the header carries the effective redline, so a configuration
+/// applied at runtime recolors the next frame's gauges.
+#[test]
+fn the_header_follows_the_effective_redline() {
+    let mut fixture = Fixture::new();
+    let model = build_view_model(&fixture.context());
+    assert_eq!(
+        model.header.redline_threshold_percent,
+        fixture.effective.viewer.redline_threshold_percent
+    );
+    fixture.effective.viewer.redline_threshold_percent = 92.5;
+    let applied = build_view_model(&fixture.context());
+    assert_eq!(applied.header.redline_threshold_percent, 92.5);
+}
+
 #[test]
 fn each_view_fills_only_its_visible_topics() {
     let fixture_base = Fixture::new();
@@ -423,7 +437,6 @@ fn history_is_shared_when_small_and_downsampled_to_the_chart_width() {
             mean: Some(1.0),
             min: Some(0.5),
             max: Some(2.0),
-            method: HistoryMethod::Raw,
         })
         .collect();
     fixture.history = Arc::new(HistoryView {

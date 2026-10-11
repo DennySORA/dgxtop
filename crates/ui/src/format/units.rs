@@ -112,6 +112,18 @@ pub fn format_duration_ms(milliseconds: f64) -> String {
     super::age::format_span_seconds(whole_seconds)
 }
 
+/// A count in a few columns: exact below 1000, then SI prefixes without a
+/// space (`412`, `12.3k`, `654k`, `1.2M`), for totals beside each other.
+pub fn format_compact_count(value: f64) -> String {
+    if !value.is_finite() {
+        return NOT_AVAILABLE.to_owned();
+    }
+    if value.abs() < 1000.0 {
+        return fixed(value, 0);
+    }
+    scaled(value, 1000.0, &SI_PREFIXES, "").replace(' ', "")
+}
+
 /// Fixed decimals without a `-0` artifact for values that round to zero.
 pub fn fixed(value: f64, decimals: usize) -> String {
     let text = format!("{value:.decimals$}");
@@ -231,6 +243,17 @@ mod tests {
             ),
             "18446744073709551615"
         );
+    }
+
+    #[test]
+    fn compact_counts_fit_a_few_columns() {
+        assert_eq!(format_compact_count(0.0), "0");
+        assert_eq!(format_compact_count(999.0), "999");
+        assert_eq!(format_compact_count(1000.0), "1.0k");
+        assert_eq!(format_compact_count(12_345.0), "12.3k");
+        assert_eq!(format_compact_count(654_321.0), "654k");
+        assert_eq!(format_compact_count(1.25e9), "1.2G");
+        assert_eq!(format_compact_count(f64::NAN), NOT_AVAILABLE);
     }
 
     #[test]

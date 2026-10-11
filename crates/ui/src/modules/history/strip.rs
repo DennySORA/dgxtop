@@ -405,7 +405,6 @@ mod tests {
     use super::*;
     use crate::modules::history::panels::panels;
     use crate::test_fixtures::{GIB, HISTORY_END, display_context, history_view};
-    use dgxtop_core::history::HistoryMethod;
     use dgxtop_core::view::{HistoryChartKind, HistoryPart};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -419,7 +418,6 @@ mod tests {
             mean,
             min: None,
             max,
-            method: HistoryMethod::BucketExact,
         }
     }
 

@@ -10,13 +10,11 @@ use dgxtop_core::action::{
 use dgxtop_core::canonical::GpuUsageKind;
 use dgxtop_core::commands::{SortKey, ViewKind};
 use dgxtop_core::config::{Theme, ValueOrigin};
-use dgxtop_core::history::HistoryMethod;
-use dgxtop_core::identity::{
-    BootId, EntityId, HostId, MetricId, MetricKey, ModuleId, Pid, PidNamespace, ProcessKey, Scope,
-    SessionId,
-};
+use dgxtop_core::identity::{EntityId, ModuleId, ProcessKey, SessionId};
 use dgxtop_core::metric::{CanonicalUnit, Scalar};
 use dgxtop_core::quality::{Freshness, Quality, SampleKind, SelectionState};
+pub(crate) use dgxtop_core::testing::metric_key;
+use dgxtop_core::testing::test_process_key;
 use dgxtop_core::view::{
     ActionRecordView, ActionsView, CandidateView, CellState, ConfirmationView, ConflictView,
     CoreView, CpuView, DiskDeviceView, DiskHistory, DiskView, FilesystemView, GpuCard, GpuDetails,
@@ -44,40 +42,49 @@ pub(crate) fn display_context() -> crate::registry::DisplayContext {
     }
 }
 
-pub(crate) fn host() -> HostId {
-    HostId::new("test-host").unwrap()
-}
-
-pub(crate) fn boot() -> BootId {
-    BootId::new("test-boot").unwrap()
+/// The text `module` draws for `model` in a `width` x `height` area, one
+/// line a row.
+pub(crate) fn render_text(
+    module: &dyn crate::registry::DisplayModule,
+    model: &ViewModel,
+    (width, height): (u16, u16),
+) -> String {
+    let context = crate::registry::DisplayContext {
+        viewport: ratatui::layout::Rect::new(0, 0, width, height),
+        ..display_context()
+    };
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|frame| {
+            module.render(&context, model, frame.area(), frame);
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..height)
+        .map(|y| {
+            (0..width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(crate) fn entity(value: &str) -> EntityId {
     EntityId::new(value).unwrap()
 }
 
+/// The core's test process key, started at tick `start`.
 pub(crate) fn process_key(pid: i64, start: u64) -> ProcessKey {
     ProcessKey {
-        host_id: host(),
-        boot_id: boot(),
-        pid_namespace: PidNamespace::new("pid:[4026531836]").unwrap(),
-        pid: Pid::new(pid).unwrap(),
         start_time_ticks: start,
+        ..test_process_key(pid)
     }
 }
 
 pub(crate) fn token() -> ConfirmationToken {
     ConfirmationToken::new("ab".repeat(32)).unwrap()
-}
-
-pub(crate) fn metric_key(entity_id: &str, metric: &str, scope: &str) -> MetricKey {
-    MetricKey::new(
-        host(),
-        boot(),
-        entity(entity_id),
-        MetricId::new(metric).unwrap(),
-        Scope::new(scope).unwrap(),
-    )
 }
 
 pub(crate) fn ok(value: f64, unit: CanonicalUnit) -> MetricCell {
@@ -139,10 +146,7 @@ pub(crate) fn stale(unit: CanonicalUnit, last: f64, age_ms: u64) -> MetricCell {
 }
 
 fn trend(points: Vec<Option<f64>>) -> Trend {
-    Trend {
-        points,
-        step_ms: 1000,
-    }
+    Trend { points }
 }
 
 pub(crate) fn cpu_view() -> CpuView {
@@ -578,11 +582,6 @@ pub(crate) fn history_view() -> HistoryView {
                     mean: sample.map(|(mean, _)| mean),
                     min: None,
                     max: sample.map(|(_, max)| max),
-                    method: if sample.is_some() {
-                        HistoryMethod::BucketExact
-                    } else {
-                        HistoryMethod::Gap
-                    },
                 }
             })
             .collect()
@@ -599,7 +598,6 @@ pub(crate) fn history_view() -> HistoryView {
             peak: Some(peak),
             coverage_ratio: Some(1.0),
             covered_ns: Some(60 * MINUTE),
-            truncated: false,
             display_downsampled: true,
             pending: false,
             error: None,
@@ -846,7 +844,8 @@ pub(crate) fn sources_view() -> SourcesView {
                 timeouts_total: 3,
                 consecutive_failures: 3,
                 restarts_total: 2,
-                backoff_until_boot_ns: None,
+                // 7 s after the projection was generated.
+                backoff_until_boot_ns: Some(12_000_000_000),
                 detail: Some("child not reaped".into()),
             },
             HostStatus {
@@ -854,7 +853,8 @@ pub(crate) fn sources_view() -> SourcesView {
                 state: HostState::Healthy,
                 generation: 1,
                 pid: Some(5000),
-                last_success_boot_ns: Some(1),
+                // 3 s before the projection was generated.
+                last_success_boot_ns: Some(2_000_000_000),
                 timeouts_total: 0,
                 consecutive_failures: 0,
                 restarts_total: 0,
@@ -973,6 +973,7 @@ pub(crate) fn header() -> HeaderView {
         hosts_total: 7,
         read_only: false,
         theme: Theme::Dark,
+        redline_threshold_percent: 80.0,
     }
 }
 
@@ -1024,7 +1025,6 @@ pub(crate) const RUNS_UTC: i64 = 1_791_072_000_000_000_000;
 /// running for 2 h in color 0.
 pub(crate) fn process_history_view() -> dgxtop_core::view::ProcessHistoryView {
     use dgxtop_core::action::Signal;
-    use dgxtop_core::history::HistoryMethod;
     use dgxtop_core::process_history::{BarSize, EndCause, RunDetails, RunEnd, RunInfo, RunMetric};
     use dgxtop_core::view::{
         HistoryPointView, ProcessHistoryView, RunChartView, RunDetailView, RunRowView,
@@ -1071,7 +1071,6 @@ pub(crate) fn process_history_view() -> dgxtop_core::view::ProcessHistoryView {
         mean: Some(value),
         min: None,
         max: Some(value),
-        method: HistoryMethod::BucketExact,
     };
     let charts = RunMetric::ALL
         .iter()

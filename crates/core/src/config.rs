@@ -1,7 +1,10 @@
 //! Complete v2 configuration (`contracts/config.schema.json`) and its semantic
 //! validation (`contracts/CONFIG.md`).
 //!
-//! Every field is required and unknown keys are rejected. The source of the
+//! Every field is required and unknown keys are rejected, except the
+//! retired keys ([`RETIRED_KEYS`]) an earlier version wrote: those are
+//! accepted with any value, ignored and never written back (D-88). The
+//! source of the
 //! defaults is `spec/dgxtop-v2/examples/config.default.json`, embedded
 //! verbatim: the REF workload's configuration ([`Config::reference`]). The
 //! built-in defaults are that document with the owner's decisions applied
@@ -45,6 +48,48 @@ pub const BUILTIN_MODULES: [&str; 10] = [
     "settings",
     "actions",
 ];
+
+/// Configuration keys an earlier version wrote that this one ignores (D-88).
+pub const RETIRED_KEYS: [&str; 1] = ["store.raw_candidate_seconds"];
+
+/// Removes the retired keys ([`RETIRED_KEYS`]) from a configuration
+/// document, so it compares with what this version writes (D-88).
+pub fn remove_retired_keys(document: &mut serde_json::Value) {
+    for path in RETIRED_KEYS {
+        let Some((section, key)) = path.split_once('.') else {
+            continue;
+        };
+        if let Some(section) = document
+            .get_mut(section)
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            section.remove(key);
+        }
+    }
+}
+
+/// A retired key's slot in its section: whatever value a document holds is
+/// read and dropped, only that it was there is kept, so a configuration
+/// equals itself with or without it and saving leaves it out (D-88).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RetiredKey {
+    present: bool,
+}
+
+impl PartialEq for RetiredKey {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for RetiredKey {}
+
+impl<'de> Deserialize<'de> for RetiredKey {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        serde::de::IgnoredAny::deserialize(deserializer)?;
+        Ok(Self { present: true })
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -99,10 +144,9 @@ pub struct PinnedSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StoreConfig {
-    /// Accepted and range-checked because the sealed schema requires it,
-    /// but nothing retains raw candidates any more: the Sources view reads
-    /// the snapshot's arbitration explanations (D-84).
-    pub raw_candidate_seconds: u32,
+    /// Retired (D-88): nothing retains raw candidates since D-84.
+    #[serde(default, rename = "raw_candidate_seconds", skip_serializing)]
+    retired_raw_candidate_seconds: RetiredKey,
     pub raw_history_seconds: u32,
     pub aggregate_seconds: u32,
     pub aggregate_retention_hours: u32,
@@ -299,6 +343,16 @@ impl Config {
         Ok(config)
     }
 
+    /// The retired keys ([`RETIRED_KEYS`]) the parsed document carried:
+    /// ignored now and left out when the configuration is saved (D-88).
+    pub fn retired_keys_present(&self) -> Vec<&'static str> {
+        let mut present = Vec::new();
+        if self.store.retired_raw_candidate_seconds.present {
+            present.push(RETIRED_KEYS[0]);
+        }
+        present
+    }
+
     /// Pretty JSON with a trailing newline (persisted form).
     pub fn to_pretty_json(&self) -> Result<String, serde_json::Error> {
         let mut text = serde_json::to_string_pretty(self)?;
@@ -442,11 +496,6 @@ impl Config {
         }
 
         let store = &self.store;
-        check(
-            range(store.raw_candidate_seconds, 1, 600),
-            "store.raw_candidate_seconds",
-            "must be 1..=600",
-        );
         check(
             range(store.raw_history_seconds, 30, 3600),
             "store.raw_history_seconds",
@@ -1204,10 +1253,55 @@ mod tests {
         let text = config.to_pretty_json().unwrap();
         assert_eq!(Config::from_json(&text).unwrap(), config);
         let reference = Config::reference().unwrap();
-        let original: serde_json::Value = serde_json::from_str(DEFAULT_CONFIG_JSON).unwrap();
+        let mut original: serde_json::Value = serde_json::from_str(DEFAULT_CONFIG_JSON).unwrap();
+        remove_retired_keys(&mut original);
         let reencoded: serde_json::Value =
             serde_json::from_str(&reference.to_pretty_json().unwrap()).unwrap();
         assert_eq!(original, reencoded);
+    }
+
+    /// D-88: a document of an earlier version with a retired key loads,
+    /// whatever the key holds, says the key was there, and is written back
+    /// without it.
+    #[test]
+    fn retired_keys_are_accepted_reported_and_never_written() {
+        let reference = Config::reference().unwrap();
+        assert!(DEFAULT_CONFIG_JSON.contains("\"raw_candidate_seconds\""));
+        assert_eq!(
+            reference.retired_keys_present(),
+            vec!["store.raw_candidate_seconds"]
+        );
+        let text = reference.to_pretty_json().unwrap();
+        assert!(!text.contains("raw_candidate_seconds"), "{text}");
+        let saved = Config::from_json(&text).unwrap();
+        assert!(saved.retired_keys_present().is_empty());
+        assert_eq!(saved, reference, "the retired key changes nothing");
+        // Out of its former range or of another type: still ignored.
+        let mut value: serde_json::Value = serde_json::from_str(DEFAULT_CONFIG_JSON).unwrap();
+        for retired in [
+            serde_json::json!(0),
+            serde_json::json!(601),
+            serde_json::json!("60"),
+        ] {
+            value["store"]["raw_candidate_seconds"] = retired;
+            let parsed = Config::from_json(&value.to_string()).unwrap();
+            assert_eq!(parsed, reference);
+        }
+    }
+
+    /// A retired key is accepted only where it was: elsewhere it is an
+    /// unknown key like any other.
+    #[test]
+    fn a_retired_key_outside_its_section_is_rejected() {
+        let mut value: serde_json::Value = serde_json::from_str(DEFAULT_CONFIG_JSON).unwrap();
+        value["sampling"]["raw_candidate_seconds"] = serde_json::json!(60);
+        assert!(matches!(
+            Config::from_json(&value.to_string()),
+            Err(ConfigError::Parse { .. })
+        ));
+        let mut empty = serde_json::json!({"store": 1});
+        remove_retired_keys(&mut empty);
+        assert_eq!(empty, serde_json::json!({"store": 1}));
     }
 
     #[test]

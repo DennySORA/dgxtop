@@ -517,7 +517,7 @@ pub(crate) fn draw_caption(
 /// projection is taken as fresh.
 pub(crate) fn measuring_context(model: &ViewModel, slot: Slot) -> DisplayContext {
     DisplayContext {
-        theme: ThemePalette::for_theme(model.header.theme),
+        theme: ThemePalette::for_model(model),
         viewport: Rect::default(),
         tick_for_animation: 0,
         compact: false,

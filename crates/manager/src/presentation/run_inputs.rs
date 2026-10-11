@@ -29,7 +29,7 @@ pub(crate) fn run_inputs(
     catalog: &CatalogSnapshot,
     now_boot_ns: u64,
 ) -> RunInputs {
-    let trends = TrendBook::new(0, 1);
+    let trends = TrendBook::new(0);
     let reader = MetricReader::new(snapshot, catalog, &trends, now_boot_ns);
     let directory = GpuDirectory::new(catalog, reader.index());
     let gpu_labels = directory

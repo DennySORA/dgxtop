@@ -42,7 +42,6 @@ use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::commands::{CommandEnvelope, CommandRejection, CommandResult, SortKey, ViewKind};
 use dgxtop_core::config::{Config, ValueOrigin};
 use dgxtop_core::errors::ErrorCode;
-use dgxtop_core::history::HistoryMethod;
 use dgxtop_core::identity::{EntityId, MetricKey, SessionId};
 use dgxtop_core::metric::{CanonicalUnit, Scalar, descriptor, ids};
 use dgxtop_core::naming::entity;
@@ -249,7 +248,7 @@ impl SnapshotWorld {
             pipeline,
             writer,
             snapshots,
-            trends: TrendFeed::new(u64::from(config.sampling.interval_ms)),
+            trends: TrendFeed::new(),
             processes,
             model: published.latest(),
             published,
@@ -314,9 +313,9 @@ struct TrendFeed {
 }
 
 impl TrendFeed {
-    fn new(step_ms: u64) -> Self {
+    fn new() -> Self {
         Self {
-            book: TrendBook::new(TREND_POINTS, step_ms),
+            book: TrendBook::new(TREND_POINTS),
             last_read: BTreeMap::new(),
         }
     }
@@ -533,11 +532,6 @@ fn history_view(snapshot: &ImmutableSnapshot, now_ns: u64) -> HistoryView {
                 mean: (!gap).then_some(mean),
                 min: None,
                 max: (!gap).then_some(mean + 5.0),
-                method: if gap {
-                    HistoryMethod::Gap
-                } else {
-                    HistoryMethod::TimeWeightedStep
-                },
             }
         })
         .collect();
@@ -588,7 +582,6 @@ fn history_view(snapshot: &ImmutableSnapshot, now_ns: u64) -> HistoryView {
                 peak: Some(75.0),
                 coverage_ratio: Some(0.97),
                 covered_ns: Some(3_492_000_000_000),
-                truncated: false,
                 display_downsampled: true,
                 pending: false,
                 error: None,

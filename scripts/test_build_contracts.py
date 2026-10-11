@@ -26,6 +26,19 @@ class BuildContractsTest(unittest.TestCase):
         self.assertIn('process_history_enabled', store['properties'])
         self.assertNotIn('process_history_enabled', store['required'])
 
+    def test_retired_store_keys_are_accepted_but_not_required(self):
+        built = {name: json.loads(text) for name, text in build_contracts.build().items()}
+        spec = json.loads((build_contracts.SPEC / 'config.schema.json').read_text())
+        spec_store = spec['properties']['store']
+        for name in built:
+            stores = [node for node in build_contracts.objects(built[name])
+                      if isinstance(node.get('properties'), dict) and 'archive_enabled' in node['properties']]
+            self.assertTrue(stores, name)
+            for store in stores:
+                self.assertIn('raw_candidate_seconds', store['properties'], 'old documents stay valid')
+                self.assertNotIn('raw_candidate_seconds', store['required'])
+                self.assertEqual(set(spec_store['required']) - set(store['required']), {'raw_candidate_seconds'})
+
 
 if __name__ == '__main__':
     unittest.main()

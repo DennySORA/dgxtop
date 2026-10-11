@@ -163,12 +163,28 @@ example_round_trip!(
     "command-result.schema.json",
     CommandResult
 );
-example_round_trip!(
-    example_config_default,
-    "config.default.json",
-    "config.schema.json",
-    Config
-);
+/// D-88: the spec's default document parses; dgxtop writes it back without
+/// the retired keys, which its contract no longer requires and the sealed
+/// spec still does, and everything else as the spec wrote it.
+#[test]
+fn example_config_default() {
+    let original = load_json("examples/config.default.json");
+    assert_valid("config.schema.json", &original);
+    let parsed = Config::from_json(&original.to_string()).unwrap();
+    assert_eq!(
+        parsed.retired_keys_present(),
+        vec!["store.raw_candidate_seconds"]
+    );
+    let reencoded = to_value(&parsed);
+    assert_valid("config.schema.json", &reencoded);
+    assert!(!spec_validator("config.schema.json").is_valid(&reencoded));
+    let mut expected = original.clone();
+    dgxtop_core::config::remove_retired_keys(&mut expected);
+    assert_eq!(reencoded, expected);
+    // A document of an earlier version keeps its retired key and stays
+    // valid under both schemas.
+    assert!(spec_validator("config.schema.json").is_valid(&original));
+}
 example_round_trip!(
     example_event_gap,
     "event.gap.json",

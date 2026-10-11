@@ -284,10 +284,7 @@ mod tests {
 
     #[test]
     fn the_other_processes_hold_the_rest_of_each_point() {
-        let trend = |points: Vec<Option<f64>>| Trend {
-            points,
-            step_ms: 1000,
-        };
+        let trend = |points: Vec<Option<f64>>| Trend { points };
         let trends = [
             ProcessTrend {
                 slot: 0,

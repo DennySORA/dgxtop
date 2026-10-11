@@ -4,9 +4,9 @@ use dgxtop_core::text::sanitize_display;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Marker appended when text is cut to fit.
-pub const ELLIPSIS: char = '…';
+const ELLIPSIS: char = '…';
 /// Upper bound for any single projected string drawn by the viewer.
-pub const MAX_FIELD_BYTES: usize = 512;
+const MAX_FIELD_BYTES: usize = 512;
 
 /// Strips control/escape/bidi characters and bounds the byte length. Driver
 /// labels and process names are untrusted even after the Manager cleaned
