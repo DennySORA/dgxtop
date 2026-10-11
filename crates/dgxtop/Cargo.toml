@@ -1,6 +1,6 @@
 [package]
 name = "dgxtop"
-description = "Stable, efficient local system monitor for NVIDIA DGX and GPU Linux hosts"
+description = "Terminal GPU monitor for NVIDIA DGX Spark and Linux machines with NVIDIA GPUs"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

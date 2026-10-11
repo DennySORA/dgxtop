@@ -9,7 +9,7 @@ use clap::{ArgGroup, Parser};
 use dgxtop_core::config::{CliOverrides, Theme};
 use thiserror::Error;
 
-/// Stable, efficient local system monitor for NVIDIA DGX and GPU Linux hosts.
+/// Terminal GPU monitor for NVIDIA DGX Spark and Linux machines with NVIDIA GPUs.
 #[derive(Debug, Clone, Parser)]
 #[command(name = "dgxtop", about, disable_version_flag = true)]
 #[command(group(ArgGroup::new("import_mode").args(["dry_run", "apply"]).multiple(false)))]

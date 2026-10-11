@@ -2,13 +2,14 @@
 
 # dgxtop
 
-**給 NVIDIA DGX Spark 與 GPU Linux 主機的誠實終端監控工具**
+**為 NVIDIA DGX Spark 打造的終端 GPU 監控工具**
 
-CPU · GPU · 記憶體 · 磁碟 · 網路 · GPU 程序<br>
-隔離採集 · 可解釋的來源 · 精確歷史 · 受保護的程序控制
+所有 GPU、使用它們的程序與整台機器，一個畫面看完；<br>
+歷史紀錄重開也還在。任何裝有 NVIDIA GPU 的 Linux 主機都能使用。
 
-[English](../README.md) · [日本語](README.ja.md) · [設計說明](https://dennysora.me/zh-hant/projects/tools/dgxtop/)
+[English](../README.md) · [日本語](README.ja.md) · [專案頁面](https://dennysora.me/zh-hant/projects/tools/dgxtop/)
 
+[![Release](https://img.shields.io/github/v/release/DennySORA/dgxtop)](https://github.com/DennySORA/dgxtop/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.92.0-orange.svg)](../rust-toolchain.toml)
 [![CI](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml/badge.svg)](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml)
@@ -19,19 +20,17 @@ CPU · GPU · 記憶體 · 磁碟 · 網路 · GPU 程序<br>
 
 </div>
 
-dgxtop 不會顯示假的 0。讀不到的值會標示為**不支援**、**讀取失敗**、**過期**或**來源衝突**，並附上資料來源。
-
 ## 安裝
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
 ```
 
-支援 x86_64 或 aarch64 的 Linux，glibc 2.34 以上（Ubuntu 22.04、Debian 12、RHEL 9 及更新版本），包括 DGX Spark。WSL 2 可以執行 Linux 版：GPU 需要在 Windows 安裝 NVIDIA 驅動，CPU 溫度與功耗通常讀不到。不支援 WSL 1、musl、macOS 與 Windows。GPU 指標需要 NVIDIA 驅動（NVML）；沒有驅動時其他功能照常運作。
+支援 x86_64 或 aarch64 的 Linux，glibc 2.34 以上（Ubuntu 22.04、Debian 12、RHEL 9 及更新版本），包括 DGX Spark。WSL 2 可以執行 Linux 版。GPU 指標需要 NVIDIA 驅動；沒有驅動時，CPU、記憶體、磁碟與網路照常顯示。不支援 WSL 1、musl、macOS 與 Windows。
 
-`install.sh` 會依 CPU 選擇對應的版本、驗證 `SHA256SUMS` 與壓縮檔結構、執行 `dgxtop --version --verbose`，再以原子方式替換 `~/.local/bin/dgxtop`，並把舊版保留為 `dgxtop.previous`（用 `./install.sh --rollback` 還原）。要安裝特定版本，在 `bash` 後面加上 `-s -- --version v2.0.0`。v2.0.0 之前的 release 是先前的 v1 程式。
+安裝程式會依 CPU 選擇對應的版本，以 release 的 `SHA256SUMS` 驗證後安裝到 `~/.local/bin`。舊版本會保留，執行 `./install.sh --rollback` 就能還原。要安裝特定版本，在 `bash` 後面加上 `-s -- --version v2.0.2`。
 
-也可以從原始碼建置（`rust-toolchain.toml` 固定 Rust 1.92.0）：
+也可以用 Rust 1.92.0 從原始碼建置（由 `rust-toolchain.toml` 固定）：
 
 ```bash
 git clone https://github.com/DennySORA/dgxtop.git
@@ -40,98 +39,102 @@ cargo build --release --locked
 ./target/release/dgxtop
 ```
 
+## 功能
+
+htop 以 CPU 為主，nvtop 和 nvidia-smi 只在你盯著的時候顯示 GPU。dgxtop 以 GPU 為主，把整台機器放在旁邊，而且保留歷史。
+
+- **一眼看完所有 GPU。** 每張 GPU 的使用率、記憶體、溫度、功耗、時脈與風扇，附即時圖表。
+- **完整的 GPU 細節。** 一次看一張 GPU：
+  - 效能狀態與降頻原因、時脈；
+  - 記憶體與記憶體匯流排、PCIe 連線與流量、NVLink-C2C；
+  - 溫度上限、功耗與耗電量；
+  - CUDA 與驅動版本；
+  - NUMA 與 CPU 親和性、P2P 路徑、裝置與韌體。
+
+  GPU 不回報的值不會佔一行。
+- **GPU 程序。** 所有使用 GPU 的程序，以及所在的 GPU、類型（運算或圖形）、GPU 記憶體、CPU 與 RAM。可依 GPU 或名稱篩選、依任一欄排序，確認後即可結束程序。
+- **歷史紀錄。** 5 分鐘到 24 小時的圖表共用一條時間軸：
+  - CPU、記憶體、磁碟與網路；
+  - 每張 GPU 的使用率、記憶體、溫度與功耗；
+  - 每張圖都標出目前值、平均與最大值；
+  - 每張 GPU 最近 1、6、12、24 小時的統計與耗電量。
+
+  歷史寫入磁碟保存 7 天，重開程式或重開機都還在。
+- **整台機器。** 每顆核心的 CPU 使用率、硬體有回報時的 CPU 溫度與功耗、記憶體與 swap、磁碟流量與檔案系統容量、網路流量。
+- **為 DGX Spark 打造。** GB10 與 CPU 共用記憶體：dgxtop 會顯示 GPU 程序佔用多少系統 RAM，以及 GB10 的 NVLink-C2C 連線。提供原生 aarch64 版本。
+- **程式內設定。** 調整採樣間隔與顯示模組。每項設定都顯示儲存值與生效值、來源，以及是立即生效還是重開後生效。
+
 ## 畫面
 
-### 總覽（Overview）
+### 總覽
 
-CPU 與記憶體、每張 GPU 的使用率與記憶體、最忙的磁碟與網路介面，以及有使用 GPU 的程序。忙碌的時段一眼就是紅色；按 `c` 會加入所有 CPU 感測器與各核心長條。
+每張 GPU 的使用率與記憶體、CPU 與記憶體、最忙的磁碟與網路介面，以及使用 GPU 的程序。按 `c` 會把 CPU 展開成每顆核心的長條與感測器。
 
 <img src="images/screenshots/workstation-overview.png" alt="雙 GPU 工作站（RTX 5080 與 RTX 3060）上的 dgxtop 總覽，以及佔用 GPU 記憶體的程序" width="100%">
 
 ### GPU
 
-一次看一張 GPU：上方四條即時長條，下方是驅動回報的全部資訊，從 NVML 與 CUDA toolkit 的檔案讀取，不執行任何指令。GPU 沒有回報的值就不列出。
+一次看一張 GPU：四條即時長條，接著是驅動回報的所有資訊。用 `h` / `l` 切換 GPU。
 
 <img src="images/screenshots/dgx-spark-gpu.png" alt="DGX Spark 的 GB10 GPU 頁面：狀態、時脈、統一記憶體、PCIe、NVLink-C2C、溫度門檻、功耗、CUDA 13.0、驅動、裝置與拓樸" width="100%">
 
 <img src="images/screenshots/workstation-gpu.png" alt="RTX 5080 的 GPU 頁面：狀態、時脈、VRAM 與 BAR1、PCIe Gen5、風扇與溫度門檻、功耗上限、CUDA、驅動、裝置、韌體，以及到第二張 GPU 的 P2P 路徑" width="100%">
 
-<sub>上：GB10，統一記憶體與 NVLink-C2C；下：RTX 5080，獨立 VRAM 與 PCIe Gen5。序號與 UUID 已打碼。</sub>
+<sub>上：GB10，統一記憶體與 NVLink-C2C；下：RTX 5080，VRAM 與 PCIe Gen5。序號與 UUID 已遮蔽。</sub>
 
-### 歷史（History）
+### 歷史
 
-把總覽的資源拉長到 5 分鐘至 24 小時（`w` / `W` 切換），成對的面板共用同一條時間軸。每條圖都有刻度、依數值上色的每欄平均，以及 now／avg／max。時間軸下方是每張 GPU 最近 1、6、12、24 小時的統計。歷史存在 `history.sqlite3`，之前執行的紀錄也會畫出來。
+總覽的各項資源在 5 分鐘到 24 小時之間（`w` / `W`），以成對的面板共用一條時間軸；下方是每張 GPU 最近 1、6、12、24 小時的統計。
 
-<img src="images/screenshots/dgx-spark-history.png" alt="DGX Spark 一小時的歷史：CPU、記憶體、GPU 使用率、GPU 記憶體、溫度、功耗與能耗、磁碟與網路" width="100%">
+<img src="images/screenshots/dgx-spark-history.png" alt="DGX Spark 一小時的歷史：CPU、記憶體、GPU 使用率、GPU 記憶體、溫度、功耗與耗電量、磁碟與網路" width="100%">
 
 <img src="images/screenshots/workstation-history.png" alt="雙 GPU 工作站的歷史，附每張 GPU 最近 1、6、12、24 小時的平均與峰值" width="100%">
 
-### 設定（Settings）
+### 設定
 
-每個設定的已保存值、生效值、來源，以及是否即時生效或需要重新啟動；顯示模組可以個別開關。
+每項設定的儲存值與生效值、來源，以及是即時套用還是需要重開。可以開關各個顯示模組。
 
-<img src="images/screenshots/dgx-spark-settings.png" alt="設定頁列出每個設定的已保存值、生效值、來源與是否需要重啟，旁邊是顯示模組的開關" width="100%">
+<img src="images/screenshots/dgx-spark-settings.png" alt="設定頁列出每個設定的儲存值、生效值、來源與是否需要重開，旁邊是顯示模組的開關" width="100%">
 
-## 為什麼是 dgxtop
+## 能力
 
-- **不顯示假的 0。** 讀取狀態、資料種類（量測、衍生、估算、模擬）、品質與新鮮度是分開的軸。未經證實的單位不靠猜測換算，也不從使用率百分比捏造頻寬。
-- **驅動卡住不會讓畫面凍結。** 每個 live 資料來源都在自己的常駐 host 程序裡執行。NVML 呼叫卡死只影響那個 host，CPU、記憶體與 UI 照常更新。
-- **可解釋的來源。** 已證明是同一顆感測器的別名只算一票；獨立來源互相矛盾時顯示「來源衝突」，不取平均。
-- **精確的歷史。** 速率來自精確的 `u64` counter 差值除以真實經過時間，空窗一律看得到。
-- **有界的資源。** 所有受管資料共用一份 256 MiB 預算，每條佇列都有位元組與筆數上限；執行緒數量固定；只在有變化時重繪，最多 4 fps。
-- **受保護的程序控制。** `K` 對選取的 GPU 程序請求 SIGTERM：僅限同使用者、需在 10 秒內一次性確認、送訊號**之前**先寫入稽核，並透過預先持有的 `pidfd` 送出。
+- **一台機器多張 GPU。** 已在 DGX Spark（GB10）與裝有 RTX 5080 和 RTX 3060 的工作站上測試。
+- **輕量。** 以 Rust 撰寫。只在內容變化時重繪，每秒最多 4 次，資料使用量固定在 256 MiB 以內。
+- **任何終端尺寸。** 80×24 以上顯示完整版面，更小時改用精簡版面。支援鍵盤與滑鼠。
+- **隱私。** 不連網，也不回傳任何資料。設定與歷史是只有你能讀的檔案，不會儲存命令列與環境變數。
+- **安全模式。** `--read-only` 關閉程序操作；`--replay` 用模擬資料做展示或測試；`--diagnostics-json` 輸出版本與健康狀態。
+- **安全升級。** 安裝程式會驗證每個下載的檔案，並保留上一版，一個指令就能還原。
 
 ## 架構
 
-### 六個元件、兩條路徑、單一寫入者
+dgxtop 是由六個元件組成的單一程式。讀值走資料路徑；你的按鍵與指令走控制路徑。
 
-<img src="images/architecture/architecture-overview.png" alt="架構：Linux 核心與 NVIDIA 驅動經七個 adapter host、Collector、Manager、Store 到 Viewer 的資料路徑；Controller 與程序操作 adapter 位於控制路徑" width="100%">
+<img src="images/architecture/architecture-overview.png" alt="dgxtop 架構：procfs、hwmon、thermal、powercap、NVML、網路與檔案系統的 adapter host 送資料給 Collector，Manager 寫入 Store 並把畫面資料交給 Viewer；Controller 與程序操作 adapter 位於控制路徑" width="100%">
 
-資料從核心與驅動出發，經過隔離的 adapter host 到 Collector（正規化與仲裁），再到 Store 唯一的寫入者 Manager。Viewer 只畫不可變的 view model；Controller 只把按鍵轉成命令。
-
-### 隔離、不阻塞的採集
-
-<img src="images/architecture/runtime-isolation.png" alt="執行模型：一個父程序與固定數量的執行緒，透過匿名管線連到七個常駐 adapter host；卡住的 NVML host 依序經過 degraded、circuit open、backoff、probe 與 warmup" width="100%">
-
-逾時的 host 會退避（1 秒、2 秒、4 秒……最多 60 秒），而且只有在確實回收後才重啟；無法回收的 host 會被隔離，不會無限重生。
-
-### 可解釋的來源仲裁
-
-<img src="images/architecture/source-arbitration.png" alt="仲裁：hwmon 讀到 68 °C、thermal zone 讀到 42 °C；九個步驟的結果是選中、來源衝突、不支援、讀取失敗或過期，絕不是 55 °C 的平均值" width="100%">
-
-要切換到另一個來源，必須連續勝出 3 次且至少經過 5 秒，數值不會在感測器之間來回跳。
-
-### 受保護的程序終止
-
-<img src="images/architecture/protected-kill.png" alt="程序終止：按 K、準備階段的同使用者與安全檢查、pidfd_open、10 秒確認、持久化稽核 intent、pidfd_send_signal 送出 SIGTERM，最後是已送出訊號，以及已觀察到結束或仍在執行" width="100%">
-
-結果會分開標示「已送出訊號」與「已觀察到結束」。`SIGKILL` 預設停用，除非啟用 `actions.allow_force`；`--read-only` 會停用所有操作。
-
-### 精確的歷史
-
-<img src="images/architecture/exact-history.png" alt="歷史：以真實經過時間計算的 counter 差值、跨分鐘邊界的精確 bridge、可見的空窗、5 分鐘到 24 小時的時窗，以及 history.sqlite3 封存" width="100%">
-
-時窗總量只計入完全落在窗內的區間；跨分鐘的區間以精確的 bridge 保存，不靠猜測拆分。
-
-### Workspace 邊界
-
-<img src="images/architecture/crate-boundaries.png" alt="Crate 依賴圖：dgxtop-runtime、adapters、collectors、store、manager 與 ui 都只依賴 dgxtop-core；組裝根 dgxtop 依賴全部" width="100%">
+| 元件 | 功能 |
+|---|---|
+| Adapter | 讀取硬體：`/proc`、hwmon、thermal zone、powercap、GPU 的 NVML、網路與檔案系統。每個 adapter 在自己的背景程序裡執行。 |
+| Collector | 把原始讀值整理成指標：單位、重複的來源、每個值的最佳來源，以及由計數器算出的速率。 |
+| Manager | 排定採樣、套用設定、檢查指令，也是唯一寫入資料的元件。 |
+| Store | 保存即時快照、歷史、設定與程序操作紀錄。 |
+| Viewer | 用整理好的畫面資料，以 Ratatui 繪製畫面。 |
+| Controller | 把按鍵、滑鼠點擊與命令列選項轉成指令。 |
 
 <details>
-<summary>各 crate 的職責</summary>
+<summary>程式碼結構</summary>
 
-| Crate | 職責 |
+程式碼是 8 個 crate 組成的 Rust workspace，圍繞一個共用的契約 crate。
+
+| Crate | 內容 |
 |---|---|
-| `dgxtop-core` | 型別化身分、單位、品質軸、命令、事件、設定、位元組預算、ports |
-| `dgxtop-runtime` | adapter-host 監管與 IPC framing、有界 worker、不阻塞的終端輸出 |
-| `dgxtop-adapters` | 唯讀 adapter（procfs、hwmon、thermal、powercap、NVML、network、filesystem、replay）與獨立的 pidfd 操作 adapter |
-| `dgxtop-collectors` | 正規化、同源去重、仲裁、counter 速率、程序與 GPU 關聯 |
-| `dgxtop-store` | 即時快照、有界精確歷史、設定 repository、SQLite 稽核與封存 |
-| `dgxtop-manager` | 排程、目錄、政策、資料提交、歷史、設定、程序操作、呈現、會話 |
-| `dgxtop-ui` | 顯示模組、排版、keymap、controller、終端 runner |
-| `dgxtop` | 組裝根（composition root）與 CLI |
-
-CI 以 [`spec/dgxtop-v2/tools/check_boundaries.py`](../spec/dgxtop-v2/tools/check_boundaries.py) 檢查這條邊界。
+| `dgxtop` | 主程式：啟動、命令列與組裝 |
+| `dgxtop-core` | 共用型別：指標、單位、指令與介面 |
+| `dgxtop-runtime` | 背景程序、IPC、worker 與終端 I/O |
+| `dgxtop-adapters` | procfs、sysfs、NVML 與程序操作 |
+| `dgxtop-collectors` | 正規化、來源選擇與速率 |
+| `dgxtop-store` | 快照、歷史、設定與操作紀錄（SQLite） |
+| `dgxtop-manager` | 採樣、設定、指令與畫面資料 |
+| `dgxtop-ui` | 畫面、元件與按鍵對應 |
 
 </details>
 
@@ -155,45 +158,28 @@ dgxtop --version --verbose   # 版本、commit、工具鏈、target、SQLite run
 | `1`–`4`、`Tab`、`Shift-Tab` | 總覽、GPU、歷史、設定 |
 | `w` / `W` | 下一個／上一個歷史時窗（5m、1h、6h、12h、24h） |
 | `c` | 顯示／隱藏 CPU 感測器與各核心長條（也可點擊 CPU 面板） |
-| `j`/`k`、方向鍵、`PgUp`/`PgDn`、`Home`/`End` | 移動選取（依程序身分，不依列號） |
+| `j`/`k`、方向鍵、`PgUp`/`PgDn`、`Home`/`End` | 移動選取 |
 | `h`/`l` | GPU 頁面切換上一張／下一張 GPU |
 | `g` | 循環切換程序表的 GPU 篩選（全部 → 各張 GPU） |
 | `/` | 篩選程序（Enter 套用、Esc 清除） |
 | `s` / `r` | 排序欄位／反轉順序 |
-| `+` / `-` | 調整採樣間隔（store 確認後才保存） |
-| `K` | 對選取的程序請求 SIGTERM（需要確認） |
+| `+` / `-` | 調整採樣間隔 |
+| `K` | 結束選取的程序（需要確認） |
 | `y`/`Enter`、`n`/`Esc` | 確認／取消待執行的程序操作 |
 | `F2`、`?`/`F1` | 設定頁、說明 |
 
-版面依終端大小調整：80×24 以上為完整版面，更小時為精簡摘要，小於 40×10 時顯示尺寸提示（仍可離開）。命令列參數只在明確指定時覆寫已保存的設定，而且只影響本次執行。
+命令列參數只在本次執行時覆寫已保存的設定。
 
 ## 設定與檔案
 
 | 用途 | 位置 |
 |---|---|
-| 設定（schema 2、版本化、原子寫入） | `$XDG_CONFIG_HOME/dgxtop/v2/config.json`（`~/.config/dgxtop/v2/config.json`） |
-| 操作稽核（SQLite、`synchronous=FULL`） | `$XDG_STATE_HOME/dgxtop/v2/audit.sqlite3`（`~/.local/state/...`） |
-| 歷史封存（預設開啟、7 天、最多 1 GiB） | `$XDG_STATE_HOME/dgxtop/v2/history.sqlite3` |
-| 有界日誌、執行個體鎖 | `$XDG_STATE_HOME/dgxtop/v2/` |
+| 設定 | `$XDG_CONFIG_HOME/dgxtop/v2/config.json`（`~/.config/dgxtop/v2/config.json`） |
+| 歷史（7 天、最多 1 GiB） | `$XDG_STATE_HOME/dgxtop/v2/history.sqlite3`（`~/.local/state/...`） |
+| 程序操作紀錄 | `$XDG_STATE_HOME/dgxtop/v2/audit.sqlite3` |
+| 日誌與執行個體鎖 | `$XDG_STATE_HOME/dgxtop/v2/` |
 
-目錄以 `0700`、檔案以 `0600` 建立。完整命令列、環境變數與 token 永遠不會寫入磁碟。設定契約見 [`spec/dgxtop-v2/contracts/CONFIG.md`](../spec/dgxtop-v2/contracts/CONFIG.md)，預設值見 [`spec/dgxtop-v2/examples/config.default.json`](../spec/dgxtop-v2/examples/config.default.json)。從 v1 升級不會修改 `~/.config/dgxtop/config.json`：先用 `--import-legacy <path> --dry-run` 檢查對應，再用 `--apply` 寫入 v2 設定檔。
-
-## 開發與驗證
-
-```bash
-just ci        # fmt、check、clippy -D warnings、測試、依賴邊界（全部 --locked）
-just e2e       # 依需求執行的端對端測試：PTY 會話、故障注入、真實 host 程序
-just hardware  # 在真實 procfs/sysfs/NVML 上的硬體測試（pidfd 只用可拋棄的子程序）
-```
-
-格式、lint、測試套件（x86_64 上 1,373 項、aarch64 上 1,372 項）、依賴邊界與硬體測試，在 Debian 13 工作站（RTX 5080 + RTX 3060）與 DGX Spark（GB10）上都通過，紀錄與 SHA-256 在 [`docs/validation/evidence/`](validation/evidence/)。[`docs/validation/VALIDATION.md`](validation/VALIDATION.md) 追蹤 40 項驗收案例（目前 14 PASS、24 NOT_RUN、2 BLOCKED）。3 × 30 分鐘的效能基準與 72 小時 soak 都還沒做，所以沒有任何平台被宣稱為已驗收，規格裡的效能數字仍是目標。
-
-## 文件
-
-- [設計說明](https://dennysora.me/zh-hant/projects/tools/dgxtop/)：架構與背後的想法（[English](https://dennysora.me/en/projects/tools/dgxtop/)）。
-- [`spec/dgxtop-v2/`](../spec/dgxtop-v2/README.md)：規格。
-- [`docs/design/DECISIONS.md`](design/DECISIONS.md)：實作決策 D-01 到 D-63。
-- [`docs/design/history-redesign.md`](design/history-redesign.md)：歷史畫面的設計分析。
+目錄以 `0700`、檔案以 `0600` 建立。從 v1 升級不會修改 `~/.config/dgxtop/config.json`：先用 `--import-legacy <path> --dry-run` 檢查對應，再用 `--apply` 寫入 v2 設定檔。
 
 ## 授權
 
