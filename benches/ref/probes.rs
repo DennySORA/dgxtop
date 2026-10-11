@@ -12,8 +12,8 @@ use dgxtop::perf::coverage::{COMMIT_GRACE_NS, CoverageLedger, CoverageReport, Sc
 use dgxtop::perf::latency::{PendingRequests, ProjectionLatencyTracker, duration_us};
 use dgxtop_core::canonical::{CollectionBatch, StoreAck};
 use dgxtop_core::errors::{ErrorCode, ErrorDetail};
-use dgxtop_core::history::HistoryResult;
 use dgxtop_core::observation::BatchStatus;
+use dgxtop_core::overview_history::OverviewAnswer;
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -194,7 +194,7 @@ impl Probes {
     pub fn on_history_result(
         &self,
         request_id: &Uuid,
-        result: &Result<HistoryResult, ErrorDetail>,
+        result: &Result<OverviewAnswer, ErrorDetail>,
     ) {
         let finished = Instant::now();
         let measuring = self.is_measuring();
@@ -206,8 +206,12 @@ impl Probes {
             return;
         }
         let (label, sampled) = match result {
-            Ok(result) => {
-                probe.max_points = probe.max_points.max(result.points.len());
+            Ok(answer) => {
+                let points = match answer {
+                    OverviewAnswer::Bars(bars) => bars.bars.len(),
+                    OverviewAnswer::Windows(windows) => windows.len(),
+                };
+                probe.max_points = probe.max_points.max(points);
                 ("ok".to_owned(), true)
             }
             Err(error) => (

@@ -21,9 +21,7 @@ use dgxtop_core::config::Config;
 use dgxtop_core::diagnostics::names;
 use dgxtop_core::errors::{ErrorCode, ResultCode};
 use dgxtop_core::event::EventKind;
-use dgxtop_core::history::{HistoryMethod, HistoryPoint, HistoryResult};
 use dgxtop_core::identity::{Pid, PidNamespace, ProcessKey};
-use dgxtop_core::metric::Scalar;
 use dgxtop_core::observation::{
     BatchStatus, IPC_PROTOCOL_VERSION, Observation, ObservationBatch, PAGE_CONTINUES, ReadPlan,
     split_page,
@@ -881,36 +879,25 @@ fn history_view_queries_and_drops_stale_generations() {
     let jobs = harness.ports.history.take();
     assert!(!jobs.is_empty());
     let job = &jobs[0];
-    assert_eq!(job.query.key.metric_id.as_str(), "cpu.utilization.total");
+    assert_eq!(
+        job.request.series().metric_id.as_str(),
+        "cpu.utilization.total"
+    );
     assert_eq!(job.session_id, *harness.session.session_id());
-    let result = HistoryResult {
-        schema_version: 1,
-        request_id: job.query.request_id,
-        key: job.query.key.clone(),
-        start_boot_ns: job.query.start_boot_ns,
-        end_boot_ns: job.query.end_boot_ns,
-        covered_ns: 0,
-        coverage_ratio: 0.0,
-        truncated: false,
-        points: vec![HistoryPoint {
-            start_boot_ns: job.query.start_boot_ns,
-            end_boot_ns: job.query.end_boot_ns,
-            value: Some(Scalar::from_f64(1.0).unwrap()),
-            covered_ns: 1,
-            method: HistoryMethod::TimeWeightedStep,
-            source_ids: Vec::new(),
-            reason: None,
-        }],
-        source_changes: Vec::new(),
-        clock_discontinuities: Vec::new(),
-        snapshot_revision: 1,
-        next_start_boot_ns: None,
-    };
+    let answer = dgxtop_core::overview_history::OverviewAnswer::Bars(
+        dgxtop_core::overview_history::OverviewBars {
+            epoch: 0,
+            settled_through_utc_ns: 0,
+            bars: Vec::new(),
+            kept_on_disk: false,
+            store_issue: None,
+        },
+    );
     harness.control(ControlCompletion::History {
-        request_id: job.query.request_id,
+        request_id: job.request_id,
         session_id: job.session_id.clone(),
         session_generation: job.session_generation + 1,
-        result: Ok(result),
+        result: Ok(answer),
     });
     harness.settle();
     assert_eq!(

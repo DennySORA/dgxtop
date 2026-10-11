@@ -356,6 +356,37 @@ mod tests {
         );
     }
 
+    /// The history keeps only the Overview metrics in every bar size
+    /// (D-82): every series the view charts or summarizes is one of them.
+    #[test]
+    fn every_pick_is_a_series_the_history_keeps_in_every_size() {
+        use dgxtop_core::overview_history::is_overview_metric;
+        let metrics = [
+            ids::CPU_UTILIZATION_TOTAL,
+            ids::MEMORY_USED,
+            ids::GPU_UTILIZATION_COMPUTE,
+            ids::GPU_MEMORY_FB_USED,
+            ids::GPU_MEMORY_PROCESS_ALLOCATED,
+            ids::GPU_TEMPERATURE,
+            ids::GPU_POWER_DRAW,
+            ids::DISK_READ_BPS,
+            ids::DISK_WRITE_BPS,
+            ids::NET_RX_BPS,
+            ids::NET_TX_BPS,
+        ];
+        assert!(metrics.iter().all(|metric| is_overview_metric(metric)));
+        let mut fixture = host();
+        disk(&mut fixture, "blockdev:259:0", "nvme0n1", 100.0);
+        let picked = pick(&fixture, &[]);
+        for spec in picked.charts.iter().chain(&picked.stats) {
+            assert!(
+                is_overview_metric(spec.key.metric_id.as_str()),
+                "{}",
+                spec.key.metric_id
+            );
+        }
+    }
+
     #[test]
     fn nothing_reported_gives_no_charts() {
         assert_eq!(pick(&Fixture::new(), &[]), HistoryPicks::default());

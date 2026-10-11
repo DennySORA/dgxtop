@@ -518,10 +518,8 @@ pub struct HistoryWindowSummary {
     pub mean: Option<f64>,
     pub peak: Option<f64>,
     pub coverage_ratio: Option<f64>,
-    /// Time the history holds in the window, from memory and the archive
-    /// (D-51). Without the archive a window reaching back before boot is
-    /// answered from boot on, so its ratio is of the time since boot; this
-    /// stays the time recorded (D-50).
+    /// Time the history holds in the window: the time its aligned buckets
+    /// recorded (D-50, D-82).
     pub covered_ns: Option<u64>,
     /// Mean times covered time (joules for power); `None` for other series.
     pub integral: Option<f64>,
@@ -646,14 +644,14 @@ pub struct RunChartView {
     pub latest: Option<f64>,
 }
 
-/// Where the history before this run comes from (D-51).
+/// Where the history before this run comes from (D-51, D-82).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DiskHistory {
     /// No archive: the history starts with dgxtop.
     Off,
-    /// Earlier runs and boots are read back from the archive on disk.
+    /// Earlier runs and boots are kept on disk in every bar size.
     On,
-    /// The archive could not be read; why.
+    /// The history's store could not keep or read them; why.
     Failed(String),
 }
 
@@ -664,10 +662,14 @@ pub struct HistoryView {
     pub window_label: String,
     pub requested_span_ns: u64,
     /// The time axis every chart shares, on the wall clock (D-51):
-    /// `[start_utc_ns, end_utc_ns)`. It is the requested window, or without
-    /// the archive the part of it since boot.
+    /// `[start_utc_ns, end_utc_ns)`, a bar for each plot column on the
+    /// local clock, ending with the bar being filled now (D-82).
     pub start_utc_ns: u64,
     pub end_utc_ns: u64,
+    /// Local time's offset from UTC, seconds east: the axis reads the
+    /// local clock the bars follow (D-82).
+    #[serde(default)]
+    pub utc_offset_s: i32,
     pub charts: Vec<HistoryChartView>,
     /// Each GPU's statistics over the last 1 h, 6 h, 12 h and 24 h (D-48).
     pub summaries: Vec<HistoryWindowSummary>,

@@ -18,9 +18,8 @@ use dgxtop_core::diagnostics::Diagnostics;
 use dgxtop_core::identity::{BootId, HostId, PidNamespace};
 use dgxtop_core::observation::AdapterManifest;
 use dgxtop_core::ports::{
-    AdapterJob, ArchiveReadJob, Collector, ConfigJob, ControlCompletion, Dispatch, HistoryJob,
-    IngestionCompletion, Logger, ProbeDeriver, ProcessHistoryJob, ProcessProbeJob, SnapshotReader,
-    StoreJob,
+    AdapterJob, Collector, ConfigJob, ControlCompletion, Dispatch, HistoryJob, IngestionCompletion,
+    Logger, ProbeDeriver, ProcessHistoryJob, ProcessProbeJob, SnapshotReader, StoreJob,
 };
 use dgxtop_core::quality::Namespace;
 
@@ -45,10 +44,8 @@ pub struct ManagerPorts {
     pub collector_registry: Vec<Arc<dyn Collector>>,
     pub store: Box<dyn Dispatch<StoreJob>>,
     pub snapshots: Arc<dyn SnapshotReader>,
+    /// The Overview History's reads (D-82).
     pub history: Box<dyn Dispatch<HistoryJob>>,
-    /// Reads of the history archive for the history view (D-51); `None`
-    /// when the archive is off.
-    pub archive_reads: Option<Box<dyn Dispatch<ArchiveReadJob>>>,
     pub config: Box<dyn Dispatch<ConfigJob>>,
     pub audit: Box<dyn Dispatch<AuditOp>>,
     pub actions: Box<dyn Dispatch<ActionOp>>,

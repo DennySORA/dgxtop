@@ -122,7 +122,6 @@ fn fixture_with_audit(audit: Box<dyn Dispatch<AuditOp>>) -> Fixture {
         store: Box::new(CapturingDispatch::<StoreJob>::new()),
         snapshots: Arc::new(Snapshots::default()),
         history: Box::new(CapturingDispatch::<HistoryJob>::new()),
-        archive_reads: None,
         config: Box::new(config_jobs.clone()),
         audit,
         actions: Box::new(CapturingDispatch::<ActionOp>::new()),

@@ -333,6 +333,7 @@ impl TierBook {
                 epoch: 0,
                 settled_through_utc_ns: i64::MIN,
                 bars: merge_extra(Vec::new(), tier, self.shift_ns, window, extra),
+                kept_on_disk: false,
                 store_issue: None,
             };
         };
@@ -351,6 +352,7 @@ impl TierBook {
                 i64::MIN
             },
             bars: merge_extra(bars, tier, self.shift_ns, window, &waiting),
+            kept_on_disk: false,
             store_issue: None,
         }
     }

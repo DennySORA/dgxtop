@@ -1,54 +1,28 @@
-//! [`SqliteArchiveReader`]: the history view's reader of the archive
-//! (D-51).
+//! [`SqliteArchiveReader`]: the reader of the archive (D-51) through which
+//! the history compresses the Overview series' archived minutes at startup
+//! (D-82, [`super::backfill`]): the series earlier runs left, then each
+//! one's minutes oldest first, a bounded page a read.
 //!
 //! It holds a read-only connection of its own (`query_only`), opened on the
-//! first read after the writer has created the schema. A read finds the
-//! series' segments in every boot (in the series' canonical unit, so units
-//! never mix), reads each segment's gauge minutes that started in the
-//! window with one short statement (no read pins the WAL for long), checks
-//! the deadline and the cancel flag between rows, and merges the minutes
-//! into points by the UTC grid; a point spans the minutes merged into it,
-//! so it sits where they were recorded. Boot clocks differ between boots,
-//! so the minutes are placed by their UTC stamps, which STORAGE.md §3
-//! allows for display.
-//!
-//! The history compresses the Overview series' archived minutes at startup
-//! through the same reader (D-82, [`super::backfill`]): the series earlier
-//! runs left, then each one's minutes oldest first, a bounded page a read.
+//! first read after the writer has created the schema; each read is one
+//! short statement, so no read pins the WAL for long. Boot clocks differ
+//! between boots, so the minutes are placed by their UTC stamps, which
+//! STORAGE.md §3 allows for display.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use dgxtop_core::clock::TimeProvider;
-use dgxtop_core::errors::{ErrorCode, ErrorDetail, InfraError};
-use dgxtop_core::history::{ArchivePoint, ArchiveQuery, ArchiveResult, SeriesInEveryBoot};
-use dgxtop_core::metric::descriptor;
+use dgxtop_core::errors::InfraError;
+use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::overview_history::{ArchivedMinutes, ArchivedMinutesRead, ArchivedSeriesList};
-use dgxtop_core::ports::{ArchiveReader, CancelFlag};
+use dgxtop_core::ports::ArchiveReader;
 use rusqlite::config::DbConfig;
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{Connection, OpenFlags};
 
-use crate::sqlite::{FaultKind, SCHEMA_USER_VERSION, describe, fault_kind, parse_utc_rfc3339_ns};
-use dgxtop_core::clock::format_utc_ns;
+use crate::sqlite::{FaultKind, SCHEMA_USER_VERSION, describe, fault_kind};
 
 /// The writer holds the lock only for its short batches.
 const BUSY_TIMEOUT: Duration = Duration::from_millis(50);
-/// Rows read between two deadline and cancel checks.
-const CHECK_INTERVAL: u64 = 512;
-/// Segments one read merges: every boot and source generation of a week.
-const MAX_SEGMENTS: usize = 256;
-/// Minutes one read may return (a week of one series is 10 080).
-const MAX_ROWS: u64 = 200_000;
-const SELECT_SEGMENTS: &str = "SELECT segment_id, boot_id FROM history_segments \
-     WHERE host_id = ?1 AND entity_id = ?2 AND metric_id = ?3 AND scope = ?4 AND unit = ?5 \
-     LIMIT ?6";
-/// `+start_utc` keeps the planner on the primary key: one segment's rows,
-/// never every series' minutes of the window.
-const SELECT_MINUTES: &str = "SELECT start_utc, end_utc, covered_ns, weighted_sum, maximum \
-     FROM history_buckets \
-     WHERE segment_id = ?1 AND +start_utc >= ?2 AND +start_utc < ?3 \
-     AND method = 'time_weighted_step'";
 
 /// What the reader knows of the archive file.
 enum ArchiveFile {
@@ -59,7 +33,7 @@ enum ArchiveFile {
     Refused(String),
 }
 
-/// The archive's reader for the history view.
+/// The archive's reader.
 pub struct SqliteArchiveReader {
     path: PathBuf,
     file: ArchiveFile,
@@ -113,6 +87,34 @@ fn open(path: &Path) -> rusqlite::Result<Opened> {
     })
 }
 
+/// Why a read failed.
+enum Failure {
+    Sqlite(rusqlite::Error),
+    Refused(String),
+}
+
+impl Failure {
+    fn into_infra(self) -> InfraError {
+        match self {
+            Self::Sqlite(error) if fault_kind(&error) == FaultKind::Busy => {
+                InfraError::Unavailable(format!(
+                    "history archive read failed: {}",
+                    describe(&error)
+                ))
+            }
+            Self::Sqlite(error) => {
+                InfraError::Database(format!("history archive read failed: {}", describe(&error)))
+            }
+            Self::Refused(reason) => InfraError::Unavailable(reason),
+        }
+    }
+
+    /// A SQLite failure other than a busy lock reopens the file next time.
+    fn closes_connection(&self) -> bool {
+        matches!(self, Self::Sqlite(error) if fault_kind(error) != FaultKind::Busy)
+    }
+}
+
 impl SqliteArchiveReader {
     /// A reader of the archive at `path`; nothing is opened before a read.
     pub fn new(path: &Path) -> Self {
@@ -138,346 +140,47 @@ impl SqliteArchiveReader {
         }
     }
 
-    fn read_minutes(
+    /// Runs `read` on the open archive (`empty` without one); a broken
+    /// connection is opened again next time.
+    fn with_archive<T>(
         &mut self,
-        query: &ArchiveQuery,
-        guard: &mut ReadGuard<'_>,
-    ) -> Result<ArchiveResult, Failure> {
-        guard.checkpoint()?;
-        let Some(connection) = self.connection()? else {
-            return Ok(ArchiveResult::empty(query.request_id));
+        empty: T,
+        read: impl FnOnce(&Connection) -> rusqlite::Result<T>,
+    ) -> Result<T, InfraError> {
+        let result = match self.connection() {
+            Ok(Some(connection)) => read(connection).map_err(Failure::Sqlite),
+            Ok(None) => Ok(empty),
+            Err(failure) => Err(failure),
         };
-        let segments = segments_of(connection, query)?;
-        let bounds = utc_bounds(query);
-        let mut points = PointSums::new(query);
-        let mut statement = connection.prepare_cached(SELECT_MINUTES)?;
-        for (segment_id, boot_id) in &segments.found {
-            guard.checkpoint()?;
-            let mut rows = statement.query(params![segment_id, bounds.0, bounds.1])?;
-            while let Some(row) = rows.next()? {
-                guard.charge()?;
-                let minute = Minute {
-                    start_utc: row.get(0)?,
-                    end_utc: row.get(1)?,
-                    covered_ns: row.get(2)?,
-                    weighted_sum: row.get(3)?,
-                    maximum: row.get(4)?,
-                };
-                points.add(&minute, boot_id);
+        result.map_err(|failure| {
+            if failure.closes_connection() {
+                self.file = ArchiveFile::Closed;
             }
-        }
-        Ok(points.finish(query, segments.truncated))
+            failure.into_infra()
+        })
     }
 }
 
 impl ArchiveReader for SqliteArchiveReader {
-    fn read(
-        &mut self,
-        query: &ArchiveQuery,
-        deadline_boot_ns: u64,
-        cancel: &CancelFlag,
-        clock: &dyn TimeProvider,
-    ) -> Result<ArchiveResult, ErrorDetail> {
-        let selector = format!(
-            "{}|{}|{}",
-            query.series.metric_id, query.series.scope, query.series.entity_id
-        );
-        let error = |code: ErrorCode, message: String| {
-            ErrorDetail::new(code, message)
-                .with_request(query.request_id)
-                .with_affected(&selector)
-        };
-        query
-            .validate()
-            .map_err(|invalid| error(ErrorCode::ValidationFailed, invalid.to_string()))?;
-        let mut guard = ReadGuard {
-            deadline_ns: deadline_boot_ns,
-            cancel,
-            clock,
-            rows: 0,
-            since_check: 0,
-        };
-        self.read_minutes(query, &mut guard).map_err(|failure| {
-            let (code, message) = failure.describe();
-            if failure.closes_connection() {
-                self.file = ArchiveFile::Closed;
-            }
-            error(code, message)
-        })
-    }
-
     fn archived_series(
         &mut self,
         list: &ArchivedSeriesList,
     ) -> Result<Vec<SeriesInEveryBoot>, InfraError> {
-        let result = match self.connection() {
-            Ok(Some(connection)) => {
-                super::backfill::series(connection, list).map_err(Failure::Sqlite)
-            }
-            Ok(None) => Ok(Vec::new()),
-            Err(failure) => Err(failure),
-        };
-        result.map_err(|failure| self.infra_failure(&failure))
+        self.with_archive(Vec::new(), |connection| {
+            super::backfill::series(connection, list)
+        })
     }
 
     fn archived_minutes(
         &mut self,
         read: &ArchivedMinutesRead,
     ) -> Result<ArchivedMinutes, InfraError> {
-        let result = match self.connection() {
-            Ok(Some(connection)) => {
-                super::backfill::minutes(connection, read).map_err(Failure::Sqlite)
-            }
-            Ok(None) => Ok(ArchivedMinutes {
-                minutes: Vec::new(),
-                more: false,
-            }),
-            Err(failure) => Err(failure),
+        let empty = ArchivedMinutes {
+            minutes: Vec::new(),
+            more: false,
         };
-        result.map_err(|failure| self.infra_failure(&failure))
-    }
-}
-
-impl SqliteArchiveReader {
-    /// A failure as the history's store port reports it; a broken
-    /// connection is opened again next time.
-    fn infra_failure(&mut self, failure: &Failure) -> InfraError {
-        if failure.closes_connection() {
-            self.file = ArchiveFile::Closed;
-        }
-        let (code, message) = failure.describe();
-        if code == ErrorCode::Busy {
-            InfraError::Unavailable(message)
-        } else {
-            InfraError::Database(message)
-        }
-    }
-}
-
-/// Why a read failed.
-enum Failure {
-    Sqlite(rusqlite::Error),
-    Refused(String),
-    Cancelled,
-    TimedOut { rows: u64 },
-    TooLarge,
-}
-
-impl From<rusqlite::Error> for Failure {
-    fn from(error: rusqlite::Error) -> Self {
-        Self::Sqlite(error)
-    }
-}
-
-impl Failure {
-    fn describe(&self) -> (ErrorCode, String) {
-        match self {
-            Self::Sqlite(error) => {
-                let code = if fault_kind(error) == FaultKind::Busy {
-                    ErrorCode::Busy
-                } else {
-                    ErrorCode::Unavailable
-                };
-                (
-                    code,
-                    format!("history archive read failed: {}", describe(error)),
-                )
-            }
-            Self::Refused(reason) => (ErrorCode::Unavailable, reason.clone()),
-            Self::Cancelled => (
-                ErrorCode::Cancelled,
-                "history archive read cancelled".to_owned(),
-            ),
-            Self::TimedOut { rows } => (
-                ErrorCode::TimedOut,
-                format!("history archive read passed its deadline after {rows} minutes"),
-            ),
-            Self::TooLarge => (
-                ErrorCode::QueryTooLarge,
-                format!("history archive read would return more than {MAX_ROWS} minutes"),
-            ),
-        }
-    }
-
-    /// A SQLite failure other than a busy lock reopens the file next time.
-    fn closes_connection(&self) -> bool {
-        matches!(self, Self::Sqlite(error) if fault_kind(error) != FaultKind::Busy)
-    }
-}
-
-/// Deadline, cancel flag and row budget of one read.
-struct ReadGuard<'a> {
-    deadline_ns: u64,
-    cancel: &'a CancelFlag,
-    clock: &'a dyn TimeProvider,
-    rows: u64,
-    since_check: u64,
-}
-
-impl ReadGuard<'_> {
-    /// Fails with `Cancelled` or `TimedOut` (cancellation wins).
-    fn checkpoint(&mut self) -> Result<(), Failure> {
-        self.since_check = 0;
-        if self.cancel.is_cancelled() {
-            return Err(Failure::Cancelled);
-        }
-        if self.clock.now_boot_ns() >= self.deadline_ns {
-            return Err(Failure::TimedOut { rows: self.rows });
-        }
-        Ok(())
-    }
-
-    fn charge(&mut self) -> Result<(), Failure> {
-        self.rows = self.rows.saturating_add(1);
-        if self.rows > MAX_ROWS {
-            return Err(Failure::TooLarge);
-        }
-        self.since_check = self.since_check.saturating_add(1);
-        if self.since_check >= CHECK_INTERVAL {
-            self.checkpoint()?;
-        }
-        Ok(())
-    }
-}
-
-/// The series' segments in every boot.
-struct Segments {
-    found: Vec<(String, String)>,
-    truncated: bool,
-}
-
-fn segments_of(connection: &Connection, query: &ArchiveQuery) -> Result<Segments, Failure> {
-    let series = &query.series;
-    let Some(known) = descriptor(series.metric_id.as_str()) else {
-        return Ok(Segments {
-            found: Vec::new(),
-            truncated: false,
-        });
-    };
-    let unit = known.unit.to_string();
-    let limit = i64::try_from(MAX_SEGMENTS + 1).unwrap_or(i64::MAX);
-    let mut statement = connection.prepare_cached(SELECT_SEGMENTS)?;
-    let rows = statement.query_map(
-        params![
-            series.host_id.as_str(),
-            series.entity_id.as_str(),
-            series.metric_id.as_str(),
-            series.scope.as_str(),
-            unit,
-            limit
-        ],
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-    )?;
-    let mut found = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-    let truncated = found.len() > MAX_SEGMENTS;
-    found.truncate(MAX_SEGMENTS);
-    Ok(Segments { found, truncated })
-}
-
-/// The window as the archive's UTC text (`…T12:00:00.000000000Z`).
-fn utc_bounds(query: &ArchiveQuery) -> (String, String) {
-    let text = |utc_ns: u64| format_utc_ns(i128::from(utc_ns)).unwrap_or_default();
-    (text(query.start_utc_ns), text(query.end_utc_ns))
-}
-
-/// One archived gauge minute as stored.
-struct Minute {
-    start_utc: String,
-    end_utc: String,
-    covered_ns: String,
-    weighted_sum: Option<f64>,
-    maximum: Option<f64>,
-}
-
-/// Running sums of one point: its minutes' extent, weighted sum, covered
-/// time and maximum.
-#[derive(Debug)]
-struct PointSum {
-    start_utc_ns: u64,
-    end_utc_ns: u64,
-    weighted_sum: f64,
-    covered_ns: u64,
-    maximum: Option<f64>,
-}
-
-/// Minutes merged into points on the UTC grid.
-struct PointSums {
-    point_ns: u64,
-    sums: BTreeMap<u64, PointSum>,
-    boots: BTreeSet<String>,
-}
-
-impl PointSums {
-    fn new(query: &ArchiveQuery) -> Self {
-        Self {
-            point_ns: query.point_ns,
-            sums: BTreeMap::new(),
-            boots: BTreeSet::new(),
-        }
-    }
-
-    /// Adds a minute to the point of the grid its start falls in; the point
-    /// grows to span it. A minute without covered time or with a malformed
-    /// stamp adds nothing.
-    fn add(&mut self, minute: &Minute, boot_id: &str) {
-        let utc = |text: &str| parse_utc_rfc3339_ns(text).and_then(|ns| u64::try_from(ns).ok());
-        let (Some(start), Some(end)) = (utc(&minute.start_utc), utc(&minute.end_utc)) else {
-            return;
-        };
-        let covered_ns = minute.covered_ns.parse::<u64>().unwrap_or(0);
-        let Some(weighted_sum) = minute.weighted_sum.filter(|sum| sum.is_finite()) else {
-            return;
-        };
-        if covered_ns == 0 || end <= start {
-            return;
-        }
-        self.boots.insert(boot_id.to_owned());
-        let sum = self
-            .sums
-            .entry(start - start % self.point_ns.max(1))
-            .or_insert(PointSum {
-                start_utc_ns: start,
-                end_utc_ns: end,
-                weighted_sum: 0.0,
-                covered_ns: 0,
-                maximum: None,
-            });
-        sum.start_utc_ns = sum.start_utc_ns.min(start);
-        sum.end_utc_ns = sum.end_utc_ns.max(end);
-        sum.weighted_sum += weighted_sum;
-        sum.covered_ns = sum.covered_ns.saturating_add(covered_ns);
-        if let Some(maximum) = minute.maximum.filter(|maximum| maximum.is_finite()) {
-            sum.maximum = Some(sum.maximum.map_or(maximum, |known| known.max(maximum)));
-        }
-    }
-
-    #[allow(clippy::cast_precision_loss)]
-    fn finish(self, query: &ArchiveQuery, segments_truncated: bool) -> ArchiveResult {
-        let cap = usize::try_from(query.max_points).unwrap_or(usize::MAX);
-        let skip = self.sums.len().saturating_sub(cap);
-        let points: Vec<ArchivePoint> = self
-            .sums
-            .into_values()
-            .skip(skip)
-            .map(|sum| ArchivePoint {
-                start_utc_ns: sum.start_utc_ns,
-                end_utc_ns: sum.end_utc_ns,
-                mean: Some(sum.weighted_sum / sum.covered_ns as f64),
-                max: sum.maximum,
-                // Boots overlapping on the wall clock never claim more time
-                // than the point spans.
-                covered_ns: sum.covered_ns.min(sum.end_utc_ns - sum.start_utc_ns),
-            })
-            .collect();
-        ArchiveResult {
-            request_id: query.request_id,
-            covered_ns: points
-                .iter()
-                .map(|point| point.covered_ns)
-                .fold(0, u64::saturating_add),
-            points,
-            boots: u32::try_from(self.boots.len()).unwrap_or(u32::MAX),
-            truncated: skip > 0 || segments_truncated,
-        }
+        self.with_archive(empty, |connection| {
+            super::backfill::minutes(connection, read)
+        })
     }
 }

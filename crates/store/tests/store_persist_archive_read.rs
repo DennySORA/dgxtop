@@ -1,8 +1,7 @@
-//! Reading the history archive back for the history view (D-51): minutes of
-//! every boot of a series merged into points on the wall clock, a window
-//! that keeps only the minutes started in it, units that never mix, and a
-//! read that stays bounded (missing or unready file, refused schema,
-//! cancel, deadline, point cap).
+//! Reading the history archive back (D-51, D-82): the series earlier runs
+//! left and their minutes from every boot, oldest first, a page at a time,
+//! for the history's startup compression; units that never mix; a missing,
+//! unready or refused file; and the prunes the compression asks for.
 
 // Test helpers panic on setup failures; the lints target production code.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -12,13 +11,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dgxtop_core::clock::TimeProvider;
-use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::history::HistoryMethod;
-use dgxtop_core::history::{ARCHIVE_MINUTE_NS, ArchiveQuery, SeriesInEveryBoot};
+use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::identity::{BootId, HostId, MetricKey};
 use dgxtop_core::metric::CanonicalUnit;
 use dgxtop_core::ports::{
-    ArchiveJournal, ArchiveReader, ArchiveSink, ArchivedBucket, ArchivedSegment, CancelFlag,
+    ArchiveJournal, ArchiveReader, ArchiveSink, ArchivedBucket, ArchivedSegment,
 };
 use dgxtop_core::quality::SampleKind;
 use dgxtop_core::testing::{FakeClock, metric_key, source_id};
@@ -26,10 +24,8 @@ use dgxtop_store::archive::{ArchiveLimits, SqliteArchive, SqliteArchiveReader};
 use dgxtop_store::sqlite::StatvfsFreeSpace;
 use uuid::Uuid;
 
-const MINUTE: u64 = ARCHIVE_MINUTE_NS;
+const MINUTE: u64 = 60_000_000_000;
 const SECOND: u64 = 1_000_000_000;
-/// A deadline no read reaches.
-const NO_DEADLINE: u64 = u64::MAX;
 
 struct TempDir(PathBuf);
 
@@ -183,206 +179,29 @@ fn temperature_in(boot: &str) -> MetricKey {
     key
 }
 
-fn query(key: &MetricKey, start_utc: u64, end_utc: u64, point_ns: u64) -> ArchiveQuery {
-    ArchiveQuery {
-        request_id: Uuid::new_v4(),
+fn minutes_of(key: &MetricKey, before: u64) -> dgxtop_core::overview_history::ArchivedMinutesRead {
+    dgxtop_core::overview_history::ArchivedMinutesRead {
         series: SeriesInEveryBoot::from(key),
-        start_utc_ns: start_utc,
-        end_utc_ns: end_utc,
-        point_ns,
-        max_points: 2000,
+        from_utc_ns: 0,
+        segments_before_utc_ns: i64::try_from(before).unwrap(),
+        max_minutes: 100,
     }
 }
 
 #[test]
-fn every_boot_of_a_series_is_read_back_on_the_wall_clock() {
-    let mut fixture = Fixture::new("boots");
-    let now = fixture.now_utc();
-    let (boot_a, boot_b) = (temperature_in("boot-a"), temperature_in("boot-b"));
-    // Boot A three hours ago, ten minutes at 50 °C; boot B (its boot clock
-    // restarted near zero) an hour ago, five minutes at 70 °C.
-    let first = Run {
-        key: &boot_a,
-        segment_id: "seg-a",
-        unit: CanonicalUnit::DegC,
-        start_utc: now - 180 * MINUTE,
-        start_boot: 7_000 * MINUTE,
-    };
-    fixture.write(&first, &[Some(50.0); 10]);
-    let second = Run {
-        key: &boot_b,
-        segment_id: "seg-b",
-        unit: CanonicalUnit::DegC,
-        start_utc: now - 60 * MINUTE,
-        start_boot: 2 * MINUTE,
-    };
-    fixture.write(&second, &[Some(70.0); 5]);
-    let mut reader = fixture.reader();
-    // Asked through the current boot's key: the boot is not part of it.
-    let current = temperature_in("boot-c");
-    let half_hour = 30 * MINUTE;
-    let result = reader
-        .read(
-            &query(&current, now - 240 * MINUTE, now, half_hour),
-            NO_DEADLINE,
-            &CancelFlag::new(),
-            fixture.clock.as_ref(),
-        )
-        .unwrap();
-    assert_eq!(result.boots, 2);
-    assert_eq!(result.points.len(), 2, "{result:#?}");
-    let (older, newer) = (&result.points[0], &result.points[1]);
-    // A point spans the minutes merged into it, where they were recorded.
-    assert_eq!(older.start_utc_ns, now - 180 * MINUTE);
-    assert_eq!(older.end_utc_ns, now - 170 * MINUTE);
-    assert_eq!(newer.end_utc_ns - newer.start_utc_ns, 5 * MINUTE);
-    assert_eq!((older.mean, older.max), (Some(50.0), Some(52.0)));
-    assert_eq!(older.covered_ns, 10 * MINUTE);
-    assert_eq!((newer.mean, newer.max), (Some(70.0), Some(72.0)));
-    assert_eq!(newer.covered_ns, 5 * MINUTE);
-    assert_eq!(result.covered_ns, 15 * MINUTE);
-    assert!(!result.truncated);
-}
-
-#[test]
-fn a_point_weighs_its_minutes_by_covered_time_and_keeps_the_peak() {
-    let mut fixture = Fixture::new("weights");
-    let now = fixture.now_utc();
-    let key = temperature_in("boot-a");
-    let run = Run {
-        key: &key,
-        segment_id: "seg-a",
-        unit: CanonicalUnit::DegC,
-        start_utc: now - 30 * MINUTE,
-        start_boot: 100 * MINUTE,
-    };
-    // An uncovered minute in the middle adds no time and no weight.
-    fixture.write(&run, &[Some(40.0), None, Some(60.0), Some(80.0)]);
-    let result = fixture
-        .reader()
-        .read(
-            &query(&key, now - 60 * MINUTE, now, 60 * MINUTE),
-            NO_DEADLINE,
-            &CancelFlag::new(),
-            fixture.clock.as_ref(),
-        )
-        .unwrap();
-    let points: Vec<_> = result
-        .points
-        .iter()
-        .map(|point| (point.mean, point.max, point.covered_ns))
-        .collect();
-    assert_eq!(points, vec![(Some(60.0), Some(82.0), 3 * MINUTE)]);
-}
-
-#[test]
-fn a_window_keeps_only_the_minutes_that_started_in_it() {
-    let mut fixture = Fixture::new("window");
-    let now = fixture.now_utc();
-    let key = temperature_in("boot-a");
-    let run = Run {
-        key: &key,
-        segment_id: "seg-a",
-        unit: CanonicalUnit::DegC,
-        start_utc: now - 20 * MINUTE,
-        start_boot: 500 * MINUTE,
-    };
-    fixture.write(&run, &[Some(55.0); 10]);
-    let mut reader = fixture.reader();
-    let window = query(&key, now - 17 * MINUTE, now - 13 * MINUTE, MINUTE);
-    let result = reader
-        .read(
-            &window,
-            NO_DEADLINE,
-            &CancelFlag::new(),
-            fixture.clock.as_ref(),
-        )
-        .unwrap();
-    let starts: Vec<u64> = result
-        .points
-        .iter()
-        .map(|point| (now - point.start_utc_ns) / MINUTE)
-        .collect();
-    assert_eq!(starts, vec![17, 16, 15, 14]);
-    // A window with no minute in it.
-    let empty = query(&key, now - 5 * MINUTE, now, MINUTE);
-    let result = reader
-        .read(
-            &empty,
-            NO_DEADLINE,
-            &CancelFlag::new(),
-            fixture.clock.as_ref(),
-        )
-        .unwrap();
-    assert!(result.points.is_empty() && result.boots == 0);
-}
-
-#[test]
-fn other_units_series_and_hosts_are_never_merged() {
-    let mut fixture = Fixture::new("isolation");
-    let now = fixture.now_utc();
-    let key = temperature_in("boot-a");
-    let other_unit = Run {
-        key: &key,
-        segment_id: "seg-percent",
-        unit: CanonicalUnit::Percent,
-        start_utc: now - 10 * MINUTE,
-        start_boot: 10 * MINUTE,
-    };
-    fixture.write(&other_unit, &[Some(300.0); 3]);
-    let mut other_series = metric_key("gpu:GPU-2", "gpu.temperature", "gpu");
-    other_series.boot_id = BootId::new("boot-a").unwrap();
-    let neighbour = Run {
-        key: &other_series,
-        segment_id: "seg-other",
-        unit: CanonicalUnit::DegC,
-        start_utc: now - 10 * MINUTE,
-        start_boot: 10 * MINUTE,
-    };
-    fixture.write(&neighbour, &[Some(99.0); 3]);
-    let mut other_host = key.clone();
-    other_host.host_id = HostId::new("other-host").unwrap();
-    let elsewhere = Run {
-        key: &other_host,
-        segment_id: "seg-host",
-        unit: CanonicalUnit::DegC,
-        start_utc: now - 10 * MINUTE,
-        start_boot: 10 * MINUTE,
-    };
-    fixture.write(&elsewhere, &[Some(98.0); 3]);
-    let result = fixture
-        .reader()
-        .read(
-            &query(&key, now - 60 * MINUTE, now, MINUTE),
-            NO_DEADLINE,
-            &CancelFlag::new(),
-            fixture.clock.as_ref(),
-        )
-        .unwrap();
-    assert!(result.points.is_empty(), "{result:#?}");
-}
-
-#[test]
-fn a_missing_or_unready_archive_answers_with_no_points() {
+fn a_missing_or_unready_archive_holds_no_minutes() {
     let dir = TempDir::new("missing");
-    let clock = FakeClock::new(MINUTE);
     let key = temperature_in("boot-a");
-    let window = query(&key, MINUTE, 10 * MINUTE, MINUTE);
     let mut reader = SqliteArchiveReader::new(&dir.database());
-    let result = reader
-        .read(&window, NO_DEADLINE, &CancelFlag::new(), clock.as_ref())
-        .unwrap();
-    assert!(result.points.is_empty());
+    let read = minutes_of(&key, 10 * MINUTE);
+    assert!(reader.archived_minutes(&read).unwrap().minutes.is_empty());
     assert!(
         !dir.database().exists(),
         "the reader never creates the file"
     );
     // A file the writer has not given its schema yet.
     rusqlite::Connection::open(dir.database()).unwrap();
-    let result = reader
-        .read(&window, NO_DEADLINE, &CancelFlag::new(), clock.as_ref())
-        .unwrap();
-    assert!(result.points.is_empty());
+    assert!(reader.archived_minutes(&read).unwrap().minutes.is_empty());
 }
 
 #[test]
@@ -391,19 +210,12 @@ fn a_schema_this_build_does_not_know_is_refused_and_left_alone() {
     let connection = rusqlite::Connection::open(dir.database()).unwrap();
     connection.pragma_update(None, "user_version", 3).unwrap();
     drop(connection);
-    let clock = FakeClock::new(MINUTE);
     let key = temperature_in("boot-a");
     let mut reader = SqliteArchiveReader::new(&dir.database());
     let error = reader
-        .read(
-            &query(&key, MINUTE, 10 * MINUTE, MINUTE),
-            NO_DEADLINE,
-            &CancelFlag::new(),
-            clock.as_ref(),
-        )
+        .archived_minutes(&minutes_of(&key, 10 * MINUTE))
         .unwrap_err();
-    assert_eq!(error.code, ErrorCode::Unavailable);
-    assert!(error.message.contains("schema version 3"), "{error:?}");
+    assert!(error.to_string().contains("schema version 3"), "{error:?}");
     let version: i64 = rusqlite::Connection::open(dir.database())
         .unwrap()
         .pragma_query_value(None, "user_version", |row| row.get(0))
@@ -411,82 +223,32 @@ fn a_schema_this_build_does_not_know_is_refused_and_left_alone() {
     assert_eq!(version, 3);
 }
 
+/// Units never mix: a segment of the series in another unit is not read.
 #[test]
-fn a_read_stops_when_cancelled_or_past_its_deadline_and_rejects_bad_windows() {
-    let mut fixture = Fixture::new("bounds");
+fn other_units_are_never_read() {
+    let mut fixture = Fixture::new("units");
     let now = fixture.now_utc();
     let key = temperature_in("boot-a");
-    let run = Run {
-        key: &key,
-        segment_id: "seg-a",
-        unit: CanonicalUnit::DegC,
-        start_utc: now - 10 * MINUTE,
-        start_boot: 10 * MINUTE,
-    };
-    fixture.write(&run, &[Some(50.0); 3]);
-    let mut reader = fixture.reader();
-    let window = query(&key, now - 60 * MINUTE, now, MINUTE);
-    let cancel = CancelFlag::new();
-    cancel.cancel();
-    let cancelled = reader
-        .read(&window, NO_DEADLINE, &cancel, fixture.clock.as_ref())
-        .unwrap_err();
-    assert_eq!(cancelled.code, ErrorCode::Cancelled);
-    let past = fixture.clock.now_boot_ns();
-    let late = reader
-        .read(&window, past, &CancelFlag::new(), fixture.clock.as_ref())
-        .unwrap_err();
-    assert_eq!(late.code, ErrorCode::TimedOut);
-    let mut bad = window.clone();
-    bad.point_ns = 30 * SECOND;
-    let invalid = reader
-        .read(
-            &bad,
-            NO_DEADLINE,
-            &CancelFlag::new(),
-            fixture.clock.as_ref(),
-        )
-        .unwrap_err();
-    assert_eq!(invalid.code, ErrorCode::ValidationFailed);
-    // The reader keeps working after a failed read.
-    let result = reader
-        .read(
-            &window,
-            NO_DEADLINE,
-            &CancelFlag::new(),
-            fixture.clock.as_ref(),
-        )
-        .unwrap();
-    assert_eq!(result.points.len(), 3);
-}
-
-#[test]
-fn the_point_cap_keeps_the_newest_points_and_says_so() {
-    let mut fixture = Fixture::new("cap");
-    let now = fixture.now_utc();
-    let key = temperature_in("boot-a");
-    let run = Run {
-        key: &key,
-        segment_id: "seg-a",
-        unit: CanonicalUnit::DegC,
-        start_utc: now - 10 * MINUTE,
-        start_boot: 10 * MINUTE,
-    };
-    fixture.write(&run, &[Some(10.0), Some(20.0), Some(30.0)]);
-    let mut window = query(&key, now - 60 * MINUTE, now, MINUTE);
-    window.max_points = 2;
-    let result = fixture
+    for (segment_id, unit, value) in [
+        ("seg-c", CanonicalUnit::DegC, 50.0),
+        ("seg-k", CanonicalUnit::Count, 9.0),
+    ] {
+        let run = Run {
+            key: &key,
+            segment_id,
+            unit,
+            start_utc: now - 30 * MINUTE,
+            start_boot: MINUTE,
+        };
+        fixture.write(&run, &[Some(value); 3]);
+    }
+    let minutes = fixture
         .reader()
-        .read(
-            &window,
-            NO_DEADLINE,
-            &CancelFlag::new(),
-            fixture.clock.as_ref(),
-        )
-        .unwrap();
-    let means: Vec<_> = result.points.iter().map(|point| point.mean).collect();
-    assert_eq!(means, vec![Some(20.0), Some(30.0)]);
-    assert!(result.truncated);
+        .archived_minutes(&minutes_of(&key, now))
+        .unwrap()
+        .minutes;
+    assert_eq!(minutes.len(), 3);
+    assert!(minutes.iter().all(|minute| minute.mean() == Some(50.0)));
 }
 
 fn utc_i64(utc_ns: u64) -> i64 {

@@ -812,7 +812,6 @@ fn manager_ports(
         store: Box::new(CapturingDispatch::<StoreJob>::new()),
         snapshots,
         history: Box::new(CapturingDispatch::<HistoryJob>::new()),
-        archive_reads: None,
         config: Box::new(workers.config.clone()),
         audit: Box::new(RecordingDispatch::new(
             workers.audit.clone(),

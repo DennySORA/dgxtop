@@ -649,6 +649,7 @@ pub(crate) fn history_view() -> HistoryView {
         requested_span_ns: 60 * MINUTE,
         start_utc_ns: HISTORY_END - 60 * MINUTE,
         end_utc_ns: HISTORY_END,
+        utc_offset_s: 0,
         charts: vec![
             cpu,
             chart(

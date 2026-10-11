@@ -11,7 +11,7 @@
 //!   each commit to the history, `HistoryReader` and `OverviewReader`
 //!   (D-82); `HistoryTierStore` keeps the Overview's sizes.
 //! * Store: `ConfigRepository`, `AuditRepository`, `ArchiveSink`,
-//!   `ArchiveReader` (D-51).
+//!   `ArchiveReader` (D-51), `HistoryTierStore` (D-82).
 //! * Runtime: `Dispatch<J>` submits jobs to fixed workers without blocking;
 //!   results come back as `IngestionCompletion` / `ControlCompletion`.
 //! * UI: `SessionPort` (commands, projections, results) and
@@ -40,7 +40,7 @@ use crate::clock::TimeProvider;
 use crate::commands::{CommandEnvelope, CommandRejection, CommandResult};
 use crate::config::{Config, ConfigError, ValidationIssue};
 use crate::errors::{ErrorDetail, InfraError};
-use crate::history::{ArchiveQuery, ArchiveResult, HistoryQuery, HistoryResult};
+use crate::history::{HistoryQuery, HistoryResult};
 use crate::identity::{AdapterId, CollectorId, MetricKey, ProcessKey, SessionId, SourceId};
 use crate::observation::{
     AdapterHealth, AdapterManifest, CatalogDelta, DiscoverRequest, ObservationBatch, ReadPlan,
@@ -267,23 +267,12 @@ pub trait HistoryIngest: Send {
     fn take_archive_journal(&mut self, max_bytes: u64) -> Option<ArchiveJournal>;
 }
 
-/// Reader of the history archive (D-51): the minutes earlier runs and
-/// boots left on disk, for the history view. Bounded like the history
-/// reader: `TimedOut` past the deadline, `Cancelled` when the flag is set; an
-/// archive that does not exist yet answers with no points.
-///
-/// The history compresses the Overview series' archived minutes at
-/// startup through it (D-82): which series earlier runs left, and their
+/// Reader of the history archive (D-51, D-82): the minutes earlier runs
+/// and boots left on disk, which the history compresses into the
+/// Overview's sizes at startup: which series earlier runs left, and their
 /// minutes oldest first, a bounded page at a time. An archive that does not
 /// exist yet holds none.
 pub trait ArchiveReader: Send {
-    fn read(
-        &mut self,
-        query: &ArchiveQuery,
-        deadline_boot_ns: u64,
-        cancel: &CancelFlag,
-        clock: &dyn TimeProvider,
-    ) -> Result<ArchiveResult, ErrorDetail>;
     fn archived_series(
         &mut self,
         list: &ArchivedSeriesList,
@@ -611,21 +600,11 @@ pub enum StoreJob {
     Maintain,
 }
 
-/// One history query job.
+/// One Overview History read of a session's history view (D-82).
 #[derive(Debug, Clone)]
 pub struct HistoryJob {
-    pub query: HistoryQuery,
-    pub session_id: SessionId,
-    /// Session generation; results for an older generation are dropped.
-    pub session_generation: u64,
-    pub deadline_boot_ns: u64,
-    pub cancel: CancelFlag,
-}
-
-/// One archive read job for a session's history view (D-51).
-#[derive(Debug, Clone)]
-pub struct ArchiveReadJob {
-    pub query: ArchiveQuery,
+    pub request_id: Uuid,
+    pub request: OverviewRequest,
     pub session_id: SessionId,
     /// Session generation; results for an older generation are dropped.
     pub session_generation: u64,
@@ -733,18 +712,12 @@ pub enum ControlCompletion {
         outcome: ArchiveOutcome,
         status: Option<PersistenceStatus>,
     },
+    /// An Overview History read for a session's history view (D-82).
     History {
         request_id: Uuid,
         session_id: SessionId,
         session_generation: u64,
-        result: Result<HistoryResult, ErrorDetail>,
-    },
-    /// An archive read for a session's history view (D-51).
-    ArchiveRead {
-        request_id: Uuid,
-        session_id: SessionId,
-        session_generation: u64,
-        result: Result<ArchiveResult, ErrorDetail>,
+        result: Result<OverviewAnswer, ErrorDetail>,
     },
     /// What the process probe read (D-76).
     ProcessProbe(ProbeReport),

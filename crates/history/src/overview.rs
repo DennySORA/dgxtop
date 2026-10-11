@@ -247,6 +247,7 @@ impl OverviewTiers {
     ) -> OverviewBars {
         let inner = self.lock();
         let mut bars = inner.book.bars(series, tier, window, extra);
+        bars.kept_on_disk = inner.link.is_some();
         bars.store_issue = inner.link.as_ref().and_then(|link| link.issue.clone());
         bars
     }

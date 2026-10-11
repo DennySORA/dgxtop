@@ -25,8 +25,8 @@ use dgxtop_core::observation::{
     AdapterManifest, AdapterOperation, EntityKind, EntityRecord, Isolation, SourceDescriptor,
 };
 use dgxtop_core::ports::{
-    AdapterJob, ArchiveReadJob, ConfigJob, ControlCompletion, HistoryJob, IngestionCompletion,
-    SessionPort, StoreJob,
+    AdapterJob, ConfigJob, ControlCompletion, HistoryJob, IngestionCompletion, SessionPort,
+    StoreJob,
 };
 use dgxtop_core::ports::{Collector, IngressBatch, SnapshotReader};
 use dgxtop_core::quality::Availability;
@@ -360,7 +360,6 @@ pub(crate) struct Ports {
     pub(crate) collectors: CapturingDispatch<CollectionPlan>,
     pub(crate) store: CapturingDispatch<StoreJob>,
     pub(crate) history: CapturingDispatch<HistoryJob>,
-    pub(crate) archive_reads: CapturingDispatch<ArchiveReadJob>,
     pub(crate) config: CapturingDispatch<ConfigJob>,
     pub(crate) audit: CapturingDispatch<AuditOp>,
     pub(crate) actions: CapturingDispatch<ActionOp>,
@@ -430,7 +429,6 @@ pub(crate) fn harness_ports(options: &HarnessOptions) -> (ManagerPorts, Ports) {
         collectors: CapturingDispatch::new(),
         store: CapturingDispatch::new(),
         history: CapturingDispatch::new(),
-        archive_reads: CapturingDispatch::new(),
         config: CapturingDispatch::new(),
         audit: CapturingDispatch::new(),
         actions: CapturingDispatch::new(),
@@ -454,7 +452,6 @@ pub(crate) fn harness_ports(options: &HarnessOptions) -> (ManagerPorts, Ports) {
         store: Box::new(ports.store.clone()),
         snapshots: ports.snapshots.clone(),
         history: Box::new(ports.history.clone()),
-        archive_reads: Some(Box::new(ports.archive_reads.clone())),
         config: Box::new(ports.config.clone()),
         audit: Box::new(ports.audit.clone()),
         actions: Box::new(ports.actions.clone()),
