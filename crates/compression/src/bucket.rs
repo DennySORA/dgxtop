@@ -20,6 +20,16 @@ pub trait Bucket: Copy {
     fn is_empty(&self) -> bool;
 }
 
+/// A bucket whose samples can be cut by time: a window that cuts a bucket
+/// takes the share of it that falls inside (D-97), its samples assumed
+/// spread evenly over the bucket's time. Only a bucket that integrates
+/// over time cuts without bias; one that counts samples does not.
+pub trait Divisible: Bucket {
+    /// The share `fraction` (in `(0, 1)`) of this bucket's time holds.
+    #[must_use]
+    fn portion(&self, fraction: f64) -> Self;
+}
+
 impl Bucket for RunBucket {
     fn new(start_utc_ns: i64) -> Self {
         RunBucket::new(start_utc_ns)
@@ -112,6 +122,59 @@ impl Bucket for Tally {
 
     fn is_empty(&self) -> bool {
         self.samples == 0
+    }
+}
+
+/// A test bucket that integrates a value over time, to show how a cut
+/// bucket shares out.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Level {
+    pub(crate) start_utc_ns: i64,
+    /// Σ value × time.
+    pub(crate) integral: f64,
+    pub(crate) covered_ns: f64,
+}
+
+#[cfg(test)]
+impl Level {
+    pub(crate) fn mean(&self) -> Option<f64> {
+        (self.covered_ns > 0.0).then(|| self.integral / self.covered_ns)
+    }
+}
+
+#[cfg(test)]
+impl Bucket for Level {
+    fn new(start_utc_ns: i64) -> Self {
+        Self {
+            start_utc_ns,
+            integral: 0.0,
+            covered_ns: 0.0,
+        }
+    }
+
+    fn start_utc_ns(&self) -> i64 {
+        self.start_utc_ns
+    }
+
+    fn merge(&mut self, other: &Self) {
+        self.integral += other.integral;
+        self.covered_ns += other.covered_ns;
+    }
+
+    fn is_empty(&self) -> bool {
+        self.covered_ns <= 0.0
+    }
+}
+
+#[cfg(test)]
+impl Divisible for Level {
+    fn portion(&self, fraction: f64) -> Self {
+        Self {
+            start_utc_ns: self.start_utc_ns,
+            integral: self.integral * fraction,
+            covered_ns: self.covered_ns * fraction,
+        }
     }
 }
 

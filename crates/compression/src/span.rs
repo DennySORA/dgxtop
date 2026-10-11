@@ -25,12 +25,7 @@ pub fn merged_between<'a, B: Bucket + 'a>(
     let mut merged = B::new(start);
     let mut cursor = start;
     while cursor < end {
-        let fitting = Tier::ALL.into_iter().rev().find(|tier| {
-            tier.align(cursor, shift) == cursor
-                && cursor.saturating_add(tier.step_i64()) <= end
-                && series.holds(*tier, cursor)
-        });
-        let Some(tier) = fitting else {
+        let Some(tier) = whole_fit(series, cursor, end) else {
             let minute = Tier::OneMinute;
             cursor = minute
                 .align(cursor, shift)
@@ -49,9 +44,29 @@ pub fn merged_between<'a, B: Bucket + 'a>(
     merged
 }
 
+/// The coarsest size whose bucket starts at `cursor`, ends by `end` and
+/// is still held: the piece a window takes whole there.
+pub(crate) fn whole_fit<B: Bucket>(
+    series: &TieredSeries<B>,
+    cursor: i64,
+    end: i64,
+) -> Option<Tier> {
+    let shift = series.shift_ns();
+    Tier::ALL.into_iter().rev().find(|tier| {
+        tier.align(cursor, shift) == cursor
+            && cursor.saturating_add(tier.step_i64()) <= end
+            && series.holds(*tier, cursor)
+    })
+}
+
 /// Merges `tier`'s bucket at `start` with what its finer sizes still fill
 /// of that time (not merged into it yet), each piece once.
-fn take_bucket_at<B: Bucket>(series: &TieredSeries<B>, tier: Tier, start: i64, merged: &mut B) {
+pub(crate) fn take_bucket_at<B: Bucket>(
+    series: &TieredSeries<B>,
+    tier: Tier,
+    start: i64,
+    merged: &mut B,
+) {
     if let Some(kept) = series.kept_at(tier, start) {
         merged.merge(kept);
     }

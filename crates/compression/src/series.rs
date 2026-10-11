@@ -57,6 +57,29 @@ impl<B: Bucket> TieredSeries<B> {
         closed
     }
 
+    /// Lets `fill` add what was held over `[start, end)` to each 5 s bucket
+    /// that span crosses, given the time of the span in that bucket (ns);
+    /// returns the buckets of a minute and more it closed. A value that
+    /// holds between two readings (D-97) lands in every bucket of its time,
+    /// not only in the one it was read in.
+    pub fn record_span(
+        &mut self,
+        (start, end): (i64, i64),
+        mut fill: impl FnMut(&mut B, i64),
+    ) -> Vec<(Tier, B)> {
+        let mut closed = Vec::new();
+        let mut at = start;
+        while at < end {
+            let bucket_end = Tier::Recent
+                .align(at, self.shift_ns)
+                .saturating_add(Tier::Recent.step_i64());
+            let piece_end = bucket_end.min(end);
+            closed.extend(self.record(at, |bucket| fill(bucket, piece_end - at)));
+            at = piece_end;
+        }
+        closed
+    }
+
     /// Adds a whole bucket of `tier` (one that started at
     /// `bucket.start_utc_ns`, aligned or not) to the bucket of `tier` being
     /// filled at its aligned start; returns the buckets of a minute and
@@ -757,6 +780,32 @@ mod tests {
             .chain(series.unmerged(Tier::OneDay))
             .map(|tally| tally.samples)
             .sum()
+    }
+
+    /// A held span lands in every 5 s bucket of its time, cut at their
+    /// local-clock edges; an empty or inverted span records nothing.
+    #[test]
+    fn a_span_fills_each_bucket_it_crosses() {
+        let mut series = TieredSeries::<Tally>::new(2 * SECOND);
+        let mut pieces = Vec::new();
+        series.record_span((SECOND, 12 * SECOND), |tally, piece_ns| {
+            tally.samples += 1;
+            pieces.push(piece_ns / SECOND);
+        });
+        // At UTC+2 s the 5 s buckets start at 3, 8, 13 s UTC.
+        assert_eq!(pieces, vec![2, 5, 4]);
+        let starts: Vec<i64> = series
+            .buckets(Tier::Recent)
+            .map(|tally| tally.start_utc_ns / SECOND)
+            .collect();
+        assert_eq!(starts, vec![-2, 3, 8]);
+        assert!(
+            series
+                .record_span((20 * SECOND, 20 * SECOND), |_, _| panic!("no piece"))
+                .is_empty()
+        );
+        series.record_span((30 * SECOND, 25 * SECOND), |_, _| panic!("no piece"));
+        assert_eq!(series.buckets(Tier::Recent).count(), 3);
     }
 
     /// A size at its capacity holds only from its oldest bucket on.
