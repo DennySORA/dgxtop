@@ -1,13 +1,13 @@
 //! The finalized minutes of the Overview series as the sizes take them
 //! (D-82): the same rows the archive queue journals, placed on the wall
-//! clock by the boot-to-UTC pairing. Only series of the Overview metrics in
-//! their canonical unit count (units never mix); a minute without time held
+//! clock by the boot-to-UTC pairing. Only the Overview series in their
+//! canonical unit count (units never mix); a minute without time held
 //! is a gap and adds nothing. Bridges (counter intervals across minutes)
 //! are left out: the Overview series are gauges.
 
 use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::metric::descriptor;
-use dgxtop_core::overview_history::{OverviewBucket, is_overview_metric};
+use dgxtop_core::overview_history::{OverviewBucket, is_overview_series};
 
 use super::book::TierMinute;
 use crate::output::ArchiveRow;
@@ -40,7 +40,8 @@ pub(crate) fn is_overview_row(row: &ArchiveRow) -> bool {
 
 fn is_overview_segment(segment: &SegmentMeta) -> bool {
     let metric = segment.key.metric_id.as_str();
-    is_overview_metric(metric) && descriptor(metric).is_some_and(|known| known.unit == segment.unit)
+    is_overview_series(metric, segment.key.entity_id.as_str())
+        && descriptor(metric).is_some_and(|known| known.unit == segment.unit)
 }
 
 fn tier_minute(row: &ArchiveRow, clock: &WallClock) -> Option<TierMinute> {
@@ -138,7 +139,8 @@ mod tests {
     }
 
     /// An Overview gauge minute lands on the wall clock with what makes it
-    /// merge exactly; other metrics, units, gaps and empty minutes do not.
+    /// merge exactly; other metrics, units, entities, gaps and empty
+    /// minutes do not.
     #[test]
     fn overview_minutes_are_placed_on_the_wall_clock() {
         let rows = vec![
@@ -150,6 +152,12 @@ mod tests {
                 BUCKET_NS,
             ),
             gauge_row(ids::GPU_TEMPERATURE, CanonicalUnit::DegC, 0),
+            // A CPU series of one entity that is not the whole CPU.
+            gauge_row(
+                ids::CPU_UTILIZATION_TOTAL,
+                CanonicalUnit::Percent,
+                BUCKET_NS,
+            ),
         ];
         assert!(
             tier_minutes(&rows, &WallClock::default()).is_none(),

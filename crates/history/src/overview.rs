@@ -33,7 +33,7 @@ use dgxtop_core::identity::{HostId, MetricKey};
 use dgxtop_core::overview_history::{
     ArchivePrune, ArchivedMinutes, ArchivedMinutesRead, ArchivedSeriesList, HistoryTierCompletion,
     HistoryTierJob, OVERVIEW_METRICS, OverviewBars, OverviewBucket, StoredTierSeries, TierJournal,
-    TierRow,
+    TierRow, is_overview_series,
 };
 use dgxtop_core::ports::{Dispatch, DispatchError};
 use dgxtop_core::process_history::{TIER_BUCKETS, Tier};
@@ -303,7 +303,12 @@ fn listed(
     let queue = match result {
         Ok(series) => {
             link.listed = true;
-            series.into_iter().collect()
+            series
+                .into_iter()
+                .filter(|series| {
+                    is_overview_series(series.metric_id.as_str(), series.entity_id.as_str())
+                })
+                .collect()
         }
         Err(error) => {
             link.issue = Some(format!("history archive: {error}"));

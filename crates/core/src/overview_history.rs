@@ -16,6 +16,7 @@ use crate::errors::InfraError;
 use crate::history::SeriesInEveryBoot;
 use crate::identity::HostId;
 use crate::metric::ids;
+use crate::naming::entity;
 use crate::process_history::Tier;
 
 const NANOS_PER_SECOND_F64: f64 = 1e9;
@@ -36,9 +37,17 @@ pub const OVERVIEW_METRICS: [&str; 11] = [
     ids::NET_TX_BPS,
 ];
 
-/// Whether the Overview History keeps `metric_id` in every bar size.
+/// Whether `metric_id` is one the Overview History charts or summarizes.
 pub fn is_overview_metric(metric_id: &str) -> bool {
     OVERVIEW_METRICS.contains(&metric_id)
+}
+
+/// Whether the history keeps the series of `metric_id` on `entity_id` in
+/// every bar size: an Overview metric, and of the CPU only the whole (the
+/// history view charts the total, never each core).
+pub fn is_overview_series(metric_id: &str, entity_id: &str) -> bool {
+    is_overview_metric(metric_id)
+        && (metric_id != ids::CPU_UTILIZATION_TOTAL || entity_id == entity::CPU_AGGREGATE)
 }
 
 /// A span of one series' time, merged exactly from what it holds.
@@ -356,5 +365,14 @@ mod tests {
             assert!(is_overview_metric(metric));
         }
         assert!(!is_overview_metric(ids::CPU_UTILIZATION_IOWAIT));
+        assert!(is_overview_series(
+            ids::CPU_UTILIZATION_TOTAL,
+            entity::CPU_AGGREGATE
+        ));
+        assert!(!is_overview_series(
+            ids::CPU_UTILIZATION_TOTAL,
+            "cpu.core.3"
+        ));
+        assert!(is_overview_series(ids::GPU_POWER_DRAW, "gpu:GPU-1"));
     }
 }
