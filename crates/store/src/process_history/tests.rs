@@ -354,10 +354,12 @@ fn buckets_pack_twelve_bytes_a_metric_and_back() {
     assert_eq!(back.value(RunMetric::OpenFiles).peak(), Some(12.0));
     assert!(database::unpack(0, &packed[..95]).is_none());
     assert!(database::unpack(0, &[]).is_none());
-    // A bucket of version 2 held the first eight metrics.
-    let older = database::unpack(MINUTE, &packed[..96]).unwrap();
-    assert_eq!(older.value(RunMetric::Cpu).mean(), Some(20.0));
-    assert_eq!(older.value(RunMetric::OpenFiles).count, 0);
+    // Only this format's layout is read: a file of another format is
+    // recreated, never upgraded (D-85).
+    assert!(database::unpack(MINUTE, &packed[..96]).is_none());
+    let mut longer = packed.clone();
+    longer.extend([0; 12]);
+    assert!(database::unpack(MINUTE, &longer).is_none());
 }
 
 /// Writes a database of this schema holding one run, stamped with

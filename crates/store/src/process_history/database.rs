@@ -20,8 +20,6 @@ use crate::sqlite::{StepError, TxError, describe, immediate_transaction};
 const BUSY_DEADLINE: Duration = Duration::from_millis(500);
 const AGGREGATE_BYTES: usize = 12;
 const PACKED_BYTES: usize = AGGREGATE_BYTES * RUN_METRICS;
-/// The most a stored bucket may hold (the schema's limit).
-const MAX_PACKED_BYTES: usize = 1200;
 /// Ended runs whose buckets the startup load returns, the latest first.
 const ENDED_RUNS_WITH_BUCKETS: i64 = 32;
 /// Runs kept at most; the ones last seen longest ago give way.
@@ -395,13 +393,12 @@ pub(super) fn pack(bucket: &RunBucket) -> Vec<u8> {
     packed
 }
 
-/// A stored bucket of any version: the metrics it holds, in order; the
-/// ones it does not are empty (D-77).
+/// A stored bucket, every metric in [`RunMetric`] order; `None` for any
+/// other layout (a file of another format is recreated, D-85).
+///
+/// [`RunMetric`]: dgxtop_core::process_history::RunMetric
 pub(super) fn unpack(start_utc_ns: i64, packed: &[u8]) -> Option<RunBucket> {
-    if packed.is_empty()
-        || packed.len() > MAX_PACKED_BYTES
-        || !packed.len().is_multiple_of(AGGREGATE_BYTES)
-    {
+    if packed.len() != PACKED_BYTES {
         return None;
     }
     let mut bucket = RunBucket::new(start_utc_ns);

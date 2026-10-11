@@ -1,6 +1,6 @@
 -- dgxtop process history (D-76, D-77): GPU process runs and their buckets.
--- Not part of the sealed spec; user_version 3. A file of another format
--- is recreated, never upgraded (D-85).
+-- Not part of the sealed spec. A file of another format is recreated,
+-- never upgraded (D-85).
 PRAGMA foreign_keys = ON;
 BEGIN IMMEDIATE;
 
@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS process_runs (
         'dgxtop_sigterm', 'dgxtop_sigkill', 'signal', 'exit', 'oom',
         'not_visible', 'while_away', 'host_restarted')),
     end_code INTEGER CHECK (end_code IS NULL OR end_code BETWEEN 0 AND 255),
-    -- Version 3: what the probe read once (RunDetails).
+    -- What the probe read once (RunDetails).
     parent_pid INTEGER CHECK (parent_pid IS NULL OR parent_pid > 0),
     parent_name TEXT NOT NULL DEFAULT '',
     executable TEXT NOT NULL DEFAULT '',
@@ -38,8 +38,7 @@ CREATE TABLE IF NOT EXISTS process_runs (
 -- One closed bucket of a size (Tier::code): 1 a minute, 2 ten minutes,
 -- 3 to 12 five minutes, 30 minutes, 1, 2, 4, 6, 8, 12, 18 and 24 hours.
 -- `aggregates` packs, per metric in RunMetric order, count (u32), mean (f32)
--- and peak (f32), little-endian: 12 bytes a metric, as many metrics as the
--- version that wrote it knew (8 before version 3, 14 since).
+-- and peak (f32), little-endian: 12 bytes a metric, every metric.
 CREATE TABLE IF NOT EXISTS process_buckets (
     run_id INTEGER NOT NULL REFERENCES process_runs (run_id) ON DELETE CASCADE,
     tier INTEGER NOT NULL CHECK (tier BETWEEN 1 AND 12),
