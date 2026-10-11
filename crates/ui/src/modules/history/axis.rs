@@ -15,9 +15,10 @@ use crate::format::{display_width, format_local_clock, format_local_date, format
 use crate::num::saturate_u16;
 use crate::registry::DisplayContext;
 
-/// Tick steps in seconds, from the finest.
-const STEPS: [u64; 11] = [
-    60, 120, 300, 600, 900, 1_800, 3_600, 7_200, 10_800, 14_400, 21_600,
+/// Tick steps in seconds, from the finest, to the 300 days of day bars.
+const STEPS: [u64; 18] = [
+    60, 120, 300, 600, 900, 1_800, 3_600, 7_200, 10_800, 14_400, 21_600, 43_200, 86_400, 172_800,
+    604_800, 1_209_600, 2_592_000, 7_776_000,
 ];
 /// Most ticks a window gets besides `now`.
 const MAX_TICKS: u64 = 6;
@@ -55,7 +56,7 @@ pub(super) fn ticks(span_seconds: u64, width: u16) -> Vec<Tick> {
             let label = if ago == 0 {
                 "now".to_owned()
             } else {
-                format!("-{}", format_span_ns(ago.saturating_mul(1_000_000_000)))
+                format!("-{}", ago_text(ago))
             };
             Tick {
                 column: u16::try_from(column).unwrap_or(u16::MAX),
@@ -98,6 +99,15 @@ pub(super) fn clock_ticks((start, end): (i64, i64), offset_s: i32, width: u16) -
         tick -= step_ns;
     }
     ticks
+}
+
+/// `10m`, `6h`, `3d`: how long ago a tick is.
+fn ago_text(seconds: u64) -> String {
+    if seconds >= 86_400 && seconds.is_multiple_of(86_400) {
+        format!("{}d", seconds / 86_400)
+    } else {
+        format_span_ns(seconds.saturating_mul(1_000_000_000))
+    }
 }
 
 /// Draws `ticks` (the rightmost first) under a plot `width` columns wide
@@ -149,6 +159,8 @@ mod tests {
         assert_eq!(labels(43_200)[1], "-2h");
         assert_eq!(labels(86_400)[1], "-4h");
         assert_eq!(labels(86_400).len(), 7);
+        // Sixty days of day bars: every 14 days, in days.
+        assert_eq!(labels(60 * 86_400)[1], "-14d");
         // Columns run from the right edge to the left.
         let hour = ticks(3_600, 80);
         assert_eq!(hour[0].column, 79);

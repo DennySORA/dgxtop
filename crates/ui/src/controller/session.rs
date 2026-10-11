@@ -11,10 +11,12 @@ use dgxtop_core::view::{SessionState, ViewModel};
 
 /// A sent draft no projection has reflected is dropped after this long.
 const PENDING_TTL: Duration = Duration::from_secs(2);
-/// Default history window token (`commands.rs`: 5m, 1h, 6h, 12h, 24h).
-pub const DEFAULT_HISTORY_WINDOW: &str = "1h";
-/// History window tokens in cycle order.
-pub const HISTORY_WINDOWS: [&str; 5] = ["5m", "1h", "6h", "12h", "24h"];
+/// Default Overview History bar size (D-78).
+pub const DEFAULT_HISTORY_WINDOW: &str = "1m";
+/// Overview History bar sizes in cycle order: the Process History's.
+pub const HISTORY_WINDOWS: [&str; 12] = [
+    "1m", "5m", "10m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "18h", "24h",
+];
 
 /// All fields of an `UpdateViewSession` except the frame revision.
 #[derive(Debug, Clone, PartialEq, Eq)]

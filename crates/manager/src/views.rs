@@ -32,7 +32,7 @@ use dgxtop_core::text::sanitize_display;
 use dgxtop_core::view::SessionState;
 
 use crate::error::ManagerError;
-use crate::history::HistoryWindow;
+use crate::history::ChartWindow;
 use crate::session::SessionShared;
 
 /// Recent frame revisions remembered per session (4 s at 4 fps).
@@ -351,14 +351,15 @@ fn validate_view(
             let Some(filter) = HistoryFilter::parse(&update.filter) else {
                 return Err(ErrorDetail::new(
                     ErrorCode::ValidationFailed,
-                    "history filter must be a window, then optionally a bar size: \
+                    "history filter must be a bar size, then optionally the Process History's: \
                      auto, 1m, 5m, 10m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 18h or 24h",
                 ));
             };
-            if !filter.window.is_empty() && HistoryWindow::parse(filter.window).is_none() {
+            if ChartWindow::bar_of(filter.window).is_none() {
                 return Err(ErrorDetail::new(
                     ErrorCode::ValidationFailed,
-                    "history window must be one of 5m, 1h, 6h, 12h, 24h",
+                    "history bar size must be one of 1m, 5m, 10m, 30m, 1h, 2h, 4h, 6h, 8h, \
+                     12h, 18h, 24h",
                 ));
             }
             Ok(())
@@ -697,16 +698,19 @@ mod tests {
             .is_err()
         );
         let mut window = update(ViewKind::History, None, None, 0);
-        window.filter = "2h".into();
+        // The Overview History's bar size (D-78), then the Process
+        // History's (D-77).
+        window.filter = "3h".into();
         assert!(apply(&mut bench, window.clone(), &rows, &catalog).is_err());
+        window.filter = "18h".into();
+        assert!(apply(&mut bench, window.clone(), &rows, &catalog).is_ok());
         window.filter = "24h".into();
         assert!(apply(&mut bench, window.clone(), &rows, &catalog).is_ok());
-        // The window, then the Process History's bar size (D-77).
         window.filter = "24h 18h".into();
         assert!(apply(&mut bench, window.clone(), &rows, &catalog).is_ok());
         window.filter = "24h 3h".into();
         assert!(apply(&mut bench, window.clone(), &rows, &catalog).is_err());
-        window.filter = "2h 1h".into();
+        window.filter = "3h 1h".into();
         assert!(apply(&mut bench, window.clone(), &rows, &catalog).is_err());
         window.filter = "24h 1h 1h".into();
         assert!(apply(&mut bench, window, &rows, &catalog).is_err());

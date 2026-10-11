@@ -49,8 +49,8 @@ use crate::registry::{
 /// Process History tabs (D-75).
 pub const HISTORY_MODULE_ID: &str = "history";
 
-/// Windows `w` and `W` step through, in order.
-const WINDOWS: [&str; 5] = ["5m", "1h", "6h", "12h", "24h"];
+/// Bar sizes `w` and `W` step through, in order (D-78).
+const WINDOWS: [&str; 12] = crate::controller::HISTORY_WINDOWS;
 /// Share of the window below which the bar says how much is recorded.
 const FULL_COVERAGE: f64 = 0.99;
 
@@ -360,7 +360,7 @@ impl Hidden {
 }
 
 /// The keys acting on the view, at the right of its title (D-70).
-const WINDOW_KEYS: &str = "w/W/←/→ window";
+const WINDOW_KEYS: &str = "w/W/←/→ bar size";
 /// The keys of the process history's pages (D-72, D-75).
 const PROCESS_LIST_KEYS: &str = "j/k/↑/↓ select · Enter open";
 const PROCESS_DETAIL_KEYS: &str = "w/W bar · Enter back · j/k/↑/↓ next · e command · y copy";

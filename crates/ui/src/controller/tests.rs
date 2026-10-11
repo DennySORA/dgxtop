@@ -506,25 +506,25 @@ fn the_cursor_follows_the_selected_run_when_the_list_moves() {
     );
 }
 
-/// `w`/`W` step the window on the Overview History and the bar size on an
-/// opened run (D-77); the session's filter keeps both.
+/// `w`/`W` step the Overview History's bar size (D-78) and an opened
+/// run's (D-77); the session's filter keeps both.
 #[test]
 fn w_steps_the_window_or_an_opened_runs_bar_size() {
     let mut harness = Harness::new(ViewKind::History);
     let filter = |harness: &Harness| harness.last_session().3;
     harness.keys(&[key('w')]);
-    assert_eq!(filter(&harness), "6h");
+    assert_eq!(filter(&harness), "2h", "the bar after the fixture's 1 h");
     harness.keys(&[key('4'), code(KeyCode::Enter), key('w')]);
-    assert_eq!(filter(&harness), "6h 1m", "auto, then 1 minute");
+    assert_eq!(filter(&harness), "2h 1m", "auto, then 1 minute");
     harness.keys(&[key('W'), key('W')]);
-    assert_eq!(filter(&harness), "6h 24h", "back past auto to a day");
+    assert_eq!(filter(&harness), "2h 24h", "back past auto to a day");
     harness.keys(&[code(KeyCode::Right)]);
-    assert_eq!(filter(&harness), "6h");
+    assert_eq!(filter(&harness), "2h");
     harness.keys(&[code(KeyCode::Left), key('3'), key('w')]);
     assert_eq!(
         filter(&harness),
-        "12h 24h",
-        "the window steps, the bar stays"
+        "4h 24h",
+        "the overview steps, the run's stays"
     );
 }
 

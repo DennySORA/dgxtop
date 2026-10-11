@@ -426,9 +426,8 @@ fn history_says_when_it_loads_fails_is_partly_recorded_or_has_no_series() {
     model.modules.history = Some(Arc::new(history.clone()));
     let short = render(&model, (100, 10));
     assert!(
-        // The keys moved to the title (D-70), so the bar has room for the
-        // fuller note.
-        short.contains("+7 panels · +2 GPUs' long-term statistics on a taller terminal"),
+        // The twelve bar sizes (D-78) leave room for the first part only.
+        short.contains("+7 panels on a taller terminal"),
         "{}",
         short.text()
     );

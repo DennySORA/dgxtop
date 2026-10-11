@@ -4,9 +4,10 @@
 //! * Charts: the overview's series over a longer window, as the
 //!   presentation picks them ([`HistoryChartSpec`]): the CPU total, the RAM
 //!   in use, each GPU's utilization and the rates of a disk and an
-//!   interface. Window: the session filter token (`5m`, `1h`, `6h`, `12h`,
-//!   `24h`), default `1h`. Every chart of a session queries the same window,
-//!   so all of them share one time axis.
+//!   interface. Window (D-78): a bar of the session filter's size (`1m` to
+//!   `24h`, as the Process History's, default `1m`) for each column of a
+//!   plot, ending now ([`ChartWindow`]). Every chart of a session queries
+//!   the same window, so all of them share one time axis.
 //! * Statistics (D-48): each GPU's utilization, memory in use, temperature
 //!   and power over the last 1 h, 6 h, 12 h and 24 h: per series and window
 //!   one mean and one maximum over the whole window, refreshed once a
@@ -44,7 +45,7 @@ use dgxtop_core::history::{
 };
 use dgxtop_core::identity::{MetricKey, SessionId};
 use dgxtop_core::ports::{ArchiveReadJob, CancelFlag, Dispatch, DispatchError, HistoryJob};
-use dgxtop_core::process_history::HistoryFilter;
+use dgxtop_core::process_history::{HistoryFilter, RunBar};
 use dgxtop_core::view::{
     DiskHistory, HistoryChartKind, HistoryChartView, HistoryView, HistoryWindowSummary,
     SessionState, history_plot_columns,
@@ -86,35 +87,67 @@ const MAX_ARCHIVE_INFLIGHT: usize = 2;
 /// grid of its own width straddles at most two.
 const WINDOW_ARCHIVE_POINTS: u32 = 4;
 
-/// Supported history windows.
+/// The statistics' windows (D-48); the charts draw a [`ChartWindow`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum HistoryWindow {
-    FiveMinutes,
     OneHour,
     SixHours,
     TwelveHours,
     OneDay,
 }
 
-/// Window used when the session gives none.
-pub(crate) const DEFAULT_WINDOW: HistoryWindow = HistoryWindow::OneHour;
+/// Bar size of the charts when the session gives none.
+const DEFAULT_BAR: RunBar = RunBar::OneMinute;
 
-impl HistoryWindow {
-    /// Parses a window token; the empty token is not a window.
-    pub(crate) fn parse(token: &str) -> Option<Self> {
+/// What a session's charts draw (D-78): `columns` bars of `bar` ending now,
+/// each the mean of its time (the query's resolution is the bar).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ChartWindow {
+    bar: RunBar,
+    columns: u32,
+}
+
+impl ChartWindow {
+    /// The bar of a filter's window token: a fixed bar size; any other
+    /// (empty, `auto`) is the default.
+    pub(crate) fn bar_of(token: &str) -> Option<RunBar> {
         match token {
-            "5m" => Some(Self::FiveMinutes),
-            "1h" => Some(Self::OneHour),
-            "6h" => Some(Self::SixHours),
-            "12h" => Some(Self::TwelveHours),
-            "24h" => Some(Self::OneDay),
-            _ => None,
+            "" | "auto" => Some(DEFAULT_BAR),
+            token => RunBar::parse(token),
         }
     }
 
+    fn new(bar: RunBar, columns: u32) -> Self {
+        Self {
+            bar: if bar == RunBar::Auto {
+                DEFAULT_BAR
+            } else {
+                bar
+            },
+            columns: columns.max(1),
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        self.bar.token()
+    }
+
+    fn bar_ms(self) -> u64 {
+        self.bar.step_ns().unwrap_or(60_000_000_000) / NANOS_PER_MILLI
+    }
+
+    fn span_ms(self) -> u64 {
+        self.bar_ms().saturating_mul(u64::from(self.columns))
+    }
+
+    fn span_ns(self) -> u64 {
+        ms_to_ns(self.span_ms())
+    }
+}
+
+impl HistoryWindow {
     pub(crate) const fn label(self) -> &'static str {
         match self {
-            Self::FiveMinutes => "5m",
             Self::OneHour => "1h",
             Self::SixHours => "6h",
             Self::TwelveHours => "12h",
@@ -124,7 +157,6 @@ impl HistoryWindow {
 
     const fn span_ms(self) -> u64 {
         match self {
-            Self::FiveMinutes => 300_000,
             Self::OneHour => 3_600_000,
             Self::SixHours => 21_600_000,
             Self::TwelveHours => 43_200_000,
@@ -211,7 +243,7 @@ impl Purpose {
 /// The window a session on the history view wants charted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Wanted {
-    window: HistoryWindow,
+    window: ChartWindow,
     resolution_ms: u32,
     points_target: u32,
 }
@@ -357,7 +389,7 @@ fn pick_change(group: &SeriesGroup, picked: &[HistoryChartSpec]) -> PickChange {
 #[derive(Debug)]
 struct SessionHistory {
     active: bool,
-    window: HistoryWindow,
+    window: ChartWindow,
     resolution_ms: u32,
     points_target: u32,
     /// Snapshot revision the series were last picked from.
@@ -504,7 +536,7 @@ impl HistoryService {
     pub(crate) fn open_session(&mut self, session_id: &SessionId) {
         let mut session = SessionHistory {
             active: false,
-            window: DEFAULT_WINDOW,
+            window: ChartWindow::new(DEFAULT_BAR, MIN_DISPLAY_POINTS),
             resolution_ms: 0,
             points_target: MIN_DISPLAY_POINTS,
             charts_revision: None,
@@ -818,16 +850,18 @@ impl HistoryService {
         if state.view != ViewKind::History {
             return None;
         }
-        // The filter also carries the Process History's bar (D-77).
-        let window = HistoryFilter::parse(&state.filter)
-            .and_then(|filter| HistoryWindow::parse(filter.window))
-            .unwrap_or(DEFAULT_WINDOW);
+        // The filter's first token is the Overview History's bar size, the
+        // second the Process History's (D-77, D-78).
+        let bar = HistoryFilter::parse(&state.filter)
+            .and_then(|filter| ChartWindow::bar_of(filter.window))
+            .unwrap_or(DEFAULT_BAR);
         let upper = self.settings.max_points.clamp(1, MAX_HISTORY_POINTS);
-        let plot_columns = history_plot_columns(columns);
-        let points_target = u32::from(plot_columns).clamp(MIN_DISPLAY_POINTS.min(upper), upper);
+        // A bar for each column of the plot.
+        let points_target = u32::from(history_plot_columns(columns)).clamp(1, upper);
+        let window = ChartWindow::new(bar, points_target);
         Some(Wanted {
             window,
-            resolution_ms: resolution_for(window, points_target),
+            resolution_ms: resolution_for(window),
             points_target,
         })
     }
@@ -1224,10 +1258,9 @@ fn refresh_ms(resolution_ms: u32) -> u64 {
     u64::from(resolution_ms).clamp(MIN_REFRESH_MS, MAX_REFRESH_MS)
 }
 
-/// Resolution so that the window fits `points_target` points.
-fn resolution_for(window: HistoryWindow, points_target: u32) -> u32 {
-    let raw = window.span_ms().div_ceil(u64::from(points_target.max(1)));
-    u32::try_from(raw.clamp(MIN_RESOLUTION_MS, MAX_RESOLUTION_MS)).unwrap_or(u32::MAX)
+/// Resolution of a chart window: its bar.
+fn resolution_for(window: ChartWindow) -> u32 {
+    u32::try_from(window.bar_ms().clamp(MIN_RESOLUTION_MS, MAX_RESOLUTION_MS)).unwrap_or(u32::MAX)
 }
 
 fn build_query(
@@ -1236,13 +1269,18 @@ fn build_query(
     configured_max_points: u32,
 ) -> Option<HistoryQuery> {
     let cap = configured_max_points.min(MAX_HISTORY_POINTS);
-    let whole = |window: HistoryWindow| u32::try_from(window.span_ms()).unwrap_or(u32::MAX);
-    let charted = (session.window, session.resolution_ms);
-    let ((window, resolution_ms), stat, max_points) = match purpose {
+    let whole = |window: HistoryWindow| {
+        (
+            window.span_ns(),
+            u32::try_from(window.span_ms()).unwrap_or(u32::MAX),
+        )
+    };
+    let charted = (session.window.span_ns(), session.resolution_ms);
+    let ((span_ns, resolution_ms), stat, max_points) = match purpose {
         Purpose::Mean(_) => (charted, HistoryStat::Mean, session.points_target + 1),
         Purpose::Max(_) => (charted, HistoryStat::Max, session.points_target + 1),
-        Purpose::WindowMean(_, window) => ((window, whole(window)), HistoryStat::Mean, 2),
-        Purpose::WindowMax(_, window) => ((window, whole(window)), HistoryStat::Max, 2),
+        Purpose::WindowMean(_, window) => (whole(window), HistoryStat::Mean, 2),
+        Purpose::WindowMax(_, window) => (whole(window), HistoryStat::Max, 2),
         Purpose::Archive(_) | Purpose::WindowArchive(..) => return None,
     };
     let group = session.group(purpose.group());
@@ -1251,7 +1289,7 @@ fn build_query(
         schema_version: HISTORY_SCHEMA_VERSION,
         request_id: Uuid::new_v4(),
         key: chart.spec.key.clone(),
-        start_boot_ns: group.end_ns.saturating_sub(window.span_ns()),
+        start_boot_ns: group.end_ns.saturating_sub(span_ns),
         end_boot_ns: group.end_ns,
         resolution_ms,
         stat,
@@ -1315,18 +1353,18 @@ fn archive_query(
     wall: Wall,
     since_utc: u64,
 ) -> Option<ArchiveQuery> {
-    let (window, point_ns, max_points) = match purpose {
+    let (span_ns, point_ns, max_points) = match purpose {
         Purpose::Archive(_) => {
             let point_ns = archive_point_ns(session.resolution_ms);
-            let points = session
-                .window
-                .span_ns()
-                .div_ceil(point_ns)
-                .saturating_add(2);
-            (session.window, point_ns, points)
+            let span_ns = session.window.span_ns();
+            (
+                span_ns,
+                point_ns,
+                span_ns.div_ceil(point_ns).saturating_add(2),
+            )
         }
         Purpose::WindowArchive(_, window) => (
-            window,
+            window.span_ns(),
             window.span_ns().div_ceil(ARCHIVE_MINUTE_NS) * ARCHIVE_MINUTE_NS,
             u64::from(WINDOW_ARCHIVE_POINTS),
         ),
@@ -1335,7 +1373,7 @@ fn archive_query(
     let group = session.group(purpose.group());
     let chart = group.series.get(purpose.index())?;
     let end = wall.utc_of(group.end_ns);
-    let start = end.saturating_sub(window.span_ns());
+    let start = end.saturating_sub(span_ns);
     let before_run = since_utc.min(end);
     if start >= before_run {
         return None;
@@ -1394,9 +1432,10 @@ fn chart_view(
 }
 
 fn empty_view() -> HistoryView {
+    let window = ChartWindow::new(DEFAULT_BAR, MIN_DISPLAY_POINTS);
     HistoryView {
-        window_label: DEFAULT_WINDOW.label().to_owned(),
-        requested_span_ns: DEFAULT_WINDOW.span_ns(),
+        window_label: window.label().to_owned(),
+        requested_span_ns: window.span_ns(),
         start_utc_ns: 0,
         end_utc_ns: 0,
         charts: Vec::new(),

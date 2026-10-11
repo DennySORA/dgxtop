@@ -275,7 +275,7 @@ pub static KEYMAP: &[KeyBinding] = &[
     binding("Enter", "open / close the selected run", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::key(KeyCode::Enter)], KeyAction::HistoryOpen),
     binding("e", "show the whole command line of the opened run / one line", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('e')], KeyAction::HistoryExpandCommand),
     binding("y", "copy the opened run's command line (OSC 52)", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('y')], KeyAction::HistoryCopyCommand),
-    binding("w/W/→/←", "next / previous history window (5m 1h 6h 12h 24h)", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('w'), KeyPattern::key(KeyCode::Right)], KeyAction::NextHistoryWindow),
+    binding("w/W/→/←", "next / previous bar size of the history charts (1m … 24h)", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('w'), KeyPattern::key(KeyCode::Right)], KeyAction::NextHistoryWindow),
     binding("W", "previous history window", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('W'), KeyPattern::key(KeyCode::Left)], KeyAction::PreviousHistoryWindow),
     binding("Space", "enable / disable the selected module", None, Section::Settings, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Settings]), &[KeyPattern::char(' ')], KeyAction::ToggleModule),
     binding("Enter", "apply the filter", Some("apply"), Section::FilterMode, ModeSet::FILTER, ViewScope::All, &[KeyPattern::key(KeyCode::Enter)], KeyAction::FilterApply),

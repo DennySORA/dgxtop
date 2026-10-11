@@ -19,7 +19,8 @@ const SECOND: u64 = NANOS_PER_SECOND;
 const NOW: u64 = 100_000 * SECOND;
 /// A 120-column plot: one panel 144 columns wide inside the border, less
 /// its gutter and legend (D-50).
-const COLUMNS: u16 = 146;
+/// 60 columns of plot: a 1 m bar each is an hour (D-78).
+const COLUMNS: u16 = 86;
 
 struct Bench {
     service: HistoryService,
@@ -211,13 +212,17 @@ fn every_chart_queries_one_window_at_a_bounded_resolution() {
     );
     for job in &jobs {
         assert_eq!(job.query.end_boot_ns, NOW, "one time axis for all charts");
-        assert_eq!(job.query.span_ns(), 3_600 * SECOND, "default 1h");
-        assert_eq!(job.query.resolution_ms, 30_000, "3600 s over 120 columns");
-        assert!(job.query.max_points <= 121);
+        assert_eq!(
+            job.query.span_ns(),
+            3_600 * SECOND,
+            "default 1 m bars, 60 of them"
+        );
+        assert_eq!(job.query.resolution_ms, 60_000, "a point a bar");
+        assert!(job.query.max_points <= 61);
         assert_eq!(job.deadline_boot_ns, NOW + 200 * NANOS_PER_MILLI);
     }
     let view = bench.service.view(&bench.session);
-    assert_eq!(view.window_label, "1h");
+    assert_eq!(view.window_label, "1m");
     assert_eq!(view.end_utc_ns, bench.utc(NOW));
     assert_eq!(view.end_utc_ns - view.start_utc_ns, 3_600 * SECOND);
     assert_eq!(view.disk, DiskHistory::Off);
@@ -225,26 +230,39 @@ fn every_chart_queries_one_window_at_a_bounded_resolution() {
     assert_eq!(view.charts[1].subject, "blockdev:8:0");
 }
 
-/// The filter's window stays the window when the Process History's bar
-/// size follows it (D-77).
+/// The filter's first token is the bar size (D-78): a bar of it for each
+/// column; the Process History's after it changes nothing here (D-77).
 #[test]
-fn a_bar_size_after_the_window_keeps_the_window() {
+fn a_bar_size_charts_a_bar_a_column() {
     let mut bench = bench(4);
     bench.open("6h 30m", &[cpu()]);
     bench.service.tick(NOW, false);
     let jobs = bench.port.take();
     assert!(!jobs.is_empty());
+    for job in &jobs {
+        // 60 bars of 6 h reach before boot: memory answers from boot on.
+        assert_eq!(job.query.start_boot_ns, 0);
+        assert_eq!(job.query.resolution_ms, 6 * 3_600_000);
+    }
+    let view = bench.service.view(&bench.session);
+    assert_eq!(view.window_label, "6h");
+    assert_eq!(view.requested_span_ns, 60 * 6 * 3_600 * SECOND);
+    // 24 h bars: 60 days asked; memory answers from boot.
+    bench.open("24h", &[cpu()]);
+    bench.service.tick(NOW, false);
     assert!(
-        jobs.iter()
-            .all(|job| job.query.span_ns() == 6 * 3_600 * SECOND)
+        bench
+            .port
+            .take()
+            .iter()
+            .all(|job| job.query.resolution_ms == 86_400_000)
     );
-    assert_eq!(bench.service.view(&bench.session).window_label, "6h");
 }
 
 #[test]
 fn results_give_points_mean_peak_and_coverage_and_late_ones_are_dropped() {
     let mut bench = bench(4);
-    bench.open("1h", &[cpu()]);
+    bench.open("1m", &[cpu()]);
     bench.service.tick(NOW, false);
     let jobs = bench.port.take();
     let by_stat = |stat| jobs.iter().find(|job| job.query.stat == stat).unwrap();
@@ -273,7 +291,7 @@ fn results_give_points_mean_peak_and_coverage_and_late_ones_are_dropped() {
     let pending = bench.port.take();
     bench.service.sync_session(
         &bench.session,
-        &state(ViewKind::History, "6h"),
+        &state(ViewKind::History, "5m"),
         COLUMNS,
         NOW,
     );
@@ -287,7 +305,7 @@ fn results_give_points_mean_peak_and_coverage_and_late_ones_are_dropped() {
 #[test]
 fn a_new_series_restarts_the_queries_and_a_new_scale_only_redraws() {
     let mut bench = bench(4);
-    bench.open("1h", &[cpu()]);
+    bench.open("1m", &[cpu()]);
     bench.service.tick(NOW, false);
     let first = bench.port.take();
     let mut rescaled = cpu();
@@ -416,13 +434,13 @@ fn gpu_stats() -> Vec<HistoryChartSpec> {
 /// Whether a job draws a chart of the 1 h window (30 s points) rather than
 /// summarizing a whole window.
 fn charts_one_hour(job: &HistoryJob) -> bool {
-    job.query.resolution_ms == 30_000
+    job.query.resolution_ms == 60_000
 }
 
 #[test]
 fn the_history_view_summarizes_each_gpu_over_four_windows_once_a_minute() {
     let mut bench = bench(64);
-    bench.open_with_stats("1h", &[cpu()], &gpu_stats());
+    bench.open_with_stats("1m", &[cpu()], &gpu_stats());
     bench.service.tick(NOW, false);
     let jobs = bench.port.take();
     let (charted, summarized): (Vec<&HistoryJob>, Vec<&HistoryJob>) =
@@ -482,14 +500,9 @@ fn the_history_view_summarizes_each_gpu_over_four_windows_once_a_minute() {
     assert_eq!(power.integral, Some(360_000.0));
     assert_eq!(hour[0].integral, None, "only power has an energy");
     assert!(view.summaries.iter().all(|summary| !summary.pending));
-    // The chart refreshes at its resolution, the statistics once a minute.
+    // The chart refreshes at its resolution (a minute), as the statistics.
     bench.service.tick(NOW + 30 * SECOND, false);
-    let half = bench.port.take();
-    assert_eq!(half.len(), 2);
-    assert!(half.iter().all(charts_one_hour));
-    for job in &half {
-        bench.answer(job, &[Some(1.0)]);
-    }
+    assert!(bench.port.take().is_empty());
     bench.service.tick(NOW + 60 * SECOND, false);
     assert_eq!(bench.port.take().len(), 2 + 2 * 4 * 2);
 }
@@ -497,7 +510,7 @@ fn the_history_view_summarizes_each_gpu_over_four_windows_once_a_minute() {
 #[test]
 fn new_statistics_restart_only_their_queries_and_other_views_query_nothing() {
     let mut bench = bench(64);
-    bench.open_with_stats("1h", &[cpu()], &gpu_stats());
+    bench.open_with_stats("1m", &[cpu()], &gpu_stats());
     bench.service.tick(NOW, false);
     let first = bench.port.take();
     // A second GPU appears: the statistics query again, the chart goes on.
@@ -576,14 +589,14 @@ fn the_time_before_this_run_is_read_from_the_archive_once_a_generation() {
     // This run started half an hour ago.
     let since = NOW - 30 * MINUTE;
     let mut bench = bench_with_archive(4, Some(since));
-    bench.open("1h", &[cpu(), read_rate("blockdev:8:0")]);
+    bench.open("1m", &[cpu(), read_rate("blockdev:8:0")]);
     bench.service.tick(NOW, false);
     let reads = bench.archive.take();
     assert_eq!(reads.len(), 2, "one read per chart");
     for read in &reads {
         assert_eq!(read.query.end_utc_ns, bench.utc(since), "up to this run");
         assert_eq!(read.query.start_utc_ns, bench.utc(NOW) - 60 * MINUTE);
-        // The view's 30 s points in the archive's whole minutes.
+        // The view's 1 m bars in the archive's whole minutes.
         assert_eq!(read.query.point_ns, MINUTE);
         assert_eq!(read.deadline_boot_ns, NOW + 200 * NANOS_PER_MILLI);
     }
@@ -604,21 +617,21 @@ fn the_time_before_this_run_is_read_from_the_archive_once_a_generation() {
     // A new window is a new generation: read again, at its resolution.
     bench.service.sync_session(
         &bench.session,
-        &state(ViewKind::History, "6h"),
+        &state(ViewKind::History, "5m"),
         COLUMNS,
         NOW + 121 * SECOND,
     );
     bench.service.tick(NOW + 121 * SECOND, false);
     let again = bench.archive.take();
     assert_eq!(again.len(), 2);
-    assert!(again.iter().all(|read| read.query.point_ns == 3 * MINUTE));
+    assert!(again.iter().all(|read| read.query.point_ns == 5 * MINUTE));
 }
 
 #[test]
 fn archived_minutes_lead_the_chart_on_the_wall_clock() {
     let since = NOW - 30 * MINUTE;
     let mut bench = bench_with_archive(4, Some(since));
-    bench.open("1h", &[cpu()]);
+    bench.open("1m", &[cpu()]);
     bench.service.tick(NOW, false);
     for job in bench.port.take() {
         // This run: two values over its half hour, 15 minutes each.
@@ -663,7 +676,7 @@ fn archived_minutes_lead_the_chart_on_the_wall_clock() {
 #[test]
 fn a_failed_archive_read_shows_and_is_asked_again_next_round() {
     let mut bench = bench_with_archive(4, Some(NOW - 30 * MINUTE));
-    bench.open("1h", &[cpu()]);
+    bench.open("1m", &[cpu()]);
     bench.service.tick(NOW, false);
     let read = bench.archive.take().remove(0);
     bench.service.on_archive_result(
@@ -674,11 +687,11 @@ fn a_failed_archive_read_shows_and_is_asked_again_next_round() {
     );
     let view = bench.service.view(&bench.session);
     assert_eq!(view.disk, DiskHistory::Failed("disk on fire".to_owned()));
-    // Not again on every tick, only with the next round (30 s points
-    // refresh every 30 s).
+    // Not again on every tick, only with the next round (1 m bars
+    // refresh every minute).
     bench.service.tick(NOW + SECOND, false);
     assert!(bench.archive.take().is_empty());
-    bench.service.tick(NOW + 30 * SECOND, false);
+    bench.service.tick(NOW + 60 * SECOND, false);
     let retry = bench.archive.take();
     assert_eq!(retry.len(), 1);
     bench.answer_archive(&retry[0], &[]);
@@ -699,7 +712,7 @@ fn a_failed_archive_read_shows_and_is_asked_again_next_round() {
 fn archive_reads_run_two_at_a_time_and_time_out() {
     let mut bench = bench_with_archive(64, Some(NOW - 30 * MINUTE));
     let charts = vec![cpu(), read_rate("a"), read_rate("b"), read_rate("c")];
-    bench.open("1h", &charts);
+    bench.open("1m", &charts);
     bench.service.tick(NOW, false);
     assert_eq!(bench.archive.take().len(), MAX_ARCHIVE_INFLIGHT);
     // Past the deadline and its grace: the slots free up, the view says
@@ -721,7 +734,7 @@ fn without_an_archive_the_window_starts_at_boot_and_nothing_is_read() {
     bench.clock.set_boot_ns(10 * MINUTE);
     bench.service.sync_session(
         &bench.session,
-        &state(ViewKind::History, "1h"),
+        &state(ViewKind::History, "1m"),
         COLUMNS,
         10 * MINUTE,
     );
