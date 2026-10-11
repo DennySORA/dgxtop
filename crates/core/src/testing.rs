@@ -2,21 +2,27 @@
 //! (`dgxtop-core` feature `test-support`). Nothing here touches real drivers,
 //! files or the network.
 
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use uuid::Uuid;
 
+use crate::canonical::{GpuUsageKind, ProcessGpuLink, ProcessRow, ProcessTable};
 use crate::clock::TimeProvider;
 use crate::identity::{
-    AdapterId, BootId, EntityId, HostId, MetricId, MetricKey, OriginId, OriginRelation, ProfileId,
-    ReadGroup, Scope, SourceId,
+    AdapterId, BootId, EntityId, HostId, MetricId, MetricKey, OriginId, OriginRelation, Pid,
+    PidNamespace, ProcessKey, ProfileId, ReadGroup, Scope, SourceId,
 };
 use crate::metric::{NativeUnit, Scalar};
 use crate::observation::{
     BatchStatus, IPC_PROTOCOL_VERSION, Observation, ObservationBatch, Provenance,
 };
-use crate::ports::{Dispatch, DispatchError, LogLevel, Logger, ProbeDeriver};
+use crate::ports::{
+    Dispatch, DispatchError, LogLevel, Logger, ProbeDeriver, ProcessHistoryReader,
+    ProcessMemoryReader,
+};
+use crate::process_model::{MemoryPart, ProcessHistoryModel};
 use crate::process_probe::{ProbeReading, ProbeState};
 use crate::quality::{Quality, ReadStatus, SampleKind};
 
@@ -179,6 +185,121 @@ impl ProbeDeriver for IdleProbeDeriver {
         _read_boot_ns: u64,
     ) -> ProbeState {
         *previous
+    }
+}
+
+/// The history's process actor of a setup that publishes a fixed model
+/// and fixed memory parts (D-79): the presentation's and the Manager's
+/// tests shape what it holds without following any run.
+#[derive(Debug, Default)]
+pub struct StaticProcessHistory {
+    model: Mutex<Arc<ProcessHistoryModel>>,
+    parts: Mutex<Vec<MemoryPart>>,
+    /// What the parts were asked for, in order.
+    asked: Mutex<Vec<PartsAsked>>,
+}
+
+/// The GPUs, window and cells a chart's parts were asked for.
+pub type PartsAsked = (BTreeSet<EntityId>, (u64, u64), usize);
+
+impl StaticProcessHistory {
+    pub fn new(model: ProcessHistoryModel) -> Arc<Self> {
+        let history = Self::default();
+        history.publish(model);
+        Arc::new(history)
+    }
+
+    pub fn publish(&self, model: ProcessHistoryModel) {
+        *self.model.lock().unwrap_or_else(PoisonError::into_inner) = Arc::new(model);
+    }
+
+    /// The parts every chart gets.
+    pub fn set_parts(&self, parts: Vec<MemoryPart>) {
+        *self.parts.lock().unwrap_or_else(PoisonError::into_inner) = parts;
+    }
+
+    pub fn asked(&self) -> Vec<PartsAsked> {
+        self.asked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl ProcessHistoryReader for StaticProcessHistory {
+    fn latest(&self) -> Arc<ProcessHistoryModel> {
+        Arc::clone(&self.model.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+}
+
+impl ProcessMemoryReader for StaticProcessHistory {
+    fn parts(
+        &self,
+        gpus: &BTreeSet<EntityId>,
+        window: (u64, u64),
+        cells: usize,
+    ) -> Vec<MemoryPart> {
+        self.asked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((gpus.clone(), window, cells));
+        self.parts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+/// The key of process `pid` on host `host-test`, boot `boot-test`, started
+/// at tick 7.
+pub fn test_process_key(pid: i64) -> ProcessKey {
+    ProcessKey {
+        host_id: host_id("host-test"),
+        boot_id: boot_id("boot-test"),
+        pid_namespace: PidNamespace::new("pid:[4026531836]")
+            .unwrap_or_else(|error| panic!("test pid namespace: {error}")),
+        pid: Pid::new(pid).unwrap_or_else(|error| panic!("test pid: {error}")),
+        start_time_ticks: 7,
+    }
+}
+
+/// Process `pid` holding the bytes of `held` on each of its GPUs (`None`:
+/// a GPU it uses without a known figure).
+pub fn gpu_process(pid: i64, name: &str, held: &[(&str, Option<u64>)]) -> ProcessRow {
+    ProcessRow {
+        key: test_process_key(pid),
+        name: name.to_owned(),
+        command: String::new(),
+        uid: Some(1000),
+        state: Some('R'),
+        ppid: None,
+        threads: None,
+        descendants: None,
+        cpu_percent: None,
+        rss_bytes: None,
+        missing_reason: None,
+        gpu: held
+            .iter()
+            .map(|(gpu, bytes)| ProcessGpuLink {
+                gpu_entity_id: EntityId::new(*gpu)
+                    .unwrap_or_else(|error| panic!("test entity: {error}")),
+                usage: GpuUsageKind::Compute,
+                utilization_percent: None,
+                memory_bytes: *bytes,
+            })
+            .collect(),
+        sample_kind: SampleKind::Measured,
+        read_finished_boot_ns: 0,
+    }
+}
+
+/// The process table of collection `cycle`, read at `read_ns`.
+pub fn process_table(cycle: u64, read_ns: u64, rows: Vec<ProcessRow>) -> ProcessTable {
+    ProcessTable {
+        rows,
+        cycle_id: cycle,
+        read_finished_boot_ns: read_ns,
+        ..ProcessTable::default()
     }
 }
 

@@ -41,9 +41,9 @@ use crate::ingestion::{IngestionPorts, IngestionService, IngestionSettings, coll
 use crate::overload::OverloadController;
 use crate::pacing::FramePacing;
 use crate::policy::QualityPolicyService;
-use crate::presentation::{HostFacts, ProcessMemoryBook};
+use crate::presentation::HostFacts;
 use crate::process::{ActionIdentity, Now, ProcessPorts, ProcessService};
-use crate::process_history::{ProcessHistoryPorts, ProcessHistoryService};
+use crate::process_link::ProcessHistoryLink;
 use crate::projection::PresentationService;
 use crate::results::ResultCache;
 use crate::scheduler::SamplingScheduler;
@@ -113,8 +113,10 @@ pub(crate) struct ControlCore {
     scheduler: SamplingScheduler,
     ingestion: IngestionService,
     trends: TrendRecorder,
-    process_memory: ProcessMemoryBook,
-    process_history: ProcessHistoryService,
+    /// How often the process table is read (its memory values hold a few
+    /// such periods, D-64).
+    process_period_ms: u64,
+    process_history: ProcessHistoryLink,
     history: HistoryService,
     config: ConfigurationService,
     process: ProcessService,
@@ -150,7 +152,6 @@ impl ControlCore {
         let fast_ms = scheduler.effective_fast_interval_ms();
         let periods = scheduler.effective_periods();
         let process_ms = process_list_period_ms(&periods).unwrap_or(u64::from(fast_ms));
-        let process_memory = ProcessMemoryBook::new(process_ms);
         let policy = QualityPolicyService::new(&effective, periods, setup.namespace);
         let ingestion = IngestionService::new(
             IngestionPorts {
@@ -199,16 +200,8 @@ impl ControlCore {
             &effective,
             ports.diagnostics.clone(),
         );
-        let process_history = ProcessHistoryService::new(
-            ProcessHistoryPorts {
-                probe: ports.process_probe,
-                probe_deriver: ports.probe_deriver,
-                store: ports.process_history,
-            },
-            (setup.boot_id.clone(), setup.facts.utc_offset_s),
-            Arc::clone(&ports.logger),
-            now,
-        );
+        let process_history =
+            ProcessHistoryLink::new(ports.process_history, ports.diagnostics.clone());
         let catalog = DeviceCatalog::new(
             setup.host_id.clone(),
             setup.boot_id.clone(),
@@ -224,7 +217,7 @@ impl ControlCore {
             events: EventRecorder::new(setup.boot_id.clone(), EVENT_LOG_CAPACITY),
             hosts: HostTable::new(&setup.adapters),
             trends: TrendRecorder::new(u64::from(fast_ms)),
-            process_memory,
+            process_period_ms: process_ms,
             process_history,
             sessions: ViewSessionService::new(effective.viewer.max_sessions),
             presentation: PresentationService::new(
@@ -301,7 +294,6 @@ impl ControlCore {
         self.started = true;
         let now = self.now();
         self.process.start(now);
-        self.process_history.start();
     }
 
     pub(crate) fn open_session(&mut self) -> Result<SessionHandle, ManagerError> {
@@ -465,11 +457,11 @@ impl ControlCore {
 
     /// Re-publishes the policy after period or quality changes; new periods
     /// also set how long a process table's values hold in the process
-    /// memory record.
+    /// memory record (each table hands its period to the history).
     fn refresh_policy(&mut self) {
         let periods = self.scheduler.effective_periods();
         if let Some(process_ms) = process_list_period_ms(&periods) {
-            self.process_memory.set_interval(process_ms);
+            self.process_period_ms = process_ms;
         }
         self.policy.update(self.config.effective(), periods);
     }

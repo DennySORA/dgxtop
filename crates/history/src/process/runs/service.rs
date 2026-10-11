@@ -24,11 +24,11 @@ pub(crate) const APPEND_EVERY_NS: u64 = 10 * NANOS_PER_SECOND;
 pub(crate) const SAVE_EVERY_NS: u64 = 30 * NANOS_PER_SECOND;
 /// Buckets a backlog of refused journals keeps; older ones give way.
 const MAX_BACKLOG_BUCKETS: usize = 8192;
-const LOG_TARGET: &str = "manager.process_history";
+const LOG_TARGET: &str = "history.process";
 
 /// The ports of the process history; the probe and the stores may be
 /// absent (no probe in a replay, no stores with the archive off).
-pub(crate) struct ProcessHistoryPorts {
+pub(crate) struct ServicePorts {
     pub(crate) probe: Option<Box<dyn Dispatch<ProcessProbeJob>>>,
     /// Makes the values of the probe's readings (D-79).
     pub(crate) probe_deriver: Arc<dyn ProbeDeriver>,
@@ -58,7 +58,7 @@ pub(crate) struct ProcessHistoryService {
 
 impl ProcessHistoryService {
     pub(crate) fn new(
-        ports: ProcessHistoryPorts,
+        ports: ServicePorts,
         (boot_id, utc_offset_s): (BootId, i32),
         logger: Arc<dyn Logger>,
         now_ns: u64,
@@ -107,6 +107,7 @@ impl ProcessHistoryService {
     /// Whether `table` was sampled already: every committed batch hands
     /// over the snapshot's table, so only the first commit of a cycle
     /// brings a new one and the caller can skip building its inputs.
+    #[cfg(test)]
     pub(crate) fn has_sampled(&self, table: &ProcessTable) -> bool {
         self.book.has_sampled(table)
     }
@@ -141,20 +142,15 @@ impl ProcessHistoryService {
         }
     }
 
-    /// Whether the views should be rebuilt.
-    pub(crate) fn on_completion(&mut self, completion: ProcessHistoryCompletion, now: Now) -> bool {
+    /// Takes what a store job did; the book's revision says whether the
+    /// runs changed.
+    pub(crate) fn on_completion(&mut self, completion: ProcessHistoryCompletion, now: Now) {
         match completion {
             ProcessHistoryCompletion::Loaded(result) => {
                 self.load = Load::Done;
                 match result {
-                    Ok(load) => {
-                        self.book.restore(load, now);
-                        true
-                    }
-                    Err(error) => {
-                        self.warn(&format!("PROCESS_HISTORY_LOAD_FAILED: {error}"));
-                        false
-                    }
+                    Ok(load) => self.book.restore(load, now),
+                    Err(error) => self.warn(&format!("PROCESS_HISTORY_LOAD_FAILED: {error}")),
                 }
             }
             ProcessHistoryCompletion::Appended(result)
@@ -163,20 +159,13 @@ impl ProcessHistoryService {
                 if let Err(error) = result {
                     self.warn(&format!("PROCESS_HISTORY_WRITE_FAILED: {error}"));
                 }
-                false
             }
             ProcessHistoryCompletion::RunRead { key, result } => match result {
-                Ok(rows) => {
-                    self.book.on_buckets(&key, rows);
-                    true
-                }
-                Err(error) => {
-                    self.warn(&format!(
-                        "PROCESS_HISTORY_READ_FAILED: {}: {error}",
-                        key.summary()
-                    ));
-                    false
-                }
+                Ok(rows) => self.book.on_buckets(&key, rows),
+                Err(error) => self.warn(&format!(
+                    "PROCESS_HISTORY_READ_FAILED: {}: {error}",
+                    key.summary()
+                )),
             },
         }
     }
@@ -198,10 +187,10 @@ impl ProcessHistoryService {
         }
     }
 
-    /// Whether a write has not been answered yet (the shutdown waits, so
-    /// its answer finds the Manager listening).
-    pub(crate) fn is_writing(&self) -> bool {
-        self.writing > 0
+    /// Writes not answered yet (the shutdown waits for them, so their
+    /// answers find the actor listening).
+    pub(crate) fn writes_pending(&self) -> usize {
+        self.writing
     }
 
     /// At shutdown: whatever is left, then the short-term file.
@@ -273,10 +262,11 @@ mod tests {
     use std::sync::Arc;
 
     use dgxtop_core::process_history::ProcessHistoryLoad;
-    use dgxtop_core::testing::{CapturingDispatch, IdleProbeDeriver, MemoryLogger, boot_id};
+    use dgxtop_core::testing::{
+        CapturingDispatch, IdleProbeDeriver, MemoryLogger, boot_id, gpu_process, process_table,
+    };
 
     use super::*;
-    use crate::test_support::{gpu_process, process_table};
 
     const SECOND: u64 = NANOS_PER_SECOND;
 
@@ -297,7 +287,7 @@ mod tests {
         let probe = CapturingDispatch::new();
         let store = CapturingDispatch::new();
         let service = ProcessHistoryService::new(
-            ProcessHistoryPorts {
+            ServicePorts {
                 probe: Some(Box::new(probe.clone())),
                 probe_deriver: Arc::new(IdleProbeDeriver),
                 store: Some(Box::new(store.clone())),
@@ -358,12 +348,12 @@ mod tests {
         );
         rig.service.tick(now(42));
         assert!(rig.store.is_empty(), "not due again");
-        assert!(rig.service.is_writing(), "two writes unanswered");
+        assert_eq!(rig.service.writes_pending(), 2, "two writes unanswered");
         for _ in 0..2 {
             rig.service
                 .on_completion(ProcessHistoryCompletion::Saved(Ok(())), now(43));
         }
-        assert!(!rig.service.is_writing());
+        assert_eq!(rig.service.writes_pending(), 0);
     }
 
     /// One probe at a time: the next waits for the report.

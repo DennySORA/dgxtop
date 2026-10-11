@@ -10,10 +10,11 @@ use dgxtop_core::process_history::{
 use dgxtop_core::process_probe::{
     ExitStatus, IoCounters, ProbeLiveness, ProbeReading, ProbeReport,
 };
-use dgxtop_core::testing::{IdleProbeDeriver, boot_id};
+use dgxtop_core::testing::{
+    IdleProbeDeriver, boot_id, gpu_process, process_table, test_process_key,
+};
 
 use super::*;
-use crate::test_support::{gpu_process, process_table, test_process_key};
 
 const SECOND: u64 = NANOS_PER_SECOND;
 const GIB: u64 = 1 << 30;
@@ -683,4 +684,42 @@ fn the_rows_descendants_become_the_samples() {
         1,
         "the rows without descendants add no value"
     );
+}
+
+const BUCKET_BYTES_FOR_TEST: usize = std::mem::size_of::<dgxtop_core::process_history::RunBucket>();
+
+/// A run's whole-life figures follow every sample as its buckets close,
+/// equal the compression's merge of what it holds, and stay when an ended
+/// run's buckets leave memory (D-79: the list never merges buckets).
+#[test]
+fn whole_figures_follow_the_samples_and_outlive_the_buckets() {
+    // A budget the 33 runs' buckets overflow: the first ended gives way.
+    let mut book = book().with_series_budget(32 * 40 * BUCKET_BYTES_FOR_TEST);
+    let pids: Vec<i64> = (1..=33).collect();
+    for second in 0..130 {
+        #[allow(clippy::cast_precision_loss)]
+        let cpu = (second % 7) as f64 * 10.0;
+        observe(
+            &mut book,
+            second,
+            pids.iter().map(|pid| row(*pid, cpu, Some(GIB))).collect(),
+        );
+        let run = book.run(&key(1)).unwrap();
+        assert_eq!(*run.whole(), whole_series(run.series()), "at {second} s");
+    }
+    let figures = *book.run(&key(1)).unwrap().whole();
+    assert_eq!(figures.value(RunMetric::Cpu).count, 130);
+    for (index, pid) in pids.iter().enumerate() {
+        let second = 200 + u64::try_from(index).unwrap();
+        probe(
+            &mut book,
+            &report(second, None, vec![reading(*pid, ProbeLiveness::Gone, None)]),
+            now(second),
+        );
+    }
+    let first = book.run(&key(1)).unwrap();
+    assert!(first.series().is_empty(), "the run that ended first");
+    assert_eq!(*first.whole(), figures, "keeps its figures");
+    let last = book.run(&key(*pids.last().unwrap())).unwrap();
+    assert!(!last.series().is_empty());
 }

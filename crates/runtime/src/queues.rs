@@ -13,7 +13,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError, bounded, select};
+use crossbeam_channel::{
+    Receiver, SendTimeoutError, Sender, TryRecvError, TrySendError, bounded, select,
+};
 use dgxtop_core::errors::InfraError;
 use dgxtop_core::ports::{Dispatch, DispatchError};
 use dgxtop_core::text::sanitize_message;
@@ -116,6 +118,29 @@ impl<J: Send> Dispatch<J> for PoolHandle<J> {
                 Err(DispatchError::Busy)
             }
             Err(TrySendError::Disconnected(_)) => Err(DispatchError::Closed),
+        }
+    }
+}
+
+impl<J: Send> PoolHandle<J> {
+    /// Like [`Dispatch::try_dispatch`], but waits up to `timeout` for room:
+    /// for a worker handing its result to an actor that never waits on it,
+    /// so a momentarily full queue does not lose the result. Never for the
+    /// Manager, which must not block.
+    pub fn dispatch_within(&self, job: J, timeout: Duration) -> Result<(), DispatchError> {
+        if self.shared.stopped.load(Ordering::Acquire) {
+            return Err(DispatchError::Closed);
+        }
+        match self.shared.jobs.send_timeout(job, timeout) {
+            Ok(()) => Ok(()),
+            Err(SendTimeoutError::Timeout(_)) => {
+                self.shared
+                    .counters
+                    .rejected_busy
+                    .fetch_add(1, Ordering::Relaxed);
+                Err(DispatchError::Busy)
+            }
+            Err(SendTimeoutError::Disconnected(_)) => Err(DispatchError::Closed),
         }
     }
 }
@@ -420,6 +445,50 @@ mod tests {
         let report = pool.stop(Duration::from_secs(1));
         assert_eq!(report.joined, 1);
         assert_eq!(pool.try_dispatch(5), Err(DispatchError::Closed));
+    }
+
+    /// A worker handing its result to an actor waits a bounded time for
+    /// room, then gives up as busy; a stopped actor refuses at once.
+    #[test]
+    fn a_bounded_wait_gets_room_or_gives_up() {
+        let gate = Arc::new(Gate::default());
+        let started = Arc::new(AtomicU64::new(0));
+        let actor = {
+            let gate = Arc::clone(&gate);
+            let started = Arc::clone(&started);
+            spawn_actor("wait", 1, (), move |(): &mut (), _: u32| {
+                started.fetch_add(1, Ordering::SeqCst);
+                gate.wait();
+            })
+            .unwrap()
+        };
+        actor.try_dispatch(1).unwrap();
+        wait_until(|| started.load(Ordering::SeqCst) == 1);
+        actor.dispatch_within(2, Duration::ZERO).unwrap();
+        let begin = Instant::now();
+        assert_eq!(
+            actor.dispatch_within(3, Duration::from_millis(30)),
+            Err(DispatchError::Busy)
+        );
+        assert!(begin.elapsed() >= Duration::from_millis(30));
+        assert_eq!(actor.stats().rejected_busy, 1);
+        let releaser = {
+            let gate = Arc::clone(&gate);
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(20));
+                gate.release();
+            })
+        };
+        actor
+            .dispatch_within(4, Duration::from_secs(5))
+            .expect("room once the job finished");
+        releaser.join().unwrap();
+        wait_until(|| actor.stats().completed == 3);
+        actor.stop(Duration::from_secs(1));
+        assert_eq!(
+            actor.dispatch_within(5, Duration::from_secs(1)),
+            Err(DispatchError::Closed)
+        );
     }
 
     #[test]

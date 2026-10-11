@@ -17,15 +17,18 @@ use dgxtop_core::identity::{
 use dgxtop_core::metric::{NativeUnit, Scalar};
 use dgxtop_core::naming::collector_id;
 use dgxtop_core::observation::{Attribute, EntityKind, EntityRecord};
+use dgxtop_core::process_model::ProcessHistoryModel;
 use dgxtop_core::quality::{Freshness, Quality, ReadStatus, SampleKind, SelectionState};
-use dgxtop_core::testing::{adapter_id, boot_id, host_id, metric_key, source_id};
+use dgxtop_core::testing::{
+    StaticProcessHistory, adapter_id, boot_id, host_id, metric_key, source_id,
+};
 use dgxtop_core::view::{
     ActionsView, DiskHistory, HistoryChartKind, HistoryChartView, HistoryPointView, HistoryView,
     HostState, HostStatus, IntervalView, OverloadState, SessionState,
 };
 
 use super::cell::canonical_unit_of;
-use super::{HostFacts, PresentationContext, ProcessMemoryBook, SettingsInputs, TrendBook};
+use super::{HostFacts, PresentationContext, SettingsInputs, TrendBook};
 
 /// Boot-clock "now" of every fixture.
 pub(crate) const NOW: u64 = 100_000_000_000;
@@ -393,8 +396,9 @@ pub(crate) struct Fixture {
     pub(crate) actions: Arc<ActionsView>,
     pub(crate) history: Arc<HistoryView>,
     pub(crate) trends: TrendBook,
-    pub(crate) process_memory: ProcessMemoryBook,
-    pub(crate) process_history: crate::process_history::ProcessHistoryBook,
+    /// What the history's process actor published.
+    pub(crate) processes: ProcessHistoryModel,
+    pub(crate) process_memory: Arc<StaticProcessHistory>,
     /// Wall clock minus boot clock (0: the history's times are boot times).
     pub(crate) boot_to_utc_ns: i128,
     pub(crate) facts: HostFacts,
@@ -444,10 +448,8 @@ impl Fixture {
             actions: Arc::new(empty_actions()),
             history: Arc::new(empty_history()),
             trends: TrendBook::new(120, 1000),
-            process_memory: ProcessMemoryBook::new(1000),
-            process_history: crate::process_history::ProcessHistoryBook::new(
-                dgxtop_core::testing::boot_id("boot-test"),
-            ),
+            processes: ProcessHistoryModel::default(),
+            process_memory: StaticProcessHistory::new(ProcessHistoryModel::default()),
             boot_to_utc_ns: 0,
             facts: HostFacts {
                 host_name: "dgx-test".to_owned(),
@@ -482,9 +484,8 @@ impl Fixture {
             actions: Arc::clone(&self.actions),
             history: Arc::clone(&self.history),
             trends: &self.trends,
-            process_memory: &self.process_memory,
-            process_history: &self.process_history,
-            process_history_kept: false,
+            processes: &self.processes,
+            process_memory: self.process_memory.as_ref(),
             boot_to_utc_ns: self.boot_to_utc_ns,
             facts: &self.facts,
             enabled_modules: &self.enabled_modules,

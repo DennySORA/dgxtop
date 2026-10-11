@@ -21,9 +21,10 @@ use dgxtop_core::identity::{EntityId, MetricId, MetricKey, ProcessKey};
 use dgxtop_core::metric::{Scalar, ids};
 use dgxtop_core::naming::entity;
 use dgxtop_core::observation::EntityKind;
+use dgxtop_core::process_model::TrackedProcess;
 
+use crate::presentation::TrendBook;
 use crate::presentation::gpu_directory::is_unified_memory;
-use crate::presentation::{ProcessMemoryBook, TrendBook};
 
 /// Metric id of the RAM unified-memory GPUs hold, recorded beside
 /// `memory.used` (not a collected metric).
@@ -69,7 +70,7 @@ impl TrendRecorder {
         &mut self,
         snapshot: &ImmutableSnapshot,
         unified_gpus: &BTreeSet<EntityId>,
-        processes: &ProcessMemoryBook,
+        processes: &[TrackedProcess],
     ) {
         let mut present = BTreeSet::new();
         let mut new_memory_reads = Vec::new();
@@ -104,7 +105,7 @@ impl TrendRecorder {
     fn record_process_shares(
         &mut self,
         unified_gpus: &BTreeSet<EntityId>,
-        processes: &ProcessMemoryBook,
+        processes: &[TrackedProcess],
         new_memory_reads: &[MetricKey],
         present: &mut BTreeSet<MetricKey>,
     ) {
@@ -113,12 +114,12 @@ impl TrendRecorder {
             .filter(|key| key.metric_id.as_str() == ids::MEMORY_USED)
             .cloned()
             .collect();
-        for process in processes.tracked() {
+        for process in processes {
             let bytes = process.bytes_on(|gpu| unified_gpus.contains(gpu));
             #[allow(clippy::cast_precision_loss)]
             let share = (bytes > 0).then_some(bytes as f64);
             for used in &used_keys {
-                let Some(key) = process_share_key(used, process.key) else {
+                let Some(key) = process_share_key(used, &process.key) else {
                     continue;
                 };
                 if share.is_none() && !self.book.contains(&key) {
@@ -229,14 +230,12 @@ fn is_trend_key(key: &MetricKey) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{
-        committed_snapshot, gpu_process, process_table, sample_entry, test_process_key,
-    };
+    use crate::test_support::{committed_snapshot, sample_entry, test_process_key};
     use dgxtop_core::testing::metric_key;
 
     /// No GPU process tracked.
-    fn untracked() -> ProcessMemoryBook {
-        ProcessMemoryBook::new(1000)
+    fn untracked() -> Vec<TrackedProcess> {
+        Vec::new()
     }
 
     #[test]
@@ -389,30 +388,36 @@ mod tests {
         let memory = metric_key("memory", "memory.used", "system");
         let gpus: BTreeSet<EntityId> = [EntityId::new("gpu:GPU-1").unwrap()].into();
         let part = |pid| process_share_key(&memory, &test_process_key(pid)).unwrap();
-        let mut processes = ProcessMemoryBook::new(1000);
+        // The tracked processes as the history publishes them: an exited
+        // one keeps its color with nothing listed.
+        let tracked = |train: Option<u64>, render: Option<u64>| {
+            let process = |pid: i64, name: &str, gpu: &str, held: Option<u64>| TrackedProcess {
+                slot: u8::try_from(pid - 10).unwrap(),
+                key: test_process_key(pid),
+                pid: i32::try_from(pid).unwrap(),
+                name: name.to_owned(),
+                current: held
+                    .map(|bytes| vec![(EntityId::new(gpu).unwrap(), bytes)])
+                    .unwrap_or_default(),
+            };
+            vec![
+                process(10, "train", "gpu:GPU-1", train),
+                process(11, "render", "gpu:GPU-2", render),
+            ]
+        };
+        let mut processes = Vec::new();
         let mut recorder = TrendRecorder::new(1000);
-        let mut step = |read: u64, rows, recorder: &mut TrendRecorder| {
-            processes.record(&process_table(read, read, rows));
+        let mut step = |read: u64, now: Vec<TrackedProcess>, recorder: &mut TrendRecorder| {
+            processes = now;
             let snapshot = committed_snapshot(
                 read,
                 vec![("memory", sample_entry(&memory, Some(50.0), read))],
             );
             recorder.record(&snapshot, &gpus, &processes);
         };
-        step(
-            1,
-            vec![
-                gpu_process(10, "train", &[("gpu:GPU-1", Some(6 * GIB))]),
-                gpu_process(11, "render", &[("gpu:GPU-2", Some(2 * GIB))]),
-            ],
-            &mut recorder,
-        );
-        step(2, Vec::new(), &mut recorder);
-        step(
-            3,
-            vec![gpu_process(10, "train", &[("gpu:GPU-1", Some(7 * GIB))])],
-            &mut recorder,
-        );
+        step(1, tracked(Some(6 * GIB), Some(2 * GIB)), &mut recorder);
+        step(2, tracked(None, None), &mut recorder);
+        step(3, tracked(Some(7 * GIB), None), &mut recorder);
         #[allow(clippy::cast_precision_loss)]
         let gib = |value: u64| Some((value * GIB) as f64);
         assert_eq!(

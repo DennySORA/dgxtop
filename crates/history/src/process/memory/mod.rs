@@ -1,5 +1,5 @@
 //! What each GPU process holds over time (D-64), fed from the committed
-//! process tables.
+//! process tables the Manager hands the process actor (D-79).
 //!
 //! The processes that hold the most GPU memory get a color each, the one
 //! their display name hashes to when they can, so a job keeps its color
@@ -21,17 +21,16 @@
 mod buckets;
 mod tracking;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use dgxtop_core::canonical::{ProcessRow, ProcessTable};
 use dgxtop_core::clock::{NANOS_PER_SECOND, ms_to_ns};
 use dgxtop_core::identity::{EntityId, ProcessKey};
+use dgxtop_core::process_model::MemoryPart;
 
 #[cfg(test)]
-pub(crate) use self::buckets::Held;
+use self::buckets::Held;
 use self::buckets::TimeBuckets;
-#[cfg(test)]
-pub(crate) use self::tracking::preferred_color;
 use self::tracking::{Listed as TrackedListed, Tracking};
 
 /// A table's values hold for at most this many sampling periods.
@@ -55,6 +54,7 @@ pub(crate) struct TrackedProcess<'a> {
 
 impl TrackedProcess<'_> {
     /// Bytes it holds now on the GPUs `include` accepts.
+    #[cfg(test)]
     pub(crate) fn bytes_on(&self, include: impl Fn(&EntityId) -> bool) -> u64 {
         self.current
             .iter()
@@ -85,7 +85,7 @@ struct Pending {
 
 /// The process memory record (module docs).
 #[derive(Debug, Clone)]
-pub struct ProcessMemoryBook {
+pub(crate) struct ProcessMemoryBook {
     tracking: Tracking,
     processes: BTreeMap<ProcessKey, ProcessRecord>,
     /// When process lists were recorded.
@@ -94,11 +94,13 @@ pub struct ProcessMemoryBook {
     /// Cycle and read time of the newest table recorded.
     last_table: Option<(u64, u64)>,
     hold_ns: u64,
+    /// Moves with every table recorded.
+    revision: u64,
 }
 
 impl ProcessMemoryBook {
     /// An empty book for tables read every `interval_ms`.
-    pub fn new(interval_ms: u64) -> Self {
+    pub(crate) fn new(interval_ms: u64) -> Self {
         Self {
             tracking: Tracking::default(),
             processes: BTreeMap::new(),
@@ -106,23 +108,30 @@ impl ProcessMemoryBook {
             pending: None,
             last_table: None,
             hold_ns: hold_ns(interval_ms),
+            revision: 0,
         }
     }
 
     /// A new sampling interval changes how long a table's values hold.
-    pub fn set_interval(&mut self, interval_ms: u64) {
+    pub(crate) fn set_interval(&mut self, interval_ms: u64) {
         self.hold_ns = hold_ns(interval_ms);
+    }
+
+    /// Moves with every table recorded.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Records a committed process table once (a commit of another domain
     /// hands the same table again).
-    pub fn record(&mut self, table: &ProcessTable) {
+    pub(crate) fn record(&mut self, table: &ProcessTable) {
         let now = table.read_finished_boot_ns;
         let stamp = (table.cycle_id, now);
         if now == 0 || self.last_table == Some(stamp) {
             return;
         }
         self.last_table = Some(stamp);
+        self.revision += 1;
         self.close_pending(now);
         let listed: Vec<Listed<'_>> = table.rows.iter().filter_map(Listed::of).collect();
         let sizes: Vec<TrackedListed<'_>> = listed
@@ -193,6 +202,7 @@ impl ProcessMemoryBook {
     }
 
     /// The color of `key` while it is tracked.
+    #[cfg(test)]
     pub(crate) fn slot_of(&self, key: &ProcessKey) -> Option<u8> {
         self.tracking.color_of(key)
     }
@@ -280,6 +290,31 @@ impl ProcessMemoryBook {
                         .sum();
                     integral / listed_ns
                 })
+            })
+            .collect()
+    }
+
+    /// Each tracked process's part of a chart of the GPUs in `gpus` over
+    /// `window` in `cells` cells ([`Self::part_means`]), in color order;
+    /// a process that held nothing there is left out.
+    pub(crate) fn parts(
+        &self,
+        gpus: &BTreeSet<EntityId>,
+        window: (u64, u64),
+        cells: usize,
+    ) -> Vec<MemoryPart> {
+        self.tracked()
+            .into_iter()
+            .filter_map(|process| {
+                let means = self.part_means(process.key, |gpu| gpus.contains(gpu), window, cells);
+                means
+                    .iter()
+                    .flatten()
+                    .any(|mean| *mean > 0.0)
+                    .then_some(MemoryPart {
+                        slot: process.slot,
+                        means,
+                    })
             })
             .collect()
     }

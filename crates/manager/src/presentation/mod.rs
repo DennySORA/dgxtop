@@ -37,9 +37,8 @@ pub use cell::build_metric_cell;
 pub(crate) use history_charts::history_charts;
 pub use plan::visible_modules;
 pub use processes::PROCESS_OVERSCAN_ROWS;
+pub(crate) use run_history::run_request;
 pub(crate) use run_inputs::run_inputs;
-
-pub use crate::process_memory::ProcessMemoryBook;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
@@ -50,6 +49,8 @@ use dgxtop_core::commands::ViewKind;
 use dgxtop_core::config::{Config, ValueOrigin};
 use dgxtop_core::identity::{MetricKey, ModuleId};
 use dgxtop_core::naming::adapters;
+use dgxtop_core::ports::ProcessMemoryReader;
+use dgxtop_core::process_model::ProcessHistoryModel;
 use dgxtop_core::view::{
     ActionsView, GpuView, HeaderView, HistoryView, HostStatus, IntervalView, ModuleViews,
     OverloadState, SessionState, Trend, ViewModel,
@@ -153,7 +154,7 @@ pub struct SettingsInputs<'a> {
 }
 
 /// Everything a projection is built from (all immutable).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PresentationContext<'a> {
     pub frame_revision: u64,
     pub now_boot_ns: u64,
@@ -171,12 +172,12 @@ pub struct PresentationContext<'a> {
     /// Built by the HistoryService for this session.
     pub history: Arc<HistoryView>,
     pub trends: &'a TrendBook,
-    /// GPU processes' colors and memory over time (D-64).
-    pub process_memory: &'a ProcessMemoryBook,
-    /// The GPU process runs (D-76).
-    pub process_history: &'a crate::process_history::ProcessHistoryBook,
-    /// Whether runs outlive dgxtop.
-    pub process_history_kept: bool,
+    /// The GPU process runs and colors the history's process actor
+    /// published (D-64, D-76, D-79).
+    pub processes: &'a ProcessHistoryModel,
+    /// What each GPU process held over time, for the history's memory
+    /// charts (D-64).
+    pub process_memory: &'a dyn ProcessMemoryReader,
     /// Wall clock minus boot clock when the projection is built: places the
     /// process memory record on the history view's time axis.
     pub boot_to_utc_ns: i128,
@@ -250,7 +251,7 @@ pub fn build_view_model_measured(context: &PresentationContext<'_>) -> (ViewMode
     let inputs = ModuleInputs {
         reader: &reader,
         directory: &directory,
-        process_memory: context.process_memory,
+        processes: context.processes,
         layout,
         visible_process_rows,
     };
@@ -285,7 +286,8 @@ pub fn build_view_model_measured(context: &PresentationContext<'_>) -> (ViewMode
 struct ModuleInputs<'a> {
     reader: &'a MetricReader<'a>,
     directory: &'a GpuDirectory<'a>,
-    process_memory: &'a ProcessMemoryBook,
+    /// The GPU processes' colors and runs.
+    processes: &'a ProcessHistoryModel,
     layout: ViewportLayout,
     visible_process_rows: usize,
 }
@@ -315,7 +317,7 @@ fn build_modules(
         modules.memory = Some(Arc::new(memory::build_memory_view(
             reader,
             inputs.directory,
-            inputs.process_memory,
+            &inputs.processes.tracked,
             layout.chart_points(),
         )));
     }
@@ -337,7 +339,7 @@ fn build_modules(
             &context.snapshot.process_table,
             context.session,
             inputs.directory,
-            inputs.process_memory,
+            inputs.processes,
             inputs.visible_process_rows,
         )));
     }
@@ -346,22 +348,20 @@ fn build_modules(
         modules.history = Some(process_parts::with_process_parts(
             charts,
             &process_parts::ProcessHistoryInputs {
-                book: inputs.process_memory,
+                tracked: &inputs.processes.tracked,
+                memory: context.process_memory,
                 directory: inputs.directory,
                 boot_to_utc_ns: context.boot_to_utc_ns,
                 cells: layout.history_chart_points(),
             },
         ));
-        let bar = context.session.process_bar;
+        let opened = run_history::run_request(context.session, context.viewport);
         modules.process_history = Some(Arc::new(run_history::build_process_history_view(
             &run_history::RunHistoryInputs {
-                book: context.process_history,
-                colors: inputs.process_memory,
-                opened: context.session.selected_process.as_ref(),
-                kept_on_disk: context.process_history_kept,
+                model: inputs.processes,
+                opened: opened.as_ref(),
                 utc_offset_s: context.facts.utc_offset_s,
-                bar,
-                columns: layout.run_chart_bars(),
+                bar: context.session.process_bar,
                 scales: &run_history::RunScales::read(reader, inputs.directory),
             },
         )));

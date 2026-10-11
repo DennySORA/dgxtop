@@ -1,9 +1,9 @@
 use dgxtop_core::canonical::{ProcessRow, ProcessTable};
 use dgxtop_core::identity::{EntityId, ProcessKey};
+use dgxtop_core::testing::{gpu_process, process_table, test_process_key};
 
 use super::tracking::preferred_color;
 use super::*;
-use crate::test_support::{gpu_process, process_table, test_process_key};
 
 const SECOND: u64 = NANOS_PER_SECOND;
 const GIB: u64 = 1 << 30;
@@ -266,4 +266,50 @@ fn the_hold_follows_the_sampling_interval() {
     book.record(&table(2, 11, vec![row(9, "python", &[(GPU_A, Some(GIB))])]));
     let held = book.held_on(&key(9), &gpu(GPU_A), (0, 20 * SECOND));
     assert_eq!(held.covered_ns, 10 * SECOND);
+}
+
+/// A chart's parts (moved with the record from the Manager's presentation,
+/// D-79): tables every 10 s from 10 s to 30 s, `train` holding 6 GiB of
+/// GPU A, `serve` 2 GiB of it and 1 GiB of GPU B. Each GPU's chart gets the
+/// parts on it in color order, a set of GPUs the parts on all of them, and
+/// a window before any list none.
+#[test]
+fn parts_follow_the_gpus_asked_for_in_color_order() {
+    let mut book = ProcessMemoryBook::new(10_000);
+    for at in [10, 20, 30] {
+        book.record(&table(
+            at,
+            at,
+            vec![
+                row(1, "train", &[(GPU_A, Some(6 * GIB))]),
+                row(2, "serve", &[(GPU_A, Some(2 * GIB)), (GPU_B, Some(GIB))]),
+            ],
+        ));
+    }
+    let window = (10 * SECOND, 30 * SECOND);
+    let parts = |gpus: &[&str]| -> Vec<(u8, Vec<Option<f64>>)> {
+        let gpus: BTreeSet<EntityId> = gpus.iter().map(|id| gpu(id)).collect();
+        book.parts(&gpus, window, 2)
+            .into_iter()
+            .map(|part| (part.slot, part.means))
+            .collect()
+    };
+    let (train, serve) = (preferred_color("train"), preferred_color("serve"));
+    let mut on_a = vec![
+        (train, vec![Some(gib(6.0)); 2]),
+        (serve, vec![Some(gib(2.0)); 2]),
+    ];
+    on_a.sort_by_key(|(slot, _)| *slot);
+    assert_eq!(parts(&[GPU_A]), on_a);
+    assert_eq!(parts(&[GPU_B]), vec![(serve, vec![Some(gib(1.0)); 2])]);
+    let mut both = vec![
+        (train, vec![Some(gib(6.0)); 2]),
+        (serve, vec![Some(gib(3.0)); 2]),
+    ];
+    both.sort_by_key(|(slot, _)| *slot);
+    assert_eq!(parts(&[GPU_A, GPU_B]), both);
+    assert!(
+        book.parts(&BTreeSet::from([gpu(GPU_A)]), (0, 5 * SECOND), 2)
+            .is_empty()
+    );
 }

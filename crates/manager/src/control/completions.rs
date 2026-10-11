@@ -16,6 +16,7 @@ use dgxtop_core::ports::{
     AdapterFailure, AdapterFailureKind, ControlCompletion, IngestionCompletion, IngressBatch,
     LogLevel, PersistError, PersistReceipt,
 };
+use dgxtop_core::process_model::ProcessTableSample;
 use dgxtop_core::quality::Availability;
 use dgxtop_core::text::sanitize_display;
 use dgxtop_core::view::HostStatus;
@@ -31,7 +32,6 @@ use crate::ingestion::trends::unified_gpus;
 use crate::ingestion::{CollectedOutcome, CommitOutcome, CycleInput};
 use crate::presentation::run_inputs;
 use crate::process::Now;
-use crate::process_history::SampleInputs;
 use crate::scheduler::{ReadReply, ReplyMatch, RequestKind};
 
 /// Source ids carried by these entities are per-process and never catalog
@@ -55,7 +55,7 @@ impl ControlCore {
             }
             ControlCompletion::Action(action) => {
                 if let Some((target, signal)) = self.process.signal_sent(&action) {
-                    self.process_history.note_signal(&target, signal, now);
+                    self.process_history.note_signal(&target, signal);
                 }
                 let open = self.sessions.open_ids();
                 let mut fx = Effects::default();
@@ -97,14 +97,6 @@ impl ControlCore {
                 Some(session) => self.sessions.mark_dirty(&session),
                 None => self.count_stale("history_archive"),
             },
-            ControlCompletion::ProcessProbe(report) => {
-                self.process_history.on_probe(&report, now);
-            }
-            ControlCompletion::ProcessHistory(completion) => {
-                if self.process_history.on_completion(completion, now) {
-                    self.sessions.mark_all_data_changed(now.boot_ns);
-                }
-            }
         }
     }
 
@@ -543,12 +535,12 @@ impl ControlCore {
         match self.ingestion.on_committed(ack, now) {
             CommitOutcome::Committed(batch) => {
                 let snapshot = self.ingestion.snapshots().latest();
-                self.process_memory.record(&snapshot.process_table);
-                self.sample_process_history(&snapshot);
+                self.forward_process_table(&snapshot);
+                let processes = self.process_history.model();
                 self.trends.record(
                     &snapshot,
                     &unified_gpus(&self.catalog.snapshot()),
-                    &self.process_memory,
+                    &processes.tracked,
                 );
                 self.pending_commit_ns.get_or_insert(now);
                 self.events.emit(
@@ -631,27 +623,25 @@ impl ControlCore {
 
     // ----- hosts --------------------------------------------------------------
 
-    /// Samples the process history from the committed process table (D-76).
-    fn sample_process_history(&mut self, snapshot: &ImmutableSnapshot) {
-        // Most commits of a cycle carry the table already sampled; the
-        // inputs (a reader, an index, the GPU directory) are built only for
-        // a new one.
-        if self.process_history.has_sampled(&snapshot.process_table) {
-            self.process_history.on_sampled_table();
+    /// Hands the committed process table to the history's process actor
+    /// (D-76, D-79).
+    fn forward_process_table(&mut self, snapshot: &ImmutableSnapshot) {
+        // Most commits of a cycle carry the table handed over already; the
+        // sample's inputs (a reader, an index, the GPU directory) are built
+        // only for a new one.
+        if self.process_history.has_table(&snapshot.process_table) {
+            self.process_history.tick();
             return;
         }
-        let now = self.now();
         let catalog = self.catalog.snapshot();
-        let inputs = run_inputs(snapshot, &catalog, now.boot_ns);
-        self.process_history.on_table(
-            &snapshot.process_table,
-            &SampleInputs {
-                now,
-                clk_tck: inputs.clk_tck,
-                gpu_labels: &inputs.gpu_labels,
-                host_network: inputs.host_network,
-            },
-        );
+        let inputs = run_inputs(snapshot, &catalog, self.now_boot_ns());
+        self.process_history.send_table(ProcessTableSample {
+            table: Arc::clone(&snapshot.process_table),
+            clk_tck: inputs.clk_tck,
+            gpu_labels: inputs.gpu_labels,
+            host_network: inputs.host_network,
+            process_period_ms: self.process_period_ms,
+        });
     }
 
     fn on_host_status(&mut self, status: HostStatus, now: u64) {

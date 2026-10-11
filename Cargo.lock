@@ -652,6 +652,7 @@ dependencies = [
 name = "dgxtop-history"
 version = "2.0.2"
 dependencies = [
+ "dgxtop-compression",
  "dgxtop-core",
  "uuid",
 ]
@@ -661,7 +662,6 @@ name = "dgxtop-manager"
 version = "2.0.2"
 dependencies = [
  "crossbeam-channel",
- "dgxtop-compression",
  "dgxtop-core",
  "proptest",
  "serde",

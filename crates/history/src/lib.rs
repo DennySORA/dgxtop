@@ -22,6 +22,11 @@
 //! inside each commit, so history never lags the snapshot; the Manager reads
 //! it through `HistoryReader` ([`HistoryIndex`]); the archive receives the
 //! finished rows as `ArchiveJournal`s drained from the recorder.
+//!
+//! The GPU processes' runs and memory are its process actor's
+//! ([`ProcessHistory`]): the Manager hands it the committed process tables
+//! and reads the model it publishes ([`PublishedProcessHistory`]) through
+//! `ProcessHistoryReader` and `ProcessMemoryReader`.
 
 #![forbid(unsafe_code)]
 
@@ -31,6 +36,7 @@ pub(crate) mod gaps;
 mod index;
 pub(crate) mod output;
 pub(crate) mod pin;
+mod process;
 mod query;
 mod recorder;
 pub(crate) mod records;
@@ -51,6 +57,9 @@ use dgxtop_core::sampling::SamplingTiming;
 
 pub use index::HistoryIndex;
 pub(crate) use index::HistoryWriter;
+pub use process::{
+    ProcessHistory, ProcessHistoryPorts, ProcessHistorySettings, PublishedProcessHistory,
+};
 pub use recorder::HistoryRecorder;
 
 use archive::ArchiveQueue;

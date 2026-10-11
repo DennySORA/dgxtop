@@ -11,16 +11,18 @@
 //! whether it ended and how ([`ending`]). Closed buckets and changed
 //! runs leave through [`ProcessHistoryBook::take_journal`] for the
 //! long-term store; the short-term file takes [`ProcessHistoryBook::recent`].
+//! Each run keeps its whole-life figures as its buckets close, so the read
+//! model never merges a run's buckets to list it (D-79).
 //! Nothing here performs I/O.
 
 mod ending;
 mod service;
 
-pub(crate) use self::service::{ProcessHistoryPorts, ProcessHistoryService};
+pub(crate) use self::service::{ProcessHistoryService, ServicePorts};
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use dgxtop_compression::{RunSample, RunSeries};
+use dgxtop_compression::{RunSample, RunSeries, whole_series};
 use dgxtop_core::action::Signal;
 use dgxtop_core::canonical::{ProcessRow, ProcessTable};
 use dgxtop_core::identity::{BootId, EntityId, ProcessKey};
@@ -38,12 +40,16 @@ use self::ending::{EndEvidence, end_cause};
 use crate::process::Now;
 
 const NANOS_PER_SECOND: u64 = 1_000_000_000;
+/// What one held bucket costs.
+const BUCKET_BYTES: usize = std::mem::size_of::<dgxtop_core::process_history::RunBucket>();
 /// A live run the table stops listing ends after this long even when no
 /// probe answers.
 const MISSING_GRACE_NS: u64 = 10 * NANOS_PER_SECOND;
-/// Ended runs whose buckets stay in memory; older ones keep their figures
-/// and read their buckets from the long-term store when opened.
-const ENDED_RUNS_WITH_SERIES: usize = 32;
+/// Bytes the ended runs' buckets may hold in memory (D-79: a byte budget,
+/// the oldest ended go first); the others keep their figures and read their
+/// buckets from the long-term store when opened. Live runs are always held:
+/// at most 64, each at most one size's TIER_BUCKETS a size.
+pub(crate) const ENDED_SERIES_BUDGET_BYTES: usize = 48 * 1024 * 1024;
 
 /// What a cycle's sample needs beside the process table.
 #[derive(Debug, Clone, Copy)]
@@ -60,9 +66,16 @@ pub(crate) struct SampleInputs<'a> {
 /// One run: what it was, what it used, and while it runs, what following
 /// it needs.
 #[derive(Debug, Clone)]
-pub struct Run {
+pub(crate) struct Run {
     info: RunInfo,
     series: RunSeries,
+    /// Every sample of the run as one bucket, the compression's
+    /// [`whole_series`] of what it holds; kept when an ended run's buckets
+    /// leave memory, so it is still listed with its figures.
+    whole: RunBucket,
+    /// The start of the 5 s bucket being filled when `whole` was last
+    /// taken: until it closes, a sample only adds to `whole`.
+    whole_filling: Option<i64>,
     live: Option<Live>,
     changed: bool,
 }
@@ -76,6 +89,11 @@ impl Run {
         &self.series
     }
 
+    /// The run's figures over its whole life (module docs).
+    pub(crate) fn whole(&self) -> &RunBucket {
+        &self.whole
+    }
+
     pub(crate) fn is_live(&self) -> bool {
         self.live.is_some()
     }
@@ -85,6 +103,32 @@ impl Run {
         self.live
             .as_ref()
             .map_or_else(ProbedValues::default, |live| live.probe.values)
+    }
+
+    /// Takes the whole-life figures again from every bucket held, after
+    /// buckets closed or were put back; an empty series keeps the last.
+    fn retake_whole(&mut self) {
+        self.whole_filling = None;
+        if !self.series.is_empty() {
+            self.whole = whole_series(&self.series);
+        }
+    }
+
+    /// Adds `sample` taken at `utc_ns`; returns the buckets of a minute
+    /// and more it closed. While no bucket closes, the sample is all that
+    /// changes what the whole series merges, so it only adds to `whole`.
+    fn add(&mut self, utc_ns: i64, sample: &RunSample) -> Vec<(Tier, RunBucket)> {
+        let filling = Tier::Recent.align(utc_ns, self.series.shift_ns());
+        let closed = self.series.add(utc_ns, sample);
+        if closed.is_empty() && self.whole_filling == Some(filling) {
+            for (metric, value) in RunMetric::ALL.iter().zip(sample) {
+                self.whole.add(*metric, *value);
+            }
+        } else {
+            self.retake_whole();
+            self.whole_filling = Some(filling);
+        }
+        closed
     }
 }
 
@@ -101,7 +145,7 @@ struct Live {
 }
 
 #[derive(Debug)]
-pub struct ProcessHistoryBook {
+pub(crate) struct ProcessHistoryBook {
     boot_id: BootId,
     runs: BTreeMap<ProcessKey, Run>,
     signals: BTreeMap<ProcessKey, (Signal, u64)>,
@@ -114,6 +158,11 @@ pub struct ProcessHistoryBook {
     journal: ProcessHistoryJournal,
     /// Runs whose buckets were asked of the long-term store.
     reading: BTreeSet<ProcessKey>,
+    /// Moves whenever what a run shows may have changed (the read model
+    /// is built again then).
+    revision: u64,
+    /// [`ENDED_SERIES_BUDGET_BYTES`] unless a test sets another.
+    series_budget_bytes: usize,
 }
 
 impl ProcessHistoryBook {
@@ -127,7 +176,21 @@ impl ProcessHistoryBook {
             shift_ns: 0,
             journal: ProcessHistoryJournal::default(),
             reading: BTreeSet::new(),
+            revision: 0,
+            series_budget_bytes: ENDED_SERIES_BUDGET_BYTES,
         }
+    }
+
+    /// The ended runs' buckets keep within `bytes` (tests).
+    #[cfg(test)]
+    pub(crate) fn with_series_budget(mut self, bytes: usize) -> Self {
+        self.series_budget_bytes = bytes;
+        self
+    }
+
+    /// Moves whenever what a run shows may have changed.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Buckets follow the local clock `utc_offset_s` east of UTC, so a
@@ -154,6 +217,7 @@ impl ProcessHistoryBook {
             return;
         }
         self.last_table = Some(table_identity(table));
+        self.revision += 1;
         let utc_ns = utc_of(inputs.now);
         let mut listed = BTreeSet::new();
         for row in &table.rows {
@@ -226,6 +290,7 @@ impl ProcessHistoryBook {
         for reading in &report.readings {
             self.take_reading(reading, (report.read_boot_ns, now), oom_rose, deriver);
         }
+        self.revision += 1;
     }
 
     /// dgxtop sent `signal` to `key` (D-71): if the run ends within a
@@ -273,16 +338,18 @@ impl ProcessHistoryBook {
             self.backfill(&key);
         }
         self.bound();
+        self.revision += 1;
     }
 
     /// Makes the sizes a run's stored buckets lack from the finer ones
-    /// (D-77), and journals them.
+    /// (D-77), and journals them; the run's figures follow what it holds.
     fn backfill(&mut self, key: &ProcessKey) {
         let Some(run) = self.runs.get_mut(key) else {
             return;
         };
         let live = run.is_live();
         let made = run.series.backfill(live);
+        run.retake_whole();
         if !made.is_empty() {
             self.journal
                 .buckets
@@ -317,6 +384,7 @@ impl ProcessHistoryBook {
         }
         self.backfill(key);
         self.limit_series(Some(key));
+        self.revision += 1;
     }
 
     /// What closed and changed since the last call, for the long-term
@@ -443,6 +511,7 @@ impl ProcessHistoryBook {
         run.info.end = Some(RunEnd { utc_ns, cause });
         run.changed = true;
         let closed = run.series.close_all();
+        run.retake_whole();
         self.signals.remove(key);
         self.journal_buckets(key, closed);
         self.limit_series(None);
@@ -484,21 +553,23 @@ impl ProcessHistoryBook {
         self.limit_series(None);
     }
 
-    /// Keeps the buckets of at most [`ENDED_RUNS_WITH_SERIES`] ended runs:
-    /// the ones that ended last, and `keep`.
+    /// Keeps the ended runs' buckets within the byte budget: `keep` (the
+    /// run being opened) and then the ones that ended last.
     fn limit_series(&mut self, keep: Option<&ProcessKey>) {
-        let mut ended: Vec<(i64, ProcessKey)> = self
+        let bytes_of = |run: &Run| run.series.len().saturating_mul(BUCKET_BYTES);
+        let mut used = keep.and_then(|key| self.runs.get(key)).map_or(0, &bytes_of);
+        let mut ended: Vec<(i64, ProcessKey, usize)> = self
             .runs
             .iter()
             .filter(|(key, run)| Some(*key) != keep && !run.series.is_empty())
-            .filter_map(|(key, run)| Some((run.info.end?.utc_ns, key.clone())))
+            .filter_map(|(key, run)| Some((run.info.end?.utc_ns, key.clone(), bytes_of(run))))
             .collect();
-        let limit = ENDED_RUNS_WITH_SERIES.saturating_sub(usize::from(keep.is_some()));
-        if ended.len() <= limit {
-            return;
-        }
         ended.sort_by(|left, right| right.cmp(left));
-        for (_, key) in ended.into_iter().skip(limit) {
+        for (_, key, bytes) in ended {
+            used = used.saturating_add(bytes);
+            if used <= self.series_budget_bytes {
+                continue;
+            }
             if let Some(run) = self.runs.get_mut(&key) {
                 run.series.clear();
                 self.reading.remove(&key);
@@ -533,6 +604,8 @@ fn new_run(row: &ProcessRow, inputs: &SampleInputs<'_>, (utc_ns, shift_ns): (i64
             end: None,
         },
         series: RunSeries::new(shift_ns),
+        whole: RunBucket::new(0),
+        whole_filling: None,
         live: Some(Live::default()),
         changed: true,
     }
@@ -571,6 +644,8 @@ fn restored_run(mut info: RunInfo, (boot_id, shift_ns): (&BootId, i64), now: Now
     Run {
         info,
         series: RunSeries::new(shift_ns),
+        whole: RunBucket::new(0),
+        whole_filling: None,
         live,
         changed,
     }
@@ -637,7 +712,7 @@ fn sample_run(
     }
     sample[RunMetric::Swap.index()] = probed.swap;
     sample[RunMetric::OpenFiles.index()] = probed.open_files;
-    run.series.add(utc_ns, &sample)
+    run.add(utc_ns, &sample)
 }
 
 /// The sum of the values present; `None` when none is.
