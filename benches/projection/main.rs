@@ -575,7 +575,6 @@ fn history_view(snapshot: &ImmutableSnapshot, now_ns: u64) -> HistoryView {
                 points: points.clone(),
                 mean: Some(41.5),
                 peak: Some(75.0),
-                coverage_ratio: Some(0.97),
                 covered_ns: Some(3_492_000_000_000),
                 display_downsampled: true,
                 pending: false,

@@ -347,7 +347,6 @@ pub(crate) fn history_chart(points: Vec<HistoryPointView>) -> HistoryChartView {
         points,
         mean: None,
         peak: None,
-        coverage_ratio: Some(1.0),
         covered_ns: None,
         display_downsampled: false,
         pending: false,

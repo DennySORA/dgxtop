@@ -375,7 +375,6 @@ fn history_says_when_it_loads_fails_is_partly_recorded_or_has_no_series() {
     (cpu.mean, cpu.peak) = (None, None);
     history.charts[1].error = Some("QueryTooLarge: narrow the window".into());
     for chart in &mut history.charts {
-        chart.coverage_ratio = Some(0.2);
         chart.covered_ns = Some(720 * 1_000_000_000);
     }
     model.modules.history = Some(Arc::new(history.clone()));

@@ -651,26 +651,21 @@ mod tests {
     fn a_partly_recorded_window_says_how_much_it_holds() {
         let mut history = history_view();
         for chart in &mut history.charts {
-            chart.coverage_ratio = Some(0.2);
             chart.covered_ns = Some(720 * SECOND);
         }
         assert_eq!(
             recorded_note(&history).as_deref(),
             Some("recorded 12m of 1h")
         );
-        // The 24 h window on a machine up five hours: its ratio is of the
-        // five hours, the note still of the time recorded.
+        // The 24 h window on a machine up five hours: the note is of the
+        // time recorded.
         history.requested_span_ns = 24 * 3_600 * SECOND;
-        for chart in &mut history.charts {
-            chart.coverage_ratio = Some(720.0 / (5.0 * 3_600.0));
-        }
         assert_eq!(
             recorded_note(&history).as_deref(),
             Some("recorded 12m of 24h")
         );
         history.requested_span_ns = 3_600 * SECOND;
         for chart in &mut history.charts {
-            chart.coverage_ratio = Some(1.0);
             chart.covered_ns = Some(3_600 * SECOND);
         }
         assert_eq!(recorded_note(&history), None);

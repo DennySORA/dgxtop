@@ -334,7 +334,12 @@ fn statistics_are_one_read_per_series_for_four_windows() {
     assert_eq!(power_rows[1].peak, Some(205.0));
     let joules = 200.0 * 300.0 * 60.0;
     assert!((power_rows[1].integral.unwrap() - joules).abs() < 1e-6);
-    assert!((power_rows[1].coverage_ratio.unwrap() - 300.0 / 360.0).abs() < 1e-9);
+    let spans: Vec<u64> = power_rows.iter().map(|row| row.span_ns).collect();
+    assert_eq!(
+        spans,
+        [1, 6, 12, 24].map(|hours| hours * 3_600 * SECOND),
+        "each window carries its length"
+    );
     assert!(view.summaries.iter().all(|row| !row.pending));
     let util_row = view
         .summaries

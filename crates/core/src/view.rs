@@ -527,13 +527,15 @@ pub struct HistoryWindowSummary {
     /// The device summarized (`GPU 0 · NVIDIA GB10`).
     pub subject: String,
     pub window_label: String,
+    /// The window's length, so the Viewer never reads it from the label
+    /// (D-99).
+    pub span_ns: u64,
     pub unit: CanonicalUnit,
     /// Time-weighted mean over the covered part of the window.
     pub mean: Option<f64>,
     pub peak: Option<f64>,
-    pub coverage_ratio: Option<f64>,
     /// Time the history holds in the window: the time its aligned buckets
-    /// recorded (D-50, D-82).
+    /// recorded (D-50, D-82); its share of `span_ns` is the coverage.
     pub covered_ns: Option<u64>,
     /// Mean times covered time (joules for power); `None` for other series.
     pub integral: Option<f64>,
@@ -558,9 +560,9 @@ pub struct HistoryChartView {
     /// Largest value in the window (from the bucket maxima when buckets
     /// merge several samples).
     pub peak: Option<f64>,
-    pub coverage_ratio: Option<f64>,
     /// Time the history holds in the window (see
-    /// [`HistoryWindowSummary::covered_ns`]).
+    /// [`HistoryWindowSummary::covered_ns`]), of the view's
+    /// [`HistoryView::requested_span_ns`].
     pub covered_ns: Option<u64>,
     /// Set when points were merged to fit the chart's width: the spec's
     /// mark of a display-only compression (STORAGE.md §5).
