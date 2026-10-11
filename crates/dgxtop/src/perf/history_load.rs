@@ -35,6 +35,10 @@ use uuid::Uuid;
 pub const PRELOAD_REASON: &str = "SYNTHETIC_HISTORY_PRELOAD";
 const COLLECTOR: &str = "history-preload";
 const MINUTE_NS: u64 = 60 * NANOS_PER_SECOND;
+/// UTC of boot 0 on the synthetic timeline: a whole minute, so the
+/// history's minutes (cut on whole UTC minutes once it is paired, D-82)
+/// are whole minutes of the boot clock, as the shape above assumes.
+const SYNTHETIC_UTC_AT_BOOT_NS: i128 = 1_790_000_040 * 1_000_000_000;
 const DAY_SECONDS: u64 = 86_400;
 const OUTAGE_NS: u64 = 10 * MINUTE_NS;
 /// One series in this many has an outage, another one a source change.
@@ -212,13 +216,15 @@ impl HistoryFeeder {
         &self.series
     }
 
-    /// Fills `[end − span, end]` and returns what was committed.
+    /// Fills `[end − span, end]` of a fresh writer and returns what was
+    /// committed; first pairs its boot clock with the synthetic UTC.
     pub fn preload(
         &mut self,
         writer: &mut StateWriter,
         shape: PreloadShape,
         end_ns: u64,
     ) -> PreloadReport {
+        writer.observe_wall_clock(0, SYNTHETIC_UTC_AT_BOOT_NS);
         let start = end_ns.saturating_sub(shape.span_ns).max(shape.bulk_step_ns);
         let fine_start = end_ns.saturating_sub(shape.fine_tail_ns).max(start);
         self.timeline = Some(Timeline {

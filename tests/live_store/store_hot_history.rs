@@ -287,9 +287,6 @@ fn at07_other_boots_are_separate_series_and_unknown_boots_are_empty() {
 fn at07_generation_changes_cut_segments_and_utc_steps_are_discontinuities() {
     let mut harness = Harness::new();
     let key = temperature_key("gpu:0");
-    harness
-        .writer
-        .observe_wall_clock(0, 1_790_000_000_000_000_000);
     for second in 0..10u64 {
         let generation = if second < 5 { 1 } else { 2 };
         harness.commit(
@@ -306,7 +303,7 @@ fn at07_generation_changes_cut_segments_and_utc_steps_are_discontinuities() {
         if second == 5 {
             harness.writer.observe_wall_clock(
                 5 * SECOND,
-                1_790_000_005_000_000_000 - 86_400 * SECOND as i128,
+                support::UTC_AT_BOOT_NS + 5 * SECOND as i128 - 86_400 * SECOND as i128,
             );
         }
     }
@@ -431,6 +428,104 @@ fn at27_boundary_without_raw_is_a_boundary_gap_never_proportional() {
         )
         .unwrap();
     assert_eq!(value_u64(&exact.points[0]), (31..=120).sum::<u64>());
+}
+
+/// D-82: a boot 37 s into a UTC minute cuts its minutes at boot 23 s,
+/// 83 s, 143 s… (whole UTC minutes), the first 23 s being a head minute.
+/// Queries over the rollups stay exact: whole buckets and bridges each
+/// count once, a minute point holds only the intervals inside it, and a
+/// window edge without raw data is a boundary gap up to the next boundary.
+#[test]
+fn at27_minutes_on_whole_utc_minutes_keep_every_window_exact() {
+    let mut settings = config();
+    settings.store.raw_history_seconds = 30;
+    let mut harness = Harness::unpaired(
+        settings,
+        dgxtop_core::budget::ByteLedger::for_memory_limit_mib(256),
+        dgxtop_core::quality::Namespace::Live,
+        false,
+    );
+    let key = rx_key("netif:ns:2");
+    for k in 0..200u64 {
+        let start = k * SECOND + 500 * MILLI;
+        let end = start + SECOND;
+        harness.commit(
+            vec![gauge(&key, (k + 1) as f64, end)],
+            vec![interval(&key, start, end, k + 1)],
+            end,
+        );
+    }
+    // The pairing arrives late; nothing was finished before it.
+    harness.writer.observe_wall_clock(
+        250 * SECOND,
+        support::UTC_AT_BOOT_NS + i128::from(37 * SECOND + 250 * SECOND),
+    );
+    harness.maintain(400 * SECOND);
+
+    let whole = harness
+        .query(&key, (0, 400 * SECOND), ONE_CELL_MS, HistoryStat::Total, 10)
+        .unwrap();
+    assert_well_formed(&whole);
+    assert_eq!(value_u64(&whole.points[0]), (1..=200).sum::<u64>());
+    assert_eq!(whole.points[0].method, HistoryMethod::BucketExact);
+
+    let per_minute = harness
+        .query(&key, (0, 203 * SECOND), 60_000, HistoryStat::Total, 10)
+        .unwrap();
+    assert_well_formed(&per_minute);
+    let spans: Vec<(u64, u64, Option<u64>)> = per_minute
+        .points
+        .iter()
+        .map(|point| {
+            (
+                point.start_boot_ns / SECOND,
+                point.end_boot_ns / SECOND,
+                point.value.and_then(Scalar::as_u64),
+            )
+        })
+        .collect();
+    // The bridges across 23 s, 83 s and 143 s are in no minute point.
+    assert_eq!(
+        spans,
+        vec![
+            (0, 23, Some((1..=22).sum())),
+            (23, 83, Some((24..=82).sum())),
+            (83, 143, Some((84..=142).sum())),
+            (143, 203, Some((144..=200).sum())),
+        ]
+    );
+
+    let edge = harness
+        .query(
+            &key,
+            (50 * SECOND, 203 * SECOND),
+            ONE_CELL_MS,
+            HistoryStat::Total,
+            10,
+        )
+        .unwrap();
+    assert_well_formed(&edge);
+    let boundary = &edge.points[0];
+    assert_eq!(boundary.method, HistoryMethod::BoundaryGap);
+    assert_eq!(
+        (boundary.start_boot_ns, boundary.end_boot_ns),
+        (50 * SECOND, 82 * SECOND + 500 * MILLI),
+        "up to the bridge across the boundary, never split"
+    );
+    assert_eq!(value_u64(&edge.points[1]), (83..=200).sum::<u64>());
+
+    let means = harness
+        .query(&key, (0, 203 * SECOND), 60_000, HistoryStat::Max, 10)
+        .unwrap();
+    let maxima: Vec<(u64, f64)> = means
+        .points
+        .iter()
+        .map(|point| (point.start_boot_ns / SECOND, value_f64(point)))
+        .collect();
+    assert_eq!(
+        maxima,
+        vec![(0, 22.0), (23, 82.0), (83, 142.0), (143, 200.0)]
+    );
 }
 
 #[test]

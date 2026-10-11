@@ -29,6 +29,10 @@ use uuid::Uuid;
 pub const SECOND: u64 = 1_000_000_000;
 pub const MINUTE: u64 = 60 * SECOND;
 pub const MILLI: u64 = 1_000_000;
+/// UTC at boot 0 of the harness's wall clock: a whole minute, so the
+/// history's minutes (cut on whole UTC minutes, D-82) are whole minutes of
+/// the boot clock too.
+pub const UTC_AT_BOOT_NS: i128 = 1_790_000_040_000_000_000;
 
 pub fn config() -> Config {
     Config::defaults().unwrap_or_else(|error| panic!("embedded defaults: {error}"))
@@ -72,7 +76,22 @@ impl Harness {
         )
     }
 
+    /// A harness whose wall clock is paired from the start (as the
+    /// monitor's first maintenance step does).
     pub fn build(config: Config, ledger: ByteLedger, namespace: Namespace, archive: bool) -> Self {
+        let mut harness = Self::unpaired(config, ledger, namespace, archive);
+        harness.writer.observe_wall_clock(0, UTC_AT_BOOT_NS);
+        harness
+    }
+
+    /// A harness without a boot-to-UTC pairing yet: the history finishes
+    /// no minute until one arrives.
+    pub fn unpaired(
+        config: Config,
+        ledger: ByteLedger,
+        namespace: Namespace,
+        archive: bool,
+    ) -> Self {
         let store = LiveStore::new(
             &config.store,
             &config.sampling,

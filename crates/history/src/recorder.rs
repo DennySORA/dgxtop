@@ -7,7 +7,10 @@
 //! (counters, health, recent gaps) crosses back. Finished rows stay here,
 //! in the archive queue, until the actor drains them as journals; the
 //! Overview series' finished minutes also go into their sizes (D-82), and
-//! the journals carry the archive deletions those sizes allow.
+//! the journals carry the archive deletions those sizes allow. The first
+//! boot-to-UTC pairing fixes the boot's minute grid (whole UTC minutes);
+//! no minute is finished before it, so every finished minute already has
+//! its place on the wall clock.
 
 use std::fmt;
 
@@ -15,14 +18,12 @@ use dgxtop_core::canonical::GapRecord;
 use dgxtop_core::ports::{ArchiveJournal, HistoryAppends, HistoryIngest, HistoryOutcome};
 
 use crate::archive::ArchiveQueue;
+use crate::grid::MinuteGrid;
 use crate::index::HistoryWriter;
 use crate::output::{ArchiveRow, HistoryReport};
 use crate::overview::OverviewTiers;
 use crate::overview::rows::{is_overview_row, tier_minutes};
 use crate::wall_clock::WallClock;
-
-/// Overview minutes kept while no boot-to-UTC pairing is known yet.
-const MAX_UNTIMED_ROWS: usize = 4096;
 
 /// Write side of the history, handed to the live state at composition.
 pub struct HistoryRecorder {
@@ -33,8 +34,6 @@ pub struct HistoryRecorder {
     /// Snapshot revision of the last ingest or publish; journals carry it.
     revision: u64,
     overview: OverviewTiers,
-    /// Overview minutes finished before the wall clock was known.
-    untimed: Vec<ArchiveRow>,
     now_boot_ns: u64,
 }
 
@@ -62,28 +61,23 @@ impl HistoryRecorder {
             archive_enabled,
             revision: 0,
             overview,
-            untimed: Vec::new(),
             now_boot_ns: 0,
         }
     }
 
     /// The Overview minutes among `rows` into their sizes, on the wall
-    /// clock; kept (bounded) until the clock is known.
+    /// clock (known: minutes are finished only after the first pairing).
     fn feed_overview(&mut self, rows: &[ArchiveRow]) {
-        self.untimed
-            .extend(rows.iter().filter(|row| is_overview_row(row)).cloned());
-        if self.untimed.is_empty() {
+        let overview_rows: Vec<ArchiveRow> = rows
+            .iter()
+            .filter(|row| is_overview_row(row))
+            .cloned()
+            .collect();
+        if overview_rows.is_empty() {
             return;
         }
-        match tier_minutes(&self.untimed, &self.clock) {
-            Some(minutes) => {
-                self.untimed.clear();
-                self.overview.feed(minutes);
-            }
-            None => {
-                let excess = self.untimed.len().saturating_sub(MAX_UNTIMED_ROWS);
-                self.untimed.drain(..excess);
-            }
+        if let Some(minutes) = tier_minutes(&overview_rows, &self.clock) {
+            self.overview.feed(minutes);
         }
     }
 
@@ -151,11 +145,16 @@ impl HistoryIngest for HistoryRecorder {
         self.writer.set_finalize_grace(grace_ns);
     }
 
+    /// The first pairing fixes the boot's minutes; a later step keeps them
+    /// (finished rows are never cut again) and only moves their UTC stamps.
     fn observe_wall_clock(&mut self, boot_ns: u64, utc_ns: i128) {
+        if !self.clock.is_known() {
+            self.writer
+                .set_minute_grid(MinuteGrid::on_utc_minutes(boot_ns, utc_ns));
+        }
         if let Some(discontinuity) = self.clock.observe(boot_ns, utc_ns) {
             self.writer.note_discontinuity(discontinuity);
         }
-        self.feed_overview(&[]);
     }
 
     fn take_archive_journal(&mut self, max_bytes: u64) -> Option<ArchiveJournal> {
@@ -272,8 +271,12 @@ mod tests {
         assert_eq!(ledger.used(Partition::Reserve), 0);
     }
 
+    /// A pairing that arrives late: the minutes wait (none is cut on a
+    /// grid that would move), then are cut on whole UTC minutes, the
+    /// boot's head minute ending on the first one, and journaled with the
+    /// published revision.
     #[test]
-    fn journals_wait_for_the_wall_clock_and_carry_the_published_revision() {
+    fn minutes_wait_for_the_wall_clock_and_start_on_whole_utc_minutes() {
         let (mut history, _ledger) = history(true);
         for minute in 0..3 {
             let seconds = minute * 60 + 1;
@@ -287,11 +290,121 @@ mod tests {
             history.recorder.take_archive_journal(1 << 20).is_none(),
             "no UTC mapping yet"
         );
-        history.recorder.observe_wall_clock(0, UTC_AT_BOOT);
+        // Boot was 20 s into a UTC minute: whole minutes at boot 40 s, 100 s…
+        let late = 5 * MINUTE;
+        history
+            .recorder
+            .observe_wall_clock(late, UTC_AT_BOOT + i128::from(late));
+        history.recorder.maintain(late);
         history.recorder.set_revision(7);
         let journal = history.recorder.take_archive_journal(1 << 20).unwrap();
         assert_eq!(journal.revision, 7);
-        assert!(!journal.buckets.is_empty());
+        let spans: Vec<(u64, u64)> = journal
+            .buckets
+            .iter()
+            .map(|bucket| (bucket.start_boot_ns, bucket.end_boot_ns))
+            .collect();
+        assert_eq!(
+            spans,
+            vec![
+                (0, 40 * SECOND),
+                (40 * SECOND, 100 * SECOND),
+                (100 * SECOND, 160 * SECOND)
+            ]
+        );
+        for bucket in &journal.buckets[1..] {
+            assert!(bucket.start_utc.ends_with(":00.000000000Z"), "{bucket:?}");
+            assert!(bucket.end_utc.ends_with(":00.000000000Z"), "{bucket:?}");
+            assert!(bucket.covered_ns <= MINUTE);
+        }
+        assert!(journal.buckets[0].end_utc.ends_with(":00.000000000Z"));
+        assert_eq!(journal.buckets[0].covered_ns, 3 * SECOND);
+    }
+
+    /// A boot 20 s into a UTC minute, on a local clock an hour and a half
+    /// ahead: every 1 minute bar starts on a whole local minute and holds
+    /// exactly that minute, so a value that changes on a minute boundary
+    /// is never mixed into the neighbouring bar (D-82).
+    #[test]
+    fn minute_bars_start_and_end_on_local_clock_minutes() {
+        use dgxtop_core::history::SeriesInEveryBoot;
+        use dgxtop_core::overview_history::{OverviewAnswer, OverviewRequest};
+        use dgxtop_core::ports::{CancelFlag, OverviewReader};
+        use dgxtop_core::process_history::Tier;
+        use dgxtop_core::testing::FakeClock;
+
+        let (mut history, _ledger) = history(false);
+        let offset_s = 5_400;
+        history.index.overview().set_utc_offset(offset_s);
+        history.recorder.observe_wall_clock(0, UTC_AT_BOOT);
+        let utc_at_boot = i64::try_from(UTC_AT_BOOT).unwrap();
+        let minute = i64::try_from(MINUTE).unwrap();
+        // UTC minute of the sample at boot `seconds`, counted from boot's.
+        let utc_minute = |seconds: u64| {
+            let utc = utc_at_boot + i64::try_from(seconds * SECOND).unwrap();
+            utc.div_euclid(minute) - utc_at_boot.div_euclid(minute)
+        };
+        let samples = 6 * 60 / 2;
+        for step in 0..samples {
+            let seconds = step * 2;
+            let value = if utc_minute(seconds) % 2 == 0 {
+                10.0
+            } else {
+                20.0
+            };
+            history
+                .recorder
+                .ingest(one_gauge(seconds, value), seconds * SECOND, step + 1);
+        }
+        let now = 6 * MINUTE;
+        history.recorder.maintain(now);
+        let clock = FakeClock::new(now);
+        clock.step_utc_ns(i64::try_from(now).unwrap());
+        let shift = i64::from(offset_s) * 1_000_000_000;
+        let from = Tier::OneMinute.align(utc_at_boot, shift);
+        let request = OverviewRequest::Bars {
+            series: SeriesInEveryBoot::from(&metric_key("gpu:0", ids::GPU_TEMPERATURE, "gpu")),
+            tier: Tier::OneMinute,
+            from_utc_ns: from,
+            end_utc_ns: from + 10 * minute,
+            at_utc_ns: utc_at_boot + i64::try_from(now).unwrap(),
+        };
+        let answer = OverviewReader::read(
+            &history.index,
+            &request,
+            u64::MAX,
+            &CancelFlag::new(),
+            clock.as_ref(),
+        )
+        .unwrap();
+        let OverviewAnswer::Bars(bars) = answer else {
+            panic!("bars asked");
+        };
+        assert!(bars.bars.len() >= 6, "{bars:?}");
+        for bar in &bars.bars {
+            assert_eq!((bar.start_utc_ns + shift).rem_euclid(minute), 0, "{bar:?}");
+            assert!(bar.covered_ns <= MINUTE, "{bar:?}");
+            let index = (bar.start_utc_ns - utc_at_boot.div_euclid(minute) * minute) / minute;
+            let expected = if index % 2 == 0 { 10.0 } else { 20.0 };
+            assert_eq!(bar.mean(), Some(expected), "{bar:?}");
+        }
+        let held: u64 = bars.bars.iter().map(|bar| bar.covered_ns).sum();
+        assert_eq!(held, now, "finalized and unfinalized minutes, once");
+    }
+
+    /// A wall clock step keeps the boot's grid: minutes cut later still
+    /// start where the first pairing put whole minutes.
+    #[test]
+    fn a_wall_clock_step_keeps_the_minute_grid() {
+        let (mut history, _ledger) = history(false);
+        history.recorder.observe_wall_clock(0, UTC_AT_BOOT);
+        history
+            .recorder
+            .observe_wall_clock(SECOND, UTC_AT_BOOT + 7 * i128::from(SECOND));
+        assert_eq!(
+            history.index.read().minute_grid(),
+            Some(MinuteGrid::on_utc_minutes(0, UTC_AT_BOOT))
+        );
     }
 
     /// The Overview series' finalized minutes reach their sizes on the wall

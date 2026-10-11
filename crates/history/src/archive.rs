@@ -23,7 +23,6 @@ use dgxtop_core::ports::{ArchiveJournal, ArchivedBridge, ArchivedBucket, Archive
 use dgxtop_core::clock::format_utc_ns;
 
 use crate::output::ArchiveRow;
-use crate::records::BUCKET_NS;
 use crate::segment::SegmentMeta;
 use crate::wall_clock::WallClock;
 use dgxtop_core::budget::accounted::Account;
@@ -73,12 +72,8 @@ pub(crate) struct ArchiveQueue {
 
 fn row_span(row: &ArchiveRow) -> (u64, u64) {
     match row {
-        ArchiveRow::GaugeBucket { bucket, .. } => {
-            (bucket.start_ns, bucket.start_ns.saturating_add(BUCKET_NS))
-        }
-        ArchiveRow::CounterBucket { bucket, .. } => {
-            (bucket.start_ns, bucket.start_ns.saturating_add(BUCKET_NS))
-        }
+        ArchiveRow::GaugeBucket { bucket, end_ns, .. } => (bucket.start_ns, *end_ns),
+        ArchiveRow::CounterBucket { bucket, end_ns, .. } => (bucket.start_ns, *end_ns),
         ArchiveRow::Bridge { bridge, .. } => (bridge.start_ns, bridge.end_ns),
         ArchiveRow::Gap(gap) => (gap.start_boot_ns, gap.end_boot_ns),
     }
@@ -249,9 +244,12 @@ fn ensure_segment(segment: &SegmentMeta, clock: &WallClock, collected: &mut Jour
 fn collect_row(queued: QueuedRow, clock: &WallClock, collected: &mut JournalRows) {
     collected.bytes = collected.bytes.saturating_add(queued.bytes);
     match queued.row {
-        ArchiveRow::GaugeBucket { segment, bucket } => {
+        ArchiveRow::GaugeBucket {
+            segment,
+            bucket,
+            end_ns: end,
+        } => {
             ensure_segment(&segment, clock, collected);
-            let end = bucket.start_ns.saturating_add(BUCKET_NS);
             let covered = bucket.covered_ns > 0;
             collected.buckets.push(ArchivedBucket {
                 segment_id: segment.uuid.to_string(),
@@ -273,9 +271,12 @@ fn collect_row(queued: QueuedRow, clock: &WallClock, collected: &mut JournalRows
                 reason_code: None,
             });
         }
-        ArchiveRow::CounterBucket { segment, bucket } => {
+        ArchiveRow::CounterBucket {
+            segment,
+            bucket,
+            end_ns: end,
+        } => {
             ensure_segment(&segment, clock, collected);
-            let end = bucket.start_ns.saturating_add(BUCKET_NS);
             let exact = bucket.total.integral();
             collected.buckets.push(ArchivedBucket {
                 segment_id: segment.uuid.to_string(),
@@ -331,7 +332,7 @@ mod tests {
     use dgxtop_core::testing::{metric_key, source_id};
     use uuid::Uuid;
 
-    use crate::records::{CounterSample, GaugeBucket};
+    use crate::records::{BUCKET_NS, CounterSample, GaugeBucket};
     use crate::segment::SegmentIdentity;
 
     fn segment() -> Arc<SegmentMeta> {
@@ -357,6 +358,7 @@ mod tests {
         ArchiveRow::GaugeBucket {
             segment: Arc::clone(segment),
             bucket,
+            end_ns: (minute + 1) * BUCKET_NS,
         }
     }
 

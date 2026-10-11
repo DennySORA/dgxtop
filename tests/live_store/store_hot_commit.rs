@@ -431,9 +431,6 @@ fn at06_archive_disabled_does_not_affect_the_hot_store() {
         );
         assert_eq!(ack.archive, ArchiveState::Disabled);
     }
-    harness
-        .writer
-        .observe_wall_clock(0, 1_790_000_000_000_000_000);
     let reserve_before = harness.ledger.used(Partition::Reserve);
     harness.maintain(200 * SECOND);
     assert!(harness.writer.take_archive_journal(1 << 20).is_none());
@@ -450,7 +447,7 @@ fn at06_archive_disabled_does_not_affect_the_hot_store() {
 
 #[test]
 fn at06_archive_enabled_gets_finished_rows_and_at27_keys_sort_numerically() {
-    let mut harness = Harness::build(
+    let mut harness = Harness::unpaired(
         support::config(),
         ByteLedger::for_memory_limit_mib(256),
         Namespace::Live,
@@ -481,7 +478,7 @@ fn at06_archive_enabled_gets_finished_rows_and_at27_keys_sort_numerically() {
     );
     harness
         .writer
-        .observe_wall_clock(0, 1_790_000_000_000_000_000);
+        .observe_wall_clock(0, support::UTC_AT_BOOT_NS);
     harness.maintain(250 * SECOND);
     let journal = harness.writer.take_archive_journal(8 << 20).unwrap();
     assert_eq!(journal.host_id, "test-host");
@@ -538,10 +535,10 @@ fn at06_archive_enabled_gets_finished_rows_and_at27_keys_sort_numerically() {
         .map(|key| parse_fixed_width(key).unwrap())
         .collect();
     assert_eq!(small, vec![2, 10, 100]);
-    assert!(
-        journal.buckets[0]
-            .start_utc
-            .starts_with("2026-09-21T14:13:20")
+    // Archived minutes start on whole UTC minutes (D-82).
+    assert_eq!(
+        journal.buckets[0].start_utc,
+        "2026-09-21T14:14:00.000000000Z"
     );
     assert!(harness.writer.take_archive_journal(8 << 20).is_none());
     let reserve_with_journal = harness.ledger.used(Partition::Reserve);

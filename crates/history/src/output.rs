@@ -7,16 +7,19 @@ use dgxtop_core::canonical::GapRecord;
 use super::records::{CounterBucket, CounterSample, GaugeBucket};
 use super::segment::SegmentMeta;
 
-/// A finished row for the optional archive (`history.sql`).
+/// A finished row for the optional archive (`history.sql`). A minute
+/// carries its end from the boot's grid: a boot's head minute is shorter.
 #[derive(Debug, Clone)]
 pub(crate) enum ArchiveRow {
     GaugeBucket {
         segment: Arc<SegmentMeta>,
         bucket: GaugeBucket,
+        end_ns: u64,
     },
     CounterBucket {
         segment: Arc<SegmentMeta>,
         bucket: CounterBucket,
+        end_ns: u64,
     },
     Bridge {
         segment: Arc<SegmentMeta>,

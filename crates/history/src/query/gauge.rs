@@ -12,7 +12,8 @@ use super::points::{DataPoint, PointSink, SourceSet};
 use super::{gap_reason, push_null_region};
 use crate::chunk::Slices;
 use crate::gaps::GapEntry;
-use crate::records::{BUCKET_NS, GaugeBucket, GaugeSample};
+use crate::grid::MinuteGrid;
+use crate::records::{GaugeBucket, GaugeSample};
 use crate::segment::SegmentsView;
 use crate::steps::{RawGauge, Step, StepIter};
 
@@ -53,6 +54,8 @@ pub(crate) struct GaugeInputs<'p> {
     pub gaps: &'p [GapEntry],
     /// Query clock: the newest step is never extended into the future.
     pub now_ns: u64,
+    /// Where the series' minutes begin and end.
+    pub grid: MinuteGrid,
 }
 
 impl<'p> GaugeInputs<'p> {
@@ -222,7 +225,7 @@ fn accumulate_buckets(
             break;
         }
         guard.charge(1)?;
-        if bucket.start_ns.saturating_add(BUCKET_NS) <= to_ns {
+        if inputs.grid.end_of(bucket.start_ns) <= to_ns {
             accumulator.add_bucket(bucket, inputs);
         }
     }
@@ -288,7 +291,7 @@ pub(crate) fn gauge_cells(
     guard: &mut ScanGuard<'_>,
 ) -> Result<(), ErrorDetail> {
     let mut raw_cursor: Option<(usize, StepCursor<'_, '_>)> = None;
-    for (cell_start, cell_end) in cells(window, cell_ns) {
+    for (cell_start, cell_end) in cells(window, cell_ns, inputs.grid) {
         let mut run: Option<Run> = None;
         for (index, region) in plan.regions().iter().enumerate() {
             if region.end_ns <= cell_start || region.start_ns >= cell_end {

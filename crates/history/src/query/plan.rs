@@ -4,10 +4,13 @@
 //! come from rollups; a partial bucket at a window edge comes from raw data
 //! when raw still covers it and is otherwise a `boundary_gap` (never
 //! reconstructed proportionally). From the boundary on, raw data is used.
+//! Minutes are the boot's [`MinuteGrid`] (whole UTC minutes, D-82), and so
+//! are the point cells of whole minutes, so a cell never splits a bucket.
 
 use dgxtop_core::clock::{NANOS_PER_MILLI, ms_to_ns};
 
-use crate::records::{BUCKET_NS, floor_bucket};
+use crate::grid::MinuteGrid;
+use crate::records::BUCKET_NS;
 
 /// Half-open query window `[start, end)` with `end > start`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,7 +89,7 @@ pub(crate) struct RegionPlan {
 }
 
 impl RegionPlan {
-    pub(crate) fn new(window: Window, floors: Floors, boundary_ns: u64) -> Self {
+    pub(crate) fn new(window: Window, floors: Floors, boundary_ns: u64, grid: MinuteGrid) -> Self {
         let mut plan = Self {
             regions: Vec::new(),
             window,
@@ -95,13 +98,13 @@ impl RegionPlan {
         let end = window.end_ns;
         let mut cursor = window.start_ns;
         if cursor < boundary_ns {
-            if !cursor.is_multiple_of(BUCKET_NS) {
-                let bucket = floor_bucket(cursor);
-                let head_end = bucket.saturating_add(BUCKET_NS).min(end);
+            if !grid.is_boundary(cursor) {
+                let bucket = grid.floor(cursor);
+                let head_end = grid.end_of(bucket).min(end);
                 plan.push(cursor, head_end, partial_bucket_kind(bucket, &floors));
                 cursor = head_end;
             }
-            let body_end = boundary_ns.min(floor_bucket(end)).max(cursor);
+            let body_end = boundary_ns.min(grid.floor(end)).max(cursor);
             if cursor < body_end {
                 let lower = floors.raw_floor_ns.min(floors.rollup_floor_ns);
                 let no_data_end = lower.clamp(cursor, body_end);
@@ -116,7 +119,7 @@ impl RegionPlan {
                 plan.push(
                     cursor,
                     tail_end,
-                    partial_bucket_kind(floor_bucket(cursor), &floors),
+                    partial_bucket_kind(grid.floor(cursor), &floors),
                 );
                 cursor = tail_end;
             }
@@ -194,7 +197,7 @@ impl RegionPlan {
 pub(crate) enum Grid {
     /// One point per raw step or interval (resolution 0, raw data only).
     Native,
-    /// Absolute cells `[k*cell, (k+1)*cell)` clipped to the window.
+    /// Absolute cells of this width clipped to the window (see [`cells`]).
     Cells(u64),
 }
 
@@ -206,24 +209,47 @@ fn round_up(value: u64, align: u64) -> u64 {
     value.div_ceil(align).saturating_mul(align)
 }
 
-fn cell_count(window: Window, cell_ns: u64) -> u64 {
+/// How far before boot 0 the cells of `cell_ns` begin: cells of whole
+/// minutes begin with the grid's minute holding boot (its head minute is
+/// that minute's tail), so every cell edge is a minute boundary and a cell
+/// holds whole buckets; finer cells begin at boot 0.
+fn cell_lead(cell_ns: u64, grid: MinuteGrid) -> u64 {
+    if cell_ns.is_multiple_of(BUCKET_NS) {
+        (BUCKET_NS - grid.phase_ns()) % BUCKET_NS
+    } else {
+        0
+    }
+}
+
+/// Ordinal of the cell holding `time_ns`.
+fn cell_index(time_ns: u64, cell_ns: u64, lead_ns: u64) -> u64 {
+    time_ns.saturating_add(lead_ns) / cell_ns
+}
+
+fn cell_count(window: Window, cell_ns: u64, grid: MinuteGrid) -> u64 {
     let cell = cell_ns.max(1);
-    (window.end_ns.saturating_sub(1) / cell)
-        .saturating_sub(window.start_ns / cell)
+    let lead = cell_lead(cell, grid);
+    cell_index(window.end_ns.saturating_sub(1), cell, lead)
+        .saturating_sub(cell_index(window.start_ns, cell, lead))
         .saturating_add(1)
 }
 
 /// Smallest aligned cell not below `cell_ns` that keeps the cells within the
 /// point cap ("aggregated beyond max_points -> coarser buckets").
-pub(crate) fn fit_cells(cell_ns: u64, window: Window, cap: usize, align: u64) -> u64 {
+pub(crate) fn fit_cells(
+    cell_ns: u64,
+    window: Window,
+    (cap, align): (usize, u64),
+    grid: MinuteGrid,
+) -> u64 {
     let usable = u64::try_from(cap.saturating_sub(EDGE_POINTS).max(1)).unwrap_or(u64::MAX);
     let mut cell = round_up(cell_ns.max(1), align);
-    if cell_count(window, cell) <= usable {
+    if cell_count(window, cell, grid) <= usable {
         return cell;
     }
     cell = cell.max(round_up(window.span_ns().div_ceil(usable), align));
     for _ in 0..64 {
-        if cell_count(window, cell) <= usable {
+        if cell_count(window, cell, grid) <= usable {
             return cell;
         }
         cell = cell.saturating_add(align.max(1));
@@ -236,7 +262,7 @@ pub(crate) fn choose_grid(
     resolution_ms: u32,
     window: Window,
     plan: &RegionPlan,
-    cap: usize,
+    (cap, grid): (usize, MinuteGrid),
 ) -> Grid {
     let rollups = plan.reaches_rollups();
     if resolution_ms == 0 && !rollups {
@@ -248,7 +274,7 @@ pub(crate) fn choose_grid(
     } else {
         ms_to_ns(u64::from(resolution_ms))
     };
-    Grid::Cells(fit_cells(requested, window, cap, align))
+    Grid::Cells(fit_cells(requested, window, (cap, align), grid))
 }
 
 /// Alignment of a grid over `plan`.
@@ -260,15 +286,25 @@ pub(crate) fn grid_alignment(plan: &RegionPlan) -> u64 {
     }
 }
 
-/// Cells of `cell_ns` clipped to the window, in order.
-pub(crate) fn cells(window: Window, cell_ns: u64) -> impl Iterator<Item = (u64, u64)> {
+/// Cells of `cell_ns` clipped to the window, in order: `[k × cell − lead,
+/// (k + 1) × cell − lead)`, on the minute grid for cells of whole minutes
+/// (see [`cell_lead`]).
+pub(crate) fn cells(
+    window: Window,
+    cell_ns: u64,
+    grid: MinuteGrid,
+) -> impl Iterator<Item = (u64, u64)> {
     let cell = cell_ns.max(1);
+    let lead = cell_lead(cell, grid);
     let mut start = window.start_ns;
     std::iter::from_fn(move || {
         if start >= window.end_ns {
             return None;
         }
-        let next = (start / cell).saturating_add(1).saturating_mul(cell);
+        let next = cell_index(start, cell, lead)
+            .saturating_add(1)
+            .saturating_mul(cell)
+            .saturating_sub(lead);
         let end = next.min(window.end_ns);
         let current = (start, end);
         start = end;
@@ -282,6 +318,7 @@ mod tests {
 
     const MINUTE: u64 = BUCKET_NS;
     const SECOND: u64 = 1_000_000_000;
+    const BOOT: MinuteGrid = MinuteGrid::BOOT;
 
     fn window(start: u64, end: u64) -> Window {
         Window {
@@ -304,7 +341,7 @@ mod tests {
             finalized_ns: 12 * MINUTE,
             rollup_floor_ns: 0,
         };
-        let plan = RegionPlan::new(window(11 * MINUTE, 13 * MINUTE), floors, 10 * MINUTE);
+        let plan = RegionPlan::new(window(11 * MINUTE, 13 * MINUTE), floors, 10 * MINUTE, BOOT);
         assert_eq!(
             kinds(&plan),
             vec![(11 * MINUTE, 13 * MINUTE, RegionKind::Raw)]
@@ -321,7 +358,7 @@ mod tests {
         };
         let start = 3 * MINUTE + 30 * SECOND;
         let end = 6 * MINUTE + 10 * SECOND;
-        let plan = RegionPlan::new(window(start, end), floors, 10 * MINUTE);
+        let plan = RegionPlan::new(window(start, end), floors, 10 * MINUTE, BOOT);
         assert_eq!(
             kinds(&plan),
             vec![
@@ -342,7 +379,12 @@ mod tests {
         };
         let start = 30 * SECOND;
         let end = 14 * MINUTE + 5 * SECOND;
-        let fine = RegionPlan::new(window(start, end), floors, rollup_boundary(1000, &floors));
+        let fine = RegionPlan::new(
+            window(start, end),
+            floors,
+            rollup_boundary(1000, &floors),
+            BOOT,
+        );
         assert_eq!(
             kinds(&fine),
             vec![
@@ -351,7 +393,12 @@ mod tests {
                 (10 * MINUTE, end, RegionKind::Raw),
             ]
         );
-        let coarse = RegionPlan::new(window(start, end), floors, rollup_boundary(60_000, &floors));
+        let coarse = RegionPlan::new(
+            window(start, end),
+            floors,
+            rollup_boundary(60_000, &floors),
+            BOOT,
+        );
         assert_eq!(
             kinds(&coarse),
             vec![
@@ -373,6 +420,7 @@ mod tests {
             window(0, 13 * MINUTE),
             floors,
             rollup_boundary(60_000, &floors),
+            BOOT,
         );
         assert_eq!(
             kinds(&plan),
@@ -393,7 +441,7 @@ mod tests {
             rollup_floor_ns: 0,
         };
         let start = 3 * MINUTE + 30 * SECOND;
-        let mut plan = RegionPlan::new(window(start, 6 * MINUTE), floors, 10 * MINUTE);
+        let mut plan = RegionPlan::new(window(start, 6 * MINUTE), floors, 10 * MINUTE, BOOT);
         let bridge_start = 4 * MINUTE - SECOND / 2;
         plan.absorb_crossings(|boundary| {
             (boundary == 4 * MINUTE).then_some((bridge_start, 4 * MINUTE + SECOND / 2))
@@ -416,34 +464,84 @@ mod tests {
             finalized_ns: 0,
             rollup_floor_ns: 0,
         };
-        let raw_plan = RegionPlan::new(day, floors, 0);
-        assert_eq!(choose_grid(0, day, &raw_plan, 100), Grid::Native);
-        let Grid::Cells(cell) = choose_grid(1000, day, &raw_plan, 100) else {
+        let raw_plan = RegionPlan::new(day, floors, 0, BOOT);
+        assert_eq!(choose_grid(0, day, &raw_plan, (100, BOOT)), Grid::Native);
+        let Grid::Cells(cell) = choose_grid(1000, day, &raw_plan, (100, BOOT)) else {
             panic!("expected cells");
         };
-        assert!(cell_count(day, cell) <= 96);
+        assert!(cell_count(day, cell, BOOT) <= 96);
         let rollup_floors = Floors {
             raw_floor_ns: 1440 * MINUTE,
             finalized_ns: 1440 * MINUTE,
             rollup_floor_ns: 0,
         };
-        let rollup_plan = RegionPlan::new(day, rollup_floors, 1440 * MINUTE);
-        let Grid::Cells(cell) = choose_grid(0, day, &rollup_plan, 2000) else {
+        let rollup_plan = RegionPlan::new(day, rollup_floors, 1440 * MINUTE, BOOT);
+        let Grid::Cells(cell) = choose_grid(0, day, &rollup_plan, (2000, BOOT)) else {
             panic!("expected cells");
         };
         assert_eq!(cell, MINUTE);
-        let Grid::Cells(coarse) = choose_grid(90_000, day, &rollup_plan, 100) else {
+        let Grid::Cells(coarse) = choose_grid(90_000, day, &rollup_plan, (100, BOOT)) else {
             panic!("expected cells");
         };
         assert_eq!(coarse % MINUTE, 0);
-        assert!(cell_count(day, coarse) <= 96);
+        assert!(cell_count(day, coarse, BOOT) <= 96);
+    }
+
+    /// A boot 37 s into a UTC minute: minute cells and regions start on
+    /// its whole UTC minutes (boot 23 s, 83 s…); a day cell holds the
+    /// head minute and the minutes after it.
+    #[test]
+    fn minute_cells_and_regions_follow_a_mid_minute_boot() {
+        let grid = MinuteGrid::on_utc_minutes(0, i128::from(37 * SECOND));
+        let s = SECOND;
+        let minutes: Vec<(u64, u64)> = cells(window(0, 150 * s), MINUTE, grid).collect();
+        assert_eq!(
+            minutes,
+            vec![
+                (0, 23 * s),
+                (23 * s, 83 * s),
+                (83 * s, 143 * s),
+                (143 * s, 150 * s)
+            ]
+        );
+        assert_eq!(cell_count(window(0, 150 * s), MINUTE, grid), 4);
+        let pairs: Vec<(u64, u64)> = cells(window(0, 300 * s), 2 * MINUTE, grid).collect();
+        assert_eq!(
+            pairs,
+            vec![(0, 83 * s), (83 * s, 203 * s), (203 * s, 300 * s)]
+        );
+        let day: Vec<(u64, u64)> = cells(window(0, 150 * s), 1440 * MINUTE, grid).collect();
+        assert_eq!(day, vec![(0, 150 * s)]);
+        let seconds: Vec<(u64, u64)> = cells(window(0, 2 * s), SECOND, grid).collect();
+        assert_eq!(
+            seconds,
+            vec![(0, s), (s, 2 * s)],
+            "finer cells stay on boot 0"
+        );
+
+        let floors = Floors {
+            raw_floor_ns: 143 * s,
+            finalized_ns: 143 * s,
+            rollup_floor_ns: 0,
+        };
+        let plan = RegionPlan::new(window(50 * s, 150 * s), floors, 143 * s, grid);
+        assert_eq!(
+            kinds(&plan),
+            vec![
+                (50 * s, 83 * s, RegionKind::BoundaryGap),
+                (83 * s, 143 * s, RegionKind::Rollup),
+                (143 * s, 150 * s, RegionKind::Raw),
+            ]
+        );
+        let from_boot = RegionPlan::new(window(0, 143 * s), floors, 143 * s, grid);
+        assert_eq!(kinds(&from_boot), vec![(0, 143 * s, RegionKind::Rollup)]);
     }
 
     #[test]
     fn cells_are_absolute_and_clipped() {
-        let collected: Vec<(u64, u64)> = cells(window(5, 25), 10).collect();
+        let collected: Vec<(u64, u64)> = cells(window(5, 25), 10, BOOT).collect();
         assert_eq!(collected, vec![(5, 10), (10, 20), (20, 25)]);
-        assert_eq!(cell_count(window(5, 25), 10), 3);
-        assert_eq!(fit_cells(1, window(0, 100), 14, 1), 10);
+        assert_eq!(cell_count(window(5, 25), 10, BOOT), 3);
+        assert_eq!(fit_cells(1, window(0, 100), (14, 1), BOOT), 10);
     }
 }

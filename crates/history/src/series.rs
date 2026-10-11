@@ -5,7 +5,9 @@
 //! `raw_floor_ns` on (older raw data is summarized by finalized rollups), and
 //! rollups are complete from `rollup_floor_ns` on. Floors are bucket aligned
 //! and the raw floor never passes `finalized_through_ns`, so evicting raw data
-//! never loses data that has no rollup yet.
+//! never loses data that has no rollup yet. Minutes follow the boot's
+//! [`MinuteGrid`] (whole UTC minutes); until it is known nothing is final,
+//! so no minute is ever cut on a grid that would move.
 
 use dgxtop_core::budget::{ByteLedger, CapacityError, Partition};
 use dgxtop_core::identity::MetricKey;
@@ -13,10 +15,9 @@ use dgxtop_core::metric::{CanonicalUnit, MetricDescriptor, Scalar};
 
 use super::chunk::ChunkLog;
 use super::gaps::GapList;
+use super::grid::MinuteGrid;
 use super::output::{ArchiveRow, DropReason, HistoryReport};
-use super::records::{
-    BUCKET_NS, CounterBucket, CounterSample, GaugeBucket, GaugeSample, ceil_bucket, floor_bucket,
-};
+use super::records::{BUCKET_NS, CounterBucket, CounterSample, GaugeBucket, GaugeSample};
 use super::rollup::{self, CounterRollup};
 use super::segment::{SegmentIdentity, SegmentTable};
 use super::steps::{RawGauge, StepIter};
@@ -85,6 +86,8 @@ pub(crate) struct Series {
     pub counter: CounterTrack,
     pub gaps: GapList,
     pub finalized_through_ns: u64,
+    /// The boot's minutes; `None` until the boot-to-UTC pairing is known.
+    grid: Option<MinuteGrid>,
     /// Whether any finalization ran; until then `finalized_through_ns` is
     /// only the creation minute and nothing before it is final.
     finalized_any: bool,
@@ -109,8 +112,8 @@ impl Series {
     pub(crate) fn new(
         key: MetricKey,
         descriptor: &'static MetricDescriptor,
-        first_time_ns: u64,
-        now_ns: u64,
+        (first_time_ns, now_ns): (u64, u64),
+        grid: Option<MinuteGrid>,
         ledger: &ByteLedger,
     ) -> Result<Self, CapacityError> {
         let mut overhead = Account::new(ledger, Partition::Aggregates);
@@ -136,12 +139,30 @@ impl Series {
                 rollup_floor_ns: 0,
             },
             gaps: GapList::new(ledger, MAX_SERIES_GAPS),
-            finalized_through_ns: floor_bucket(first_time_ns),
+            finalized_through_ns: grid.map_or(first_time_ns, |grid| grid.floor(first_time_ns)),
+            grid,
             finalized_any: false,
             last_activity_ns: now_ns,
             capacity_truncated: false,
             _overhead: overhead,
         })
+    }
+
+    /// Takes the boot's minutes once they are known; the creation minute
+    /// moves onto them (nothing was final, so no row is cut again).
+    pub(crate) fn adopt_grid(&mut self, grid: MinuteGrid) {
+        if self.grid.is_some() {
+            return;
+        }
+        self.grid = Some(grid);
+        if !self.finalized_any {
+            self.finalized_through_ns = grid.floor(self.finalized_through_ns);
+        }
+    }
+
+    /// The boot's minutes, when known.
+    pub(crate) fn grid(&self) -> Option<MinuteGrid> {
+        self.grid
     }
 
     /// Whether a gauge sample (or cut) at `time_ns` may be appended.
@@ -160,7 +181,8 @@ impl Series {
     /// ending on that minute boundary look late) while no minute is final.
     pub(crate) fn reach_back_to(&mut self, time_ns: u64) {
         if !self.finalized_any {
-            self.finalized_through_ns = self.finalized_through_ns.min(floor_bucket(time_ns));
+            let start = self.grid.map_or(time_ns, |grid| grid.floor(time_ns));
+            self.finalized_through_ns = self.finalized_through_ns.min(start);
         }
     }
 
@@ -227,15 +249,17 @@ impl Series {
         Ok(())
     }
 
-    /// Computes the rollups for the minutes that ended before `horizon_ns`.
+    /// Computes the rollups for the minutes that ended before `horizon_ns`;
+    /// none while the boot's minutes are unknown.
     pub(crate) fn plan_finalization(&self, horizon_ns: u64) -> Option<Finalization> {
-        let horizon = floor_bucket(horizon_ns);
+        let grid = self.grid?;
+        let horizon = grid.floor(horizon_ns);
         let from = self.finalized_through_ns;
         if horizon <= from {
             return None;
         }
-        let target =
-            horizon.min(from.saturating_add(MAX_FINALIZE_BUCKETS.saturating_mul(BUCKET_NS)));
+        let most = grid.floor(from.saturating_add(MAX_FINALIZE_BUCKETS.saturating_mul(BUCKET_NS)));
+        let target = horizon.min(most);
         let gauge_slices = self.gauge.raw.slices();
         let raw = RawGauge {
             slices: &gauge_slices,
@@ -247,12 +271,12 @@ impl Series {
         let samples = gauge_slices
             .iter_from(gauge_slices.seek_start(from.max(self.gauge.raw_floor_ns)))
             .take_while(|record| record.time_ns < target);
-        let gauge_buckets = rollup::gauge_buckets(steps, samples, from, target);
+        let gauge_buckets = rollup::gauge_buckets(steps, samples, (from, target), grid);
         let counter_slices = self.counter.raw.slices();
         let intervals = counter_slices
             .iter_from(counter_slices.seek_end_after(from))
             .take_while(|interval| interval.end_ns <= target);
-        let counter = rollup::counter_rollup(intervals, from, target);
+        let counter = rollup::counter_rollup(intervals, (from, target), grid);
         Some(Finalization {
             target_ns: target,
             gauge_buckets,
@@ -265,9 +289,9 @@ impl Series {
     /// read, never stored: later samples may still change them.
     pub(crate) fn provisional_gauge_buckets(&self, now_ns: u64) -> Vec<GaugeBucket> {
         let from = self.finalized_through_ns;
-        if now_ns <= from {
+        let Some(grid) = self.grid.filter(|_| now_ns > from) else {
             return Vec::new();
-        }
+        };
         let gauge_slices = self.gauge.raw.slices();
         let raw = RawGauge {
             slices: &gauge_slices,
@@ -278,7 +302,7 @@ impl Series {
         let samples = gauge_slices
             .iter_from(gauge_slices.seek_start(from.max(self.gauge.raw_floor_ns)))
             .take_while(|record| record.time_ns < now_ns);
-        rollup::gauge_buckets(steps, samples, from, now_ns)
+        rollup::gauge_buckets(steps, samples, (from, now_ns), grid)
     }
 
     /// Aggregates bytes storing `finalization` will reserve.
@@ -307,25 +331,28 @@ impl Series {
         report: &mut HistoryReport,
     ) -> Vec<(u64, u64)> {
         let mut lost = Vec::new();
+        let grid = self.grid.unwrap_or_default();
         for bucket in finalization.gauge_buckets {
             if self.gauge.buckets.try_push(bucket).is_err() {
                 report.gauge_drops.record(DropReason::Capacity);
-                lost.push((bucket.start_ns, bucket.start_ns.saturating_add(BUCKET_NS)));
+                lost.push((bucket.start_ns, grid.end_of(bucket.start_ns)));
             } else if let Some(segment) = self.segments.get(bucket.segment) {
                 report.archive_rows.push(ArchiveRow::GaugeBucket {
                     segment: segment.clone(),
                     bucket,
+                    end_ns: grid.end_of(bucket.start_ns),
                 });
             }
         }
         for bucket in finalization.counter.buckets {
             if self.counter.buckets.try_push(bucket).is_err() {
                 report.interval_drops.record(DropReason::Capacity);
-                lost.push((bucket.start_ns, bucket.start_ns.saturating_add(BUCKET_NS)));
+                lost.push((bucket.start_ns, grid.end_of(bucket.start_ns)));
             } else if let Some(segment) = self.segments.get(bucket.segment) {
                 report.archive_rows.push(ArchiveRow::CounterBucket {
                     segment: segment.clone(),
                     bucket,
+                    end_ns: grid.end_of(bucket.start_ns),
                 });
             }
         }
@@ -349,7 +376,10 @@ impl Series {
     /// horizon), keeping the newest evicted record as the carry so the step
     /// crossing the floor stays available.
     fn advance_gauge_raw_floor(&mut self, target_ns: u64) -> usize {
-        let target = floor_bucket(target_ns).min(self.finalized_through_ns);
+        let Some(grid) = self.grid else {
+            return 0;
+        };
+        let target = grid.floor(target_ns).min(self.finalized_through_ns);
         if target <= self.gauge.raw_floor_ns {
             return 0;
         }
@@ -371,7 +401,10 @@ impl Series {
     }
 
     fn advance_counter_raw_floor(&mut self, target_ns: u64) -> usize {
-        let target = floor_bucket(target_ns).min(self.finalized_through_ns);
+        let Some(grid) = self.grid else {
+            return 0;
+        };
+        let target = grid.floor(target_ns).min(self.finalized_through_ns);
         if target <= self.counter.raw_floor_ns {
             return 0;
         }
@@ -415,7 +448,10 @@ impl Series {
     /// Normal rollup and gap retention. Once retention catches up with a
     /// capacity truncation, the truncation is no longer visible.
     pub(crate) fn advance_rollup_floors(&mut self, target_ns: u64) -> usize {
-        let target = floor_bucket(target_ns);
+        let Some(grid) = self.grid else {
+            return 0;
+        };
+        let target = grid.floor(target_ns);
         let dropped = self
             .advance_gauge_rollup_floor(target)
             .saturating_add(self.advance_counter_rollup_floor(target))
@@ -436,13 +472,14 @@ impl Series {
     }
 
     fn evictable_raw_track(&self) -> Option<RawTrack> {
+        let grid = self.grid?;
         let finalized = self.finalized_through_ns;
         let gauge = self
             .gauge
             .raw
             .oldest_chunk()
             .and_then(<[GaugeSample]>::last)
-            .map(|last| floor_bucket(last.time_ns).saturating_add(BUCKET_NS))
+            .map(|last| grid.end_of(last.time_ns))
             .filter(|floor| *floor <= finalized)
             .map(RawTrack::Gauge);
         let counter = self
@@ -450,7 +487,7 @@ impl Series {
             .raw
             .oldest_chunk()
             .and_then(<[CounterSample]>::last)
-            .map(|last| ceil_bucket(last.end_ns))
+            .map(|last| grid.ceil(last.end_ns))
             .filter(|floor| *floor <= finalized)
             .map(RawTrack::Counter);
         match (gauge, counter) {
@@ -477,22 +514,21 @@ impl Series {
     }
 
     fn rollup_candidates(&self) -> [Option<(u64, u64)>; 3] {
-        let gauge = self.gauge.buckets.oldest_chunk().and_then(|chunk| {
-            Some((
-                chunk.first()?.start_ns,
-                chunk.last()?.start_ns.saturating_add(BUCKET_NS),
-            ))
-        });
-        let counter = self.counter.buckets.oldest_chunk().and_then(|chunk| {
-            Some((
-                chunk.first()?.start_ns,
-                chunk.last()?.start_ns.saturating_add(BUCKET_NS),
-            ))
-        });
-        let bridges =
-            self.counter.bridges.oldest_chunk().and_then(|chunk| {
-                Some((chunk.first()?.start_ns, ceil_bucket(chunk.last()?.end_ns)))
+        // Rollups exist only once the grid is known.
+        let grid = self.grid.unwrap_or_default();
+        let gauge =
+            self.gauge.buckets.oldest_chunk().and_then(|chunk| {
+                Some((chunk.first()?.start_ns, grid.end_of(chunk.last()?.start_ns)))
             });
+        let counter =
+            self.counter.buckets.oldest_chunk().and_then(|chunk| {
+                Some((chunk.first()?.start_ns, grid.end_of(chunk.last()?.start_ns)))
+            });
+        let bridges = self
+            .counter
+            .bridges
+            .oldest_chunk()
+            .and_then(|chunk| Some((chunk.first()?.start_ns, grid.ceil(chunk.last()?.end_ns))));
         [gauge, counter, bridges]
     }
 
@@ -596,7 +632,7 @@ mod tests {
     fn series(ledger: &ByteLedger) -> Series {
         let key = metric_key("cpu.package.0", ids::CPU_TEMPERATURE_PACKAGE, "package:0");
         let descriptor = descriptor(ids::CPU_TEMPERATURE_PACKAGE).unwrap();
-        Series::new(key, descriptor, 0, 0, ledger).unwrap()
+        Series::new(key, descriptor, (0, 0), Some(MinuteGrid::BOOT), ledger).unwrap()
     }
 
     fn gauge_identity() -> SegmentIdentity {
@@ -730,7 +766,14 @@ mod tests {
         let ledger = ByteLedger::for_memory_limit_mib(64);
         let key = metric_key("netif:ns:2", ids::NET_RX_BPS, "interface");
         let descriptor = descriptor(ids::NET_RX_BPS).unwrap();
-        let mut series = Series::new(key, descriptor, 60 * SECOND, 60 * SECOND, &ledger).unwrap();
+        let mut series = Series::new(
+            key,
+            descriptor,
+            (60 * SECOND, 60 * SECOND),
+            Some(MinuteGrid::BOOT),
+            &ledger,
+        )
+        .unwrap();
         let start = 58 * SECOND + 581_000_000;
         assert_eq!(
             series.admit_interval(start, 60 * SECOND),
