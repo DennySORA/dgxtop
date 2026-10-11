@@ -10,9 +10,9 @@ use dgxtop_core::errors::InfraError;
 use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::overview_history::{
     ArchivePrune, ArchivedMinutes, HistoryTierCompletion, HistoryTierJob, OverviewBucket,
-    StoredTierSeries, TierJournal, TierStoreUsage,
+    StoredTierSeries, TierJournal, TierRow, TierStoreUsage,
 };
-use dgxtop_core::ports::LogLevel;
+use dgxtop_core::ports::{DispatchError, LogLevel};
 use dgxtop_core::testing::{CapturingDispatch, host_id, metric_key};
 use dgxtop_core::tiers::{TIER_BUCKETS, Tier};
 
