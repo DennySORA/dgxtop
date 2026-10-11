@@ -232,6 +232,7 @@ fn at22_at08_late_reply_of_the_old_epoch_is_dropped_after_a_config_change() {
             revision: 2,
             sha256: "0".repeat(64),
             path: "/x".into(),
+            file_bytes: 1,
         }),
     });
     harness.settle();
@@ -273,6 +274,7 @@ fn apply_interval(harness: &mut Harness, interval_ms: u32) {
             revision: 2,
             sha256: "0".repeat(64),
             path: "/x".into(),
+            file_bytes: 1,
         }),
     });
     harness.settle();

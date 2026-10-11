@@ -330,6 +330,9 @@ pub struct PersistReceipt {
     pub revision: u32,
     pub sha256: String,
     pub path: String,
+    /// Size of the committed file (the Settings view shows it beside the
+    /// limit, UI.md §6).
+    pub file_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Error)]

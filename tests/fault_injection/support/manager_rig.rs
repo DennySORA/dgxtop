@@ -86,6 +86,9 @@ pub fn manager_setup(
         saved_config: config.clone(),
         effective_config: config.clone(),
         value_origins: dgxtop::startup::value_origins(config, &LoadOrigin::Defaults, &[]),
+        config_file: dgxtop_core::action::PersistenceStatus::healthy(
+            dgxtop_core::action::PersistenceKind::Config,
+        ),
         host_id: identity.host_id.clone(),
         boot_id: identity.boot_id.clone(),
         pid_namespace: identity.pid_namespace.clone(),

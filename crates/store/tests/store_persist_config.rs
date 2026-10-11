@@ -103,6 +103,7 @@ fn cas_success_increments_revision_with_private_modes() {
     assert_eq!(receipt.path, dir.config_path().display().to_string());
     let bytes = std::fs::read(dir.config_path()).unwrap();
     assert_eq!(receipt.sha256, sha256_hex(&bytes));
+    assert_eq!(receipt.file_bytes, u64::try_from(bytes.len()).unwrap());
     assert_eq!(mode(&dir.config_path()), 0o600);
     assert_eq!(mode(dir.config_path().parent().unwrap()), 0o700);
     assert_eq!(mode(&dir.path().join("dgxtop")), 0o700);

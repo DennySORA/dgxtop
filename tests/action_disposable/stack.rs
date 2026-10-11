@@ -737,6 +737,9 @@ fn manager_setup(config: &Config, identity: &Identity) -> ManagerSetup {
         saved_config: config.clone(),
         effective_config: config.clone(),
         value_origins: BTreeMap::new(),
+        config_file: dgxtop_core::action::PersistenceStatus::healthy(
+            dgxtop_core::action::PersistenceKind::Config,
+        ),
         host_id: identity.host_id.clone(),
         boot_id: identity.boot_id.clone(),
         pid_namespace: identity.pid_namespace.clone(),

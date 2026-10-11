@@ -132,6 +132,9 @@ fn fixture_with_audit(audit: Box<dyn Dispatch<AuditOp>>) -> Fixture {
         saved_config: config.clone(),
         effective_config: config,
         value_origins: BTreeMap::new(),
+        config_file: dgxtop_core::action::PersistenceStatus::healthy(
+            dgxtop_core::action::PersistenceKind::Config,
+        ),
         host_id: host_id("test-host"),
         boot_id: boot_id("fake-boot"),
         pid_namespace: PidNamespace::new("pid:[1]").unwrap(),

@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
-use dgxtop_core::action::{ActionOp, AuditOp};
+use dgxtop_core::action::{ActionOp, AuditOp, PersistenceStatus};
 use dgxtop_core::budget::{ByteLedger, QueueGate};
 use dgxtop_core::canonical::CollectionPlan;
 use dgxtop_core::clock::TimeProvider;
@@ -67,6 +67,9 @@ pub struct ManagerSetup {
     pub effective_config: Config,
     /// Field provenance; `CliOverride` paths are re-applied after every swap.
     pub value_origins: BTreeMap<String, ValueOrigin>,
+    /// The configuration file as its repository reported it after loading
+    /// (`ConfigRepository::status`: state, size and limit).
+    pub config_file: PersistenceStatus,
     pub host_id: HostId,
     pub boot_id: BootId,
     pub pid_namespace: PidNamespace,

@@ -305,6 +305,7 @@ impl RefComposition {
         let history_pool =
             wiring.spawn_history(&config, Arc::clone(&history) as Arc<dyn OverviewReader>)?;
         workers.push(Box::new(NamedPool("history", history_pool.clone())));
+        let config_file = repository.status();
         let config_actor = wiring.spawn_config(repository)?;
         workers.push(Box::new(NamedPool("config", config_actor.clone())));
         let audit = wiring.spawn_audit(&config, &paths, sqlite_runtime_ok)?;
@@ -357,6 +358,7 @@ impl RefComposition {
             saved_config: config.clone(),
             effective_config: config.clone(),
             value_origins: value_origins(&config, &loaded.origin, &[]),
+            config_file,
             host_id: host_id.clone(),
             boot_id: clock.boot_id(),
             pid_namespace: pid_namespace_of(self_pid).map_err(|error| error.to_string())?,

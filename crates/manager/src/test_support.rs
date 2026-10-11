@@ -367,6 +367,9 @@ pub(crate) fn harness_setup(options: &HarnessOptions) -> ManagerSetup {
         saved_config: options.saved.clone(),
         effective_config: options.effective.clone(),
         value_origins: options.origins.clone(),
+        config_file: dgxtop_core::action::PersistenceStatus::healthy(
+            dgxtop_core::action::PersistenceKind::Config,
+        ),
         host_id: host_id("test-host"),
         boot_id: boot_id("fake-boot"),
         pid_namespace: PidNamespace::new("pid:[4026531836]").unwrap(),

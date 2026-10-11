@@ -558,6 +558,7 @@ impl Wiring {
         let history =
             self.spawn_history(effective, Arc::new(history_index), completions.clone())?;
         workers.push(Box::new(("history".to_owned(), history.clone())));
+        let config_file = config_repository.status();
         let config = spawn_config(config_repository, completions.clone())?;
         workers.push(Box::new(("config".to_owned(), config.clone())));
         let audit = self.spawn_audit(effective, paths, sqlite_ok, completions.clone())?;
@@ -597,6 +598,7 @@ impl Wiring {
             saved_config: loaded.saved.clone(),
             effective_config: effective.clone(),
             value_origins: loaded.origins.clone(),
+            config_file,
             host_id: host_id.clone(),
             boot_id: boot_id.clone(),
             pid_namespace,

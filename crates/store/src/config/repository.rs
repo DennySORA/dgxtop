@@ -288,6 +288,7 @@ impl FileConfigRepository {
             revision: stored.revision,
             sha256: sha256_hex(&bytes),
             path: display(&self.path),
+            file_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
         })
     }
 

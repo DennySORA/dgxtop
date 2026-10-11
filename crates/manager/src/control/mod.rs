@@ -185,6 +185,7 @@ impl ControlCore {
             setup.saved_config,
             setup.effective_config,
             setup.value_origins,
+            setup.config_file,
         );
         Self {
             hosts: HostTable::new(&setup.adapters),
