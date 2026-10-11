@@ -157,7 +157,7 @@ impl HistoryResult {
 pub const ARCHIVE_MINUTE_NS: u64 = 60_000_000_000;
 
 /// A series in every boot: its metric key without the boot.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SeriesInEveryBoot {
     pub host_id: HostId,
     pub entity_id: EntityId,

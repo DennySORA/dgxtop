@@ -12,10 +12,12 @@ mod bars;
 mod bucket;
 mod run;
 mod series;
+mod span;
 mod whole;
 
-pub use bars::{Bars, bars_of};
+pub use bars::{Bars, bars_in, bars_of};
 pub use bucket::Bucket;
 pub use run::{RunSample, RunSeries};
 pub use series::TieredSeries;
+pub use span::merged_between;
 pub use whole::{chart_tier, whole_series};

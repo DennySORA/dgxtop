@@ -5,6 +5,10 @@
 //! it is the source of ([`Tier::source`]). Closed buckets of a minute and
 //! more are handed back for the long-term store. Buckets follow the local
 //! clock (`shift_ns`), so a day's bucket is a local day.
+//!
+//! A series can also be fed whole buckets of a size ([`TieredSeries::add_bucket`]:
+//! the Overview's finalized minutes, D-82) and continue after a restore of
+//! closed buckets ([`TieredSeries::resume`]).
 
 use std::collections::VecDeque;
 
@@ -53,6 +57,101 @@ impl<B: Bucket> TieredSeries<B> {
         closed
     }
 
+    /// Adds a whole bucket of `tier` (one that started at
+    /// `bucket.start_utc_ns`, aligned or not) to the bucket of `tier` being
+    /// filled at its aligned start; returns the buckets of a minute and
+    /// more it closed. Pieces of one bucket (two sources in one minute)
+    /// merge. Buckets come in time order: one older than the bucket being
+    /// filled is left out.
+    pub fn add_bucket(&mut self, tier: Tier, bucket: &B) -> Vec<(Tier, B)> {
+        let mut closed = Vec::new();
+        let start = tier.align(bucket.start_utc_ns(), self.shift_ns);
+        let level = tier.level();
+        if self.filling[level].is_some_and(|filling| start < filling.start_utc_ns())
+            || self.kept[level]
+                .back()
+                .is_some_and(|last| start <= last.start_utc_ns())
+        {
+            return closed;
+        }
+        self.close_before(start, &mut closed);
+        match &mut self.filling[level] {
+            Some(filling) => filling.merge(bucket),
+            None => self.filling[level] = Some(merged_at(start, bucket)),
+        }
+        closed
+    }
+
+    /// After a restore of closed buckets only: each size takes its source's
+    /// closed buckets that came after its own latest bucket (what it was
+    /// filling when the series was stored, and any it never closed), so the
+    /// series goes on where it stopped. All but the latest become closed
+    /// buckets, returned for the store; the latest is being filled.
+    pub fn resume(&mut self) -> Vec<(Tier, B)> {
+        let mut made = Vec::new();
+        for tier in Tier::ALL {
+            let Some(source) = tier.source() else {
+                continue;
+            };
+            let level = tier.level();
+            if self.filling[level].is_some() {
+                continue;
+            }
+            let after = self.kept[level].back().map_or(i64::MIN, |last| {
+                last.start_utc_ns().saturating_add(step(tier))
+            });
+            let mut groups: Vec<B> = Vec::new();
+            for bucket in self.kept[source.level()]
+                .iter()
+                .filter(|bucket| bucket.start_utc_ns() >= after)
+            {
+                let start = tier.align(bucket.start_utc_ns(), self.shift_ns);
+                match groups.last_mut() {
+                    Some(last) if last.start_utc_ns() == start => last.merge(bucket),
+                    _ => groups.push(merged_at(start, bucket)),
+                }
+            }
+            self.filling[level] = groups.pop();
+            for bucket in groups {
+                made.push((tier, bucket));
+                self.kept[level].push_back(bucket);
+                self.keep_capacity(tier);
+            }
+        }
+        made
+    }
+
+    /// From when `tier` holds everything it was given: a size at its
+    /// capacity may have let older buckets go (they live on in the coarser
+    /// sizes), one below it holds all (`i64::MIN`).
+    pub fn held_from(&self, tier: Tier) -> i64 {
+        let kept = &self.kept[tier.level()];
+        if kept.len() < tier.capacity() {
+            return i64::MIN;
+        }
+        kept.front().map_or(i64::MIN, Bucket::start_utc_ns)
+    }
+
+    /// Whether `tier` holds the time at `utc_ns`: it was given buckets and
+    /// let none of that time go.
+    pub(crate) fn holds(&self, tier: Tier, utc_ns: i64) -> bool {
+        let level = tier.level();
+        let given = !self.kept[level].is_empty() || self.filling[level].is_some();
+        given && utc_ns >= self.held_from(tier)
+    }
+
+    /// The kept bucket of `tier` starting at `start`, if any.
+    pub(crate) fn kept_at(&self, tier: Tier, start: i64) -> Option<&B> {
+        let kept = &self.kept[tier.level()];
+        let at = kept.partition_point(|bucket| bucket.start_utc_ns() < start);
+        kept.get(at).filter(|bucket| bucket.start_utc_ns() == start)
+    }
+
+    /// The bucket of `tier` being filled.
+    pub(crate) fn filling_of(&self, tier: Tier) -> Option<&B> {
+        self.filling[tier.level()].as_ref()
+    }
+
     /// Closes every bucket being filled, as when the series ends.
     pub fn close_all(&mut self) -> Vec<(Tier, B)> {
         let mut closed = Vec::new();
@@ -98,7 +197,7 @@ impl<B: Bucket> TieredSeries<B> {
         } else {
             kept.insert(at, bucket);
         }
-        trim(kept, tier.capacity());
+        self.keep_capacity(tier);
     }
 
     /// After a restore: each size takes what its source holds from before
@@ -219,16 +318,21 @@ impl<B: Bucket> TieredSeries<B> {
         if tier != Tier::Recent {
             closed.push((tier, bucket));
         }
+        self.kept[tier.level()].push_back(bucket);
+        self.keep_capacity(tier);
+    }
+
+    /// Lets the oldest buckets of `tier` go past its capacity.
+    fn keep_capacity(&mut self, tier: Tier) {
         let kept = &mut self.kept[tier.level()];
-        kept.push_back(bucket);
-        trim(kept, tier.capacity());
+        while kept.len() > tier.capacity() {
+            kept.pop_front();
+        }
     }
 }
 
-fn trim<B>(kept: &mut VecDeque<B>, capacity: usize) {
-    while kept.len() > capacity {
-        kept.pop_front();
-    }
+fn step(tier: Tier) -> i64 {
+    i64::try_from(tier.step_ns()).unwrap_or(i64::MAX)
 }
 
 #[cfg(test)]
@@ -533,5 +637,137 @@ mod tests {
         let kept = tallies(&series, Tier::Recent);
         assert_eq!(kept.len(), Tier::Recent.capacity());
         assert_eq!(kept[0].0, 5, "the first one gave way");
+    }
+
+    fn minute_tally(minute: i64, samples: u32) -> Tally {
+        Tally {
+            start_utc_ns: minute * MINUTE + 17 * SECOND,
+            samples,
+        }
+    }
+
+    /// Whole minutes feed every size once, each at its aligned start; a
+    /// second piece of a minute merges, an older minute is left out.
+    #[test]
+    fn closed_minutes_feed_every_size() {
+        let mut series = TieredSeries::<Tally>::new(0);
+        let mut closed = Vec::new();
+        for minute in 0..(3 * 60) {
+            closed.extend(series.add_bucket(Tier::OneMinute, &minute_tally(minute, 1)));
+        }
+        closed.extend(series.add_bucket(Tier::OneMinute, &minute_tally(179, 2)));
+        assert!(
+            series
+                .add_bucket(Tier::OneMinute, &minute_tally(100, 5))
+                .is_empty()
+        );
+        assert_eq!(
+            tallies(&series, Tier::OneHour),
+            vec![(0, 60), (3_600, 60), (7_200, 30)],
+            "the hour being filled holds its closed half hours"
+        );
+        assert_eq!(series_minutes(&series), 182);
+        let minutes: Vec<i64> = series
+            .buckets(Tier::OneMinute)
+            .map(|tally| tally.start_utc_ns / SECOND)
+            .collect();
+        assert_eq!(minutes[0], 0, "aligned to the minute");
+        assert_eq!(
+            series.filling()[0].0,
+            Tier::OneMinute,
+            "the latest minute fills"
+        );
+        let stored: u32 = closed
+            .iter()
+            .filter(|(tier, _)| *tier == Tier::OneMinute)
+            .map(|(_, tally)| tally.samples)
+            .sum();
+        assert_eq!(stored, 179, "every closed minute handed to the store once");
+    }
+
+    /// A series stored as its closed buckets and restored goes on where it
+    /// stopped: the sizes it was filling are rebuilt from their sources,
+    /// and feeding on gives what a series never restarted holds.
+    #[test]
+    fn a_restored_series_resumes_where_it_stopped() {
+        let mut original = TieredSeries::<Tally>::new(0);
+        let mut stored = Vec::new();
+        for minute in 0..(26 * 60 + 7) {
+            stored.extend(original.add_bucket(Tier::OneMinute, &minute_tally(minute, 1)));
+        }
+        let mut restored = TieredSeries::<Tally>::new(0);
+        for (tier, tally) in &stored {
+            restored.restore(*tier, *tally, false);
+        }
+        let made = restored.resume();
+        assert!(made.is_empty(), "nothing was left unclosed: {made:?}");
+        // The minute being filled was not stored: it comes again (from the
+        // archive), then both go on alike.
+        restored.add_bucket(Tier::OneMinute, &minute_tally(26 * 60 + 6, 1));
+        for minute in (26 * 60 + 7)..(50 * 60) {
+            original.add_bucket(Tier::OneMinute, &minute_tally(minute, 1));
+            restored.add_bucket(Tier::OneMinute, &minute_tally(minute, 1));
+        }
+        for tier in Tier::ALL.into_iter().skip(1) {
+            assert_eq!(
+                tallies(&restored, tier),
+                tallies(&original, tier),
+                "{tier:?}"
+            );
+        }
+        assert_eq!(series_minutes(&restored), 50 * 60);
+        assert!(
+            restored.resume().is_empty(),
+            "a live series resumes nothing"
+        );
+    }
+
+    /// Buckets a size never closed (the series was stored while they were
+    /// filling, then time went on) are made from their sources at resume.
+    #[test]
+    fn a_resume_closes_what_a_size_never_closed() {
+        let mut restored = TieredSeries::<Tally>::new(0);
+        for minute in 0..130 {
+            restored.restore(Tier::OneMinute, minute_tally(minute, 1), false);
+        }
+        let made = restored.resume();
+        let hours: Vec<(i64, u32)> = made
+            .iter()
+            .filter(|(tier, _)| *tier == Tier::OneHour)
+            .map(|(_, tally)| (tally.start_utc_ns / SECOND, tally.samples))
+            .collect();
+        assert_eq!(hours, vec![(0, 60)], "the hour that closed");
+        assert_eq!(
+            tallies(&restored, Tier::OneHour),
+            vec![(0, 60), (3_600, 30)],
+            "the latest hour fills with its closed half hours"
+        );
+        assert_eq!(series_minutes(&restored), 130, "every minute once");
+    }
+
+    fn series_minutes(series: &TieredSeries<Tally>) -> u32 {
+        series
+            .buckets(Tier::OneDay)
+            .chain(series.unmerged(Tier::OneDay))
+            .map(|tally| tally.samples)
+            .sum()
+    }
+
+    /// A size at its capacity holds only from its oldest bucket on.
+    #[test]
+    fn a_full_size_holds_from_its_oldest_bucket() {
+        let mut series = TieredSeries::<Tally>::new(0);
+        assert_eq!(series.held_from(Tier::OneMinute), i64::MIN);
+        assert!(!series.holds(Tier::OneMinute, 0), "nothing given yet");
+        for minute in 0..400 {
+            series.add_bucket(Tier::OneMinute, &minute_tally(minute, 1));
+        }
+        let from = series.held_from(Tier::OneMinute);
+        assert_eq!(from, (399 - 300) * MINUTE);
+        assert!(series.holds(Tier::OneMinute, from));
+        assert!(!series.holds(Tier::OneMinute, from - 1));
+        assert!(series.holds(Tier::OneHour, 0));
+        assert!(series.kept_at(Tier::OneHour, HOUR).is_some());
+        assert!(series.kept_at(Tier::OneHour, HOUR + 1).is_none());
     }
 }

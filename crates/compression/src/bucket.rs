@@ -1,8 +1,10 @@
 //! What the tiered aggregation needs of a bucket (D-79): one algorithm
 //! serves every series, so it knows a bucket only by its start, how two
 //! merge and whether it holds anything. Each series brings its own bucket
-//! type; a process run's is [`RunBucket`].
+//! type; a process run's is [`RunBucket`], an Overview series'
+//! [`OverviewBucket`] (D-82).
 
+use dgxtop_core::overview_history::OverviewBucket;
 use dgxtop_core::process_history::RunBucket;
 
 /// A span of time's merged samples, of any size.
@@ -32,6 +34,24 @@ impl Bucket for RunBucket {
 
     fn is_empty(&self) -> bool {
         RunBucket::is_empty(self)
+    }
+}
+
+impl Bucket for OverviewBucket {
+    fn new(start_utc_ns: i64) -> Self {
+        OverviewBucket::new(start_utc_ns)
+    }
+
+    fn start_utc_ns(&self) -> i64 {
+        self.start_utc_ns
+    }
+
+    fn merge(&mut self, other: &Self) {
+        OverviewBucket::merge(self, other);
+    }
+
+    fn is_empty(&self) -> bool {
+        OverviewBucket::is_empty(self)
     }
 }
 
@@ -90,6 +110,17 @@ mod tests {
         assert_eq!(Bucket::start_utc_ns(&one), 60, "the start stays");
         assert!(!Bucket::is_empty(&one));
         assert_eq!(one.value(RunMetric::Cpu).mean(), Some(4.0));
+    }
+
+    #[test]
+    fn an_overview_bucket_is_a_bucket() {
+        let mut hour = <OverviewBucket as Bucket>::new(0);
+        assert!(Bucket::is_empty(&hour));
+        let minute = OverviewBucket::gauge(60, 30, 300.0, (5.0, 15.0), 2);
+        Bucket::merge(&mut hour, &minute);
+        assert_eq!(Bucket::start_utc_ns(&hour), 0);
+        assert_eq!(hour.mean(), Some(10.0));
+        assert_eq!(hour.peak(), Some(15.0));
     }
 
     #[test]

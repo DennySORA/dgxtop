@@ -26,6 +26,7 @@ pub mod identity;
 pub mod metric;
 pub mod naming;
 pub mod observation;
+pub mod overview_history;
 pub mod ports;
 pub mod process_history;
 pub mod process_probe;
