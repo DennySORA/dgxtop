@@ -11,12 +11,11 @@ use dgxtop_core::canonical::GpuUsageKind;
 use dgxtop_core::commands::{SortKey, ViewKind};
 use dgxtop_core::config::{Theme, ValueOrigin};
 use dgxtop_core::history::HistoryMethod;
-use dgxtop_core::identity::{
-    BootId, EntityId, HostId, MetricId, MetricKey, ModuleId, Pid, PidNamespace, ProcessKey, Scope,
-    SessionId,
-};
+use dgxtop_core::identity::{EntityId, ModuleId, ProcessKey, SessionId};
 use dgxtop_core::metric::{CanonicalUnit, Scalar};
 use dgxtop_core::quality::{Freshness, Quality, SampleKind, SelectionState};
+pub(crate) use dgxtop_core::testing::metric_key;
+use dgxtop_core::testing::test_process_key;
 use dgxtop_core::view::{
     ActionRecordView, ActionsView, CandidateView, CellState, ConfirmationView, ConflictView,
     CoreView, CpuView, DiskDeviceView, DiskHistory, DiskView, FilesystemView, GpuCard, GpuDetails,
@@ -44,40 +43,20 @@ pub(crate) fn display_context() -> crate::registry::DisplayContext {
     }
 }
 
-pub(crate) fn host() -> HostId {
-    HostId::new("test-host").unwrap()
-}
-
-pub(crate) fn boot() -> BootId {
-    BootId::new("test-boot").unwrap()
-}
-
 pub(crate) fn entity(value: &str) -> EntityId {
     EntityId::new(value).unwrap()
 }
 
+/// The core's test process key, started at tick `start`.
 pub(crate) fn process_key(pid: i64, start: u64) -> ProcessKey {
     ProcessKey {
-        host_id: host(),
-        boot_id: boot(),
-        pid_namespace: PidNamespace::new("pid:[4026531836]").unwrap(),
-        pid: Pid::new(pid).unwrap(),
         start_time_ticks: start,
+        ..test_process_key(pid)
     }
 }
 
 pub(crate) fn token() -> ConfirmationToken {
     ConfirmationToken::new("ab".repeat(32)).unwrap()
-}
-
-pub(crate) fn metric_key(entity_id: &str, metric: &str, scope: &str) -> MetricKey {
-    MetricKey::new(
-        host(),
-        boot(),
-        entity(entity_id),
-        MetricId::new(metric).unwrap(),
-        Scope::new(scope).unwrap(),
-    )
 }
 
 pub(crate) fn ok(value: f64, unit: CanonicalUnit) -> MetricCell {
