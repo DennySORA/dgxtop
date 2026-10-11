@@ -21,6 +21,18 @@ pub fn format_local_short(utc_ns: i64, offset_s: i32) -> String {
     format!("{:02}-{:02} {:02}:{:02}", date.1, date.2, time.0, time.1)
 }
 
+/// `14:03`.
+pub fn format_local_clock(utc_ns: i64, offset_s: i32) -> String {
+    let (_, time) = parts(utc_ns, offset_s);
+    format!("{:02}:{:02}", time.0, time.1)
+}
+
+/// `10-11`.
+pub fn format_local_date(utc_ns: i64, offset_s: i32) -> String {
+    let (date, _) = parts(utc_ns, offset_s);
+    format!("{:02}-{:02}", date.1, date.2)
+}
+
 fn parts(utc_ns: i64, offset_s: i32) -> ((i64, i64, i64), (i64, i64, i64)) {
     let seconds = utc_ns
         .div_euclid(NANOS_PER_SECOND)
@@ -61,5 +73,7 @@ mod tests {
             "10-04 00:01"
         );
         assert_eq!(format_local_datetime(-1, 0), "1969-12-31 23:59:59");
+        assert_eq!(format_local_clock(SUNDAY_UTC, 8 * 3600 + 300), "08:05");
+        assert_eq!(format_local_date(SUNDAY_UTC, -60), "10-03");
     }
 }

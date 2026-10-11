@@ -6,7 +6,10 @@
 //! interface's receive and transmit rates (two strips on one scale, the
 //! tallest column of the pair, so their heights compare).
 
-use dgxtop_core::view::{HistoryChartKind, HistoryChartView, HistoryView};
+use dgxtop_core::metric::CanonicalUnit;
+use dgxtop_core::view::{
+    HistoryChartKind, HistoryChartView, HistoryPart, HistoryPointView, HistoryView,
+};
 
 use crate::format::{clean, format_value};
 
@@ -20,6 +23,71 @@ pub(super) enum Paint {
     Write,
     Receive,
     Transmit,
+    /// A count without a bound (threads, processes): one color.
+    Count,
+}
+
+/// Whether a strip's series has answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SeriesState<'a> {
+    Ready,
+    Pending,
+    /// Its query failed; why.
+    Failed(&'a str),
+}
+
+/// What a strip draws and its legend says: an Overview History chart or a
+/// run's (D-77).
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Series<'a> {
+    pub(super) points: &'a [HistoryPointView],
+    /// The tracked processes' parts, stacked at the foot (D-64).
+    pub(super) parts: &'a [HistoryPart],
+    pub(super) unit: CanonicalUnit,
+    /// The legend's first entry: `now` and the newest point's mean, or for
+    /// a run that ended `last`.
+    pub(super) latest: (&'static str, Option<f64>),
+    pub(super) mean: Option<f64>,
+    pub(super) peak: Option<f64>,
+    /// Joules over the window, for a power strip.
+    pub(super) energy: Option<f64>,
+    pub(super) state: SeriesState<'a>,
+}
+
+impl<'a> Series<'a> {
+    /// An Overview History chart over a window of `span_seconds`.
+    fn of_chart(chart: &'a HistoryChartView, span_seconds: f64) -> Self {
+        let state = match (&chart.error, chart.pending) {
+            (Some(error), _) => SeriesState::Failed(error),
+            (None, true) => SeriesState::Pending,
+            (None, false) => SeriesState::Ready,
+        };
+        Self {
+            points: &chart.points,
+            parts: &chart.parts,
+            unit: chart.unit,
+            latest: ("now", newest(&chart.points)),
+            mean: chart.mean,
+            peak: chart.peak,
+            // The mean power times the time covered.
+            energy: (chart.kind == HistoryChartKind::GpuPower)
+                .then(|| Some(chart.mean? * chart.coverage_ratio? * span_seconds))
+                .flatten(),
+            state,
+        }
+    }
+
+    pub(super) fn error(&self) -> Option<&'a str> {
+        match self.state {
+            SeriesState::Failed(error) => Some(error),
+            SeriesState::Ready | SeriesState::Pending => None,
+        }
+    }
+}
+
+/// The newest point's mean.
+pub(super) fn newest(points: &[HistoryPointView]) -> Option<f64> {
+    points.iter().rev().find_map(|point| point.mean)
 }
 
 /// One series of a panel.
@@ -28,7 +96,7 @@ pub(super) struct Strip<'a> {
     /// What the strip is in a panel of several (`GPU 0`, `read`); empty
     /// in a panel of one.
     pub(super) label: String,
-    pub(super) chart: &'a HistoryChartView,
+    pub(super) series: Series<'a>,
     /// Top of the scale; `None` for a rate, whose pair is scaled when it
     /// is drawn ([`Panel::is_rate`]).
     pub(super) scale: Option<f64>,
@@ -45,7 +113,9 @@ pub(super) struct Panel<'a> {
 impl Panel<'_> {
     /// Whether the panel draws a device's rates, scaled to what they draw.
     pub(super) fn is_rate(&self) -> bool {
-        self.strips.iter().any(|strip| strip.paint != Paint::Levels)
+        self.strips
+            .iter()
+            .any(|strip| !matches!(strip.paint, Paint::Levels | Paint::Count))
     }
 }
 
@@ -81,17 +151,24 @@ const RATE_PANELS: [([Rate; 2], &str); 2] = [
 /// The panels of `history`, in display order; a series the view does not
 /// carry has no strip, and a panel without strips is left out.
 pub(super) fn panels(history: &HistoryView) -> Vec<Panel<'_>> {
+    #[allow(clippy::cast_precision_loss)]
+    let span_seconds = history.end_utc_ns.saturating_sub(history.start_utc_ns) as f64 / 1e9;
+    let series = |chart| Series::of_chart(chart, span_seconds);
     let first = |kind| history.charts.iter().find(|chart| chart.kind == kind);
     let mut panels = Vec::new();
     if let Some(cpu) = first(HistoryChartKind::CpuUtilization) {
-        panels.push(single("CPU utilization".to_owned(), cpu));
+        panels.push(single(
+            "CPU utilization".to_owned(),
+            series(cpu),
+            cpu.scale_max,
+        ));
     }
     if let Some(memory) = first(HistoryChartKind::MemoryUsed) {
         let title = memory.scale_max.map_or_else(
             || "Memory used".to_owned(),
             |total| format!("Memory used · {}", format_value(total, memory.unit)),
         );
-        panels.push(single(title, memory));
+        panels.push(single(title, series(memory), memory.scale_max));
     }
     for (kind, title) in GPU_PANELS {
         let strips: Vec<Strip<'_>> = history
@@ -100,7 +177,7 @@ pub(super) fn panels(history: &HistoryView) -> Vec<Panel<'_>> {
             .filter(|chart| chart.kind == kind)
             .map(|chart| Strip {
                 label: gpu_label(&chart.subject),
-                chart,
+                series: series(chart),
                 scale: scale_or_peak(chart),
                 paint: Paint::Levels,
             })
@@ -113,7 +190,7 @@ pub(super) fn panels(history: &HistoryView) -> Vec<Panel<'_>> {
         }
     }
     for (pair, title) in RATE_PANELS {
-        if let Some(panel) = rate_panel(history, pair, title) {
+        if let Some(panel) = rate_panel(history, pair, title, span_seconds) {
             panels.push(panel);
         }
     }
@@ -129,13 +206,13 @@ fn scale_or_peak(chart: &HistoryChartView) -> Option<f64> {
 }
 
 /// A panel of one bounded series.
-fn single(title: String, chart: &HistoryChartView) -> Panel<'_> {
+pub(super) fn single(title: String, series: Series<'_>, scale: Option<f64>) -> Panel<'_> {
     Panel {
         title,
         strips: vec![Strip {
             label: String::new(),
-            chart,
-            scale: chart.scale_max,
+            series,
+            scale,
             paint: Paint::Levels,
         }],
     }
@@ -152,23 +229,29 @@ fn gpu_label(subject: &str) -> String {
 
 /// A device's two rates on one scale, set when they are drawn: the tallest
 /// column of the two (D-57), so their heights compare.
-fn rate_panel<'a>(history: &'a HistoryView, pair: [Rate; 2], title: &str) -> Option<Panel<'a>> {
-    let charts = pair.map(|(kind, label, paint)| {
-        let chart = history.charts.iter().find(|chart| chart.kind == kind);
-        (chart, label, paint)
-    });
-    let strips: Vec<Strip<'a>> = charts
+fn rate_panel<'a>(
+    history: &'a HistoryView,
+    pair: [Rate; 2],
+    title: &str,
+    span_seconds: f64,
+) -> Option<Panel<'a>> {
+    let charts: Vec<(&HistoryChartView, &str, Paint)> = pair
         .into_iter()
-        .filter_map(|(chart, label, paint)| {
-            Some(Strip {
-                label: label.to_owned(),
-                chart: chart?,
-                scale: None,
-                paint,
-            })
+        .filter_map(|(kind, label, paint)| {
+            let chart = history.charts.iter().find(|chart| chart.kind == kind)?;
+            Some((chart, label, paint))
         })
         .collect();
-    let subject = strips.first().map(|strip| clean(&strip.chart.subject))?;
+    let strips: Vec<Strip<'a>> = charts
+        .iter()
+        .map(|(chart, label, paint)| Strip {
+            label: (*label).to_owned(),
+            series: Series::of_chart(chart, span_seconds),
+            scale: None,
+            paint: *paint,
+        })
+        .collect();
+    let subject = charts.first().map(|(chart, _, _)| clean(&chart.subject))?;
     Some(Panel {
         title: if subject.is_empty() {
             title.to_owned()

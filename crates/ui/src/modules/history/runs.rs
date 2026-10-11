@@ -1,23 +1,32 @@
-//! The Process History tab (D-76): every GPU process run of the last 7
-//! days, the latest start first (`tab` 1), and one run's whole record
-//! (`tab` 2): what it ran and where, when it started and ended and why, and
-//! a chart of each thing it used. The context's scroll is the cursor; its
-//! `expanded` shows the whole command line.
+//! The Process History tab (D-76, D-77): every GPU process run kept (the
+//! latest 2000), the latest start first (`tab` 1), and one run's whole record
+//! (`tab` 2): what it ran and where, its parent, program and control group,
+//! when it started and ended and why, and its charts laid out like the
+//! Overview History's: panels of strips with their scale and legend, each
+//! column a bar of the size `w` steps through, on the local clock's axis.
+//! The context's scroll is the cursor; its `expanded` shows the whole
+//! command line.
 
-use dgxtop_core::process_history::RunMetric;
+use dgxtop_core::metric::CanonicalUnit;
+use dgxtop_core::process_history::{RunBar, RunInfo, RunMetric};
 use dgxtop_core::view::{ProcessHistoryView, RunChartView, RunDetailView, RunRowView};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use super::axis::clock_ticks;
+use super::layout::plan;
+use super::panels::{Paint, Panel, Series, SeriesState, Strip, single};
+use super::strip::Window;
+use super::{Hidden, render_axes, render_bands};
 use crate::format::{
     NOT_AVAILABLE, clean, display_width, format_local_datetime, format_local_short,
     format_span_seconds, format_value, truncate_to_width,
 };
 use crate::modules::common::{
-    ColumnSpec, Output, RowCursor, TableCell, draw_line, draw_table_header, draw_table_row,
-    fit_columns, message, render_chart_with_parts, separator,
+    ColumnSpec, Output, RowCursor, TableCell, draw_caption, draw_line, draw_table_header,
+    draw_table_row, fit_columns, gap, message, separator,
 };
 use crate::num::saturate_u16;
 use crate::registry::DisplayContext;
@@ -26,8 +35,6 @@ const SWATCH: &str = "■";
 const RUNNING: &str = "running";
 /// Command lines an expanded command takes at most.
 const MAX_COMMAND_LINES: usize = 8;
-/// Rows a chart takes with its title.
-const MIN_CHART_ROWS: u16 = 3;
 
 /// A list column: title, right-aligned, priority (lower gives way first).
 struct Column {
@@ -36,7 +43,7 @@ struct Column {
     priority: u8,
 }
 
-const COLUMNS: [Column; 10] = [
+const COLUMNS: [Column; 12] = [
     Column {
         title: "",
         right: false,
@@ -73,6 +80,11 @@ const COLUMNS: [Column; 10] = [
         priority: 190,
     },
     Column {
+        title: "PEAK RAM",
+        right: true,
+        priority: 150,
+    },
+    Column {
         title: "GPU%",
         right: true,
         priority: 110,
@@ -81,6 +93,11 @@ const COLUMNS: [Column; 10] = [
         title: "CPU%",
         right: true,
         priority: 100,
+    },
+    Column {
+        title: "CHILD",
+        right: true,
+        priority: 90,
     },
     Column {
         title: "STATUS",
@@ -117,7 +134,7 @@ pub(super) fn render_runs(
         "process history: {} runs{}",
         view.runs.len() + view.more_runs,
         if view.kept_on_disk {
-            ", kept 7 days"
+            ", kept on disk"
         } else {
             ", while dgxtop runs"
         }
@@ -130,7 +147,7 @@ pub(super) fn render_runs(
         .opened
         .as_ref()
         .filter(|detail| detail.info.key == run.key);
-    render_detail(frame, area, run, detail, view.utc_offset_s, context, output);
+    render_detail(frame, area, (run, detail), view, context, output);
 }
 
 fn render_list(
@@ -144,7 +161,7 @@ fn render_list(
     let rows: Vec<Vec<TableCell>> = view
         .runs
         .iter()
-        .map(|run| list_cells(run, view.utc_offset_s, context))
+        .map(|run| list_cells(run, view, context))
         .collect();
     let specs: Vec<ColumnSpec> = COLUMNS
         .iter()
@@ -203,12 +220,26 @@ fn render_list(
     }
 }
 
-fn list_cells(run: &RunRowView, offset_s: i32, context: &DisplayContext) -> Vec<TableCell> {
+fn list_cells(
+    run: &RunRowView,
+    view: &ProcessHistoryView,
+    context: &DisplayContext,
+) -> Vec<TableCell> {
     let theme = &context.theme;
     let (text, label) = if run.live {
         (theme.text_style(), theme.label_style())
     } else {
         (theme.muted_style(), theme.muted_style())
+    };
+    // A share of its whole in the gauge colors (D-77): the GPUs it used,
+    // the host's CPUs.
+    #[allow(clippy::cast_precision_loss)]
+    let gpu_scale = 100.0 * run.gpus.len().max(1) as f64;
+    let level = |value: Option<f64>, scale: Option<f64>| match (value, scale) {
+        (Some(value), Some(scale)) if scale > 0.0 && value.is_finite() => {
+            Style::new().fg(theme.level_color(value / scale))
+        }
+        _ => text,
     };
     let swatch = run.slot.map_or_else(
         || TableCell::new(" ", text),
@@ -216,14 +247,25 @@ fn list_cells(run: &RunRowView, offset_s: i32, context: &DisplayContext) -> Vec<
     );
     vec![
         swatch,
-        TableCell::new(format_local_short(run.started_utc_ns, offset_s), label),
+        TableCell::new(
+            format_local_short(run.started_utc_ns, view.utc_offset_s),
+            label,
+        ),
         TableCell::new(run.key.pid.to_string(), label),
         TableCell::new(clean(&run.name), text),
         TableCell::new(gpu_text(&run.gpus), label),
         TableCell::new(runtime_text(run.runtime_ns), text),
         TableCell::new(bytes_text(run.peak_gpu_memory), text),
-        TableCell::new(percent_text(run.mean_gpu_utilization), text),
-        TableCell::new(percent_text(run.mean_cpu), text),
+        TableCell::new(bytes_text(run.peak_memory), text),
+        TableCell::new(
+            percent_text(run.mean_gpu_utilization),
+            level(run.mean_gpu_utilization, Some(gpu_scale)),
+        ),
+        TableCell::new(
+            percent_text(run.mean_cpu),
+            level(run.mean_cpu, view.cpu_scale),
+        ),
+        TableCell::new(count_text(run.peak_children), text),
         TableCell::new(status_text(run), status_style(run, context)),
     ]
 }
@@ -245,14 +287,13 @@ fn run_label(run: &RunRowView, offset_s: i32) -> String {
 fn render_detail(
     frame: &mut Frame<'_>,
     area: Rect,
-    run: &RunRowView,
-    detail: Option<&RunDetailView>,
-    offset_s: i32,
+    (run, detail): (&RunRowView, Option<&RunDetailView>),
+    view: &ProcessHistoryView,
     context: &DisplayContext,
     output: &mut Output,
 ) {
     let mut rows = RowCursor::new(area);
-    for line in detail_lines(run, detail, offset_s, area.width, context) {
+    for line in detail_lines(run, detail, view.utc_offset_s, area.width, context) {
         let Some(row) = rows.next_row() else { return };
         output.label(line_text(&line));
         draw_line(frame.buffer_mut(), row, &line);
@@ -269,10 +310,10 @@ fn render_detail(
         return;
     };
     let Some(body) = rows.rest() else { return };
-    render_charts(frame, body, detail, context, output);
+    render_charts(frame, body, (detail, view), context, output);
 }
 
-/// The run's identity, times, folder and command line.
+/// The run's identity, times, folder, program, parent and command line.
 fn detail_lines(
     run: &RunRowView,
     detail: Option<&RunDetailView>,
@@ -295,45 +336,82 @@ fn detail_lines(
         separator(context),
         Span::styled(status_text(run), status_style(run, context)),
     ])];
-    let mut times = vec![
-        Span::styled("started ", theme.label_style()),
-        Span::styled(
-            format_local_datetime(run.started_utc_ns, offset_s),
-            theme.text_style(),
-        ),
-    ];
+    let info = detail.map(|detail| &detail.info);
+    let mut times = vec![field(
+        "started",
+        format_local_datetime(run.started_utc_ns, offset_s),
+        context,
+    )];
     if let Some(end) = run.end {
-        times.push(separator(context));
-        times.push(Span::styled("ended ", theme.label_style()));
-        times.push(Span::styled(
+        times.push(field(
+            "ended",
             format_local_datetime(end.utc_ns, offset_s),
-            theme.text_style(),
+            context,
         ));
     }
-    times.push(separator(context));
-    times.push(Span::styled(
-        if run.live { "running for " } else { "ran " },
-        theme.label_style(),
-    ));
-    times.push(Span::styled(
-        runtime_text(run.runtime_ns),
-        theme.text_style(),
-    ));
-    if let Some(uid) = detail.and_then(|detail| detail.info.uid) {
-        times.push(separator(context));
-        times.push(Span::styled("uid ", theme.label_style()));
-        times.push(Span::styled(uid.to_string(), theme.text_style()));
+    let ran = if run.live { "running for" } else { "ran" };
+    times.push(field(ran, runtime_text(run.runtime_ns), context));
+    if let Some(uid) = info.and_then(|info| info.uid) {
+        times.push(field("uid", uid.to_string(), context));
     }
-    lines.push(Line::from(times));
-    let info = detail.map(|detail| &detail.info);
-    let cwd = info.map_or("", |info| info.cwd.as_str());
-    lines.push(Line::from(vec![
-        Span::styled("folder ", theme.label_style()),
-        Span::styled(text_or_unknown(cwd), theme.text_style()),
-    ]));
+    lines.push(joined(times, context));
+    let text = |pick: fn(&RunInfo) -> &str| text_or_unknown(info.map_or("", pick));
+    lines.push(joined(
+        vec![
+            field("folder", text(|info| &info.cwd), context),
+            field("program", text(|info| &info.details.executable), context),
+        ],
+        context,
+    ));
+    lines.push(joined(
+        vec![
+            field("parent", parent_text(info), context),
+            field("nice", nice_text(info), context),
+            field("cgroup", text(|info| &info.details.cgroup), context),
+        ],
+        context,
+    ));
     let command = info.map_or("", |info| info.command.as_str());
     lines.extend(command_lines(command, width, context));
     lines
+}
+
+/// `7 bash`: the parent's PID and name as first read.
+fn parent_text(info: Option<&RunInfo>) -> String {
+    let Some(details) = info.map(|info| &info.details) else {
+        return NOT_AVAILABLE.to_owned();
+    };
+    match (details.parent_pid, details.parent_name.as_str()) {
+        (None, _) => NOT_AVAILABLE.to_owned(),
+        (Some(pid), "") => pid.to_string(),
+        (Some(pid), name) => format!("{pid} {}", clean(name)),
+    }
+}
+
+fn nice_text(info: Option<&RunInfo>) -> String {
+    info.and_then(|info| info.details.nice)
+        .map_or_else(|| NOT_AVAILABLE.to_owned(), |nice| nice.to_string())
+}
+
+/// `label value`, the label in the label color.
+fn field(label: &str, value: String, context: &DisplayContext) -> Vec<Span<'static>> {
+    let theme = &context.theme;
+    vec![
+        Span::styled(format!("{label} "), theme.label_style()),
+        Span::styled(value, theme.text_style()),
+    ]
+}
+
+/// Fields on one line between separators.
+fn joined(fields: Vec<Vec<Span<'static>>>, context: &DisplayContext) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (index, field) in fields.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(separator(context));
+        }
+        spans.extend(field);
+    }
+    Line::from(spans)
 }
 
 /// `command python -m …`: one line cut to fit, or with `expanded` the
@@ -386,97 +464,255 @@ fn take_width(text: &str, width: usize) -> usize {
     text.len()
 }
 
-/// Eight charts, two side by side when the width allows.
+/// The bar row, the panels and the axis, laid out like the Overview
+/// History's (module docs).
 fn render_charts(
     frame: &mut Frame<'_>,
     area: Rect,
-    detail: &RunDetailView,
+    (detail, view): (&RunDetailView, &ProcessHistoryView),
     context: &DisplayContext,
     output: &mut Output,
 ) {
-    let columns: u16 = if area.width >= 100 { 2 } else { 1 };
-    let count = saturate_u16(detail.charts.len());
-    let bands = count.div_ceil(columns).max(1);
-    let band_rows = (area.height / bands).max(MIN_CHART_ROWS);
-    let width = area.width / columns;
-    for (index, chart) in detail.charts.iter().enumerate() {
-        let index = saturate_u16(index);
-        let (band, column) = (index / columns, index % columns);
-        let y = area.y.saturating_add(band.saturating_mul(band_rows));
-        if y.saturating_add(MIN_CHART_ROWS) > area.bottom() {
-            break;
-        }
-        let height = band_rows.min(area.bottom() - y);
-        let x = area.x + column * width;
-        let chart_width = if column + 1 == columns {
-            area.right() - x
-        } else {
-            width.saturating_sub(1)
+    let panels = run_panels(detail);
+    let strips: Vec<u16> = panels
+        .iter()
+        .map(|panel| saturate_u16(panel.strips.len()))
+        .collect();
+    let layout = plan(area.width, area.height, &strips, (&[], 0));
+    let mut rows = RowCursor::new(area);
+    if let Some(row) = rows.next_row() {
+        let hidden = Hidden {
+            panels: layout.hidden_panels,
+            ..Hidden::default()
         };
-        let chart_area = Rect::new(x, y, chart_width, height);
-        render_chart_cell(frame, chart_area, chart, detail.slot, context);
-        output.label(chart_label(chart));
+        render_bar_row(frame, row, (detail, view.bar), hidden, context);
+    }
+    output.label(format!(
+        "process history bars: {}",
+        bar_note(detail, view.bar)
+    ));
+    let window = Window {
+        start_ns: detail.window_start_utc_ns,
+        end_ns: detail.window_end_utc_ns,
+    };
+    render_bands(
+        frame,
+        &mut rows,
+        (&layout, &panels),
+        window,
+        context,
+        output,
+    );
+    if let Some(axis) = rows.next_row() {
+        let utc = |ns: u64| i64::try_from(ns).unwrap_or(i64::MAX);
+        let span = (utc(window.start_ns), utc(window.end_ns));
+        render_axes(
+            frame,
+            axis,
+            &layout,
+            |width| clock_ticks(span, view.utc_offset_s, width),
+            context,
+        );
     }
 }
 
-/// The chart's title with its mean and peak, then its points.
-fn render_chart_cell(
+/// `auto [1m] 5m … 24h`, the session's size marked, then at the right
+/// what a bar is and how long the charts span, and what did not fit.
+fn render_bar_row(
     frame: &mut Frame<'_>,
-    area: Rect,
-    chart: &RunChartView,
-    slot: Option<u8>,
+    row: Rect,
+    (detail, chosen): (&RunDetailView, RunBar),
+    hidden: Hidden,
     context: &DisplayContext,
 ) {
-    let mut rows = RowCursor::new(area);
-    let Some(title) = rows.next_row() else { return };
     let theme = &context.theme;
-    let name = metric_title(chart.metric);
-    draw_line(
-        frame.buffer_mut(),
-        title,
-        &Line::from(vec![
-            Span::styled(name, theme.section_title_style(name)),
-            Span::styled(" · mean ", theme.label_style()),
-            Span::styled(value_text(chart.mean, chart), theme.text_style()),
-            Span::styled(" · peak ", theme.label_style()),
-            Span::styled(value_text(chart.peak, chart), theme.text_style()),
-        ]),
-    );
-    let Some(plot) = rows.rest() else { return };
-    let max = match chart.unit {
-        dgxtop_core::metric::CanonicalUnit::Percent => Some(chart.peak.unwrap_or(0.0).max(100.0)),
-        _ => chart.peak,
-    };
-    let color = slot.map(|slot| theme.process_color(slot));
-    let points = fit_to_width(&chart.means, usize::from(plot.width));
-    render_chart_with_parts(frame, plot, &points, (Vec::new(), color), max, context);
+    let spans: Vec<Span<'static>> = RunBar::ALL
+        .into_iter()
+        .map(|bar| {
+            let style = if bar == chosen {
+                theme.selected_row_style()
+            } else {
+                theme.muted_style()
+            };
+            Span::styled(format!(" {} ", bar.token()), style)
+        })
+        .collect();
+    let left = Line::from(spans);
+    let room = usize::from(row.width).saturating_sub(left.width() + 2 * gap(context).width());
+    let bars = bar_note(detail, chosen);
+    let mut notes: Vec<String> = hidden
+        .notes()
+        .into_iter()
+        .map(|hidden| format!("{hidden} · {bars}"))
+        .collect();
+    notes.push(bars);
+    notes.extend(hidden.notes());
+    let note = notes.into_iter().find(|note| display_width(note) <= room);
+    draw_caption(frame.buffer_mut(), row, &left, note.as_deref(), context);
 }
 
-/// The run's points fitted to `width` columns so its whole life spans the
-/// chart: a short run's points each widened to the same number of
-/// columns, a long run's merged, each column the mean of the points it
-/// covers (`None` where none has a value).
-fn fit_to_width(points: &[Option<f64>], width: usize) -> Vec<Option<f64>> {
-    if width == 0 || points.is_empty() {
-        return points.to_vec();
-    }
-    if points.len() <= width {
-        let columns = width / points.len();
-        return points
+/// `auto: 10m a bar · 13h 20m shown`, `24h a bar · 80d shown`.
+fn bar_note(detail: &RunDetailView, chosen: RunBar) -> String {
+    let seconds = detail
+        .window_end_utc_ns
+        .saturating_sub(detail.window_start_utc_ns)
+        / 1_000_000_000;
+    let shown = if seconds >= 86_400 && seconds.is_multiple_of(86_400) {
+        format!("{}d", seconds / 86_400)
+    } else {
+        format_span_seconds(seconds)
+    };
+    let lead = if chosen == RunBar::Auto { "auto: " } else { "" };
+    format!("{lead}{} a bar · {shown} shown", detail.bar.token())
+}
+
+/// A strip of a run panel: its metric, label and paint.
+type Member = (RunMetric, &'static str, Paint);
+
+/// The panels of a run, in order: CPU, memory, GPU utilization and memory,
+/// tasks, disk and the host's network. A strip without a sample gives way
+/// to the others of its panel; a panel keeps its first strip so it says
+/// it has none.
+fn run_panels(detail: &RunDetailView) -> Vec<Panel<'_>> {
+    let charts = RunCharts { detail };
+    [
+        charts.panel(
+            charts.titled("CPU", RunMetric::Cpu),
+            &[
+                (RunMetric::Cpu, "self", Paint::Levels),
+                (RunMetric::ChildrenCpu, "child", Paint::Levels),
+            ],
+        ),
+        charts.panel(
+            charts.titled("Memory", RunMetric::Memory),
+            &[
+                (RunMetric::Memory, "rss", Paint::Levels),
+                (RunMetric::ChildrenMemory, "child", Paint::Levels),
+                (RunMetric::Swap, "swap", Paint::Levels),
+            ],
+        ),
+        charts.single("GPU utilization".to_owned(), RunMetric::GpuUtilization),
+        charts.single(
+            charts.titled("GPU memory", RunMetric::GpuMemory),
+            RunMetric::GpuMemory,
+        ),
+        charts.panel(
+            "Tasks".to_owned(),
+            &[
+                (RunMetric::Threads, "thread", Paint::Count),
+                (RunMetric::Children, "child", Paint::Count),
+                (RunMetric::OpenFiles, "files", Paint::Count),
+            ],
+        ),
+        charts.panel(
+            "Disk".to_owned(),
+            &[
+                (RunMetric::DiskRead, "read", Paint::Read),
+                (RunMetric::DiskWrite, "write", Paint::Write),
+            ],
+        ),
+        // The kernel counts no traffic per process.
+        charts.panel(
+            "Network · host".to_owned(),
+            &[
+                (RunMetric::HostNetworkReceive, "rx", Paint::Receive),
+                (RunMetric::HostNetworkTransmit, "tx", Paint::Transmit),
+            ],
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// The opened run's charts as strips and panels.
+struct RunCharts<'a> {
+    detail: &'a RunDetailView,
+}
+
+impl<'a> RunCharts<'a> {
+    fn chart(&self, metric: RunMetric) -> Option<&'a RunChartView> {
+        self.detail
+            .charts
             .iter()
-            .flat_map(|point| std::iter::repeat_n(*point, columns))
-            .collect();
+            .find(|chart| chart.metric == metric)
     }
-    let per_column = points.len().div_ceil(width);
-    points
-        .chunks(per_column)
-        .map(|chunk| {
-            let present: Vec<f64> = chunk.iter().flatten().copied().collect();
-            #[allow(clippy::cast_precision_loss)]
-            let count = present.len() as f64;
-            (!present.is_empty()).then(|| present.iter().sum::<f64>() / count)
+
+    fn series(&self, chart: &'a RunChartView) -> Series<'a> {
+        let latest = if self.detail.live { "now" } else { "last" };
+        Series {
+            points: &chart.points,
+            parts: &[],
+            unit: chart.unit,
+            latest: (latest, chart.latest),
+            mean: chart.mean,
+            peak: chart.peak,
+            energy: None,
+            state: SeriesState::Ready,
+        }
+    }
+
+    /// `CPU · 20 CPUs`, `Memory · 128.0 GiB`: the title with its scale.
+    fn titled(&self, title: &str, metric: RunMetric) -> String {
+        let Some((scale, unit)) = self
+            .chart(metric)
+            .and_then(|chart| Some((chart.scale_max?, chart.unit)))
+        else {
+            return title.to_owned();
+        };
+        match unit {
+            CanonicalUnit::Percent => format!(
+                "{title} · {} CPUs",
+                format_value(scale / 100.0, CanonicalUnit::Count)
+            ),
+            unit => format!("{title} · {}", format_value(scale, unit)),
+        }
+    }
+
+    fn strip(&self, (metric, label, paint): Member) -> Option<Strip<'a>> {
+        let chart = self.chart(metric)?;
+        let scale = match paint {
+            Paint::Levels => chart.scale_max.or_else(|| positive(chart.peak)),
+            Paint::Count => positive(chart.peak),
+            Paint::Read | Paint::Write | Paint::Receive | Paint::Transmit => None,
+        };
+        Some(Strip {
+            label: label.to_owned(),
+            series: self.series(chart),
+            scale,
+            paint,
         })
-        .collect()
+    }
+
+    fn panel(&self, title: String, members: &[Member]) -> Option<Panel<'a>> {
+        let strips: Vec<Strip<'a>> = members
+            .iter()
+            .filter_map(|member| self.strip(*member))
+            .collect();
+        let first = strips.first().cloned();
+        let mut shown: Vec<Strip<'a>> = strips
+            .into_iter()
+            .filter(|strip| !strip.series.points.is_empty())
+            .collect();
+        if shown.is_empty() {
+            shown.extend(first);
+        }
+        (!shown.is_empty()).then_some(Panel {
+            title,
+            strips: shown,
+        })
+    }
+
+    /// A panel of one bounded series, scaled to its peak without a scale.
+    fn single(&self, title: String, metric: RunMetric) -> Option<Panel<'a>> {
+        let chart = self.chart(metric)?;
+        let scale = chart.scale_max.or_else(|| positive(chart.peak));
+        Some(single(title, self.series(chart), scale))
+    }
+}
+
+fn positive(value: Option<f64>) -> Option<f64> {
+    value.filter(|value| value.is_finite() && *value > 0.0)
 }
 
 /// `2h 15m`, `3d 4h`: how long a run ran.
@@ -484,48 +720,24 @@ fn runtime_text(runtime_ns: u64) -> String {
     format_span_seconds(runtime_ns / 1_000_000_000)
 }
 
-fn chart_label(chart: &RunChartView) -> String {
-    format!(
-        "process history chart {}: mean {} peak {}",
-        metric_title(chart.metric),
-        value_text(chart.mean, chart),
-        value_text(chart.peak, chart)
-    )
-}
-
-/// The chart titles; per-process traffic is not counted by the kernel, so
-/// the network charts say they are the host's.
-const fn metric_title(metric: RunMetric) -> &'static str {
-    match metric {
-        RunMetric::Cpu => "CPU",
-        RunMetric::Memory => "Memory",
-        RunMetric::GpuUtilization => "GPU utilization",
-        RunMetric::GpuMemory => "GPU memory",
-        RunMetric::DiskRead => "Disk read",
-        RunMetric::DiskWrite => "Disk write",
-        RunMetric::HostNetworkReceive => "Network receive (host)",
-        RunMetric::HostNetworkTransmit => "Network send (host)",
-    }
-}
-
-fn value_text(value: Option<f64>, chart: &RunChartView) -> String {
-    value.map_or_else(
-        || NOT_AVAILABLE.to_owned(),
-        |value| format_value(value, chart.unit),
-    )
-}
-
 fn bytes_text(value: Option<f64>) -> String {
     value.map_or_else(
         || NOT_AVAILABLE.to_owned(),
-        |value| format_value(value, dgxtop_core::metric::CanonicalUnit::Bytes),
+        |value| format_value(value, CanonicalUnit::Bytes),
+    )
+}
+
+fn count_text(value: Option<f64>) -> String {
+    value.map_or_else(
+        || NOT_AVAILABLE.to_owned(),
+        |value| format_value(value, CanonicalUnit::Count),
     )
 }
 
 fn percent_text(value: Option<f64>) -> String {
     value.map_or_else(
         || NOT_AVAILABLE.to_owned(),
-        |value| format_value(value, dgxtop_core::metric::CanonicalUnit::Percent),
+        |value| format_value(value, CanonicalUnit::Percent),
     )
 }
 
@@ -578,22 +790,6 @@ fn line_text(line: &Line<'_>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn runs_fit_the_chart_width() {
-        let points: Vec<Option<f64>> = (0..10).map(|value| Some(f64::from(value))).collect();
-        let widened = fit_to_width(&points, 25);
-        assert_eq!(widened.len(), 20, "each point two columns wide");
-        assert_eq!(&widened[..4], &[Some(0.0), Some(0.0), Some(1.0), Some(1.0)]);
-        assert_eq!(fit_to_width(&points, 10), points);
-        assert_eq!(
-            fit_to_width(&points, 5),
-            vec![Some(0.5), Some(2.5), Some(4.5), Some(6.5), Some(8.5)]
-        );
-        let gappy = [None, None, Some(4.0), None];
-        assert_eq!(fit_to_width(&gappy, 2), vec![None, Some(4.0)]);
-        assert_eq!(fit_to_width(&points, 0), points);
-    }
 
     #[test]
     fn runtimes_read_in_hours_and_minutes() {

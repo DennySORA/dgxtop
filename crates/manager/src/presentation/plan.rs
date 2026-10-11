@@ -103,6 +103,12 @@ impl ViewportLayout {
             .clamp(MIN_TREND_POINTS, MAX_TREND_POINTS)
     }
 
+    /// Bars of a Process History chart (D-77): one a column of its plot,
+    /// which is laid out like a history chart's.
+    pub(crate) fn run_chart_bars(self) -> usize {
+        usize::from(history_plot_columns(self.columns)).max(1)
+    }
+
     /// Half-width charts (disk and network rates).
     pub(crate) fn half_chart_points(self) -> usize {
         (usize::from(self.columns) / 2).clamp(MIN_TREND_POINTS, MAX_TREND_POINTS)

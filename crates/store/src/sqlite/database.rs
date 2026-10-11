@@ -24,8 +24,8 @@ use super::capacity::{CapacityPolicy, PageUsage};
 use super::connection::{ConnectionProfile, apply_profile, open_connection};
 use super::errors::{FaultKind, describe, fault_kind};
 use super::schema::{
-    SchemaKind, SchemaPlan, SchemaRefusal, apply_ddl, backup_before_migration, integrity_problem,
-    plan,
+    SchemaKind, SchemaPlan, SchemaRefusal, apply_ddl, apply_upgrade, backup_before_migration,
+    integrity_problem, plan,
 };
 use super::time::format_utc_rfc3339;
 use super::version::{SqliteGateError, SqliteVersion};
@@ -88,6 +88,10 @@ pub(crate) fn open_database(
     let plan = inspect(&connection, spec.kind)?;
     let backup = verify_before_writing(&connection, spec, &plan, was_empty, fs, clock)?;
     configure(&connection, spec)?;
+    if let SchemaPlan::Upgrade { from } = plan {
+        apply_upgrade(&connection, spec.kind, from)
+            .map_err(|error| sqlite_unusable("schema upgrade", &error))?;
+    }
     if plan != SchemaPlan::Current {
         initialize_schema(&connection, spec.kind)?;
     }
@@ -156,9 +160,10 @@ fn inspect(connection: &Connection, kind: SchemaKind) -> Result<SchemaPlan, Unus
         Err(error) => Err(sqlite_unusable("schema inspection", &error)),
         Ok(Ok(plan)) => Ok(plan),
         Ok(Err(SchemaRefusal::Future { found })) => Err(Unusable::read_only(format!(
-            "{} schema user_version {found} is newer than the supported 2; \
+            "{} schema user_version {found} is newer than the supported {}; \
              kept for read-only diagnostics and never rewritten",
-            kind.label()
+            kind.label(),
+            kind.user_version()
         ))),
         Ok(Err(SchemaRefusal::Unknown(detail))) => Err(Unusable::failed(format!(
             "unknown {} schema ({detail}); file kept",
@@ -194,11 +199,11 @@ fn verify_before_writing(
         }
         Ok(None) => {}
     }
-    if *plan != SchemaPlan::Migrate {
+    if !plan.rewrites() {
         return Ok(None);
     }
     let label = format_utc_rfc3339(clock.now_utc_ns());
-    backup_before_migration(connection, spec.path, fs, &label)
+    backup_before_migration(connection, (spec.path, spec.kind), fs, &label)
         .map(Some)
         .map_err(|message| {
             Unusable::failed(format!(

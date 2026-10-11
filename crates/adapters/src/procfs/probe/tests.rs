@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use dgxtop_core::identity::{Pid, PidNamespace};
 use dgxtop_core::testing::{FakeClock, boot_id, host_id};
 
+use dgxtop_core::process_probe::ChildUsage;
+
 use super::*;
 use crate::common::EntryName;
 
@@ -15,6 +17,7 @@ const NAMESPACE: &str = "pid:[4026531836]";
 struct MapFiles {
     files: HashMap<String, String>,
     links: HashMap<String, PathBuf>,
+    dirs: HashMap<String, Vec<EntryName>>,
 }
 
 impl MapFiles {
@@ -35,6 +38,19 @@ impl MapFiles {
         self.links.insert(path.to_owned(), PathBuf::from(target));
         self
     }
+
+    /// A folder of `names`, folders or files.
+    fn dir(mut self, path: &str, names: &[&str], is_dir: bool) -> Self {
+        let entries = names
+            .iter()
+            .map(|name| EntryName {
+                name: (*name).to_owned(),
+                is_dir,
+            })
+            .collect();
+        self.dirs.insert(path.to_owned(), entries);
+        self
+    }
 }
 
 fn missing() -> io::Error {
@@ -46,8 +62,19 @@ impl SystemFiles for MapFiles {
         self.files.get(path).cloned().ok_or_else(missing)
     }
 
-    fn read_dir(&self, _path: &str) -> io::Result<Vec<EntryName>> {
-        Err(missing())
+    fn read_dir(&self, path: &str) -> io::Result<Vec<EntryName>> {
+        self.dirs
+            .get(path)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|entry| EntryName {
+                        name: entry.name.clone(),
+                        is_dir: entry.is_dir,
+                    })
+                    .collect()
+            })
+            .ok_or_else(missing)
     }
 
     fn read_link(&self, path: &str) -> io::Result<PathBuf> {
@@ -77,6 +104,27 @@ fn stat_line(pid: i32, state: char, start: u64, exit_code: u32) -> String {
     format!("{pid} (python3) {}", fields.join(" "))
 }
 
+/// A `stat` line of `pid` under `parent`, with the fields `(position after
+/// the name, value)` set.
+fn stat_of(pid: i32, parent: i32, fields: &[(usize, i64)]) -> String {
+    let mut line: Vec<String> = (0..50).map(|_| "0".to_owned()).collect();
+    line[0] = "S".to_owned();
+    line[1] = parent.to_string();
+    line[19] = "900".to_owned();
+    for (position, value) in fields {
+        line[*position] = value.to_string();
+    }
+    format!("{pid} (worker) {}", line.join(" "))
+}
+
+const UTIME: usize = 11;
+const STIME: usize = 12;
+const CUTIME: usize = 13;
+const CSTIME: usize = 14;
+const NICE: usize = 16;
+const THREADS: usize = 17;
+const RSS: usize = 21;
+
 fn key(pid: i32, start: u64) -> ProcessKey {
     ProcessKey {
         host_id: host_id("host-a"),
@@ -88,7 +136,7 @@ fn key(pid: i32, start: u64) -> ProcessKey {
 }
 
 fn probe(files: MapFiles, targets: &[ProbeTarget]) -> ProbeReport {
-    let mut probe = ProcfsProcessProbe::new(Arc::new(files), FakeClock::new(5_000));
+    let mut probe = ProcfsProcessProbe::new(Arc::new(files), FakeClock::new(5_000), Some(4096));
     probe.probe(targets)
 }
 
@@ -218,6 +266,128 @@ fn texts_are_cleaned_and_bounded_and_targets_capped() {
     let many: Vec<ProbeTarget> = (1..=100).map(|pid| target(pid, 1, false)).collect();
     let report = probe(MapFiles::with_namespace(), &many);
     assert_eq!(report.readings.len(), MAX_PROBED_PROCESSES);
+}
+
+/// A training process with two dataloader workers, one of them with a
+/// helper of its own: the descendants at any depth, their CPU time with
+/// what reaped ones left, and their memory; its threads, swap and files.
+#[test]
+fn a_running_process_reports_its_descendants_threads_swap_and_files() {
+    let files = MapFiles::with_namespace()
+        .dir("/proc", &["1", "42", "50", "51", "52", "60", "self"], true)
+        .file(
+            "/proc/42/stat",
+            &stat_of(
+                42,
+                1,
+                &[(UTIME, 500), (CUTIME, 30), (CSTIME, 10), (THREADS, 24)],
+            ),
+        )
+        .file("/proc/1/stat", &stat_of(1, 0, &[(UTIME, 9_999)]))
+        .file(
+            "/proc/50/stat",
+            &stat_of(50, 42, &[(UTIME, 100), (STIME, 20), (RSS, 1_000)]),
+        )
+        .file(
+            "/proc/51/stat",
+            &stat_of(51, 42, &[(UTIME, 200), (CUTIME, 5), (RSS, 2_000)]),
+        )
+        .file("/proc/52/stat", &stat_of(52, 51, &[(UTIME, 7), (RSS, 10)]))
+        .file("/proc/60/stat", &stat_of(60, 1, &[(UTIME, 77), (RSS, 5)]))
+        .file("/proc/42/status", "Name:\tpython3\nVmSwap:\t    2048 kB\n")
+        .dir("/proc/42/fd", &["0", "1", "2", "3"], false);
+    let target = ProbeTarget {
+        key: key(42, 900),
+        with_text: false,
+    };
+    let reading = &probe(files, &[target]).readings[0];
+    assert_eq!(reading.liveness, ProbeLiveness::Running);
+    assert_eq!(reading.threads, Some(24));
+    assert_eq!(reading.swap_bytes, Some(2 * 1024 * 1024));
+    assert_eq!(reading.open_files, Some(4));
+    assert_eq!(
+        reading.children,
+        Some(ChildUsage {
+            processes: 3,
+            // Its reaped children's 40, then 120, 205 and 7.
+            cpu_ticks: 40 + 120 + 205 + 7,
+            rss_bytes: Some(3_010 * 4096),
+        })
+    );
+    assert_eq!(reading.details, None, "details come with the text");
+}
+
+/// Without a process list its descendants are unknown, never zero; an
+/// unreadable `fd` folder is no count either.
+#[test]
+fn an_unreadable_process_list_is_no_descendants() {
+    let files = MapFiles::with_namespace().file("/proc/42/stat", &stat_of(42, 1, &[]));
+    let reading = &probe(files, &[target(42, 900, false)]).readings[0];
+    assert_eq!(reading.liveness, ProbeLiveness::Running);
+    assert_eq!(reading.children, None);
+    assert_eq!(reading.open_files, None);
+    assert_eq!(reading.swap_bytes, None);
+}
+
+/// A PID reused while `/proc` was read may close a loop; it ends.
+#[test]
+fn a_parent_loop_in_the_tree_ends() {
+    let files = MapFiles::with_namespace()
+        .dir("/proc", &["42", "50", "51"], true)
+        .file("/proc/42/stat", &stat_of(42, 51, &[]))
+        .file("/proc/50/stat", &stat_of(50, 42, &[(UTIME, 1)]))
+        .file("/proc/51/stat", &stat_of(51, 50, &[(UTIME, 2)]));
+    let reading = &probe(files, &[target(42, 900, false)]).readings[0];
+    let children = reading.children.unwrap();
+    assert_eq!((children.processes, children.cpu_ticks), (2, 3));
+}
+
+/// Read with the text: the parent, the program, the control group and
+/// the niceness.
+#[test]
+fn the_details_name_the_parent_program_and_control_group() {
+    let files = MapFiles::with_namespace()
+        .file("/proc/42/stat", &stat_of(42, 7, &[(NICE, -5)]))
+        .file("/proc/7/comm", "torchrun\n")
+        .link("/proc/42/exe", "/venv/bin/python3.12")
+        .file(
+            "/proc/42/cgroup",
+            "12:cpu,cpuacct:/old\n0::/user.slice/user-1000.slice/session-3.scope\n",
+        );
+    let reading = &probe(files, &[target(42, 900, true)]).readings[0];
+    assert_eq!(
+        reading.details,
+        Some(RunDetails {
+            parent_pid: Some(7),
+            parent_name: "torchrun".to_owned(),
+            executable: "/venv/bin/python3.12".to_owned(),
+            cgroup: "/user.slice/user-1000.slice/session-3.scope".to_owned(),
+            nice: Some(-5),
+        })
+    );
+    // A process under init with nothing readable.
+    let files = MapFiles::with_namespace().file("/proc/42/stat", &stat_of(42, 0, &[]));
+    let details = probe(files, &[target(42, 900, true)]).readings[0]
+        .details
+        .clone()
+        .unwrap();
+    assert_eq!(
+        details,
+        RunDetails {
+            nice: Some(0),
+            ..RunDetails::default()
+        }
+    );
+}
+
+#[test]
+fn a_cgroup_v1_host_names_its_first_hierarchy() {
+    assert_eq!(
+        cgroup_path("4:memory:/docker/abc\n1:name=systemd:/x\n").as_deref(),
+        Some("/docker/abc")
+    );
+    assert_eq!(cgroup_path("").as_deref(), None);
+    assert_eq!(cgroup_path("0::/\n").as_deref(), Some("/"));
 }
 
 #[test]

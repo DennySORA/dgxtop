@@ -12,10 +12,14 @@ use crate::fs::FileSystemOps;
 pub const AUDIT_DDL: &str = include_str!("../../../../spec/dgxtop-v2/contracts/audit.sql");
 /// `contracts/history.sql`, applied verbatim.
 pub const HISTORY_DDL: &str = include_str!("../../../../spec/dgxtop-v2/contracts/history.sql");
-/// The process history's DDL (D-76), dgxtop's own: the spec has none.
+/// The process history's DDL (D-76, D-77), dgxtop's own: the spec has none.
 pub const PROCESS_HISTORY_DDL: &str = include_str!("../process_history/schema.sql");
-/// `PRAGMA user_version` written by every DDL file.
+/// Brings a version 2 process history to version 3 (D-77).
+const PROCESS_HISTORY_UPGRADE_FROM_2: &str = include_str!("../process_history/upgrade_from_2.sql");
+/// `PRAGMA user_version` written by the spec's DDL files.
 pub const SCHEMA_USER_VERSION: i64 = 2;
+/// `PRAGMA user_version` of the process history's DDL.
+pub const PROCESS_HISTORY_USER_VERSION: i64 = 3;
 
 /// Which SQLite partition a database belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +35,22 @@ impl SchemaKind {
             Self::Audit => AUDIT_DDL,
             Self::History => HISTORY_DDL,
             Self::ProcessHistory => PROCESS_HISTORY_DDL,
+        }
+    }
+
+    /// The `user_version` its DDL writes.
+    pub const fn user_version(self) -> i64 {
+        match self {
+            Self::Audit | Self::History => SCHEMA_USER_VERSION,
+            Self::ProcessHistory => PROCESS_HISTORY_USER_VERSION,
+        }
+    }
+
+    /// The script that brings `version` to the next version, where one does.
+    const fn upgrade_from(self, version: i64) -> Option<&'static str> {
+        match (self, version) {
+            (Self::ProcessHistory, 2) => Some(PROCESS_HISTORY_UPGRADE_FROM_2),
+            _ => None,
         }
     }
 
@@ -75,12 +95,22 @@ impl SchemaKind {
 /// What the open sequence must do with an existing database.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SchemaPlan {
-    /// `user_version` 2 with every object present.
+    /// The kind's `user_version` with every object present.
     Current,
     /// Empty database: apply the DDL directly (nothing to back up).
     Initialize,
     /// Pre-v2 content of our own objects: integrity check, backup, DDL.
     Migrate,
+    /// An earlier version of this kind: integrity check, backup, the
+    /// upgrade script, then the DDL.
+    Upgrade { from: i64 },
+}
+
+impl SchemaPlan {
+    /// Whether it rewrites existing content (so a backup comes first).
+    pub(crate) const fn rewrites(&self) -> bool {
+        matches!(self, Self::Migrate | Self::Upgrade { .. })
+    }
 }
 
 /// Why a database cannot be used for writes.
@@ -90,7 +120,7 @@ pub(crate) enum SchemaRefusal {
     Future { found: i64 },
     /// Unknown version or foreign objects: kept untouched.
     Unknown(String),
-    /// Version 2 but objects are missing.
+    /// The current version but objects are missing.
     Incomplete(Vec<String>),
 }
 
@@ -118,16 +148,19 @@ pub(crate) fn plan(
         .iter()
         .map(|name| (*name).to_owned())
         .collect();
-    Ok(classify(version, &objects, &expected))
+    Ok(classify(kind, version, &objects, &expected))
 }
 
 fn classify(
+    kind: SchemaKind,
     version: i64,
     objects: &BTreeSet<String>,
     expected: &BTreeSet<String>,
 ) -> Result<SchemaPlan, SchemaRefusal> {
+    let current = kind.user_version();
+    let foreign = || -> Vec<String> { objects.difference(expected).cloned().collect() };
     match version {
-        SCHEMA_USER_VERSION => {
+        found if found == current => {
             let missing: Vec<String> = expected.difference(objects).cloned().collect();
             if missing.is_empty() {
                 Ok(SchemaPlan::Current)
@@ -135,21 +168,18 @@ fn classify(
                 Err(SchemaRefusal::Incomplete(missing))
             }
         }
-        found if found > SCHEMA_USER_VERSION => Err(SchemaRefusal::Future { found }),
+        found if found > current => Err(SchemaRefusal::Future { found }),
         0 if objects.is_empty() => Ok(SchemaPlan::Initialize),
-        0 => {
-            let foreign: Vec<String> = objects.difference(expected).cloned().collect();
-            if foreign.is_empty() {
-                Ok(SchemaPlan::Migrate)
-            } else {
-                Err(SchemaRefusal::Unknown(format!(
-                    "user_version 0 with foreign objects: {}",
-                    foreign.join(", ")
-                )))
-            }
+        0 if foreign().is_empty() => Ok(SchemaPlan::Migrate),
+        0 => Err(SchemaRefusal::Unknown(format!(
+            "user_version 0 with foreign objects: {}",
+            foreign().join(", ")
+        ))),
+        from if kind.upgrade_from(from).is_some() && foreign().is_empty() => {
+            Ok(SchemaPlan::Upgrade { from })
         }
         other => Err(SchemaRefusal::Unknown(format!(
-            "user_version {other} has no migration path to {SCHEMA_USER_VERSION}"
+            "user_version {other} has no migration path to {current}"
         ))),
     }
 }
@@ -157,7 +187,22 @@ fn classify(
 /// Runs the spec DDL (it carries its own `BEGIN IMMEDIATE … COMMIT`). On
 /// failure the open transaction is rolled back so nothing half-applied stays.
 pub(crate) fn apply_ddl(connection: &Connection, kind: SchemaKind) -> rusqlite::Result<()> {
-    let result = connection.execute_batch(kind.ddl());
+    run_script(connection, kind.ddl())
+}
+
+/// Runs the upgrade from `from` (its own transaction, like the DDL); a
+/// version without one is left as it is.
+pub(crate) fn apply_upgrade(
+    connection: &Connection,
+    kind: SchemaKind,
+    from: i64,
+) -> rusqlite::Result<()> {
+    kind.upgrade_from(from)
+        .map_or(Ok(()), |script| run_script(connection, script))
+}
+
+fn run_script(connection: &Connection, script: &str) -> rusqlite::Result<()> {
+    let result = connection.execute_batch(script);
     if result.is_err() && !connection.is_autocommit() {
         let _rollback = connection.execute_batch("ROLLBACK");
     }
@@ -186,7 +231,7 @@ pub(crate) fn integrity_problem(
 /// then fsynced together with its directory.
 pub(crate) fn backup_before_migration(
     connection: &Connection,
-    database_path: &Path,
+    (database_path, kind): (&Path, SchemaKind),
     fs: &dyn FileSystemOps,
     utc_label: &str,
 ) -> Result<PathBuf, String> {
@@ -208,7 +253,8 @@ pub(crate) fn backup_before_migration(
         .take(8)
         .collect();
     let backup_path = directory.join(format!(
-        "{file_name}.pre-v{SCHEMA_USER_VERSION}-{compact_label}-{unique}.bak"
+        "{file_name}.pre-v{}-{compact_label}-{unique}.bak",
+        kind.user_version()
     ));
     let backup_text = backup_path
         .to_str()
@@ -261,35 +307,49 @@ mod tests {
     #[test]
     fn classification_covers_every_version_case() {
         let full = expected();
-        assert_eq!(classify(2, &full, &full), Ok(SchemaPlan::Current));
+        let audit = |version, objects: &BTreeSet<String>| {
+            classify(SchemaKind::Audit, version, objects, &full)
+        };
+        assert_eq!(audit(2, &full), Ok(SchemaPlan::Current));
         assert!(matches!(
-            classify(2, &names(&["action_intents"]), &full),
+            audit(2, &names(&["action_intents"])),
             Err(SchemaRefusal::Incomplete(missing)) if missing.len() == 5
         ));
+        assert_eq!(audit(3, &full), Err(SchemaRefusal::Future { found: 3 }));
+        assert_eq!(audit(0, &BTreeSet::new()), Ok(SchemaPlan::Initialize));
         assert_eq!(
-            classify(3, &full, &full),
-            Err(SchemaRefusal::Future { found: 3 })
-        );
-        assert_eq!(
-            classify(0, &BTreeSet::new(), &full),
-            Ok(SchemaPlan::Initialize)
-        );
-        assert_eq!(
-            classify(0, &names(&["action_intents"]), &full),
+            audit(0, &names(&["action_intents"])),
             Ok(SchemaPlan::Migrate)
         );
         assert!(matches!(
-            classify(0, &names(&["someone_elses_table"]), &full),
+            audit(0, &names(&["someone_elses_table"])),
             Err(SchemaRefusal::Unknown(_))
         ));
+        assert!(matches!(audit(1, &full), Err(SchemaRefusal::Unknown(_))));
+        assert!(matches!(audit(-1, &full), Err(SchemaRefusal::Unknown(_))));
+    }
+
+    /// The process history is at version 3 and upgrades from 2 (D-77);
+    /// the spec's partitions have no upgrade from 2.
+    #[test]
+    fn the_process_history_upgrades_from_version_2() {
+        let full = names(SchemaKind::ProcessHistory.objects());
+        let process = |version, objects: &BTreeSet<String>| {
+            classify(SchemaKind::ProcessHistory, version, objects, &full)
+        };
+        assert_eq!(process(3, &full), Ok(SchemaPlan::Current));
+        assert_eq!(process(2, &full), Ok(SchemaPlan::Upgrade { from: 2 }));
+        assert!(SchemaPlan::Upgrade { from: 2 }.rewrites());
+        assert!(!SchemaPlan::Current.rewrites());
+        assert_eq!(process(4, &full), Err(SchemaRefusal::Future { found: 4 }));
+        assert!(matches!(process(1, &full), Err(SchemaRefusal::Unknown(_))));
+        let mut foreign = full.clone();
+        foreign.insert("someone_elses_table".to_owned());
         assert!(matches!(
-            classify(1, &full, &full),
+            process(2, &foreign),
             Err(SchemaRefusal::Unknown(_))
         ));
-        assert!(matches!(
-            classify(-1, &full, &full),
-            Err(SchemaRefusal::Unknown(_))
-        ));
+        assert!(PROCESS_HISTORY_DDL.contains("PRAGMA user_version = 3;"));
     }
 
     #[test]

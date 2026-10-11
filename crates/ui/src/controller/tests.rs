@@ -485,6 +485,28 @@ fn history_process_pages_navigate_and_select_the_run() {
     );
 }
 
+/// `w`/`W` step the window on the Overview History and the bar size on an
+/// opened run (D-77); the session's filter keeps both.
+#[test]
+fn w_steps_the_window_or_an_opened_runs_bar_size() {
+    let mut harness = Harness::new(ViewKind::History);
+    let filter = |harness: &Harness| harness.last_session().3;
+    harness.keys(&[key('w')]);
+    assert_eq!(filter(&harness), "6h");
+    harness.keys(&[key('4'), code(KeyCode::Enter), key('w')]);
+    assert_eq!(filter(&harness), "6h 1m", "auto, then 1 minute");
+    harness.keys(&[key('W'), key('W')]);
+    assert_eq!(filter(&harness), "6h 24h", "back past auto to a day");
+    harness.keys(&[code(KeyCode::Right)]);
+    assert_eq!(filter(&harness), "6h");
+    harness.keys(&[code(KeyCode::Left), key('3'), key('w')]);
+    assert_eq!(
+        filter(&harness),
+        "12h 24h",
+        "the window steps, the bar stays"
+    );
+}
+
 /// In an opened run `e` shows the whole command line and `y` queues it for
 /// the clipboard once; on the list neither does anything (D-76).
 #[test]

@@ -26,7 +26,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 
-use self::axis::render_axis;
+use self::axis::{Tick, render_axis, ticks};
 use self::layout::{HistoryLayout, plan};
 use self::panels::{Panel, Strip, panels};
 pub(crate) use self::runs::cursor_run;
@@ -180,6 +180,44 @@ fn render_history(
         start_ns: history.start_utc_ns,
         end_ns: history.end_utc_ns,
     };
+    render_bands(
+        frame,
+        &mut rows,
+        (&layout, &panels),
+        window,
+        context,
+        output,
+    );
+    if let Some(axis) = rows.next_row() {
+        // A window reaching back before boot starts at boot.
+        let span_seconds = window.end_ns.saturating_sub(window.start_ns) / 1_000_000_000;
+        render_axes(
+            frame,
+            axis,
+            &layout,
+            |width| ticks(span_seconds, width),
+            context,
+        );
+    }
+    let shown = &blocks[..layout.table_blocks];
+    if let Some(table) = rows.take(layout.table_rows) {
+        render_gpu_stats(frame, table, shown, context);
+    }
+    for label in stats_labels(shown) {
+        output.label(label);
+    }
+}
+
+/// The bands of `layout`, each its panels side by side, from the rows'
+/// next row on.
+fn render_bands(
+    frame: &mut Frame<'_>,
+    rows: &mut RowCursor,
+    (layout, panels): (&HistoryLayout, &[Panel<'_>]),
+    window: Window,
+    context: &DisplayContext,
+    output: &mut Output,
+) {
     for (band, members) in layout.bands.iter().enumerate() {
         let Some(area) = rows.take(layout.band_height(band)) else {
             break;
@@ -203,18 +241,6 @@ fn render_history(
             }
         }
     }
-    if let Some(axis) = rows.next_row() {
-        // A window reaching back before boot starts at boot.
-        let span_ns = window.end_ns - window.start_ns;
-        render_axes(frame, axis, &layout, span_ns, context);
-    }
-    let shown = &blocks[..layout.table_blocks];
-    if let Some(table) = rows.take(layout.table_rows) {
-        render_gpu_stats(frame, table, shown, context);
-    }
-    for label in stats_labels(shown) {
-        output.label(label);
-    }
 }
 
 /// A panel's title rule, then its strips, `strip_rows` rows each.
@@ -227,10 +253,7 @@ fn render_panel(
 ) {
     let mut rows = RowCursor::new(area);
     if let Some(row) = rows.next_row() {
-        let error = panel
-            .strips
-            .iter()
-            .find_map(|strip| strip.chart.error.as_deref());
+        let error = panel.strips.iter().find_map(|strip| strip.series.error());
         draw_line(
             frame.buffer_mut(),
             row,
@@ -278,25 +301,24 @@ fn title_rule(
     Line::from(spans)
 }
 
-/// The time axis under each column of panels.
+/// The time axis under each column of panels, `ticks` of a plot's width.
 fn render_axes(
     frame: &mut Frame<'_>,
     row: Rect,
     layout: &HistoryLayout,
-    span_ns: u64,
+    ticks: impl Fn(u16) -> Vec<Tick>,
     context: &DisplayContext,
 ) {
-    let span_seconds = span_ns / 1_000_000_000;
     let columns = layout.bands.iter().map(Vec::len).max().unwrap_or(1);
     for column in 0..saturate_u16(columns) {
         let x = row.x + layout.panel_offset(column) + HISTORY_GUTTER_COLUMNS;
         let width = plot_width(layout.panel_width);
-        render_axis(frame, row, (x, width), span_seconds, context);
+        render_axis(frame, row, (x, width), ticks(width), context);
     }
 }
 
 /// What the view could not show.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct Hidden {
     panels: usize,
     gpus: usize,
@@ -342,7 +364,7 @@ impl Hidden {
 const WINDOW_KEYS: &str = "w/W/←/→ window";
 /// The keys of the process history's pages (D-72, D-75).
 const PROCESS_LIST_KEYS: &str = "j/k/↑/↓ select · Enter open";
-const PROCESS_DETAIL_KEYS: &str = "Enter back · j/k/↑/↓ next · e command · y copy";
+const PROCESS_DETAIL_KEYS: &str = "w/W bar · Enter back · j/k/↑/↓ next · e command · y copy";
 
 /// `5m [1h] 6h 12h 24h`, then at the right what did not fit
 /// and how much of the window is recorded, as much as fits.
@@ -436,6 +458,18 @@ mod tests {
         scroll: u16,
         expanded: bool,
     ) -> Vec<String> {
+        let terminal = render_runs_at(view, (tab, scroll, expanded), (120, 30));
+        let buffer = terminal.backend().buffer();
+        (0..30)
+            .map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    fn render_runs_at(
+        view: Option<dgxtop_core::view::ProcessHistoryView>,
+        (tab, scroll, expanded): (u8, u16, bool),
+        (width, height): (u16, u16),
+    ) -> ratatui::Terminal<ratatui::backend::TestBackend> {
         let mut context = crate::test_fixtures::display_context();
         context.tab = tab;
         context.scroll = scroll;
@@ -444,7 +478,7 @@ mod tests {
             crate::test_fixtures::view_model(dgxtop_core::commands::ViewKind::History, 1);
         model.modules.process_history = view.map(std::sync::Arc::new);
         let mut terminal =
-            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
         terminal
             .draw(|frame| {
                 HistoryModule::new()
@@ -452,10 +486,41 @@ mod tests {
                     .render(&context, &model, frame.area(), frame);
             })
             .unwrap();
+        terminal
+    }
+
+    /// On a tall terminal each strip's legend has its last value, mean and
+    /// peak, and the bars take the Overview History's level colors (D-77):
+    /// the run's busiest minutes red against their scale.
+    #[test]
+    fn a_tall_run_page_has_full_legends_and_level_colors() {
+        let view = crate::test_fixtures::process_history_view();
+        let (width, height) = (213, 70);
+        let terminal = render_runs_at(Some(view), (2, 0, false), (width, height));
         let buffer = terminal.backend().buffer();
-        (0..30)
-            .map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect())
-            .collect()
+        let rows: Vec<String> = (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect();
+        let text = rows.join("\n");
+        for entry in ["last ", "avg ", "max "] {
+            assert!(text.contains(entry), "missing {entry}: {text}");
+        }
+        assert!(
+            !text.contains("now "),
+            "an ended run has no value now: {text}"
+        );
+        let gpu = rows
+            .iter()
+            .position(|row| row.contains("GPU utilization"))
+            .unwrap();
+        let theme = crate::test_fixtures::display_context().theme;
+        let strip_rows = u16::try_from(gpu + 1).unwrap()..u16::try_from(gpu + 4).unwrap();
+        let colors: Vec<ratatui::style::Color> = strip_rows
+            .flat_map(|y| (0..width / 2).map(move |x| (x, y)))
+            .map(|cell| buffer[cell].fg)
+            .collect();
+        assert!(colors.contains(&theme.level_color(1.0)), "{text}");
+        assert!(colors.contains(&theme.level_color(0.1)), "{text}");
     }
 
     /// The Process History list (D-76): the newest start first, in local
@@ -503,6 +568,8 @@ mod tests {
                 opened: None,
                 kept_on_disk: true,
                 utc_offset_s: 0,
+                bar: dgxtop_core::process_history::RunBar::Auto,
+                cpu_scale: None,
             }),
             1,
             0,
@@ -517,8 +584,9 @@ mod tests {
         );
     }
 
-    /// An opened run: identity, times, folder, its command (one line, or
-    /// all of it expanded) and a chart of each thing it used.
+    /// An opened run: identity, times, folder, program, parent, its
+    /// command (one line, or all of it expanded) and its charts laid out
+    /// like the Overview History's, as bars of the session's size.
     #[test]
     fn an_opened_run_shows_everything_known_of_it() {
         let view = crate::test_fixtures::process_history_view();
@@ -526,6 +594,7 @@ mod tests {
         let text = detail.join("\n");
         assert!(detail[0].contains("Process History · run"), "{text}");
         assert!(detail[0].contains("y copy"), "{text}");
+        assert!(detail[0].contains("w/W bar"), "{text}");
         assert!(
             text.contains("PID 42 │ ComfyUI/main │ GPU 0 │ SIGKILL by dgxtop"),
             "{text}"
@@ -534,6 +603,11 @@ mod tests {
         assert!(text.contains("ended 2026-10-04 09:30:00"), "{text}");
         assert!(text.contains("ran 30m"), "{text}");
         assert!(text.contains("folder /home/u/code/ComfyUI"), "{text}");
+        assert!(text.contains("program /venv/bin/python3.12"), "{text}");
+        assert!(
+            text.contains("parent 7 bash │ nice 0 │ cgroup /user.slice/"),
+            "{text}"
+        );
         let command_rows = detail
             .iter()
             .filter(|line| line.contains("--preview"))
@@ -544,13 +618,20 @@ mod tests {
                 .count();
         assert!(command_rows >= 1, "{text}");
         for title in [
-            "CPU · mean",
-            "GPU memory · mean",
-            "Disk write · mean",
-            "Network receive (host)",
+            "CPU · 20 CPUs",
+            "Memory · 128 GiB",
+            "GPU utilization",
+            "GPU memory · 120 GiB",
+            "Tasks",
+            "Disk",
+            "Network · host",
         ] {
             assert!(text.contains(title), "missing {title}: {text}");
         }
+        assert!(text.contains(" auto ") && text.contains(" 18h "), "{text}");
+        assert!(text.contains("auto: 1m a bar · 1h 20m shown"), "{text}");
+        assert!(text.contains("max 2000%"), "{text}");
+        assert!(text.contains("09:30"), "the local clock's axis: {text}");
         let expanded = draw_runs(Some(view.clone()), 2, 0, true).join("\n");
         assert!(expanded.contains("--preview-method auto"), "{expanded}");
         // The cursor on a run that is not the opened one: its figures, and

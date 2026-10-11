@@ -85,6 +85,11 @@ fn parse_core_id(entity_id: &str) -> Option<u32> {
 
 /// Logical CPUs from samples and live catalog entries, numerically ordered
 /// (`cpu.core.2` before `cpu.core.10`), never by read order.
+/// The host's logical CPUs the snapshot knows of.
+pub(crate) fn logical_cpu_count(reader: &MetricReader<'_>) -> usize {
+    core_ids(reader).len()
+}
+
 fn core_ids(reader: &MetricReader<'_>) -> BTreeSet<u32> {
     let from_samples = reader
         .index()

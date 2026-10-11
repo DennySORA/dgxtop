@@ -3,11 +3,13 @@
 //! ran, where, on which GPUs, when it started and ended and why, and the
 //! averages and peaks of what it used over its life.
 //!
-//! What it used is kept as [`RunBucket`]s of three sizes, each the merge of
-//! the finer ones it covers, so the history stays small however long a run
-//! lasts: 5 s for the last 10 minutes ([`Tier::Recent`], kept in a short-term
-//! file), minutes for the last 24 hours ([`Tier::Minute`]) and ten minutes
-//! for 7 days ([`Tier::TenMinutes`]), both in the long-term database.
+//! What it used is kept as [`RunBucket`]s of the sizes a chart draws as
+//! bars (D-77, [`Tier`]): 1, 5, 10 and 30 minutes, 1, 2, 4, 6, 8, 12, 18 and
+//! 24 hours, each bucket the merge of the finer ones it covers, and 5 s
+//! buckets for the last 10 minutes (kept in a short-term file). Each size
+//! keeps its latest [`TIER_BUCKETS`], as many as the widest chart draws:
+//! older ones are in the coarser sizes already. So a run costs the same
+//! however long it lasts, and its whole life stays at the coarse sizes.
 
 use serde::{Deserialize, Serialize};
 
@@ -20,8 +22,8 @@ const NANOS_PER_SECOND: u64 = 1_000_000_000;
 pub const MAX_LIVE_RUNS: usize = crate::process_probe::MAX_PROBED_PROCESSES;
 /// Runs the history lists; the oldest ended ones give way.
 pub const MAX_LISTED_RUNS: usize = 512;
-/// How long a run is kept after it ended.
-pub const RUN_RETENTION_NS: u64 = 7 * 86_400 * NANOS_PER_SECOND;
+/// Buckets each size but the 5 s one keeps: bars of the widest chart.
+pub const TIER_BUCKETS: usize = 300;
 
 /// What a run used, in the order of [`RunBucket::values`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -43,6 +45,19 @@ pub enum RunMetric {
     HostNetworkReceive,
     /// Bytes per second the host sent while it ran.
     HostNetworkTransmit,
+    /// Its threads (D-77).
+    Threads,
+    /// Its descendant processes, at any depth.
+    Children,
+    /// CPU time of its descendants over wall time (those still running and
+    /// those reaped since), percent of one core.
+    ChildrenCpu,
+    /// Resident memory of its running descendants, bytes.
+    ChildrenMemory,
+    /// Its memory swapped out, bytes.
+    Swap,
+    /// Its open file descriptors (readable for one's own processes only).
+    OpenFiles,
 }
 
 impl RunMetric {
@@ -55,6 +70,12 @@ impl RunMetric {
         Self::DiskWrite,
         Self::HostNetworkReceive,
         Self::HostNetworkTransmit,
+        Self::Threads,
+        Self::Children,
+        Self::ChildrenCpu,
+        Self::ChildrenMemory,
+        Self::Swap,
+        Self::OpenFiles,
     ];
 
     pub const fn index(self) -> usize {
@@ -72,11 +93,20 @@ impl RunMetric {
             Self::DiskWrite => "disk_write",
             Self::HostNetworkReceive => "net_rx",
             Self::HostNetworkTransmit => "net_tx",
+            Self::Threads => "threads",
+            Self::Children => "children",
+            Self::ChildrenCpu => "children_cpu",
+            Self::ChildrenMemory => "children_memory",
+            Self::Swap => "swap",
+            Self::OpenFiles => "open_files",
         }
     }
 }
 
-pub const RUN_METRICS: usize = 8;
+/// Metrics a bucket holds. Stored buckets keep them in [`RunMetric::ALL`]
+/// order, so a bucket written before a metric was added reads with that
+/// metric empty.
+pub const RUN_METRICS: usize = 14;
 
 /// The mean and peak of the samples a bucket merged. Single precision
 /// keeps a bucket small (seven digits are plenty for a chart), so a long
@@ -137,60 +167,262 @@ impl Aggregate {
     }
 }
 
-/// The size of a bucket.
+/// The size of a bucket: the 5 s buckets of the last minutes, and one size
+/// for each bar size of the charts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Tier {
     Recent,
-    Minute,
+    OneMinute,
+    FiveMinutes,
     TenMinutes,
+    ThirtyMinutes,
+    OneHour,
+    TwoHours,
+    FourHours,
+    SixHours,
+    EightHours,
+    TwelveHours,
+    EighteenHours,
+    OneDay,
 }
 
 impl Tier {
+    /// The sizes, finest first: a size's source comes before it.
+    pub const ALL: [Self; 13] = [
+        Self::Recent,
+        Self::OneMinute,
+        Self::FiveMinutes,
+        Self::TenMinutes,
+        Self::ThirtyMinutes,
+        Self::OneHour,
+        Self::TwoHours,
+        Self::FourHours,
+        Self::SixHours,
+        Self::EightHours,
+        Self::TwelveHours,
+        Self::EighteenHours,
+        Self::OneDay,
+    ];
+
     pub const fn step_ns(self) -> u64 {
-        match self {
-            Self::Recent => 5 * NANOS_PER_SECOND,
-            Self::Minute => 60 * NANOS_PER_SECOND,
-            Self::TenMinutes => 600 * NANOS_PER_SECOND,
-        }
+        let minutes = match self {
+            Self::Recent => return 5 * NANOS_PER_SECOND,
+            Self::OneMinute => 1,
+            Self::FiveMinutes => 5,
+            Self::TenMinutes => 10,
+            Self::ThirtyMinutes => 30,
+            Self::OneHour => 60,
+            Self::TwoHours => 120,
+            Self::FourHours => 240,
+            Self::SixHours => 360,
+            Self::EightHours => 480,
+            Self::TwelveHours => 720,
+            Self::EighteenHours => 1_080,
+            Self::OneDay => 1_440,
+        };
+        minutes * 60 * NANOS_PER_SECOND
     }
 
-    /// How far back this tier reaches.
-    pub const fn span_ns(self) -> u64 {
-        match self {
-            Self::Recent => 600 * NANOS_PER_SECOND,
-            Self::Minute => 86_400 * NANOS_PER_SECOND,
-            Self::TenMinutes => RUN_RETENTION_NS,
-        }
+    /// The size whose closed buckets this one merges: the coarsest finer
+    /// size its step is a multiple of (18 hours take 6, 24 take 12).
+    pub const fn source(self) -> Option<Self> {
+        Some(match self {
+            Self::Recent => return None,
+            Self::OneMinute => Self::Recent,
+            Self::FiveMinutes => Self::OneMinute,
+            Self::TenMinutes => Self::FiveMinutes,
+            Self::ThirtyMinutes => Self::TenMinutes,
+            Self::OneHour => Self::ThirtyMinutes,
+            Self::TwoHours => Self::OneHour,
+            Self::FourHours | Self::SixHours => Self::TwoHours,
+            Self::EightHours => Self::FourHours,
+            Self::TwelveHours | Self::EighteenHours => Self::SixHours,
+            Self::OneDay => Self::TwelveHours,
+        })
     }
 
-    /// Buckets of this tier one run keeps at most (at most 1440).
-    #[allow(clippy::cast_possible_truncation)]
+    /// Its position in [`Tier::ALL`].
+    pub const fn level(self) -> usize {
+        self as usize
+    }
+
+    /// Buckets of this size one run keeps at most: 10 minutes of 5 s
+    /// buckets, else [`TIER_BUCKETS`].
     pub const fn capacity(self) -> usize {
-        (self.span_ns() / self.step_ns()) as usize
+        match self {
+            Self::Recent => 120,
+            _ => TIER_BUCKETS,
+        }
     }
 
-    /// The code stored in the database.
+    /// The code stored in the database; the minutes and ten minutes keep
+    /// their codes of version 2.
     pub const fn code(self) -> i64 {
         match self {
             Self::Recent => 0,
-            Self::Minute => 1,
+            Self::OneMinute => 1,
             Self::TenMinutes => 2,
+            Self::FiveMinutes => 3,
+            Self::ThirtyMinutes => 4,
+            Self::OneHour => 5,
+            Self::TwoHours => 6,
+            Self::FourHours => 7,
+            Self::SixHours => 8,
+            Self::EightHours => 9,
+            Self::TwelveHours => 10,
+            Self::EighteenHours => 11,
+            Self::OneDay => 12,
         }
     }
 
-    pub const fn from_code(code: i64) -> Option<Self> {
-        match code {
-            0 => Some(Self::Recent),
-            1 => Some(Self::Minute),
-            2 => Some(Self::TenMinutes),
-            _ => None,
-        }
+    pub fn from_code(code: i64) -> Option<Self> {
+        Self::ALL.into_iter().find(|tier| tier.code() == code)
     }
 
-    /// The start of the bucket holding `utc_ns`.
-    pub fn align(self, utc_ns: i64) -> i64 {
+    /// The start of the bucket holding `utc_ns`, its boundaries moved by
+    /// `shift_ns` (the local clock's offset, so a day is a local day).
+    pub fn align(self, utc_ns: i64, shift_ns: i64) -> i64 {
         let step = i64::try_from(self.step_ns()).unwrap_or(i64::MAX);
-        utc_ns.div_euclid(step) * step
+        utc_ns
+            .saturating_add(shift_ns)
+            .div_euclid(step)
+            .saturating_mul(step)
+            .saturating_sub(shift_ns)
+    }
+}
+
+/// How much time one bar of a run's chart covers (D-77): its mean of every
+/// sample in that time. `Auto` takes the finest that shows the whole run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RunBar {
+    Auto,
+    OneMinute,
+    FiveMinutes,
+    TenMinutes,
+    ThirtyMinutes,
+    OneHour,
+    TwoHours,
+    FourHours,
+    SixHours,
+    EightHours,
+    TwelveHours,
+    EighteenHours,
+    OneDay,
+}
+
+impl RunBar {
+    /// In the order `w` steps through.
+    pub const ALL: [Self; 13] = [
+        Self::Auto,
+        Self::OneMinute,
+        Self::FiveMinutes,
+        Self::TenMinutes,
+        Self::ThirtyMinutes,
+        Self::OneHour,
+        Self::TwoHours,
+        Self::FourHours,
+        Self::SixHours,
+        Self::EightHours,
+        Self::TwelveHours,
+        Self::EighteenHours,
+        Self::OneDay,
+    ];
+
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::OneMinute => "1m",
+            Self::FiveMinutes => "5m",
+            Self::TenMinutes => "10m",
+            Self::ThirtyMinutes => "30m",
+            Self::OneHour => "1h",
+            Self::TwoHours => "2h",
+            Self::FourHours => "4h",
+            Self::SixHours => "6h",
+            Self::EightHours => "8h",
+            Self::TwelveHours => "12h",
+            Self::EighteenHours => "18h",
+            Self::OneDay => "24h",
+        }
+    }
+
+    pub fn parse(token: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|bar| bar.token() == token)
+    }
+
+    /// The bucket size its bars are; `None` for `Auto`.
+    pub const fn tier(self) -> Option<Tier> {
+        Some(match self {
+            Self::Auto => return None,
+            Self::OneMinute => Tier::OneMinute,
+            Self::FiveMinutes => Tier::FiveMinutes,
+            Self::TenMinutes => Tier::TenMinutes,
+            Self::ThirtyMinutes => Tier::ThirtyMinutes,
+            Self::OneHour => Tier::OneHour,
+            Self::TwoHours => Tier::TwoHours,
+            Self::FourHours => Tier::FourHours,
+            Self::SixHours => Tier::SixHours,
+            Self::EightHours => Tier::EightHours,
+            Self::TwelveHours => Tier::TwelveHours,
+            Self::EighteenHours => Tier::EighteenHours,
+            Self::OneDay => Tier::OneDay,
+        })
+    }
+
+    pub const fn step_ns(self) -> Option<u64> {
+        match self.tier() {
+            Some(tier) => Some(tier.step_ns()),
+            None => None,
+        }
+    }
+
+    /// The next (or with `forward` false the previous) size, wrapping.
+    pub fn step(self, forward: bool) -> Self {
+        let count = Self::ALL.len();
+        let position = Self::ALL.iter().position(|bar| *bar == self).unwrap_or(0);
+        let next = if forward {
+            (position + 1) % count
+        } else {
+            (position + count - 1) % count
+        };
+        Self::ALL[next]
+    }
+
+    /// The sizes `Auto` chooses from, finest first.
+    pub fn fixed() -> impl Iterator<Item = Self> {
+        Self::ALL.into_iter().skip(1)
+    }
+}
+
+/// The History view's session filter (D-77): the Overview History window
+/// token, then the Process History bar unless it is `Auto` (`6h 30m`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryFilter<'a> {
+    /// The window token as given (empty for the default); the Manager
+    /// checks it is a window.
+    pub window: &'a str,
+    pub bar: RunBar,
+}
+
+impl<'a> HistoryFilter<'a> {
+    /// Splits `filter`; `None` when its bar token is no bar or more tokens
+    /// follow.
+    pub fn parse(filter: &'a str) -> Option<Self> {
+        let mut tokens = filter.split_whitespace();
+        let window = tokens.next().unwrap_or("");
+        let bar = match tokens.next() {
+            Some(token) => RunBar::parse(token)?,
+            None => RunBar::Auto,
+        };
+        tokens.next().is_none().then_some(Self { window, bar })
+    }
+
+    /// The filter of `window` and `bar`.
+    pub fn format(window: &str, bar: RunBar) -> String {
+        match bar {
+            RunBar::Auto => window.to_owned(),
+            bar => format!("{window} {}", bar.token()),
+        }
     }
 }
 
@@ -199,7 +431,22 @@ impl Tier {
 pub struct RunBucket {
     /// UTC start of the bucket, aligned to its tier's step.
     pub start_utc_ns: i64,
+    #[serde(deserialize_with = "values_of_any_version")]
     pub values: [Aggregate; RUN_METRICS],
+}
+
+/// The values of a bucket saved by any version: metrics it did not know
+/// are empty, metrics it knew beyond these are left out.
+fn values_of_any_version<'de, D>(deserializer: D) -> Result<[Aggregate; RUN_METRICS], D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let saved = Vec::<Aggregate>::deserialize(deserializer)?;
+    let mut values = [Aggregate::default(); RUN_METRICS];
+    for (value, saved) in values.iter_mut().zip(saved) {
+        *value = saved;
+    }
+    Ok(values)
 }
 
 impl RunBucket {
@@ -317,11 +564,28 @@ pub struct RunInfo {
     pub uid: Option<u32>,
     /// The GPUs it used, as labelled when it used them (`GPU 0`).
     pub gpus: Vec<String>,
+    /// What the probe read of it once, beside its command (D-77).
+    pub details: RunDetails,
     /// When it started, UTC.
     pub started_utc_ns: i64,
     /// When dgxtop last saw it, UTC.
     pub last_seen_utc_ns: i64,
     pub end: Option<RunEnd>,
+}
+
+/// What a run is beside its command line, read once while it runs (D-77);
+/// empty or `None` where unread.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct RunDetails {
+    /// Its parent when first read: PID and name.
+    pub parent_pid: Option<i32>,
+    pub parent_name: String,
+    /// The program file it runs (readable for one's own processes only).
+    pub executable: String,
+    /// Its control group (`/user.slice/…`, a container's scope).
+    pub cgroup: String,
+    /// Its scheduling niceness, -20 to 19.
+    pub nice: Option<i8>,
 }
 
 impl RunInfo {
@@ -408,16 +672,99 @@ mod tests {
     }
 
     #[test]
-    fn tiers_align_and_hold_their_span() {
+    fn tiers_align_nest_and_keep_their_buckets() {
+        const HOUR: i64 = 3_600 * 1_000_000_000;
         assert_eq!(Tier::Recent.capacity(), 120);
-        assert_eq!(Tier::Minute.capacity(), 1440);
-        assert_eq!(Tier::TenMinutes.capacity(), 1008);
-        assert_eq!(Tier::Minute.align(119_000_000_000), 60_000_000_000);
-        assert_eq!(Tier::Minute.align(-1), -60_000_000_000);
-        for tier in [Tier::Recent, Tier::Minute, Tier::TenMinutes] {
+        assert_eq!(Tier::OneDay.capacity(), TIER_BUCKETS);
+        assert_eq!(Tier::OneMinute.align(119_000_000_000, 0), 60_000_000_000);
+        assert_eq!(Tier::OneMinute.align(-1, 0), -60_000_000_000);
+        // UTC+8: a day starts at 16:00 UTC.
+        assert_eq!(Tier::OneDay.align(HOUR, 8 * HOUR), -8 * HOUR);
+        for (level, tier) in Tier::ALL.into_iter().enumerate() {
             assert_eq!(Tier::from_code(tier.code()), Some(tier));
+            assert_eq!(tier.level(), level);
+            if let Some(source) = tier.source() {
+                assert!(source < tier, "{tier:?} after its source");
+                assert_eq!(tier.step_ns() % source.step_ns(), 0, "{tier:?} nests");
+            }
         }
-        assert_eq!(Tier::from_code(7), None);
+        assert_eq!(Tier::Recent.source(), None);
+        assert_eq!(Tier::from_code(13), None);
+        assert_eq!(
+            Tier::from_code(1),
+            Some(Tier::OneMinute),
+            "version 2's minutes"
+        );
+        assert_eq!(Tier::from_code(2), Some(Tier::TenMinutes));
+        for bar in RunBar::fixed() {
+            assert_eq!(bar.tier().map(Tier::step_ns), bar.step_ns());
+        }
+    }
+
+    #[test]
+    fn bars_parse_step_and_wrap() {
+        let tokens: Vec<&str> = RunBar::ALL.iter().map(|bar| bar.token()).collect();
+        assert_eq!(
+            tokens,
+            vec![
+                "auto", "1m", "5m", "10m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "18h", "24h"
+            ]
+        );
+        for bar in RunBar::ALL {
+            assert_eq!(RunBar::parse(bar.token()), Some(bar));
+        }
+        assert_eq!(RunBar::parse("3h"), None);
+        assert_eq!(RunBar::Auto.step_ns(), None);
+        assert_eq!(
+            RunBar::EighteenHours.step_ns(),
+            Some(18 * 3_600 * 1_000_000_000)
+        );
+        assert_eq!(RunBar::OneDay.step(true), RunBar::Auto);
+        assert_eq!(RunBar::Auto.step(false), RunBar::OneDay);
+        assert_eq!(RunBar::OneMinute.step(true), RunBar::FiveMinutes);
+        assert_eq!(RunBar::fixed().count(), 12);
+    }
+
+    #[test]
+    fn the_history_filter_holds_a_window_and_a_bar() {
+        assert_eq!(
+            HistoryFilter::parse(""),
+            Some(HistoryFilter {
+                window: "",
+                bar: RunBar::Auto
+            })
+        );
+        assert_eq!(
+            HistoryFilter::parse("6h 30m"),
+            Some(HistoryFilter {
+                window: "6h",
+                bar: RunBar::ThirtyMinutes
+            })
+        );
+        assert_eq!(HistoryFilter::parse("6h 3h"), None, "no such bar");
+        assert_eq!(HistoryFilter::parse("6h 1h 1h"), None);
+        assert_eq!(HistoryFilter::format("1h", RunBar::Auto), "1h");
+        assert_eq!(HistoryFilter::format("1h", RunBar::OneDay), "1h 24h");
+    }
+
+    /// A bucket saved before metrics were added reads with them empty.
+    #[test]
+    fn buckets_of_older_versions_deserialize() {
+        let mut aggregate = Aggregate::default();
+        aggregate.add(3.0);
+        let saved = serde_json::json!({
+            "start_utc_ns": 60,
+            "values": vec![aggregate; 8],
+        });
+        let bucket: RunBucket = serde_json::from_value(saved).unwrap();
+        assert_eq!(bucket.value(RunMetric::HostNetworkTransmit).count, 1);
+        assert_eq!(bucket.value(RunMetric::Threads).count, 0);
+        let newer = serde_json::json!({
+            "start_utc_ns": 60,
+            "values": vec![aggregate; RUN_METRICS + 2],
+        });
+        let bucket: RunBucket = serde_json::from_value(newer).unwrap();
+        assert_eq!(bucket.value(RunMetric::OpenFiles).count, 1);
     }
 
     #[test]

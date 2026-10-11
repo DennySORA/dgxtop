@@ -132,7 +132,7 @@ fn gpu_stats(reader: &MetricReader<'_>, catalog: &CatalogSnapshot) -> Vec<Histor
 }
 
 /// The RAM total, the scale of the memory chart and of a unified GPU's.
-fn ram_total(reader: &MetricReader<'_>) -> Option<f64> {
+pub(crate) fn ram_total(reader: &MetricReader<'_>) -> Option<f64> {
     reader
         .cell(ids::MEMORY_TOTAL, entity::MEMORY, entity::SCOPE_SYSTEM)
         .value_f64()
@@ -153,10 +153,11 @@ fn gpu_series(
             .value_f64()
     };
     let memory = if gpu.has_unified_memory() {
-        (ids::GPU_MEMORY_PROCESS_ALLOCATED, ram_total(reader))
+        ids::GPU_MEMORY_PROCESS_ALLOCATED
     } else {
-        (ids::GPU_MEMORY_FB_USED, gpu_cell(ids::GPU_MEMORY_FB_TOTAL))
+        ids::GPU_MEMORY_FB_USED
     };
+    let memory = (memory, gpu_memory_scale(reader, gpu));
     [
         (
             HistoryChartKind::GpuUtilization,
@@ -175,6 +176,22 @@ fn gpu_series(
             gpu_cell(ids::GPU_POWER_LIMIT),
         ),
     ]
+}
+
+/// The top of a GPU's memory scale: its framebuffer, or on unified memory
+/// the RAM its processes draw from.
+pub(crate) fn gpu_memory_scale(reader: &MetricReader<'_>, gpu: &GpuIdentity<'_>) -> Option<f64> {
+    if gpu.has_unified_memory() {
+        ram_total(reader)
+    } else {
+        reader
+            .cell(
+                ids::GPU_MEMORY_FB_TOTAL,
+                gpu.entity_id.as_str(),
+                entity::SCOPE_GPU,
+            )
+            .value_f64()
+    }
 }
 
 /// Collects the charts whose series the snapshot reports.

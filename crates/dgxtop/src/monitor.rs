@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Sender, bounded};
 use dgxtop_adapters::common::RootedFiles;
 use dgxtop_adapters::process_action::PidfdActionAdapter;
-use dgxtop_adapters::procfs::ProcfsProcessProbe;
+use dgxtop_adapters::procfs::{HostConstants, ProcfsProcessProbe};
 use dgxtop_adapters::replay::ReplayAdapter;
 use dgxtop_collectors::registry::default_collectors;
 use dgxtop_core::action::{ActionOp, AuditOp};
@@ -824,7 +824,11 @@ impl Wiring {
         if self.namespace != Namespace::Live {
             return Ok(None);
         }
-        let probe = ProcfsProcessProbe::new(Arc::new(RootedFiles::host()), Arc::clone(&self.clock));
+        let probe = ProcfsProcessProbe::new(
+            Arc::new(RootedFiles::host()),
+            Arc::clone(&self.clock),
+            HostConstants::from_sysconf().page_size,
+        );
         let handle = spawn_actor(
             "process-probe",
             PROCESS_PROBE_QUEUE,

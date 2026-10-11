@@ -4,8 +4,8 @@ use std::sync::Arc;
 use dgxtop_core::action::Signal;
 use dgxtop_core::identity::{Pid, PidNamespace};
 use dgxtop_core::process_history::{
-    EndCause, ProcessHistoryJournal, RecentHistory, RecentRun, RunBucket, RunBucketRow, RunEnd,
-    RunInfo, RunMetric, Tier,
+    EndCause, ProcessHistoryJournal, RUN_METRICS, RecentHistory, RecentRun, RunBucket,
+    RunBucketRow, RunDetails, RunEnd, RunInfo, RunMetric, Tier,
 };
 use dgxtop_core::testing::{FakeClock, boot_id, host_id};
 
@@ -71,6 +71,13 @@ fn run(pid: i64, last_seen_utc_ns: i64, end: Option<RunEnd>) -> RunInfo {
         started_utc_ns: last_seen_utc_ns - 30 * MINUTE,
         last_seen_utc_ns,
         end,
+        details: RunDetails {
+            parent_pid: Some(7),
+            parent_name: "torchrun".to_owned(),
+            executable: "/venv/bin/python3.12".to_owned(),
+            cgroup: "/user.slice/user-1000.slice/session-3.scope".to_owned(),
+            nice: Some(-5),
+        },
     }
 }
 
@@ -106,11 +113,11 @@ fn runs_and_buckets_survive_a_restart() {
         .append(&ProcessHistoryJournal {
             runs: vec![run(1, now - 2 * MINUTE, None), run(2, now - MINUTE, None)],
             buckets: vec![
-                row(1, Tier::Minute, bucket(now - 3 * MINUTE, 10.0)),
-                row(1, Tier::Minute, bucket(now - 2 * MINUTE, 20.0)),
+                row(1, Tier::OneMinute, bucket(now - 3 * MINUTE, 10.0)),
+                row(1, Tier::OneMinute, bucket(now - 2 * MINUTE, 20.0)),
                 row(1, Tier::TenMinutes, bucket(now - 10 * MINUTE, 15.0)),
                 row(1, Tier::Recent, bucket(now, 99.0)),
-                row(9, Tier::Minute, bucket(now, 1.0)),
+                row(9, Tier::OneMinute, bucket(now, 1.0)),
             ],
         })
         .unwrap();
@@ -131,6 +138,7 @@ fn runs_and_buckets_survive_a_restart() {
     assert_eq!(first.command, "python -m acme_llm.train --epochs 3");
     assert_eq!(first.cwd, "/home/u/code/acme-llm");
     assert_eq!(first.uid, Some(1000));
+    assert_eq!(first.details, run(1, 0, None).details);
     let tiers: Vec<(Tier, i64)> = load
         .buckets
         .iter()
@@ -140,8 +148,8 @@ fn runs_and_buckets_survive_a_restart() {
         tiers,
         vec![
             (Tier::TenMinutes, -10),
-            (Tier::Minute, -3),
-            (Tier::Minute, -2)
+            (Tier::OneMinute, -3),
+            (Tier::OneMinute, -2)
         ],
         "ten minutes, then minutes oldest first; no 5 s bucket, no unknown run"
     );
@@ -201,36 +209,96 @@ fn every_end_cause_is_stored() {
     assert_eq!(loaded, causes);
 }
 
-/// Retention: minute buckets for a day, ten-minute buckets and runs for 7
-/// days.
+/// No run expires by age (D-77); each size keeps a run's latest buckets.
 #[test]
-fn retention_keeps_minutes_a_day_and_runs_a_week() {
+fn retention_keeps_runs_of_any_age_and_each_size_its_latest_buckets() {
     let scratch = Scratch::new("retention");
     let clock = clock();
     let now = now_utc(&clock);
     let day = 24 * 60 * MINUTE;
     let mut store = scratch.open(&clock);
+    let minutes = i64::try_from(Tier::OneMinute.capacity()).unwrap() + 5;
+    let mut buckets: Vec<RunBucketRow> = (0..minutes)
+        .map(|minute| {
+            row(
+                1,
+                Tier::OneMinute,
+                bucket(now - (minutes - minute) * MINUTE, 1.0),
+            )
+        })
+        .collect();
+    buckets.push(row(1, Tier::OneDay, bucket(now - 400 * day, 1.0)));
     store
         .append(&ProcessHistoryJournal {
-            runs: vec![run(1, now, None), run(2, now - 8 * day, None)],
-            buckets: vec![
-                row(1, Tier::Minute, bucket(now - 2 * day, 1.0)),
-                row(1, Tier::Minute, bucket(now - MINUTE, 1.0)),
-                row(1, Tier::TenMinutes, bucket(now - 2 * day, 1.0)),
-                row(1, Tier::TenMinutes, bucket(now - 8 * day, 1.0)),
-            ],
+            runs: vec![run(1, now, None), run(2, now - 400 * day, None)],
+            buckets,
         })
         .unwrap();
     drop(store);
     let mut store = scratch.open(&clock);
     let load = store.load().unwrap();
-    assert_eq!(load.runs.len(), 1, "a run unseen for 8 days is gone");
-    let kept: Vec<(Tier, i64)> = load
+    assert_eq!(load.runs.len(), 2, "a run unseen for 400 days stays");
+    let held = |tier: Tier| {
+        load.buckets
+            .iter()
+            .filter(|row| row.key == key(1) && row.tier == tier)
+            .count()
+    };
+    assert_eq!(held(Tier::OneMinute), Tier::OneMinute.capacity());
+    assert_eq!(held(Tier::OneDay), 1);
+    let first_minute = load
         .buckets
         .iter()
-        .map(|row| (row.tier, (now - row.bucket.start_utc_ns) / day))
+        .find(|row| row.tier == Tier::OneMinute)
+        .unwrap();
+    assert_eq!(
+        first_minute.bucket.start_utc_ns,
+        now - (minutes - 5) * MINUTE,
+        "the oldest gave way"
+    );
+    assert_eq!(load.buckets[0].tier, Tier::OneDay, "coarsest first");
+}
+
+/// Near its size the database lets the ended runs last seen longest ago
+/// go; live runs stay.
+#[test]
+fn a_full_database_lets_the_oldest_ended_runs_go() {
+    let scratch = Scratch::new("full");
+    let clock = clock();
+    let now = now_utc(&clock);
+    let ended = |pid: i64| {
+        run(
+            pid,
+            now - (100 - pid) * MINUTE,
+            Some(RunEnd {
+                utc_ns: now - (100 - pid) * MINUTE,
+                cause: EndCause::Exit(0),
+            }),
+        )
+    };
+    let mut store = scratch.open(&clock).with_max_used_bytes(1);
+    let mut runs: Vec<RunInfo> = (1..=60).map(ended).collect();
+    runs.push(run(99, now - 200 * MINUTE, None));
+    store
+        .append(&ProcessHistoryJournal {
+            runs,
+            buckets: Vec::new(),
+        })
+        .unwrap();
+    drop(store);
+    let mut store = scratch.open(&clock).with_max_used_bytes(1);
+    let kept: Vec<i32> = store
+        .load()
+        .unwrap()
+        .runs
+        .iter()
+        .map(|run| run.key.pid.get())
         .collect();
-    assert_eq!(kept, vec![(Tier::TenMinutes, 2), (Tier::Minute, 0)]);
+    assert_eq!(
+        kept,
+        vec![99],
+        "every ended run gave way, the live one stays"
+    );
 }
 
 /// The short-term file round-trips, is private, and a missing or broken
@@ -247,7 +315,7 @@ fn the_short_term_file_is_replaced_atomically_and_read_back() {
         runs: vec![RecentRun {
             key: key(1),
             recent: vec![bucket(0, 5.0)],
-            filling: vec![(Tier::Minute, bucket(0, 5.0))],
+            filling: vec![(Tier::OneMinute, bucket(0, 5.0))],
         }],
     };
     store.save_recent(&recent).unwrap();
@@ -268,14 +336,94 @@ fn the_short_term_file_is_replaced_atomically_and_read_back() {
 }
 
 #[test]
-fn buckets_pack_into_96_bytes_and_back() {
-    let packed = database::pack(&bucket(MINUTE, 10.0));
-    assert_eq!(packed.len(), 96);
+fn buckets_pack_twelve_bytes_a_metric_and_back() {
+    let mut full = bucket(MINUTE, 10.0);
+    full.add(RunMetric::OpenFiles, Some(12.0));
+    let packed = database::pack(&full);
+    assert_eq!(packed.len(), 12 * RUN_METRICS);
     let back = database::unpack(MINUTE, &packed).unwrap();
     assert_eq!(back.value(RunMetric::Cpu).mean(), Some(20.0));
     assert_eq!(back.value(RunMetric::Cpu).peak(), Some(30.0));
     assert_eq!(back.value(RunMetric::Memory).count, 0);
+    assert_eq!(back.value(RunMetric::OpenFiles).peak(), Some(12.0));
     assert!(database::unpack(0, &packed[..95]).is_none());
+    assert!(database::unpack(0, &[]).is_none());
+    // A bucket of version 2 held the first eight metrics.
+    let older = database::unpack(MINUTE, &packed[..96]).unwrap();
+    assert_eq!(older.value(RunMetric::Cpu).mean(), Some(20.0));
+    assert_eq!(older.value(RunMetric::OpenFiles).count, 0);
+}
+
+/// A version 2 database (D-76) is checked, backed up and upgraded: its
+/// runs and buckets stay, and it takes hour buckets and the run details.
+#[test]
+fn a_version_2_database_upgrades_and_keeps_its_rows() {
+    let scratch = Scratch::new("upgrade");
+    let clock = clock();
+    let now = now_utc(&clock);
+    let path = scratch.0.join("process_history.sqlite3");
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(include_str!("schema_v2.sql"))
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO process_runs (host_id, boot_id, pid_namespace, pid, \
+                 start_time_ticks, name, command, cwd, uid, gpus, started_utc_ns, \
+                 last_seen_utc_ns) VALUES ('host-a', 'boot-a', 'pid:[4026531836]', 1, 700, \
+                 'acme_llm.train', 'python -m acme_llm.train', '/srv', 1000, 'GPU 0', ?1, ?2)",
+                rusqlite::params![now - 30 * MINUTE, now - MINUTE],
+            )
+            .unwrap();
+        let packed = database::pack(&bucket(now - 2 * MINUTE, 10.0));
+        connection
+            .execute(
+                "INSERT INTO process_buckets (run_id, tier, start_utc_ns, aggregates) \
+                 VALUES (1, 1, ?1, ?2)",
+                rusqlite::params![now - 2 * MINUTE, &packed[..96]],
+            )
+            .unwrap();
+    }
+    std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+    let mut store = scratch.open(&clock);
+    let load = store.load().unwrap();
+    assert_eq!(load.runs.len(), 1);
+    assert_eq!(load.runs[0].command, "python -m acme_llm.train");
+    assert_eq!(load.runs[0].details, RunDetails::default());
+    assert_eq!(load.buckets.len(), 1);
+    assert_eq!(
+        load.buckets[0].bucket.value(RunMetric::Cpu).mean(),
+        Some(20.0)
+    );
+    let backups = std::fs::read_dir(&scratch.0)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().contains(".pre-v3-"))
+        .count();
+    assert_eq!(backups, 1, "a backup before the upgrade");
+    let mut hour = bucket(Tier::OneHour.align(now, 0), 5.0);
+    hour.add(RunMetric::Threads, Some(24.0));
+    store
+        .append(&ProcessHistoryJournal {
+            runs: vec![run(1, now, None)],
+            buckets: vec![row(1, Tier::OneHour, hour)],
+        })
+        .unwrap();
+    let rows = store.read_run(&key(1)).unwrap();
+    assert_eq!(rows[0].tier, Tier::OneHour);
+    assert_eq!(rows[0].bucket.value(RunMetric::Threads).peak(), Some(24.0));
+    drop(store);
+    let version: i64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 3);
+    let mut reopened = scratch.open(&clock);
+    assert_eq!(
+        reopened.load().unwrap().runs[0].details,
+        run(1, 0, None).details
+    );
 }
 
 fn failing_gate() -> Result<SqliteVersion, SqliteGateError> {

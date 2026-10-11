@@ -29,6 +29,7 @@ use dgxtop_core::commands::{
 use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::identity::{EntityId, ModuleId, ProcessKey, SessionId};
 use dgxtop_core::ports::SessionPort;
+use dgxtop_core::process_history::{HistoryFilter, RunBar};
 use dgxtop_core::view::{BannerLevel, ViewModel};
 
 use crate::num::saturate_u16;
@@ -632,18 +633,33 @@ impl Controller {
         });
     }
 
+    /// `w`/`W` on the history view: the Overview History's window, or on an
+    /// opened run the Process History's bar size (D-77). The session's
+    /// filter carries both, so either keeps the other.
     fn cycle_history_window(&mut self, forward: bool, context: &ControllerContext<'_>) {
         let label = context
             .model
             .and_then(|model| model.modules.history.as_deref())
             .map(|history| history.window_label.clone());
+        let on_run = self.history_page() == 2;
         self.update_fields(context, |fields| {
-            let current = if HISTORY_WINDOWS.contains(&fields.filter.as_str()) {
-                fields.filter.clone()
+            let filter = HistoryFilter::parse(&fields.filter).unwrap_or(HistoryFilter {
+                window: "",
+                bar: RunBar::Auto,
+            });
+            // A bar needs a window token before it.
+            let window = if HISTORY_WINDOWS.contains(&filter.window) {
+                filter.window.to_owned()
             } else {
-                label.unwrap_or_default()
+                label
+                    .filter(|label| HISTORY_WINDOWS.contains(&label.as_str()))
+                    .unwrap_or_else(|| session::DEFAULT_HISTORY_WINDOW.to_owned())
             };
-            fields.filter = navigation::cycle_window(&current, forward).to_owned();
+            fields.filter = if on_run {
+                HistoryFilter::format(&window, filter.bar.step(forward))
+            } else {
+                HistoryFilter::format(navigation::cycle_window(&window, forward), filter.bar)
+            };
         });
     }
 

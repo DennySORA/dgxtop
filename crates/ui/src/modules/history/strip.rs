@@ -8,20 +8,17 @@
 //!   their colors (D-64); a dotted base where nothing was recorded, so a
 //!   gap never reads as zero. Peaks are not drawn (D-57): the legend gives
 //!   the window's peak;
-//! - the legend: the value now, the mean and the peak over the window (and
-//!   for power the energy), as many as the strip has rows.
+//! - the legend: the value now (or a run's last), the mean and the peak
+//!   (and for power the energy), as many as the strip has rows.
 
 use dgxtop_core::metric::CanonicalUnit;
-use dgxtop_core::view::{
-    HISTORY_GUTTER_COLUMNS, HISTORY_LEGEND_COLUMNS, HistoryChartKind, HistoryChartView,
-    HistoryPointView,
-};
+use dgxtop_core::view::{HISTORY_GUTTER_COLUMNS, HISTORY_LEGEND_COLUMNS, HistoryPointView};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use super::panels::{Paint, Strip};
+use super::panels::{Paint, SeriesState, Strip};
 use crate::format::{CellTone, NOT_AVAILABLE, fixed, format_energy, format_value, pad_left};
 use crate::modules::common::draw_line;
 use crate::registry::DisplayContext;
@@ -37,14 +34,6 @@ const LOADING: &str = "loading…";
 pub(super) struct Window {
     pub(super) start_ns: u64,
     pub(super) end_ns: u64,
-}
-
-impl Window {
-    fn span_seconds(self) -> f64 {
-        #[allow(clippy::cast_precision_loss)]
-        let span = self.end_ns.saturating_sub(self.start_ns) as f64;
-        span / 1e9
-    }
 }
 
 /// Columns of a strip's plot in `width`.
@@ -78,10 +67,7 @@ pub(super) fn render_strip(
         area.right().saturating_sub(legend_x),
         area.height,
     );
-    for (row, line) in legend_lines(strip, window, area.height, context)
-        .iter()
-        .enumerate()
-    {
+    for (row, line) in legend_lines(strip, area.height, context).iter().enumerate() {
         let y = legend.y + u16::try_from(row).unwrap_or(u16::MAX);
         if y < legend.bottom() {
             draw_line(
@@ -105,7 +91,7 @@ fn render_gutter(
     let text_width = usize::from(HISTORY_GUTTER_COLUMNS.saturating_sub(1));
     let scale = strip
         .scale
-        .map(|scale| axis_value(scale, strip.chart.unit))
+        .map(|scale| axis_value(scale, strip.series.unit))
         .unwrap_or_default();
     let last = area.height.saturating_sub(1);
     for row in 0..area.height {
@@ -146,7 +132,7 @@ fn render_plot(
         return;
     }
     let means = columns_of(
-        &strip.chart.points,
+        strip.series.points,
         (window.start_ns, window.end_ns),
         plot.width,
     );
@@ -156,15 +142,16 @@ fn render_plot(
         Paint::Read | Paint::Receive => theme.success,
         Paint::Write => theme.warning,
         Paint::Transmit => theme.accent,
+        Paint::Count => theme.primary,
     };
     let part_columns: Vec<Vec<Option<f64>>> = strip
-        .chart
+        .series
         .parts
         .iter()
         .map(|part| grid_columns(&part.means, plot.width))
         .collect();
     let parts = strip
-        .chart
+        .series
         .parts
         .iter()
         .zip(&part_columns)
@@ -195,29 +182,23 @@ fn render_plot(
 
 /// The legend's lines for `rows` rows: the value now, the mean and the
 /// peak, and for power the energy, from the first that fit.
-fn legend_lines(
-    strip: &Strip<'_>,
-    window: Window,
-    rows: u16,
-    context: &DisplayContext,
-) -> Vec<Line<'static>> {
+fn legend_lines(strip: &Strip<'_>, rows: u16, context: &DisplayContext) -> Vec<Line<'static>> {
     let theme = &context.theme;
-    let chart = strip.chart;
-    if chart.error.is_some() {
+    let series = &strip.series;
+    match series.state {
         // The panel's title says why.
-        return vec![Line::from(Span::styled(
-            "query failed",
-            theme.tone_style(CellTone::Conflict),
-        ))];
+        SeriesState::Failed(_) => {
+            return vec![Line::from(Span::styled(
+                "query failed",
+                theme.tone_style(CellTone::Conflict),
+            ))];
+        }
+        SeriesState::Pending => {
+            return vec![Line::from(Span::styled(LOADING, theme.muted_style()))];
+        }
+        SeriesState::Ready => {}
     }
-    if chart.pending {
-        return vec![Line::from(Span::styled(LOADING, theme.muted_style()))];
-    }
-    let mut entries = vec![
-        ("now", latest(&chart.points)),
-        ("avg", chart.mean),
-        ("max", chart.peak),
-    ];
+    let mut entries = vec![series.latest, ("avg", series.mean), ("max", series.peak)];
     if rows < 3 {
         entries.drain(..3 - usize::from(rows.max(1)));
     }
@@ -226,8 +207,7 @@ fn legend_lines(
         .map(|(label, value)| legend_entry(label, value, strip, context))
         .collect();
     if rows >= 4
-        && chart.kind == HistoryChartKind::GpuPower
-        && let Some(joules) = energy(chart, window)
+        && let Some(joules) = series.energy
     {
         lines.push(Line::from(vec![
             Span::styled("energy ", theme.label_style()),
@@ -254,7 +234,7 @@ fn legend_entry(
                 }
                 _ => theme.text_style(),
             };
-            (format_value(value, strip.chart.unit), style)
+            (format_value(value, strip.series.unit), style)
         }
         None => (NOT_AVAILABLE.to_owned(), theme.muted_style()),
     };
@@ -262,17 +242,6 @@ fn legend_entry(
         Span::styled(format!("{label} "), theme.label_style()),
         Span::styled(text, style),
     ])
-}
-
-/// The newest point's mean.
-fn latest(points: &[HistoryPointView]) -> Option<f64> {
-    points.iter().rev().find_map(|point| point.mean)
-}
-
-/// The energy over the covered part of the window: its mean power times
-/// the time covered.
-fn energy(chart: &HistoryChartView, window: Window) -> Option<f64> {
-    Some(chart.mean? * chart.coverage_ratio? * window.span_seconds())
 }
 
 /// A scale's top in the gutter's few columns: `100%`, `80G`, `2.8M/s`,
@@ -383,7 +352,7 @@ pub(super) fn grid_columns(cells: &[Option<f64>], width: u16) -> Vec<Option<f64>
 pub(super) fn tallest_column(strips: &[Strip<'_>], window: Window, width: u16) -> Option<f64> {
     strips
         .iter()
-        .flat_map(|strip| columns_of(&strip.chart.points, (window.start_ns, window.end_ns), width))
+        .flat_map(|strip| columns_of(strip.series.points, (window.start_ns, window.end_ns), width))
         .flatten()
         .filter(|mean| mean.is_finite() && *mean > 0.0)
         .reduce(f64::max)
@@ -410,11 +379,11 @@ fn column_range(
 
 /// Accessibility text of a strip: `GPU 0: now 90.0% avg 19.2% max 98.0%`.
 pub(super) fn strip_text(strip: &Strip<'_>) -> String {
-    let chart = strip.chart;
+    let series = &strip.series;
     let value = |value: Option<f64>| {
         value.map_or_else(
             || NOT_AVAILABLE.to_owned(),
-            |value| format_value(value, chart.unit),
+            |value| format_value(value, series.unit),
         )
     };
     let label = if strip.label.is_empty() {
@@ -422,11 +391,12 @@ pub(super) fn strip_text(strip: &Strip<'_>) -> String {
     } else {
         format!("{}: ", strip.label)
     };
+    let (latest_label, latest) = series.latest;
     format!(
-        "{label}now {} avg {} max {}",
-        value(latest(&chart.points)),
-        value(chart.mean),
-        value(chart.peak)
+        "{label}{latest_label} {} avg {} max {}",
+        value(latest),
+        value(series.mean),
+        value(series.peak)
     )
 }
 
@@ -436,7 +406,7 @@ mod tests {
     use crate::modules::history::panels::panels;
     use crate::test_fixtures::{GIB, HISTORY_END, display_context, history_view};
     use dgxtop_core::history::HistoryMethod;
-    use dgxtop_core::view::HistoryPart;
+    use dgxtop_core::view::{HistoryChartKind, HistoryPart};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 

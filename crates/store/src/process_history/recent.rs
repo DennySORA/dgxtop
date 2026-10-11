@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::fs::{FileSystemOps, ReadLimitedError};
 
 /// What the file may hold: the live runs' 5 s buckets and filling buckets
-/// come to about 40 KB a run as JSON.
+/// come to about 70 KB a run as JSON.
 const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
 
 pub(super) fn write(
@@ -89,7 +89,7 @@ fn bound(recent: &mut RecentHistory) {
     for run in &mut recent.runs {
         let excess = run.recent.len().saturating_sub(Tier::Recent.capacity());
         run.recent.drain(..excess);
-        run.filling.truncate(3);
+        run.filling.truncate(Tier::ALL.len());
     }
 }
 

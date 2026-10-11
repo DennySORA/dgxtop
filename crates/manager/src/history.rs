@@ -44,6 +44,7 @@ use dgxtop_core::history::{
 };
 use dgxtop_core::identity::{MetricKey, SessionId};
 use dgxtop_core::ports::{ArchiveReadJob, CancelFlag, Dispatch, DispatchError, HistoryJob};
+use dgxtop_core::process_history::HistoryFilter;
 use dgxtop_core::view::{
     DiskHistory, HistoryChartKind, HistoryChartView, HistoryView, HistoryWindowSummary,
     SessionState, history_plot_columns,
@@ -817,7 +818,10 @@ impl HistoryService {
         if state.view != ViewKind::History {
             return None;
         }
-        let window = HistoryWindow::parse(&state.filter).unwrap_or(DEFAULT_WINDOW);
+        // The filter also carries the Process History's bar (D-77).
+        let window = HistoryFilter::parse(&state.filter)
+            .and_then(|filter| HistoryWindow::parse(filter.window))
+            .unwrap_or(DEFAULT_WINDOW);
         let upper = self.settings.max_points.clamp(1, MAX_HISTORY_POINTS);
         let plot_columns = history_plot_columns(columns);
         let points_target = u32::from(plot_columns).clamp(MIN_DISPLAY_POINTS.min(upper), upper);

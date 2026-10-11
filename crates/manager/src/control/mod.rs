@@ -206,7 +206,7 @@ impl ControlCore {
                 probe: ports.process_probe,
                 store: ports.process_history,
             },
-            setup.boot_id.clone(),
+            (setup.boot_id.clone(), setup.facts.utc_offset_s),
             Arc::clone(&ports.logger),
             now,
         );

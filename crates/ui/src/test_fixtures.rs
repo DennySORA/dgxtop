@@ -1021,8 +1021,11 @@ pub(crate) const RUNS_UTC: i64 = 1_791_072_000_000_000_000;
 /// running for 2 h in color 0.
 pub(crate) fn process_history_view() -> dgxtop_core::view::ProcessHistoryView {
     use dgxtop_core::action::Signal;
-    use dgxtop_core::process_history::{EndCause, RunEnd, RunInfo, RunMetric};
-    use dgxtop_core::view::{ProcessHistoryView, RunChartView, RunDetailView, RunRowView};
+    use dgxtop_core::history::HistoryMethod;
+    use dgxtop_core::process_history::{EndCause, RunBar, RunDetails, RunEnd, RunInfo, RunMetric};
+    use dgxtop_core::view::{
+        HistoryPointView, ProcessHistoryView, RunChartView, RunDetailView, RunRowView,
+    };
     const MINUTE: i64 = 60 * 1_000_000_000;
     let ended = RunEnd {
         utc_ns: RUNS_UTC + 90 * MINUTE,
@@ -1039,6 +1042,8 @@ pub(crate) fn process_history_view() -> dgxtop_core::view::ProcessHistoryView {
         peak_gpu_memory: Some(9.0 * GIB),
         mean_gpu_utilization: Some(35.0),
         mean_cpu: Some(110.0),
+        peak_memory: Some(6.5 * GIB),
+        peak_children: Some(3.0),
         slot: None,
     };
     let training = RunRowView {
@@ -1052,20 +1057,51 @@ pub(crate) fn process_history_view() -> dgxtop_core::view::ProcessHistoryView {
         peak_gpu_memory: Some(61.8 * GIB),
         mean_gpu_utilization: Some(97.0),
         mean_cpu: Some(100.0),
+        peak_memory: Some(12.0 * GIB),
+        peak_children: None,
         slot: Some(0),
+    };
+    // A bar a minute over the 30 minutes it ran, in an 80-minute window.
+    let point = |minute: i64, value: f64| HistoryPointView {
+        start_utc_ns: u64::try_from(killed.started_utc_ns + minute * MINUTE).unwrap(),
+        end_utc_ns: u64::try_from(killed.started_utc_ns + (minute + 1) * MINUTE).unwrap(),
+        mean: Some(value),
+        min: None,
+        max: Some(value),
+        method: HistoryMethod::BucketExact,
     };
     let charts = RunMetric::ALL
         .iter()
-        .map(|metric| RunChartView {
-            metric: *metric,
-            unit: match metric {
-                RunMetric::Cpu | RunMetric::GpuUtilization => CanonicalUnit::Percent,
-                RunMetric::Memory | RunMetric::GpuMemory => CanonicalUnit::Bytes,
-                _ => CanonicalUnit::BytesPerSecond,
-            },
-            means: (0..30).map(|minute| Some(f64::from(minute))).collect(),
-            mean: Some(14.5),
-            peak: Some(29.0),
+        .map(|metric| {
+            let (unit, scale_max) = match metric {
+                RunMetric::Cpu | RunMetric::ChildrenCpu => (CanonicalUnit::Percent, Some(2_000.0)),
+                RunMetric::GpuUtilization => (CanonicalUnit::Percent, Some(100.0)),
+                RunMetric::Memory | RunMetric::ChildrenMemory | RunMetric::Swap => {
+                    (CanonicalUnit::Bytes, Some(128.0 * GIB))
+                }
+                RunMetric::GpuMemory => (CanonicalUnit::Bytes, Some(120.0 * GIB)),
+                RunMetric::Threads | RunMetric::Children | RunMetric::OpenFiles => {
+                    (CanonicalUnit::Count, None)
+                }
+                _ => (CanonicalUnit::BytesPerSecond, None),
+            };
+            let top = scale_max.unwrap_or(29.0);
+            RunChartView {
+                metric: *metric,
+                unit,
+                scale_max,
+                points: (0..30)
+                    .map(|minute| {
+                        point(
+                            minute,
+                            top * f64::from(u8::try_from(minute).unwrap()) / 29.0,
+                        )
+                    })
+                    .collect(),
+                mean: Some(top / 2.0),
+                peak: Some(top),
+                latest: Some(top),
+            }
         })
         .collect();
     let opened = RunDetailView {
@@ -1080,11 +1116,19 @@ pub(crate) fn process_history_view() -> dgxtop_core::view::ProcessHistoryView {
             started_utc_ns: killed.started_utc_ns,
             last_seen_utc_ns: ended.utc_ns,
             end: Some(ended),
+            details: RunDetails {
+                parent_pid: Some(7),
+                parent_name: "bash".to_owned(),
+                executable: "/venv/bin/python3.12".to_owned(),
+                cgroup: "/user.slice/user-1000.slice/session-3.scope".to_owned(),
+                nice: Some(0),
+            },
         },
         live: false,
         slot: None,
-        first_utc_ns: killed.started_utc_ns,
-        step_ns: 60 * 1_000_000_000,
+        bar: RunBar::OneMinute,
+        window_start_utc_ns: u64::try_from(ended.utc_ns - 80 * MINUTE).unwrap(),
+        window_end_utc_ns: u64::try_from(ended.utc_ns).unwrap(),
         charts,
         loading: false,
     };
@@ -1094,5 +1138,7 @@ pub(crate) fn process_history_view() -> dgxtop_core::view::ProcessHistoryView {
         opened: Some(opened),
         kept_on_disk: true,
         utc_offset_s: 8 * 3600,
+        bar: RunBar::Auto,
+        cpu_scale: Some(2_000.0),
     }
 }

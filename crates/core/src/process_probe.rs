@@ -1,12 +1,14 @@
-//! What the process history reads of the GPU processes it follows (D-76),
-//! beside the process table: the full command line and working folder, the
-//! bytes a process read and wrote, and how it ended. Read by a
+//! What the process history reads of the GPU processes it follows (D-76,
+//! D-77), beside the process table: the full command line, working folder,
+//! parent, program and control group, the bytes a process read and wrote,
+//! its threads, swap, open files and descendants, and how it ended. Read by a
 //! [`crate::ports::ProcessProbe`] for a few processes at a time, never for
 //! every process on the host.
 
 use serde::{Deserialize, Serialize};
 
 use crate::identity::ProcessKey;
+use crate::process_history::RunDetails;
 
 /// At most this many processes are probed at once.
 pub const MAX_PROBED_PROCESSES: usize = 64;
@@ -15,8 +17,8 @@ pub const MAX_PROBED_PROCESSES: usize = 64;
 /// (cut with `…`).
 pub const MAX_PROBE_TEXT_BYTES: usize = 4096;
 
-/// One process to probe; `with_text` asks for its command line and
-/// working folder too, which the history reads once per process.
+/// One process to probe; `with_text` asks for its command line, working
+/// folder and [`RunDetails`] too, which the history reads once per process.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProbeTarget {
     pub key: ProcessKey,
@@ -65,6 +67,20 @@ pub struct IoCounters {
     pub write_bytes: u64,
 }
 
+/// What a process's descendants (at any depth) use, from their `stat`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChildUsage {
+    /// Descendants running now.
+    pub processes: u64,
+    /// CPU time, clock ticks, of the descendants running now and of those
+    /// reaped since it started (the kernel adds a reaped child's time to its
+    /// parent's): it only grows while the descendants stay in the tree.
+    pub cpu_ticks: u64,
+    /// Resident memory of the descendants running now; `None` without the
+    /// page size.
+    pub rss_bytes: Option<u64>,
+}
+
 /// What was read of one process.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProbeReading {
@@ -78,6 +94,33 @@ pub struct ProbeReading {
     pub cwd: Option<String>,
     /// `None` when the kernel does not let dgxtop read them.
     pub io: Option<IoCounters>,
+    /// Asked with the text; `None` otherwise.
+    pub details: Option<RunDetails>,
+    pub threads: Option<u64>,
+    /// `VmSwap` of its `status`.
+    pub swap_bytes: Option<u64>,
+    /// Entries of its `fd` folder; `None` when unreadable (another user's).
+    pub open_files: Option<u64>,
+    /// `None` when the process list could not be read.
+    pub children: Option<ChildUsage>,
+}
+
+impl ProbeReading {
+    /// A reading of a process that is gone (or another's now).
+    pub fn gone(key: ProcessKey) -> Self {
+        Self {
+            key,
+            liveness: ProbeLiveness::Gone,
+            command: None,
+            cwd: None,
+            io: None,
+            details: None,
+            threads: None,
+            swap_bytes: None,
+            open_files: None,
+            children: None,
+        }
+    }
 }
 
 /// One probe of a set of processes.

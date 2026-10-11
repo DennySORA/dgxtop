@@ -1,11 +1,12 @@
 //! The process history book (D-76): follows every GPU process as a run,
 //! from the first process table that lists it using a GPU until it ends,
-//! and keeps the runs of the last 7 days listed.
+//! and keeps the latest runs listed (D-77: however long ago they ended).
 //!
 //! Each cycle it adds a sample to each live run ([`series`]) and asks the
-//! process probe about the live runs: their command line and working folder
-//! once, their IO counters each cycle, and, for a run the table no longer
-//! lists, whether it ended and how ([`ending`]). Closed buckets and changed
+//! process probe about the live runs: their command line, working folder
+//! and details once, their IO counters, threads, swap, open files and
+//! descendants each cycle (D-77), and, for a run the table no longer lists,
+//! whether it ended and how ([`ending`]). Closed buckets and changed
 //! runs leave through [`ProcessHistoryBook::take_journal`] for the
 //! long-term store; the short-term file takes [`ProcessHistoryBook::recent`].
 //! Nothing here performs I/O.
@@ -23,11 +24,11 @@ use dgxtop_core::canonical::{ProcessRow, ProcessTable};
 use dgxtop_core::identity::{BootId, EntityId, ProcessKey};
 use dgxtop_core::process_history::{
     EndCause, MAX_LISTED_RUNS, MAX_LIVE_RUNS, ProcessHistoryJournal, ProcessHistoryLoad,
-    RUN_METRICS, RUN_RETENTION_NS, RecentHistory, RecentRun, RunBucket, RunBucketRow, RunEnd,
-    RunInfo, RunMetric, Tier,
+    RUN_METRICS, RecentHistory, RecentRun, RunBucket, RunBucketRow, RunEnd, RunInfo, RunMetric,
+    Tier,
 };
 use dgxtop_core::process_probe::{
-    IoCounters, ProbeLiveness, ProbeReading, ProbeReport, ProbeTarget,
+    ChildUsage, IoCounters, ProbeLiveness, ProbeReading, ProbeReport, ProbeTarget,
 };
 
 use self::ending::{EndEvidence, end_cause};
@@ -77,18 +78,35 @@ impl Run {
         self.live.is_some()
     }
 
-    /// The last sample's disk read and write rates, while it runs.
-    pub(crate) fn disk_rates(&self) -> [Option<f64>; 2] {
+    /// What the last probe read of it, while it runs.
+    pub(crate) fn probed(&self) -> Probed {
         self.live
             .as_ref()
-            .map_or([None, None], |live| live.io_rates)
+            .map_or_else(Probed::default, |live| live.probed)
     }
+}
+
+/// What the last probe of a live run read, as the samples take it; `None`
+/// where it could not be read.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct Probed {
+    /// Read and written, bytes per second.
+    pub(crate) disk: [Option<f64>; 2],
+    pub(crate) threads: Option<f64>,
+    pub(crate) children: Option<f64>,
+    /// Percent of one core.
+    pub(crate) children_cpu: Option<f64>,
+    pub(crate) children_memory: Option<f64>,
+    pub(crate) swap: Option<f64>,
+    pub(crate) open_files: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default)]
 struct Live {
     io: Option<(IoCounters, u64)>,
-    io_rates: [Option<f64>; 2],
+    /// The descendants' CPU ticks at the last probe, and when it read them.
+    child_ticks: Option<(u64, u64)>,
+    probed: Probed,
     text_read: bool,
     missing_since_boot_ns: Option<u64>,
     /// Restored at startup and not listed since: if it is gone, it ended
@@ -105,6 +123,10 @@ pub struct ProcessHistoryBook {
     /// The table sampled last (cycle, read time): every committed batch
     /// hands over the snapshot's table, sampled once.
     last_table: Option<(u64, u64)>,
+    /// Clock ticks per second, from the samples, for the descendants' CPU.
+    clk_tck: Option<u64>,
+    /// The local clock's offset, nanoseconds east: where buckets begin.
+    shift_ns: i64,
     journal: ProcessHistoryJournal,
     /// Runs whose buckets were asked of the long-term store.
     reading: BTreeSet<ProcessKey>,
@@ -118,9 +140,18 @@ impl ProcessHistoryBook {
             signals: BTreeMap::new(),
             oom_kills: None,
             last_table: None,
+            clk_tck: None,
+            shift_ns: 0,
             journal: ProcessHistoryJournal::default(),
             reading: BTreeSet::new(),
         }
+    }
+
+    /// Buckets follow the local clock `utc_offset_s` east of UTC, so a
+    /// day's is a local day.
+    pub fn with_utc_offset(mut self, utc_offset_s: i32) -> Self {
+        self.shift_ns = i64::from(utc_offset_s) * 1_000_000_000;
+        self
     }
 
     /// The runs, in key order.
@@ -141,6 +172,9 @@ impl ProcessHistoryBook {
             return;
         }
         self.last_table = Some(identity);
+        if inputs.clk_tck.is_some() {
+            self.clk_tck = inputs.clk_tck;
+        }
         let utc_ns = utc_of(inputs.now);
         let mut listed = BTreeSet::new();
         for row in &table.rows {
@@ -149,7 +183,7 @@ impl ProcessHistoryBook {
                 if row.gpu.is_empty() || self.live_count() >= MAX_LIVE_RUNS {
                     continue;
                 }
-                let run = new_run(row, inputs, utc_ns);
+                let run = new_run(row, inputs, (utc_ns, self.shift_ns));
                 self.runs.insert(row.key.clone(), run);
             }
             let Some(run) = self.runs.get_mut(&row.key) else {
@@ -167,7 +201,7 @@ impl ProcessHistoryBook {
         if !table.truncated {
             self.note_missing(&listed, inputs.now);
         }
-        self.bound(utc_ns);
+        self.bound();
     }
 
     /// The live runs to probe this cycle: first the ones the table lost.
@@ -225,7 +259,7 @@ impl ProcessHistoryBook {
             if self.runs.contains_key(&info.key) {
                 continue;
             }
-            let run = restored_run(info, &self.boot_id, now);
+            let run = restored_run(info, (&self.boot_id, self.shift_ns), now);
             if run.changed {
                 self.journal.runs.push(run.info.clone());
             }
@@ -249,7 +283,30 @@ impl ProcessHistoryBook {
                 }
             }
         }
-        self.bound(utc_of(now));
+        let keys: Vec<ProcessKey> = self.runs.keys().cloned().collect();
+        for key in keys {
+            self.backfill(&key);
+        }
+        self.bound();
+    }
+
+    /// Makes the sizes a run's stored buckets lack from the finer ones
+    /// (D-77), and journals them.
+    fn backfill(&mut self, key: &ProcessKey) {
+        let Some(run) = self.runs.get_mut(key) else {
+            return;
+        };
+        let live = run.is_live();
+        let made = run.series.backfill(live);
+        if !made.is_empty() {
+            self.journal
+                .buckets
+                .extend(made.into_iter().map(|(tier, bucket)| RunBucketRow {
+                    key: key.clone(),
+                    tier,
+                    bucket,
+                }));
+        }
     }
 
     /// A run whose buckets are not in memory, to read from the long-term
@@ -273,6 +330,7 @@ impl ProcessHistoryBook {
                 run.series.restore(row.tier, row.bucket, false);
             }
         }
+        self.backfill(key);
         self.limit_series(Some(key));
     }
 
@@ -325,6 +383,7 @@ impl ProcessHistoryBook {
         now: Now,
     ) {
         let signal = self.signal_of(&reading.key, now);
+        let clk_tck = self.clk_tck;
         let Some(run) = self.runs.get_mut(&reading.key) else {
             return;
         };
@@ -334,6 +393,12 @@ impl ProcessHistoryBook {
         if reading.liveness == ProbeLiveness::Running {
             take_text(&mut run.info, live, reading, &mut run.changed);
             take_io(live, reading.io, read_boot_ns);
+            take_children(live, reading.children, (read_boot_ns, clk_tck));
+            #[allow(clippy::cast_precision_loss)]
+            let count = |value: Option<u64>| value.map(|value| value as f64);
+            live.probed.threads = count(reading.threads);
+            live.probed.swap = count(reading.swap_bytes);
+            live.probed.open_files = count(reading.open_files);
             return;
         }
         // The probe read the process itself after the table did: gone is
@@ -423,12 +488,9 @@ impl ProcessHistoryBook {
             }));
     }
 
-    /// Keeps at most [`MAX_LISTED_RUNS`] runs and none ended longer ago
-    /// than the retention; the ended runs that ended first give way.
-    fn bound(&mut self, utc_ns: i64) {
-        let oldest = utc_ns.saturating_sub(i64::try_from(RUN_RETENTION_NS).unwrap_or(i64::MAX));
-        self.runs
-            .retain(|_, run| run.info.end.is_none_or(|end| end.utc_ns >= oldest));
+    /// Keeps at most [`MAX_LISTED_RUNS`] runs: the ended runs that ended
+    /// first give way.
+    fn bound(&mut self) {
         let excess = self.runs.len().saturating_sub(MAX_LISTED_RUNS);
         if excess > 0 {
             let mut ended: Vec<(i64, ProcessKey)> = self
@@ -471,7 +533,7 @@ fn utc_of(now: Now) -> i64 {
     i64::try_from(now.utc_ns).unwrap_or(i64::MAX)
 }
 
-fn new_run(row: &ProcessRow, inputs: &SampleInputs<'_>, utc_ns: i64) -> Run {
+fn new_run(row: &ProcessRow, inputs: &SampleInputs<'_>, (utc_ns, shift_ns): (i64, i64)) -> Run {
     Run {
         info: RunInfo {
             key: row.key.clone(),
@@ -482,11 +544,12 @@ fn new_run(row: &ProcessRow, inputs: &SampleInputs<'_>, utc_ns: i64) -> Run {
             cwd: String::new(),
             uid: row.uid,
             gpus: Vec::new(),
+            details: dgxtop_core::process_history::RunDetails::default(),
             started_utc_ns: started_utc_ns(&row.key, inputs, utc_ns),
             last_seen_utc_ns: utc_ns,
             end: None,
         },
-        series: RunSeries::default(),
+        series: RunSeries::new(shift_ns),
         live: Some(Live::default()),
         changed: true,
     }
@@ -504,7 +567,7 @@ fn started_utc_ns(key: &ProcessKey, inputs: &SampleInputs<'_>, utc_ns: i64) -> i
     utc_ns.saturating_sub(i64::try_from(ago).unwrap_or(i64::MAX))
 }
 
-fn restored_run(mut info: RunInfo, boot_id: &BootId, now: Now) -> Run {
+fn restored_run(mut info: RunInfo, (boot_id, shift_ns): (&BootId, i64), now: Now) -> Run {
     let mut changed = false;
     let live = if info.end.is_some() {
         None
@@ -524,7 +587,7 @@ fn restored_run(mut info: RunInfo, boot_id: &BootId, now: Now) -> Run {
     };
     Run {
         info,
-        series: RunSeries::default(),
+        series: RunSeries::new(shift_ns),
         live,
         changed,
     }
@@ -563,7 +626,7 @@ fn sample_run(
             run.changed = true;
         }
     }
-    let disk = run.disk_rates();
+    let probed = run.probed();
     let mut sample: Sample = [None; RUN_METRICS];
     sample[RunMetric::Cpu.index()] = row.cpu_percent;
     #[allow(clippy::cast_precision_loss)]
@@ -577,10 +640,16 @@ fn sample_run(
     }
     sample[RunMetric::GpuUtilization.index()] =
         sum_present(row.gpu.iter().map(|link| link.utilization_percent));
-    sample[RunMetric::DiskRead.index()] = disk[0];
-    sample[RunMetric::DiskWrite.index()] = disk[1];
+    sample[RunMetric::DiskRead.index()] = probed.disk[0];
+    sample[RunMetric::DiskWrite.index()] = probed.disk[1];
     sample[RunMetric::HostNetworkReceive.index()] = inputs.host_network[0];
     sample[RunMetric::HostNetworkTransmit.index()] = inputs.host_network[1];
+    sample[RunMetric::Threads.index()] = probed.threads;
+    sample[RunMetric::Children.index()] = probed.children;
+    sample[RunMetric::ChildrenCpu.index()] = probed.children_cpu;
+    sample[RunMetric::ChildrenMemory.index()] = probed.children_memory;
+    sample[RunMetric::Swap.index()] = probed.swap;
+    sample[RunMetric::OpenFiles.index()] = probed.open_files;
     run.series.add(utc_ns, &sample)
 }
 
@@ -608,6 +677,14 @@ fn take_text(info: &mut RunInfo, live: &mut Live, reading: &ProbeReading, change
         info.cwd.clone_from(cwd);
         *changed = true;
     }
+    if let Some(details) = reading
+        .details
+        .as_ref()
+        .filter(|details| **details != info.details)
+    {
+        info.details.clone_from(details);
+        *changed = true;
+    }
 }
 
 /// The disk rates since the previous reading; a counter that went back
@@ -616,7 +693,7 @@ fn take_text(info: &mut RunInfo, live: &mut Live, reading: &ProbeReading, change
 fn take_io(live: &mut Live, io: Option<IoCounters>, read_boot_ns: u64) {
     let Some(io) = io else {
         live.io = None;
-        live.io_rates = [None, None];
+        live.probed.disk = [None, None];
         return;
     };
     if let Some((before, at)) = live.io {
@@ -627,13 +704,44 @@ fn take_io(live: &mut Live, io: Option<IoCounters>, read_boot_ns: u64) {
                 now.checked_sub(then)
                     .map(|bytes| bytes as f64 * NANOS_PER_SECOND as f64 / elapsed as f64)
             };
-            live.io_rates = [
+            live.probed.disk = [
                 rate(io.read_bytes, before.read_bytes),
                 rate(io.write_bytes, before.write_bytes),
             ];
         }
     }
     live.io = Some((io, read_boot_ns));
+}
+
+/// The descendants' count and memory as read, and their CPU since the
+/// previous reading as percent of one core. Their time drops when one
+/// leaves the tree unreaped (a daemon, an orphan): that reading gives no
+/// rate, and the next one counts from it.
+fn take_children(
+    live: &mut Live,
+    children: Option<ChildUsage>,
+    (read_boot_ns, clk_tck): (u64, Option<u64>),
+) {
+    #[allow(clippy::cast_precision_loss)]
+    let count = |value: u64| value as f64;
+    let Some(children) = children else {
+        live.child_ticks = None;
+        live.probed.children = None;
+        live.probed.children_cpu = None;
+        live.probed.children_memory = None;
+        return;
+    };
+    live.probed.children = Some(count(children.processes));
+    live.probed.children_memory = children.rss_bytes.map(count);
+    live.probed.children_cpu = live.child_ticks.and_then(|(before, at)| {
+        let ticks = children.cpu_ticks.checked_sub(before)?;
+        let elapsed = read_boot_ns
+            .checked_sub(at)
+            .filter(|elapsed| *elapsed > 0)?;
+        let per_second = clk_tck.filter(|ticks| *ticks > 0)?;
+        Some(count(ticks) * 100.0 * count(NANOS_PER_SECOND) / count(per_second) / count(elapsed))
+    });
+    live.child_ticks = Some((children.cpu_ticks, read_boot_ns));
 }
 
 #[cfg(test)]

@@ -27,6 +27,7 @@ use dgxtop_core::commands::{MAX_FILTER_BYTES, SortKey, ViewKind};
 use dgxtop_core::errors::{ErrorCode, ErrorDetail};
 use dgxtop_core::identity::{BootId, EntityId, HostId, MetricKey, ProcessKey, SessionId};
 use dgxtop_core::naming::entity;
+use dgxtop_core::process_history::HistoryFilter;
 use dgxtop_core::text::sanitize_display;
 use dgxtop_core::view::SessionState;
 
@@ -347,7 +348,14 @@ fn validate_view(
             .map_or(Ok(()), |gpu| validate_gpu(gpu, stale, context)),
         ViewKind::History => {
             validate_series(update, context)?;
-            if !update.filter.is_empty() && HistoryWindow::parse(&update.filter).is_none() {
+            let Some(filter) = HistoryFilter::parse(&update.filter) else {
+                return Err(ErrorDetail::new(
+                    ErrorCode::ValidationFailed,
+                    "history filter must be a window, then optionally a bar size: \
+                     auto, 1m, 5m, 10m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 18h or 24h",
+                ));
+            };
+            if !filter.window.is_empty() && HistoryWindow::parse(filter.window).is_none() {
                 return Err(ErrorDetail::new(
                     ErrorCode::ValidationFailed,
                     "history window must be one of 5m, 1h, 6h, 12h, 24h",
@@ -692,7 +700,16 @@ mod tests {
         window.filter = "2h".into();
         assert!(apply(&mut bench, window.clone(), &rows, &catalog).is_err());
         window.filter = "24h".into();
-        assert!(apply(&mut bench, window, &rows, &catalog).is_ok());
+        assert!(apply(&mut bench, window.clone(), &rows, &catalog).is_ok());
+        // The window, then the Process History's bar size (D-77).
+        window.filter = "24h 18h".into();
+        assert!(apply(&mut bench, window.clone(), &rows, &catalog).is_ok());
+        window.filter = "24h 3h".into();
+        assert!(apply(&mut bench, window.clone(), &rows, &catalog).is_err());
+        window.filter = "2h 1h".into();
+        assert!(apply(&mut bench, window.clone(), &rows, &catalog).is_err());
+        window.filter = "24h 1h 1h".into();
+        assert!(apply(&mut bench, window, &rows, &catalog).is_err());
         let mut sources = update(ViewKind::Sources, None, None, 0);
         sources.filter = "temp\u{1b}[31m".into();
         apply(&mut bench, sources, &rows, &catalog).unwrap();

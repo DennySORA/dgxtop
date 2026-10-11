@@ -16,7 +16,7 @@ pub use cell::{
     CONFLICT_SYMBOL, CellDetail, CellText, CellTone, cell_tone, describe_cell, kind_tag,
     quality_word, state_label_for_width, value_text,
 };
-pub use clock::{format_local_datetime, format_local_short};
+pub use clock::{format_local_clock, format_local_date, format_local_datetime, format_local_short};
 pub use text::{
     ELLIPSIS, MAX_FIELD_BYTES, clean, display_width, pad_left, pad_right, truncate_to_width,
 };

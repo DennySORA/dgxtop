@@ -1,8 +1,12 @@
-//! The process probe (D-76): what the process history follows of the few
-//! GPU processes it tracks, read from `/proc/<pid>/{stat,io,cmdline,cwd}`
-//! and `/proc/vmstat`. Read-only, like every telemetry adapter; a PID whose
+//! The process probe (D-76, D-77): what the process history follows of the
+//! few GPU processes it tracks, read from `/proc/<pid>/{stat,io,status,fd}`,
+//! once per process `/proc/<pid>/{cmdline,cwd,exe,cgroup}` and the parent's
+//! `comm`, the process tree ([`tree`]) for their descendants, and
+//! `/proc/vmstat`. Read-only, like every telemetry adapter; a PID whose
 //! start time no longer matches the key is another process and reads as
 //! gone.
+
+mod tree;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -10,12 +14,14 @@ use std::sync::Arc;
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::identity::{PidNamespace, ProcessKey};
 use dgxtop_core::ports::ProcessProbe;
+use dgxtop_core::process_history::RunDetails;
 use dgxtop_core::process_probe::{
     ExitStatus, IoCounters, MAX_PROBE_TEXT_BYTES, MAX_PROBED_PROCESSES, ProbeLiveness,
     ProbeReading, ProbeReport, ProbeTarget,
 };
 use dgxtop_core::text::sanitize_display;
 
+use self::tree::ProcessTree;
 use super::command::command_text;
 use super::host::PID_NAMESPACE_PATH;
 use super::mechanics::namespace_link;
@@ -25,21 +31,31 @@ use crate::common::SystemFiles;
 const VMSTAT_PATH: &str = "/proc/vmstat";
 const OOM_KILL_FIELD: &str = "oom_kill";
 const ZOMBIE: char = 'Z';
+const KIB: u64 = 1024;
+/// The unified (v2) hierarchy's line of `/proc/<pid>/cgroup`.
+const UNIFIED_CGROUP: &str = "0::";
 
 /// Probes processes through `files` (the host's `/proc` in production).
 pub struct ProcfsProcessProbe {
     files: Arc<dyn SystemFiles>,
     clock: Arc<dyn TimeProvider>,
+    /// Bytes of a memory page, to count the descendants' resident memory.
+    page_size: Option<u64>,
     /// Ours, read on the first probe; a key of another namespace is not
     /// a process this probe can see.
     namespace: Option<Option<PidNamespace>>,
 }
 
 impl ProcfsProcessProbe {
-    pub fn new(files: Arc<dyn SystemFiles>, clock: Arc<dyn TimeProvider>) -> Self {
+    pub fn new(
+        files: Arc<dyn SystemFiles>,
+        clock: Arc<dyn TimeProvider>,
+        page_size: Option<u64>,
+    ) -> Self {
         Self {
             files,
             clock,
+            page_size,
             namespace: None,
         }
     }
@@ -54,20 +70,18 @@ impl ProcfsProcessProbe {
             .as_ref()
     }
 
-    fn read(&self, target: &ProbeTarget, visible: bool) -> ProbeReading {
+    fn read(
+        &self,
+        target: &ProbeTarget,
+        visible: bool,
+        tree: Option<&ProcessTree>,
+    ) -> ProbeReading {
         let key = &target.key;
-        let gone = || ProbeReading {
-            key: key.clone(),
-            liveness: ProbeLiveness::Gone,
-            command: None,
-            cwd: None,
-            io: None,
-        };
         if !visible {
-            return gone();
+            return ProbeReading::gone(key.clone());
         }
         let Some(stat) = self.stat_of(key) else {
-            return gone();
+            return ProbeReading::gone(key.clone());
         };
         let pid = key.pid;
         let io = self
@@ -76,13 +90,66 @@ impl ProcfsProcessProbe {
             .ok()
             .and_then(|text| parse_io(&text));
         let liveness = liveness_of(&stat, io.is_some());
-        let wants_text = target.with_text && liveness == ProbeLiveness::Running;
-        ProbeReading {
-            key: key.clone(),
+        let mut reading = ProbeReading {
             liveness,
-            command: wants_text.then(|| self.command_of(key)).flatten(),
-            cwd: wants_text.then(|| self.cwd_of(key)).flatten(),
             io,
+            ..ProbeReading::gone(key.clone())
+        };
+        if liveness != ProbeLiveness::Running {
+            return reading;
+        }
+        if target.with_text {
+            reading.command = self.command_of(key);
+            reading.cwd = self.cwd_of(key);
+            reading.details = Some(self.details_of(key, &stat));
+        }
+        reading.threads = stat.num_threads;
+        reading.swap_bytes = self
+            .files
+            .read_to_string(&format!("/proc/{pid}/status"))
+            .ok()
+            .and_then(|text| field_value(&text, "VmSwap:"))
+            .map(|kib| kib.saturating_mul(KIB));
+        reading.open_files = self
+            .files
+            .read_dir(&format!("/proc/{pid}/fd"))
+            .ok()
+            .map(|entries| u64::try_from(entries.len()).unwrap_or(u64::MAX));
+        reading.children = tree.map(|tree| tree.usage_of(stat.pid, self.page_size));
+        reading
+    }
+
+    /// Its parent, program, control group and niceness.
+    fn details_of(&self, key: &ProcessKey, stat: &PidStat) -> RunDetails {
+        let parent_pid = stat
+            .ppid
+            .and_then(|ppid| i32::try_from(ppid).ok())
+            .filter(|ppid| *ppid > 0);
+        let parent_name = parent_pid
+            .and_then(|ppid| {
+                self.files
+                    .read_to_string(&format!("/proc/{ppid}/comm"))
+                    .ok()
+            })
+            .map(|comm| sanitize_display(comm.trim_end(), MAX_PROBE_TEXT_BYTES))
+            .unwrap_or_default();
+        let pid = key.pid;
+        RunDetails {
+            parent_pid,
+            parent_name,
+            executable: self
+                .files
+                .read_link(&format!("/proc/{pid}/exe"))
+                .ok()
+                .and_then(|path| path_text(&path))
+                .unwrap_or_default(),
+            cgroup: self
+                .files
+                .read_to_string(&format!("/proc/{pid}/cgroup"))
+                .ok()
+                .and_then(|text| cgroup_path(&text))
+                .unwrap_or_default(),
+            nice: stat.nice.and_then(|nice| i8::try_from(nice).ok()),
         }
     }
 
@@ -124,13 +191,16 @@ impl ProcfsProcessProbe {
 impl ProcessProbe for ProcfsProcessProbe {
     fn probe(&mut self, targets: &[ProbeTarget]) -> ProbeReport {
         let own = self.own_namespace().cloned();
+        let targets = &targets[..targets.len().min(MAX_PROBED_PROCESSES)];
+        let visible = |target: &ProbeTarget| own.as_ref() == Some(&target.key.pid_namespace);
+        let tree = targets
+            .iter()
+            .any(visible)
+            .then(|| ProcessTree::scan(&*self.files))
+            .flatten();
         let readings = targets
             .iter()
-            .take(MAX_PROBED_PROCESSES)
-            .map(|target| {
-                let visible = own.as_ref() == Some(&target.key.pid_namespace);
-                self.read(target, visible)
-            })
+            .map(|target| self.read(target, visible(target), tree.as_ref()))
             .collect();
         ProbeReport {
             readings,
@@ -173,6 +243,19 @@ fn field_value(text: &str, name: &str) -> Option<u64> {
         let mut words = line.split_whitespace();
         (words.next()? == name).then(|| words.next()?.parse().ok())?
     })
+}
+
+/// The path of the unified hierarchy's line, else of the first line that
+/// names one (`/user.slice/user-1000.slice/session-3.scope`).
+fn cgroup_path(text: &str) -> Option<String> {
+    let path_of = |line: &str| line.splitn(3, ':').nth(2).map(str::to_owned);
+    let path = text
+        .lines()
+        .find(|line| line.starts_with(UNIFIED_CGROUP))
+        .and_then(path_of)
+        .or_else(|| text.lines().find_map(path_of))?;
+    let cleaned = sanitize_display(path.trim(), MAX_PROBE_TEXT_BYTES);
+    (!cleaned.is_empty()).then_some(cleaned)
 }
 
 /// A path as shown: cleaned of control characters and bounded.

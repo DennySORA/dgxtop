@@ -55,12 +55,12 @@ pub(crate) struct ProcessHistoryService {
 impl ProcessHistoryService {
     pub(crate) fn new(
         ports: ProcessHistoryPorts,
-        boot_id: BootId,
+        (boot_id, utc_offset_s): (BootId, i32),
         logger: Arc<dyn Logger>,
         now_ns: u64,
     ) -> Self {
         Self {
-            book: ProcessHistoryBook::new(boot_id),
+            book: ProcessHistoryBook::new(boot_id).with_utc_offset(utc_offset_s),
             probe: ports.probe,
             store: ports.store,
             logger,
@@ -283,7 +283,7 @@ mod tests {
                 probe: Some(Box::new(probe.clone())),
                 store: Some(Box::new(store.clone())),
             },
-            boot_id("boot-test"),
+            (boot_id("boot-test"), 0),
             Arc::new(MemoryLogger::default()),
             0,
         );

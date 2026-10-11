@@ -1,7 +1,7 @@
-//! Rows of the process history database (D-76): runs upserted by their
-//! key, closed buckets packed into 96-byte aggregates, retention, and the
-//! reads at startup and for one run. Only prepared statements with bound
-//! parameters.
+//! Rows of the process history database (D-76, D-77): runs upserted by
+//! their key, closed buckets packed into 12 bytes a metric, retention, and
+//! the reads at startup and for one run. Only prepared statements with
+//! bound parameters.
 
 use std::time::Duration;
 
@@ -9,8 +9,8 @@ use dgxtop_core::action::Signal;
 use dgxtop_core::errors::InfraError;
 use dgxtop_core::identity::{BootId, HostId, Pid, PidNamespace, ProcessKey};
 use dgxtop_core::process_history::{
-    Aggregate, EndCause, MAX_LISTED_RUNS, ProcessHistoryJournal, RUN_METRICS, RUN_RETENTION_NS,
-    RunBucket, RunBucketRow, RunEnd, RunInfo, Tier,
+    Aggregate, EndCause, MAX_LISTED_RUNS, ProcessHistoryJournal, RUN_METRICS, RunBucket,
+    RunBucketRow, RunDetails, RunEnd, RunInfo, Tier,
 };
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
@@ -20,18 +20,18 @@ use crate::sqlite::{StepError, TxError, describe, immediate_transaction};
 const BUSY_DEADLINE: Duration = Duration::from_millis(500);
 const AGGREGATE_BYTES: usize = 12;
 const PACKED_BYTES: usize = AGGREGATE_BYTES * RUN_METRICS;
-/// Minute buckets a run's read returns (the history keeps 6 hours of them
-/// in memory); its ten-minute buckets cover the rest.
-const MINUTES_READ: i64 = 360;
+/// The most a stored bucket may hold (the schema's limit).
+const MAX_PACKED_BYTES: usize = 1200;
 /// Ended runs whose buckets the startup load returns, the latest first.
 const ENDED_RUNS_WITH_BUCKETS: i64 = 32;
 /// Runs kept at most; the ones last seen longest ago give way.
 const MAX_STORED_RUNS: i64 = 2000;
-const DAY_NS: i64 = 86_400 * 1_000_000_000;
+/// Ended runs a pass over a database near its size gives way at once.
+const RUNS_GIVING_WAY: i64 = 50;
 
 const RUN_COLUMNS: &str = "run_id, host_id, boot_id, pid_namespace, pid, start_time_ticks, \
     name, command, cwd, uid, gpus, started_utc_ns, last_seen_utc_ns, ended_utc_ns, \
-    end_cause, end_code";
+    end_cause, end_code, parent_pid, parent_name, executable, cgroup, nice";
 
 /// Upserts the journal's runs, then inserts its buckets (a bucket written
 /// again replaces the earlier one).
@@ -46,6 +46,7 @@ pub(super) fn append(
         for run in &journal.runs {
             upsert_run(transaction, run)?;
         }
+        let mut touched = std::collections::BTreeSet::new();
         for row in &journal.buckets {
             let Some(tier) = stored_tier(row.tier) else {
                 continue;
@@ -53,6 +54,7 @@ pub(super) fn append(
             let Some(run_id) = run_id(transaction, &row.key)? else {
                 continue;
             };
+            touched.insert((run_id, row.tier));
             transaction
                 .prepare_cached(
                     "INSERT OR REPLACE INTO process_buckets \
@@ -65,6 +67,9 @@ pub(super) fn append(
                     pack(&row.bucket)
                 ])?;
         }
+        for (run_id, tier) in touched {
+            keep_latest(transaction, run_id, tier)?;
+        }
         Ok::<_, StepError<()>>(())
     })
     .map_err(|error| tx_error("process_history.append", error))?;
@@ -74,31 +79,54 @@ pub(super) fn append(
         .map_err(|error| sqlite_error("process_history.checkpoint", &error))
 }
 
-/// Minute buckets older than a day, ten-minute buckets and runs older than
-/// the retention, and runs beyond the cap.
-pub(super) fn retain(connection: &mut Connection, now_utc_ns: i64) -> Result<(), InfraError> {
-    let retention = i64::try_from(RUN_RETENTION_NS).unwrap_or(i64::MAX);
+/// Each size keeps a run's latest [`Tier::capacity`] buckets (D-77): the
+/// older ones are in the coarser sizes already.
+fn keep_latest(transaction: &Transaction<'_>, run_id: i64, tier: Tier) -> rusqlite::Result<()> {
+    let keep = i64::try_from(tier.capacity()).unwrap_or(i64::MAX);
+    transaction
+        .prepare_cached(
+            "DELETE FROM process_buckets WHERE run_id = ?1 AND tier = ?2 AND start_utc_ns < \
+             (SELECT start_utc_ns FROM process_buckets WHERE run_id = ?1 AND tier = ?2 \
+              ORDER BY start_utc_ns DESC LIMIT 1 OFFSET ?3)",
+        )?
+        .execute(params![run_id, tier.code(), keep - 1])?;
+    Ok(())
+}
+
+/// Runs beyond the cap, and while the database holds more than
+/// `max_used_bytes`, the ended runs last seen longest ago (D-77: no run
+/// expires by age).
+pub(super) fn retain(connection: &mut Connection, max_used_bytes: u64) -> Result<(), InfraError> {
     immediate_transaction(connection, BUSY_DEADLINE, |transaction| {
-        transaction.execute(
-            "DELETE FROM process_buckets WHERE tier = 1 AND start_utc_ns < ?1",
-            params![now_utc_ns.saturating_sub(DAY_NS)],
-        )?;
-        transaction.execute(
-            "DELETE FROM process_buckets WHERE tier = 2 AND start_utc_ns < ?1",
-            params![now_utc_ns.saturating_sub(retention)],
-        )?;
-        transaction.execute(
-            "DELETE FROM process_runs WHERE last_seen_utc_ns < ?1",
-            params![now_utc_ns.saturating_sub(retention)],
-        )?;
         transaction.execute(
             "DELETE FROM process_runs WHERE run_id NOT IN \
              (SELECT run_id FROM process_runs ORDER BY last_seen_utc_ns DESC LIMIT ?1)",
             params![MAX_STORED_RUNS],
         )?;
+        while used_bytes(transaction)? > max_used_bytes {
+            let removed = transaction.execute(
+                "DELETE FROM process_runs WHERE run_id IN (SELECT run_id FROM process_runs \
+                 WHERE ended_utc_ns IS NOT NULL ORDER BY last_seen_utc_ns LIMIT ?1)",
+                params![RUNS_GIVING_WAY],
+            )?;
+            if removed == 0 {
+                break;
+            }
+        }
         Ok::<_, StepError<()>>(())
     })
     .map_err(|error| tx_error("process_history.retain", error))
+}
+
+/// Bytes of the pages in use (the free ones are reused before it grows).
+fn used_bytes(connection: &Connection) -> rusqlite::Result<u64> {
+    let pragma = |name: &str| -> rusqlite::Result<u64> {
+        connection
+            .query_row(&format!("PRAGMA {name}"), [], |row| row.get::<_, i64>(0))
+            .map(|value| u64::try_from(value).unwrap_or(0))
+    };
+    let pages = pragma("page_count")?.saturating_sub(pragma("freelist_count")?);
+    Ok(pages.saturating_mul(pragma("page_size")?))
 }
 
 /// The runs the history lists (the last seen first), and the buckets of
@@ -160,12 +188,12 @@ fn buckets_of(
     run_id: i64,
     key: &ProcessKey,
 ) -> Result<Vec<RunBucketRow>, InfraError> {
-    let read = |sql: &str, limit: i64| -> Result<Vec<RunBucketRow>, InfraError> {
+    let read = |sql: &str, (limit, tier): (i64, i64)| -> Result<Vec<RunBucketRow>, InfraError> {
         let mut statement = connection
             .prepare_cached(sql)
             .map_err(|error| sqlite_error("process_history.buckets", &error))?;
         let rows = statement
-            .query_map(params![run_id, limit], |row| {
+            .query_map(params![run_id, limit, tier], |row| {
                 let tier: i64 = row.get(0)?;
                 let start: i64 = row.get(1)?;
                 let packed: Vec<u8> = row.get(2)?;
@@ -182,35 +210,42 @@ fn buckets_of(
             })
             .collect())
     };
-    let mut minutes = read(
-        "SELECT tier, start_utc_ns, aggregates FROM process_buckets \
-         WHERE run_id = ?1 AND tier = 1 ORDER BY start_utc_ns DESC LIMIT ?2",
-        MINUTES_READ,
-    )?;
-    minutes.reverse();
-    let mut rows = read(
-        "SELECT tier, start_utc_ns, aggregates FROM process_buckets \
-         WHERE run_id = ?1 AND tier = 2 ORDER BY start_utc_ns LIMIT ?2",
-        i64::try_from(Tier::TenMinutes.capacity()).unwrap_or(i64::MAX),
-    )?;
-    rows.extend(minutes);
+    let mut rows = Vec::new();
+    // Coarsest first, each oldest first.
+    for tier in Tier::ALL.into_iter().skip(1).rev() {
+        // The latest of each tier, as many as the history keeps in memory.
+        let mut latest = read(
+            "SELECT tier, start_utc_ns, aggregates FROM process_buckets \
+             WHERE run_id = ?1 AND tier = ?3 ORDER BY start_utc_ns DESC LIMIT ?2",
+            (
+                i64::try_from(tier.capacity()).unwrap_or(i64::MAX),
+                tier.code(),
+            ),
+        )?;
+        latest.reverse();
+        rows.extend(latest);
+    }
     Ok(rows)
 }
 
 fn upsert_run(transaction: &Transaction<'_>, run: &RunInfo) -> rusqlite::Result<()> {
     let (cause, code) = run.end.map_or((None, None), |end| cause_columns(end.cause));
     let key = &run.key;
+    let details = &run.details;
     transaction
         .prepare_cached(
             "INSERT INTO process_runs (host_id, boot_id, pid_namespace, pid, start_time_ticks, \
              name, command, cwd, uid, gpus, started_utc_ns, last_seen_utc_ns, ended_utc_ns, \
-             end_cause, end_code) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15) \
+             end_cause, end_code, parent_pid, parent_name, executable, cgroup, nice) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, \
+             ?18, ?19, ?20) \
              ON CONFLICT (host_id, boot_id, pid_namespace, pid, start_time_ticks) DO UPDATE SET \
              name = excluded.name, command = excluded.command, cwd = excluded.cwd, \
              uid = excluded.uid, gpus = excluded.gpus, started_utc_ns = excluded.started_utc_ns, \
              last_seen_utc_ns = excluded.last_seen_utc_ns, ended_utc_ns = excluded.ended_utc_ns, \
-             end_cause = excluded.end_cause, end_code = excluded.end_code",
+             end_cause = excluded.end_cause, end_code = excluded.end_code, \
+             parent_pid = excluded.parent_pid, parent_name = excluded.parent_name, \
+             executable = excluded.executable, cgroup = excluded.cgroup, nice = excluded.nice",
         )?
         .execute(params![
             key.host_id.as_str(),
@@ -228,6 +263,11 @@ fn upsert_run(transaction: &Transaction<'_>, run: &RunInfo) -> rusqlite::Result<
             run.end.map(|end| end.utc_ns),
             cause,
             code,
+            details.parent_pid,
+            details.parent_name,
+            details.executable,
+            details.cgroup,
+            details.nice,
         ])?;
     Ok(())
 }
@@ -292,6 +332,17 @@ fn run_of(row: &Row<'_>) -> rusqlite::Result<Option<(i64, RunInfo)>> {
             started_utc_ns: row.get(11)?,
             last_seen_utc_ns: row.get(12)?,
             end,
+            details: RunDetails {
+                parent_pid: row
+                    .get::<_, Option<i64>>(16)?
+                    .and_then(|pid| i32::try_from(pid).ok()),
+                parent_name: row.get(17)?,
+                executable: row.get(18)?,
+                cgroup: row.get(19)?,
+                nice: row
+                    .get::<_, Option<i64>>(20)?
+                    .and_then(|nice| i8::try_from(nice).ok()),
+            },
         },
     )))
 }
@@ -325,13 +376,10 @@ fn cause_of(text: &str, code: Option<i64>) -> Option<EndCause> {
     })
 }
 
-/// Only minutes and ten minutes are stored; the 5 s buckets are the
+/// Every size of a minute and more is stored; the 5 s buckets are the
 /// short-term file's.
-const fn stored_tier(tier: Tier) -> Option<i64> {
-    match tier {
-        Tier::Recent => None,
-        Tier::Minute | Tier::TenMinutes => Some(tier.code()),
-    }
+fn stored_tier(tier: Tier) -> Option<i64> {
+    (tier != Tier::Recent).then(|| tier.code())
 }
 
 /// Per metric: count, mean and peak, little-endian.
@@ -347,8 +395,13 @@ pub(super) fn pack(bucket: &RunBucket) -> Vec<u8> {
     packed
 }
 
+/// A stored bucket of any version: the metrics it holds, in order; the
+/// ones it does not are empty (D-77).
 pub(super) fn unpack(start_utc_ns: i64, packed: &[u8]) -> Option<RunBucket> {
-    if packed.len() != PACKED_BYTES {
+    if packed.is_empty()
+        || packed.len() > MAX_PACKED_BYTES
+        || !packed.len().is_multiple_of(AGGREGATE_BYTES)
+    {
         return None;
     }
     let mut bucket = RunBucket::new(start_utc_ns);

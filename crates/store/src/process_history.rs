@@ -1,13 +1,16 @@
-//! The process history's stores (D-76): a long-term SQLite database of runs
-//! with their minute buckets for 24 hours and ten-minute buckets for 7 days
+//! The process history's stores (D-76, D-77): a long-term SQLite database
+//! of runs with the latest buckets of each size, 1 minute to 24 hours
 //! ([`database`]), and a short-term JSON file of the live runs' 5 s
-//! buckets, replaced atomically every 30 s ([`recent`]).
+//! buckets and the buckets being filled, replaced atomically every 30 s
+//! ([`recent`]).
 //!
 //! The database is opened like the other partitions (0600, no symlinks,
 //! schema and integrity checked before any write, `max_page_count`); an
 //! unusable one makes every call fail with its reason, and the history
-//! stays in memory. A bucket packs its eight aggregates into 96 bytes, so a
-//! run costs about 170 KB a day however busy it is.
+//! stays in memory. A bucket packs 12 bytes a metric; a run keeps at most
+//! 300 buckets a size, so at most about a megabyte however long it runs.
+//! No run expires by age: past [`MAX_USED_BYTES`] the ended runs last seen
+//! longest ago give way.
 
 mod database;
 mod recent;
@@ -36,6 +39,9 @@ const LIMIT_BYTES: u64 = 64 * MIB;
 const WAL_CHECKPOINT_BYTES: u64 = 4 * MIB;
 const WAL_STOP_BYTES: u64 = 16 * MIB;
 const MIN_FREE_DISK_BYTES: u64 = 64 * MIB;
+/// The pages in use past which ended runs give way: room left for the WAL
+/// and the live runs' growth below the limit.
+const MAX_USED_BYTES: u64 = 48 * MIB;
 /// Retention runs at most this often (boot clock).
 const RETENTION_EVERY_NS: u64 = 3_600 * 1_000_000_000;
 
@@ -46,6 +52,7 @@ pub struct ProcessHistoryFiles {
     fs: Box<dyn FileSystemOps>,
     clock: Arc<dyn TimeProvider>,
     last_retention_boot_ns: Option<u64>,
+    max_used_bytes: u64,
 }
 
 impl std::fmt::Debug for ProcessHistoryFiles {
@@ -100,6 +107,7 @@ impl ProcessHistoryFiles {
             fs,
             clock,
             last_retention_boot_ns: None,
+            max_used_bytes: MAX_USED_BYTES,
         }
     }
 
@@ -109,8 +117,10 @@ impl ProcessHistoryFiles {
         })
     }
 
-    fn now_utc_ns(&self) -> i64 {
-        i64::try_from(self.clock.now_utc_ns()).unwrap_or(i64::MAX)
+    #[cfg(test)]
+    fn with_max_used_bytes(mut self, bytes: u64) -> Self {
+        self.max_used_bytes = bytes;
+        self
     }
 
     /// Retention when it is due: at the first call and then hourly.
@@ -122,8 +132,8 @@ impl ProcessHistoryFiles {
         if !due {
             return Ok(());
         }
-        let utc = self.now_utc_ns();
-        database::retain(self.connection()?, utc)?;
+        let max_used_bytes = self.max_used_bytes;
+        database::retain(self.connection()?, max_used_bytes)?;
         self.last_retention_boot_ns = Some(now);
         Ok(())
     }

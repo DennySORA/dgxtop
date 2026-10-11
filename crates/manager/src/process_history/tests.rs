@@ -3,9 +3,11 @@ use std::collections::BTreeMap;
 use dgxtop_core::action::Signal;
 use dgxtop_core::canonical::{ProcessRow, ProcessTable};
 use dgxtop_core::identity::{EntityId, ProcessKey};
-use dgxtop_core::process_history::{EndCause, ProcessHistoryLoad, RunBucket, RunMetric, Tier};
+use dgxtop_core::process_history::{
+    EndCause, ProcessHistoryLoad, RunBucket, RunDetails, RunMetric, Tier,
+};
 use dgxtop_core::process_probe::{
-    ExitStatus, IoCounters, ProbeLiveness, ProbeReading, ProbeReport,
+    ChildUsage, ExitStatus, IoCounters, ProbeLiveness, ProbeReading, ProbeReport,
 };
 use dgxtop_core::testing::boot_id;
 
@@ -68,14 +70,12 @@ fn key(pid: i64) -> ProcessKey {
 
 fn reading(pid: i64, liveness: ProbeLiveness, io: Option<(u64, u64)>) -> ProbeReading {
     ProbeReading {
-        key: key(pid),
         liveness,
-        command: None,
-        cwd: None,
         io: io.map(|(read_bytes, write_bytes)| IoCounters {
             read_bytes,
             write_bytes,
         }),
+        ..ProbeReading::gone(key(pid))
     }
 }
 
@@ -133,7 +133,7 @@ fn samples_aggregate_the_run_and_minutes_reach_the_journal() {
     let minutes: Vec<&RunBucket> = journal
         .buckets
         .iter()
-        .filter(|row| row.tier == Tier::Minute)
+        .filter(|row| row.tier == Tier::OneMinute)
         .map(|row| &row.bucket)
         .collect();
     assert_eq!(minutes.len(), 1);
@@ -173,7 +173,7 @@ fn probes_give_disk_rates_and_the_full_command() {
         now(3),
     );
     let run = book.run(&key(9)).unwrap();
-    assert_eq!(run.disk_rates(), [Some(2_000.0), Some(1_000.0)]);
+    assert_eq!(run.probed().disk, [Some(2_000.0), Some(1_000.0)]);
     assert_eq!(run.info().cwd, "/home/u/code/acme-llm");
     assert!(run.info().command.ends_with("--data /srv/acme"));
     assert!(!book.probe_targets()[0].with_text, "texts are read once");
@@ -188,6 +188,76 @@ fn probes_give_disk_rates_and_the_full_command() {
         recent.last().unwrap().value(RunMetric::DiskRead).mean(),
         Some(2_000.0)
     );
+}
+
+/// The probe's threads, swap, open files and descendants become samples
+/// (D-77): the descendants' CPU from their ticks since the last reading;
+/// its details are read once with the text.
+#[test]
+fn probes_give_threads_swap_files_and_descendants() {
+    let mut book = book();
+    observe(&mut book, 1, vec![row(9, 10.0, Some(GIB))]);
+    let probed = |second: u64, ticks: u64, details: Option<RunDetails>| {
+        let mut probed = reading(9, ProbeLiveness::Running, None);
+        probed.threads = Some(24);
+        probed.swap_bytes = Some(4096);
+        probed.open_files = Some(31);
+        probed.children = Some(ChildUsage {
+            processes: 4,
+            cpu_ticks: ticks,
+            rss_bytes: Some(3 * GIB),
+        });
+        probed.details = details;
+        report(second, None, vec![probed])
+    };
+    let details = RunDetails {
+        parent_pid: Some(7),
+        parent_name: "torchrun".to_owned(),
+        executable: "/venv/bin/python3.12".to_owned(),
+        cgroup: "/user.slice".to_owned(),
+        nice: Some(0),
+    };
+    book.on_probe(&probed(1, 1_000, Some(details.clone())), now(1));
+    assert_eq!(
+        book.run(&key(9)).unwrap().probed().children_cpu,
+        None,
+        "a rate needs two readings"
+    );
+    // 300 ticks in 2 s at 100 a second: one and a half cores.
+    book.on_probe(&probed(3, 1_300, None), now(3));
+    let run = book.run(&key(9)).unwrap();
+    let values = run.probed();
+    assert_eq!(values.children_cpu, Some(150.0));
+    assert_eq!(values.children, Some(4.0));
+    #[allow(clippy::cast_precision_loss)]
+    let held = (3 * GIB) as f64;
+    assert_eq!(values.children_memory, Some(held));
+    assert_eq!(
+        (values.threads, values.swap, values.open_files),
+        (Some(24.0), Some(4096.0), Some(31.0))
+    );
+    assert_eq!(run.info().details, details);
+    // A descendant that left the tree unreaped takes its time along: no
+    // rate for that reading.
+    book.on_probe(&probed(4, 900, None), now(4));
+    assert_eq!(book.run(&key(9)).unwrap().probed().children_cpu, None);
+    observe(&mut book, 5, vec![row(9, 10.0, Some(GIB))]);
+    let bucket = *book
+        .run(&key(9))
+        .unwrap()
+        .series()
+        .buckets(Tier::Recent)
+        .last()
+        .unwrap();
+    assert_eq!(bucket.value(RunMetric::Threads).mean(), Some(24.0));
+    assert_eq!(bucket.value(RunMetric::Children).mean(), Some(4.0));
+    assert_eq!(bucket.value(RunMetric::OpenFiles).mean(), Some(31.0));
+    assert_eq!(bucket.value(RunMetric::ChildrenCpu).count, 0);
+    // A list that could not be read: the descendants are unknown.
+    let mut unknown = reading(9, ProbeLiveness::Running, None);
+    unknown.children = None;
+    book.on_probe(&report(6, None, vec![unknown]), now(6));
+    assert_eq!(book.run(&key(9)).unwrap().probed().children, None);
 }
 
 /// A run the table stops listing ends as its probe says: dgxtop's own
@@ -247,7 +317,10 @@ fn runs_end_with_the_cause_the_probe_shows() {
     assert!(book.probe_targets().is_empty());
     let journal = book.take_journal();
     assert!(
-        journal.buckets.iter().any(|row| row.tier == Tier::Minute),
+        journal
+            .buckets
+            .iter()
+            .any(|row| row.tier == Tier::OneMinute),
         "an ended run's partial minute is kept"
     );
 }
@@ -402,11 +475,17 @@ fn ended_runs_read_their_buckets_once_when_none_are_held() {
         &key(1),
         vec![RunBucketRow {
             key: key(1),
-            tier: Tier::Minute,
+            tier: Tier::OneMinute,
             bucket,
         }],
     );
-    assert_eq!(book.run(&key(1)).unwrap().series().len(), 1);
+    let series = book.run(&key(1)).unwrap().series();
+    assert_eq!(
+        series.len(),
+        Tier::ALL.len() - 1,
+        "the minute, and each coarser size made from it"
+    );
+    assert_eq!(series.buckets(Tier::OneDay).count(), 1);
 }
 
 /// At most the live-run limit is followed; the listed runs are bounded,

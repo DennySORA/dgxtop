@@ -418,6 +418,13 @@ pub(crate) struct PidStat {
     pub start_time_ticks: u64,
     pub utime: Field<u64>,
     pub stime: Field<u64>,
+    /// CPU time of its reaped children (fields 16 and 17).
+    pub cutime: Field<u64>,
+    pub cstime: Field<u64>,
+    /// Niceness (field 19).
+    pub nice: Option<i64>,
+    /// Threads (field 20).
+    pub num_threads: Option<u64>,
     pub rss_pages: Field<u64>,
     /// The wait status of a zombie (field 52, Linux 3.5+); zero to a reader
     /// that may not trace the process, `None` on older kernels.
@@ -429,6 +436,10 @@ const STAT_STATE: usize = 0;
 const STAT_PPID: usize = 1;
 const STAT_UTIME: usize = 11;
 const STAT_STIME: usize = 12;
+const STAT_CUTIME: usize = 13;
+const STAT_CSTIME: usize = 14;
+const STAT_NICE: usize = 16;
+const STAT_NUM_THREADS: usize = 17;
 const STAT_START_TIME: usize = 19;
 const STAT_RSS: usize = 21;
 const STAT_EXIT_CODE: usize = 49;
@@ -457,6 +468,14 @@ pub(crate) fn parse_pid_stat(text: &str) -> Option<PidStat> {
         start_time_ticks,
         utime: u64_field(rest.get(STAT_UTIME).copied()),
         stime: u64_field(rest.get(STAT_STIME).copied()),
+        cutime: u64_field(rest.get(STAT_CUTIME).copied()),
+        cstime: u64_field(rest.get(STAT_CSTIME).copied()),
+        nice: rest
+            .get(STAT_NICE)
+            .and_then(|nice| nice.parse::<i64>().ok()),
+        num_threads: rest
+            .get(STAT_NUM_THREADS)
+            .and_then(|threads| threads.parse::<u64>().ok()),
         rss_pages: u64_field(rest.get(STAT_RSS).copied()),
         exit_code: rest
             .get(STAT_EXIT_CODE)
@@ -585,12 +604,18 @@ ctxt 18225208\n";
     #[test]
     fn pid_stat_comm_may_contain_spaces_and_parentheses() {
         let text = "4242 (my (weird) prog) S 1 4242 4242 0 -1 4194560 100 0 0 0 \
-                    250 50 0 0 20 0 1 0 90100 1234567 789 18446744073709551615";
+                    250 50 7 3 25 5 12 0 90100 1234567 789 18446744073709551615";
         let stat = parse_pid_stat(text).unwrap();
         assert_eq!(stat.pid, 4242);
         assert_eq!(stat.comm, "my (weird) prog");
         assert_eq!(stat.utime, Field::Value(250));
         assert_eq!(stat.stime, Field::Value(50));
+        assert_eq!(
+            (stat.cutime, stat.cstime),
+            (Field::Value(7), Field::Value(3))
+        );
+        assert_eq!((stat.nice, stat.num_threads), (Some(5), Some(12)));
+        assert_eq!(stat.ppid, Some(1));
         assert_eq!(stat.start_time_ticks, 90_100);
         assert_eq!(stat.rss_pages, Field::Value(789));
         assert_eq!(stat.state, Some('S'));

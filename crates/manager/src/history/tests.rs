@@ -225,6 +225,22 @@ fn every_chart_queries_one_window_at_a_bounded_resolution() {
     assert_eq!(view.charts[1].subject, "blockdev:8:0");
 }
 
+/// The filter's window stays the window when the Process History's bar
+/// size follows it (D-77).
+#[test]
+fn a_bar_size_after_the_window_keeps_the_window() {
+    let mut bench = bench(4);
+    bench.open("6h 30m", &[cpu()]);
+    bench.service.tick(NOW, false);
+    let jobs = bench.port.take();
+    assert!(!jobs.is_empty());
+    assert!(
+        jobs.iter()
+            .all(|job| job.query.span_ns() == 6 * 3_600 * SECOND)
+    );
+    assert_eq!(bench.service.view(&bench.session).window_label, "6h");
+}
+
 #[test]
 fn results_give_points_mean_peak_and_coverage_and_late_ones_are_dropped() {
     let mut bench = bench(4);

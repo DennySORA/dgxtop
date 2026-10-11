@@ -15,7 +15,7 @@ use crate::config::{Theme, ValueOrigin};
 use crate::history::HistoryMethod;
 use crate::identity::{EntityId, MetricKey, ModuleId, ProcessKey, SessionId};
 use crate::metric::{CanonicalUnit, Scalar};
-use crate::process_history::{RunEnd, RunInfo, RunMetric};
+use crate::process_history::{RunBar, RunEnd, RunInfo, RunMetric};
 use crate::quality::{Freshness, Quality, SampleKind, SelectionState};
 
 /// Why a cell has (or lacks) a value; always rendered as text, never only color.
@@ -570,11 +570,11 @@ pub struct HistoryPart {
 
 /// Rows of runs a Process History projection carries at most.
 pub const MAX_RUN_ROWS: usize = 200;
-/// Points a run chart carries at most.
-pub const MAX_RUN_CHART_POINTS: usize = 240;
+/// Bars a run chart carries at most (the widest plot).
+pub const MAX_RUN_CHART_POINTS: usize = 1_000;
 
-/// The Process History tab (D-76): GPU process runs, the newest start
-/// first, and the run the session opened.
+/// The Process History tab (D-76, D-77): GPU process runs, the newest
+/// start first, and the run the session opened.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessHistoryView {
     pub runs: Vec<RunRowView>,
@@ -585,6 +585,10 @@ pub struct ProcessHistoryView {
     pub kept_on_disk: bool,
     /// Local time's offset from UTC, seconds east.
     pub utc_offset_s: i32,
+    /// The bar size the session chose (`Auto` among them).
+    pub bar: RunBar,
+    /// The CPU's whole: 100 % for each of the host's logical CPUs.
+    pub cpu_scale: Option<f64>,
 }
 
 /// One run in the list.
@@ -600,32 +604,46 @@ pub struct RunRowView {
     pub peak_gpu_memory: Option<f64>,
     pub mean_gpu_utilization: Option<f64>,
     pub mean_cpu: Option<f64>,
+    pub peak_memory: Option<f64>,
+    /// The most descendants it had at once.
+    pub peak_children: Option<f64>,
     /// Its color while it holds one (D-64).
     pub slot: Option<u8>,
 }
 
-/// The run opened: everything known of it.
+/// The run opened: everything known of it, and its charts as bars of one
+/// size (D-77), the latest bar at the right.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunDetailView {
     pub info: RunInfo,
     pub live: bool,
     pub slot: Option<u8>,
-    /// UTC start of the first point and the time each point covers.
-    pub first_utc_ns: i64,
-    pub step_ns: u64,
+    /// The bar size drawn: the session's, or the one `Auto` chose.
+    pub bar: RunBar,
+    /// The time the charts span, UTC: as many bars as a plot has columns,
+    /// ending with the bar of the run's latest sample.
+    pub window_start_utc_ns: u64,
+    pub window_end_utc_ns: u64,
     pub charts: Vec<RunChartView>,
     /// Its buckets are being read from the long-term store.
     pub loading: bool,
 }
 
-/// One chart of a run: a mean per point, and the run's mean and peak.
+/// One chart of a run: a point per bar, and the run's mean and peak.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunChartView {
     pub metric: RunMetric,
     pub unit: CanonicalUnit,
-    pub means: Vec<Option<f64>>,
+    /// Top of the scale: the host's CPUs or RAM, the GPUs' memory or
+    /// utilization; `None` scales the chart to what it draws.
+    pub scale_max: Option<f64>,
+    /// The bars with a sample, oldest first; a bar is the mean of its time.
+    pub points: Vec<HistoryPointView>,
+    /// Over the whole run.
     pub mean: Option<f64>,
     pub peak: Option<f64>,
+    /// The latest bar's mean.
+    pub latest: Option<f64>,
 }
 
 /// Where the history before this run comes from (D-51).
