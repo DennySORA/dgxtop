@@ -1,14 +1,15 @@
 //! Process History projection (D-76, D-77): the runs, newest start first,
 //! and the run the session opened with a chart of each thing it used, as
-//! bars of the session's size ([`super::run_bars`]) against the scales of
-//! the host they ran on.
+//! bars of the session's size (the compression's [`bars_of`], D-79)
+//! against the scales of the host they ran on.
 
 use std::collections::BTreeMap;
 
+use dgxtop_compression::{Bars, bars_of, whole_series};
 use dgxtop_core::history::HistoryMethod;
 use dgxtop_core::identity::ProcessKey;
 use dgxtop_core::metric::CanonicalUnit;
-use dgxtop_core::process_history::{RunBar, RunBucket, RunInfo, RunMetric, Tier};
+use dgxtop_core::process_history::{RunBar, RunBucket, RunInfo, RunMetric};
 use dgxtop_core::view::{
     HistoryPointView, MAX_RUN_CHART_POINTS, MAX_RUN_ROWS, ProcessHistoryView, RunChartView,
     RunDetailView, RunRowView,
@@ -18,10 +19,8 @@ use super::cpu::logical_cpu_count;
 use super::gpu_directory::GpuDirectory;
 use super::history_charts::{gpu_memory_scale, ram_total};
 use super::reader::MetricReader;
-use super::run_bars::{Bars, bars_of};
 use crate::process_history::{ProcessHistoryBook, Run};
 use crate::process_memory::ProcessMemoryBook;
-use dgxtop_compression::RunSeries;
 
 const PERCENT_SCALE: f64 = 100.0;
 
@@ -126,7 +125,7 @@ pub(crate) fn build_process_history_view(inputs: &RunHistoryInputs<'_>) -> Proce
 
 fn row_view(run: &Run, colors: &ProcessMemoryBook) -> RunRowView {
     let info = run.info();
-    let whole = whole_run(run.series());
+    let whole = whole_series(run.series());
     RunRowView {
         key: info.key.clone(),
         name: info.name.clone(),
@@ -149,7 +148,7 @@ fn detail_view(run: &Run, inputs: &RunHistoryInputs<'_>) -> RunDetailView {
     let series = run.series();
     let columns = inputs.columns.clamp(1, MAX_RUN_CHART_POINTS);
     let bars = bars_of(series, inputs.bar, columns);
-    let whole = whole_run(series);
+    let whole = whole_series(series);
     let window = bars.as_ref().map_or((0, 0), |bars| bars.window);
     RunDetailView {
         info: info.clone(),
@@ -180,7 +179,7 @@ fn detail_view(run: &Run, inputs: &RunHistoryInputs<'_>) -> RunDetailView {
 }
 
 /// The bars with a sample of `metric`: each its mean and peak.
-fn points_of(bars: &Bars, metric: RunMetric) -> Vec<HistoryPointView> {
+fn points_of(bars: &Bars<RunBucket>, metric: RunMetric) -> Vec<HistoryPointView> {
     bars.bars
         .iter()
         .filter(|bar| bar.value(metric).count > 0)
@@ -198,44 +197,6 @@ fn points_of(bars: &Bars, metric: RunMetric) -> Vec<HistoryPointView> {
 /// A UTC time on the views' unsigned axis (none is before 1970).
 fn utc(utc_ns: i64) -> u64 {
     u64::try_from(utc_ns).unwrap_or(0)
-}
-
-/// The run as one bucket: every bucket of the size that reaches back to
-/// the earliest data ([`chart_tier`]), and what its sources are filling,
-/// which has not reached it yet (each size merges its source's buckets as
-/// they close, so every sample counts once).
-fn whole_run(series: &RunSeries) -> RunBucket {
-    let mut whole = RunBucket::new(0);
-    let Some(tier) = chart_tier(series) else {
-        return whole;
-    };
-    for bucket in series.buckets(tier).chain(series.unmerged(tier)) {
-        whole.merge(bucket);
-    }
-    whole
-}
-
-/// The finest size that holds the whole run: its first bucket begins
-/// inside the first bucket of every coarser size held (a coarse bucket
-/// starts at its boundary, before the run may have; a finer size keeps
-/// only its latest buckets). The coarsest held size otherwise.
-fn chart_tier(series: &RunSeries) -> Option<Tier> {
-    let first_of = |tier: Tier| series.buckets(tier).next().map(|first| first.start_utc_ns);
-    let held: Vec<(Tier, i64)> = Tier::ALL
-        .into_iter()
-        .filter_map(|tier| Some((tier, first_of(tier)?)))
-        .collect();
-    held.iter()
-        .find(|(tier, first)| {
-            held.iter()
-                .filter(|(coarser, _)| coarser > tier)
-                .all(|(coarser, start)| {
-                    let step = i64::try_from(coarser.step_ns()).unwrap_or(i64::MAX);
-                    *first < start.saturating_add(step)
-                })
-        })
-        .or_else(|| held.last())
-        .map(|(tier, _)| *tier)
 }
 
 const fn unit_of(metric: RunMetric) -> CanonicalUnit {
@@ -458,48 +419,5 @@ mod tests {
         let opened = view(&book, Some(&key)).opened.unwrap();
         assert_eq!(opened.bar, RunBar::OneMinute);
         assert!(opened.charts[RunMetric::Cpu.index()].points.len() >= 2);
-    }
-
-    /// After a restart the coarsest size may hold only what the new run
-    /// saw; the run's figures come from the size that holds it all.
-    #[test]
-    fn whole_run_figures_take_the_size_that_holds_everything() {
-        let mut series = RunSeries::default();
-        for minute in 0..3 {
-            let mut bucket = RunBucket::new(minute * 60 * 1_000_000_000);
-            for _ in 0..60 {
-                bucket.add(RunMetric::Memory, Some(10.0));
-            }
-            series.restore(Tier::OneMinute, bucket, false);
-        }
-        let mut late = RunBucket::new(0);
-        for _ in 0..4 {
-            late.add(RunMetric::Memory, Some(0.0));
-        }
-        series.restore(Tier::TenMinutes, late, false);
-        series.restore(Tier::OneDay, late, false);
-        let whole = whole_run(&series);
-        assert_eq!(whole.value(RunMetric::Memory).count, 180);
-        assert_eq!(whole.value(RunMetric::Memory).mean(), Some(10.0));
-    }
-
-    /// A ten-minute bucket starts at its ten-minute boundary, before the
-    /// run did; the minutes, which begin inside it, still cover the run.
-    #[test]
-    fn aligned_coarse_buckets_do_not_hide_finer_ones() {
-        let minute = 60 * 1_000_000_000;
-        let mut series = RunSeries::default();
-        let bucket = |start: i64| {
-            let mut bucket = RunBucket::new(start);
-            bucket.add(RunMetric::Cpu, Some(1.0));
-            bucket
-        };
-        series.restore(Tier::OneDay, bucket(0), false);
-        series.restore(Tier::TenMinutes, bucket(40 * minute), false);
-        for start in 46..50 {
-            series.restore(Tier::OneMinute, bucket(start * minute), false);
-        }
-        series.restore(Tier::Recent, bucket(48 * minute), false);
-        assert_eq!(chart_tier(&series), Some(Tier::OneMinute));
     }
 }

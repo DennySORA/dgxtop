@@ -1,32 +1,37 @@
-//! A run's buckets as bars of one size (D-77): each bar a bucket of that
-//! size, the merge of every sample in its time, so its mean is the mean
-//! over that time. The bars end with the one holding the run's latest
-//! sample and reach back as many bars as a plot has columns; the latest
-//! takes the finer buckets being filled that it has not merged yet.
+//! A series' buckets as bars of one size (D-77, D-79): each bar a bucket
+//! of that size, the merge of every sample in its time, so its mean is the
+//! mean over that time. The bars end with the one holding the series'
+//! latest sample and reach back as many bars as a plot has columns; the
+//! latest takes the finer buckets being filled that it has not merged yet.
 
-use dgxtop_core::process_history::{RunBar, RunBucket, Tier};
+use dgxtop_core::process_history::{RunBar, Tier};
 
-use dgxtop_compression::RunSeries;
+use crate::bucket::{Bucket, merged_at};
+use crate::series::TieredSeries;
 
-/// The bars of a run at one size.
+/// The bars of a series at one size.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Bars {
-    pub(crate) bar: RunBar,
-    pub(crate) step_ns: i64,
+pub struct Bars<B> {
+    pub bar: RunBar,
+    pub step_ns: i64,
     /// `[start, end)` of the window, UTC.
-    pub(crate) window: (i64, i64),
+    pub window: (i64, i64),
     /// The bars holding a sample, oldest first.
-    pub(crate) bars: Vec<RunBucket>,
+    pub bars: Vec<B>,
 }
 
 /// The bars of `series` at `bar` (`Auto`: the finest that shows the whole
-/// run) over `columns` bars; `None` without a bucket.
-pub(crate) fn bars_of(series: &RunSeries, bar: RunBar, columns: usize) -> Option<Bars> {
+/// series) over `columns` bars; `None` without a bucket.
+pub fn bars_of<B: Bucket>(
+    series: &TieredSeries<B>,
+    bar: RunBar,
+    columns: usize,
+) -> Option<Bars<B>> {
     let span = Span::of(series)?;
     let columns = i64::try_from(columns.max(1)).unwrap_or(i64::MAX);
     let bar = match bar {
         RunBar::Auto => RunBar::fixed()
-            .find(|candidate| shows_whole_run(series, *candidate, columns, span))
+            .find(|candidate| shows_whole_series(series, *candidate, columns, span))
             .unwrap_or(RunBar::OneDay),
         fixed => fixed,
     };
@@ -40,9 +45,14 @@ pub(crate) fn bars_of(series: &RunSeries, bar: RunBar, columns: usize) -> Option
     })
 }
 
-/// Whether `bar`'s window starts by the run's first sample and its size
+/// Whether `bar`'s window starts by the series' first sample and its size
 /// still holds that sample's bucket.
-fn shows_whole_run(series: &RunSeries, bar: RunBar, columns: i64, span: Span) -> bool {
+fn shows_whole_series<B: Bucket>(
+    series: &TieredSeries<B>,
+    bar: RunBar,
+    columns: i64,
+    span: Span,
+) -> bool {
     let Some(tier) = bar.tier() else {
         return false;
     };
@@ -50,12 +60,17 @@ fn shows_whole_run(series: &RunSeries, bar: RunBar, columns: i64, span: Span) ->
     let held = series
         .buckets(tier)
         .next()
-        .is_some_and(|bucket| bucket.start_utc_ns <= first);
+        .is_some_and(|bucket| bucket.start_utc_ns() <= first);
     held && first >= window_of(series, tier, columns, span).0
 }
 
 /// `columns` bars of `tier` ending with the one holding the latest sample.
-fn window_of(series: &RunSeries, tier: Tier, columns: i64, span: Span) -> (i64, i64) {
+fn window_of<B: Bucket>(
+    series: &TieredSeries<B>,
+    tier: Tier,
+    columns: i64,
+    span: Span,
+) -> (i64, i64) {
     let step = step_of(tier);
     let end = tier
         .align(span.last, series.shift_ns())
@@ -65,46 +80,43 @@ fn window_of(series: &RunSeries, tier: Tier, columns: i64, span: Span) -> (i64, 
 
 /// The buckets of `tier` in the window, the latest with what its sources
 /// fill.
-fn collect(series: &RunSeries, tier: Tier, (start, end): (i64, i64)) -> Vec<RunBucket> {
-    let mut bars: Vec<RunBucket> = series
+fn collect<B: Bucket>(series: &TieredSeries<B>, tier: Tier, (start, end): (i64, i64)) -> Vec<B> {
+    let in_window = |at: i64| at >= start && at < end;
+    let mut bars: Vec<B> = series
         .buckets(tier)
-        .filter(|bucket| bucket.start_utc_ns >= start && bucket.start_utc_ns < end)
+        .filter(|bucket| in_window(bucket.start_utc_ns()))
         .copied()
         .collect();
     for unmerged in series.unmerged(tier) {
-        let at = tier.align(unmerged.start_utc_ns, series.shift_ns());
-        if at < start || at >= end {
+        let at = tier.align(unmerged.start_utc_ns(), series.shift_ns());
+        if !in_window(at) {
             continue;
         }
         match bars.last_mut() {
-            Some(last) if last.start_utc_ns == at => last.merge(unmerged),
-            _ => {
-                let mut fresh = RunBucket::new(at);
-                fresh.merge(unmerged);
-                bars.push(fresh);
-            }
+            Some(last) if last.start_utc_ns() == at => last.merge(unmerged),
+            _ => bars.push(merged_at(at, unmerged)),
         }
     }
     bars.retain(|bar| !bar.is_empty());
     bars
 }
 
-/// Where the run's samples begin and end.
+/// Where the series' samples begin and end.
 #[derive(Debug, Clone, Copy)]
 struct Span {
     /// The earliest bucket start of the coarsest size: every size holds
-    /// the run from there (the finer ones may have let it go).
+    /// the series from there (the finer ones may have let it go).
     first: i64,
     /// The latest bucket start of any size.
     last: i64,
 }
 
 impl Span {
-    fn of(series: &RunSeries) -> Option<Self> {
+    fn of<B: Bucket>(series: &TieredSeries<B>) -> Option<Self> {
         let mut first = None;
         let mut last: Option<i64> = None;
         for tier in Tier::ALL {
-            let mut starts = series.buckets(tier).map(|bucket| bucket.start_utc_ns);
+            let mut starts = series.buckets(tier).map(Bucket::start_utc_ns);
             let Some(start) = starts.next() else {
                 continue;
             };
@@ -124,15 +136,17 @@ impl Span {
     }
 }
 
-fn step_of(tier: Tier) -> i64 {
+pub(crate) fn step_of(tier: Tier) -> i64 {
     i64::try_from(tier.step_ns()).unwrap_or(i64::MAX)
 }
 
 #[cfg(test)]
 mod tests {
-    use dgxtop_core::process_history::{RUN_METRICS, RunMetric};
+    use dgxtop_core::process_history::{RUN_METRICS, RunBucket, RunMetric, TIER_BUCKETS};
 
     use super::*;
+    use crate::bucket::Tally;
+    use crate::run::RunSeries;
 
     const SECOND: i64 = 1_000_000_000;
     const MINUTE: i64 = 60 * SECOND;
@@ -140,7 +154,7 @@ mod tests {
     /// Midnight UTC.
     const MIDNIGHT: i64 = 1_790_208_000 * SECOND;
 
-    fn means(bars: &Bars) -> Vec<(i64, f64)> {
+    fn means(bars: &Bars<RunBucket>) -> Vec<(i64, f64)> {
         bars.bars
             .iter()
             .map(|bar| {
@@ -225,7 +239,7 @@ mod tests {
         let minutes = bars_of(&series, RunBar::OneMinute, 1_000).unwrap();
         assert_eq!(
             minutes.bars.len(),
-            dgxtop_core::process_history::TIER_BUCKETS + 1,
+            TIER_BUCKETS + 1,
             "the latest minutes kept and the one being filled"
         );
         assert_eq!(
@@ -241,5 +255,40 @@ mod tests {
             .sum();
         assert_eq!(counted, 20 * 24 * 60);
         assert_eq!(eighteen.window.1 - eighteen.window.0, 30 * 18 * HOUR);
+    }
+
+    /// The bars work for any bucket: counted samples land in their bar,
+    /// the latest with what is still filling, none outside the window.
+    #[test]
+    fn any_bucket_type_lays_out_as_bars() {
+        let mut series = TieredSeries::<Tally>::default();
+        for second in 0..(3 * 3_600) {
+            series.record(second * SECOND, |tally| tally.samples += 1);
+        }
+        let hours = bars_of(&series, RunBar::OneHour, 2).unwrap();
+        assert_eq!(hours.window, (HOUR, 3 * HOUR), "the last two hours");
+        let counts: Vec<(i64, u32)> = hours
+            .bars
+            .iter()
+            .map(|bar| (bar.start_utc_ns / HOUR, bar.samples))
+            .collect();
+        assert_eq!(counts, vec![(1, 3_600), (2, 3_600)]);
+        let auto = bars_of(&series, RunBar::Auto, 4).unwrap();
+        assert_eq!(auto.bar, RunBar::OneHour, "4 hour bars hold 3 hours");
+        assert!(bars_of(&TieredSeries::<Tally>::default(), RunBar::OneHour, 4).is_none());
+    }
+
+    /// An empty bucket is no bar: a size can hold a bucket with no sample.
+    #[test]
+    fn empty_buckets_are_left_out() {
+        let mut series = TieredSeries::<Tally>::default();
+        series.restore(Tier::OneMinute, Tally::new(0), false);
+        let counted = Tally {
+            start_utc_ns: MINUTE,
+            samples: 2,
+        };
+        series.restore(Tier::OneMinute, counted, false);
+        let bars = bars_of(&series, RunBar::OneMinute, 10).unwrap();
+        assert_eq!(bars.bars, vec![counted]);
     }
 }
