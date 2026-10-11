@@ -42,7 +42,7 @@ use dgxtop_core::quality::Namespace;
 use dgxtop_core::testing::{MemoryLogger, ObservationBuilder, adapter_id, metric_key, read_group};
 use dgxtop_core::view::{HostState, HostStatus};
 use dgxtop_runtime::clock::BootClock;
-use dgxtop_runtime::host::{host_generation_from_args, host_nonce_from_env};
+use dgxtop_runtime::host::{HOST_GENERATION_ARG, host_nonce_from_env};
 use dgxtop_runtime::ipc::{FrameDecoder, encode_frame, read_frame_blocking};
 use dgxtop_runtime::supervisor::{
     ChildControl, CircuitBreaker, ExitSummary, HostLauncher, LaunchRequest, LaunchedHost,
@@ -85,7 +85,9 @@ fn flag_value(args: &[String], flag: &str) -> Option<String> {
 
 fn run_test_host(mode: &str, args: &[String]) -> ExitCode {
     let adapter = flag_value(args, ADAPTER_FLAG).unwrap_or_else(|| "child".to_owned());
-    let generation = host_generation_from_args(args).expect("host generation argument");
+    let generation: u32 = flag_value(args, HOST_GENERATION_ARG)
+        .and_then(|value| value.parse().ok())
+        .expect("host generation argument");
     let nonce = host_nonce_from_env().expect("host nonce");
     let clock: Arc<dyn TimeProvider> = Arc::new(BootClock::new().expect("boot clock"));
     match mode {

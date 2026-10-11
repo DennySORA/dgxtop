@@ -7,17 +7,16 @@
 //!   that is full. Identical `(target, message)` pairs within 30 s collapse
 //!   into one line plus a summary. Files are `0600` inside a `0700`
 //!   directory and rotate by size.
-//! * [`StderrLogger`]: for adapter-host processes, whose stderr is drained by
-//!   the supervisor; bounded lines and a per-window line budget.
+//!
+//! Adapter hosts do not log through this module: they write bounded protocol
+//! diagnostics to their stderr, which the supervisor drains.
 
 mod coalesce;
 mod file;
 mod format;
-mod stderr;
 
 pub use file::{FileLogger, LoggerStats};
 pub use format::{format_utc, level_name};
-pub use stderr::StderrLogger;
 
 /// Window inside which identical records are coalesced.
 pub const COALESCE_WINDOW_NS: u64 = 30 * dgxtop_core::clock::NANOS_PER_SECOND;

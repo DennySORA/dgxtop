@@ -69,10 +69,6 @@ pub enum HostExit {
 }
 
 impl HostExit {
-    pub const fn is_success(&self) -> bool {
-        matches!(self, Self::ShutdownRequested | Self::InputClosed)
-    }
-
     /// Process exit code (sysexits-style) for a child host.
     pub const fn exit_code(&self) -> i32 {
         match self {
@@ -486,48 +482,6 @@ impl<'a> DiagnosticLines<'a> {
         let _ = self.sink.write_all(line.as_bytes());
         let _ = self.sink.flush();
     }
-}
-
-/// Parses `--host-generation <n>` (or `--host-generation=<n>`) from argv.
-pub fn host_generation_from_args<I, S>(args: I) -> Result<u32, InfraError>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<str>,
-{
-    let mut arguments = args.into_iter();
-    while let Some(argument) = arguments.next() {
-        let argument = argument.as_ref();
-        if argument == HOST_GENERATION_ARG {
-            let value = arguments.next().ok_or_else(|| {
-                InfraError::Protocol(format!("{HOST_GENERATION_ARG} needs a value"))
-            })?;
-            return parse_generation(value.as_ref());
-        }
-        if let Some(value) = argument
-            .strip_prefix(HOST_GENERATION_ARG)
-            .and_then(|rest| rest.strip_prefix('='))
-        {
-            return parse_generation(value);
-        }
-    }
-    Err(InfraError::Protocol(format!(
-        "missing {HOST_GENERATION_ARG} argument"
-    )))
-}
-
-fn parse_generation(text: &str) -> Result<u32, InfraError> {
-    let generation: u32 = text.parse().map_err(|_| {
-        InfraError::Protocol(format!(
-            "{HOST_GENERATION_ARG} must be an integer, got {}",
-            dgxtop_core::text::sanitize_display(text, 32)
-        ))
-    })?;
-    if generation == 0 || i32::try_from(generation).is_err() {
-        return Err(InfraError::Protocol(format!(
-            "{HOST_GENERATION_ARG} must be 1..=2147483647"
-        )));
-    }
-    Ok(generation)
 }
 
 /// Reads the per-incarnation nonce from [`HOST_NONCE_ENV`].

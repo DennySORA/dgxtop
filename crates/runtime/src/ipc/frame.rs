@@ -123,7 +123,8 @@ impl FrameDecoder {
     }
 
     /// Capacity of the body buffer currently held (observable allocation).
-    pub fn buffered_capacity(&self) -> usize {
+    #[cfg(test)]
+    fn buffered_capacity(&self) -> usize {
         match &self.state {
             State::Body { buffer, .. } => buffer.capacity(),
             _ => 0,

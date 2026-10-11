@@ -15,7 +15,7 @@
 //! where a hang-up is reported explicitly.
 
 use std::io;
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::time::Duration;
 
 use dgxtop_core::ports::{InputGate, InputReadiness, TerminalTransport};
@@ -33,14 +33,6 @@ pub struct NonBlockingTerminal {
 }
 
 impl NonBlockingTerminal {
-    /// Wraps a raw descriptor (typically `STDOUT_FILENO`).
-    pub fn from_fd(fd: RawFd) -> io::Result<Self> {
-        if fd < 0 {
-            return Err(io::Error::from_raw_os_error(libc::EBADF));
-        }
-        Self::from_borrowed(borrow_raw_descriptor(fd))
-    }
-
     /// Wraps any open descriptor (`std::io::stdout()`, a PTY, a pipe).
     pub fn from_borrowed(fd: impl AsFd) -> io::Result<Self> {
         // Close-on-exec, so adapter hosts started later never inherit it.
@@ -60,16 +52,6 @@ impl NonBlockingTerminal {
     pub fn original_flags(&self) -> OFlag {
         self.original_flags
     }
-}
-
-/// Borrowing a caller-provided raw descriptor is the one place where I/O
-/// safety cannot be proven by the type system.
-#[allow(unsafe_code)]
-fn borrow_raw_descriptor<'a>(fd: RawFd) -> BorrowedFd<'a> {
-    // SAFETY: the borrow lives only for the `dup` performed immediately by
-    // `from_borrowed`; after that only the owned duplicate is used. A closed
-    // or invalid number makes `dup` fail with EBADF (no memory unsafety).
-    unsafe { BorrowedFd::borrow_raw(fd) }
 }
 
 fn current_flags(fd: BorrowedFd<'_>) -> io::Result<OFlag> {
@@ -217,7 +199,6 @@ fn input_readiness(events: PollFlags) -> InputReadiness {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::fd::AsRawFd;
     use std::time::Instant;
 
     fn pipe() -> (OwnedFd, OwnedFd) {
@@ -274,7 +255,7 @@ mod tests {
         drop(terminal);
         assert_eq!(flags_of(&writer), before);
 
-        let dropped = NonBlockingTerminal::from_fd(writer.as_raw_fd()).unwrap();
+        let dropped = NonBlockingTerminal::from_borrowed(&writer).unwrap();
         assert!(flags_of(&writer).contains(OFlag::O_NONBLOCK));
         drop(dropped);
         assert_eq!(flags_of(&writer), before);
@@ -301,12 +282,6 @@ mod tests {
         assert!(descriptor_flags(&terminal.fd).contains(FdFlag::FD_CLOEXEC));
         let gate = TtyInputGate::from_borrowed(&reader).unwrap();
         assert!(descriptor_flags(&gate.fd).contains(FdFlag::FD_CLOEXEC));
-    }
-
-    #[test]
-    fn invalid_descriptors_are_rejected() {
-        assert!(NonBlockingTerminal::from_fd(-1).is_err());
-        assert!(NonBlockingTerminal::from_fd(1_000_000).is_err());
     }
 
     #[test]
