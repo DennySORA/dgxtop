@@ -411,20 +411,27 @@ fn disk_field(stats: &[&str], field: DiskField) -> Field<u64> {
 pub(crate) struct PidStat {
     pub pid: i64,
     pub comm: String,
+    /// The state letter (field 3: `R`, `S`, `Z`, …); `None` when absent.
+    pub state: Option<char>,
     /// The parent's PID (field 4); `None` when unreadable.
     pub ppid: Option<i64>,
     pub start_time_ticks: u64,
     pub utime: Field<u64>,
     pub stime: Field<u64>,
     pub rss_pages: Field<u64>,
+    /// The wait status of a zombie (field 52, Linux 3.5+); zero to a reader
+    /// that may not trace the process, `None` on older kernels.
+    pub exit_code: Option<u32>,
 }
 
 /// Positions after the closing parenthesis of `comm` (field 3 is index 0).
+const STAT_STATE: usize = 0;
 const STAT_PPID: usize = 1;
 const STAT_UTIME: usize = 11;
 const STAT_STIME: usize = 12;
 const STAT_START_TIME: usize = 19;
 const STAT_RSS: usize = 21;
+const STAT_EXIT_CODE: usize = 49;
 
 /// Parses from the LAST `)` because `comm` may contain spaces and
 /// parentheses. `None` when pid or start time (the identity) is unusable.
@@ -443,6 +450,7 @@ pub(crate) fn parse_pid_stat(text: &str) -> Option<PidStat> {
     Some(PidStat {
         pid,
         comm,
+        state: rest.get(STAT_STATE).and_then(|state| state.chars().next()),
         ppid: rest
             .get(STAT_PPID)
             .and_then(|ppid| ppid.parse::<i64>().ok()),
@@ -450,6 +458,9 @@ pub(crate) fn parse_pid_stat(text: &str) -> Option<PidStat> {
         utime: u64_field(rest.get(STAT_UTIME).copied()),
         stime: u64_field(rest.get(STAT_STIME).copied()),
         rss_pages: u64_field(rest.get(STAT_RSS).copied()),
+        exit_code: rest
+            .get(STAT_EXIT_CODE)
+            .and_then(|code| code.parse::<u32>().ok()),
     })
 }
 
@@ -582,6 +593,22 @@ ctxt 18225208\n";
         assert_eq!(stat.stime, Field::Value(50));
         assert_eq!(stat.start_time_ticks, 90_100);
         assert_eq!(stat.rss_pages, Field::Value(789));
+        assert_eq!(stat.state, Some('S'));
+        assert_eq!(stat.exit_code, None, "a short line has no exit code");
+    }
+
+    /// A zombie's wait status is the last field of a full line (D-76).
+    #[test]
+    fn pid_stat_reads_the_state_and_a_zombies_exit_code() {
+        let mut fields: Vec<String> = (0..50).map(|_| "0".to_owned()).collect();
+        fields[0] = "Z".to_owned();
+        fields[19] = "777".to_owned();
+        fields[49] = "9".to_owned();
+        let text = format!("31 (python3) {}", fields.join(" "));
+        let stat = parse_pid_stat(&text).unwrap();
+        assert_eq!(stat.state, Some('Z'));
+        assert_eq!(stat.start_time_ticks, 777);
+        assert_eq!(stat.exit_code, Some(9));
     }
 
     #[test]

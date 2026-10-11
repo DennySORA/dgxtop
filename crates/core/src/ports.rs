@@ -40,6 +40,7 @@ use crate::identity::{AdapterId, CollectorId, MetricKey, ProcessKey, SessionId, 
 use crate::observation::{
     AdapterHealth, AdapterManifest, CatalogDelta, DiscoverRequest, ObservationBatch, ReadPlan,
 };
+use crate::process_probe::{ProbeReport, ProbeTarget};
 use crate::view::{HostStatus, ViewModel};
 
 /// Read-only telemetry adapter. Owns its driver handles; returns native values
@@ -342,6 +343,13 @@ pub trait ProcessActionPort: Send {
     fn observe_exit(&mut self, handle: ActionHandle) -> ExitObservation;
     /// Closes the held descriptor.
     fn release(&mut self, handle: ActionHandle);
+}
+
+/// Reads what the process history follows of a few GPU processes (D-76):
+/// liveness, how a zombie ended, IO counters and, when asked, the command
+/// line and working folder. Read-only: it never signals.
+pub trait ProcessProbe: Send {
+    fn probe(&mut self, targets: &[ProbeTarget]) -> ProbeReport;
 }
 
 /// Non-blocking job submission to a fixed worker.

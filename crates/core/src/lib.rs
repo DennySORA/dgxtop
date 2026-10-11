@@ -27,6 +27,7 @@ pub mod metric;
 pub mod naming;
 pub mod observation;
 pub mod ports;
+pub mod process_probe;
 pub mod quality;
 pub mod shared_text;
 pub mod text;

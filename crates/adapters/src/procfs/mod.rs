@@ -18,6 +18,7 @@ mod host;
 mod locator;
 mod memory;
 mod parse;
+mod probe;
 mod process;
 
 use std::io;
@@ -48,6 +49,7 @@ use crate::registry::{AdapterOptions, compile_time_adapter_id, kernel_file_manif
 
 pub use self::catalog::CatalogStats;
 pub use self::host::HostConstants;
+pub use self::probe::ProcfsProcessProbe;
 
 /// Profile of the kernel-defined procfs fields.
 pub const PROFILE_ID: &str = "linux-procfs";
