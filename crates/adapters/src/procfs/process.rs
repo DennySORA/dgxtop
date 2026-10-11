@@ -1,23 +1,26 @@
 //! `process` read group (paged, not catalogued): scans `/proc/[0-9]*` in PID
-//! order, at most [`MAX_SCANNED_PROCESSES`] processes, and emits per
-//! ProcessKey `process.cpu.ticks` (utime + stime from one read: a lossless
-//! decode of two same-unit counters), `process.rss` (pages × page size,
-//! bytes) and `process.uid` (owner of `/proc/<pid>`, static).
+//! order, at most [`MAX_SCANNED_PROCESSES`] processes, and emits ONE record
+//! per ProcessKey (D-79): `process.cpu.ticks` (utime + stime from one
+//! read: a lossless decode of two same-unit counters) carrying the rest of
+//! the `stat` as [`ProcessStat`] tags: RSS (pages × page size, bytes), the
+//! owner of `/proc/<pid>` (read once per process), parent, state, threads
+//! and the reaped children's ticks.
 //!
 //! Convention for the process collector: the process's display name
-//! ([`command`](super::command), D-65) travels in `provenance.channel` and
-//! `/proc/<pid>` in `provenance.device_path`. A process that vanishes
-//! mid-scan is skipped, not reported as an error.
+//! ([`command`](super::command), D-65) and its command line (D-73) travel
+//! in `provenance.channel` and `/proc/<pid>` in `provenance.device_path`.
+//! A process that vanishes mid-scan is skipped, not reported as an error.
 
 use std::collections::{HashMap, HashSet};
 use std::io;
 
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::identity::{EntityId, Pid, PidNamespace, ProcessKey, Scope};
-use dgxtop_core::metric::{Scalar, ids, native};
+use dgxtop_core::metric::{ids, native};
 use dgxtop_core::naming::{self, entity, groups};
 use dgxtop_core::observation::{Observation, ReadPlan, SourceDescriptor};
-use dgxtop_core::quality::{Quality, RawKind, ReadStatus};
+use dgxtop_core::process_stat::ProcessStat;
+use dgxtop_core::quality::{RawKind, ReadStatus};
 use dgxtop_core::text::sanitize_command_name;
 
 use super::catalog::{CatalogConfig, KeyContext, SourceSpec, descriptor_for};
@@ -26,8 +29,7 @@ use super::locator::DRIVER;
 use super::mechanics::{ReadSnapshot, invariant, io_failure, joined_error_code};
 use super::parse::{Field, PidStat, parse_pid_stat};
 use super::records::{
-    DerivationFailure, FIELD_ABSENT, PARSE_ERROR, ReadWindow, io_failed_record, ok_record,
-    u64_outcome_record,
+    DerivationFailure, FIELD_ABSENT, PARSE_ERROR, ReadWindow, u64_outcome_record,
 };
 use crate::common::SystemFiles;
 
@@ -163,9 +165,38 @@ const MAX_COMMAND_BYTES: usize = naming::MAX_CHANNEL_BYTES
     - 4 * super::command::MAX_NAME_CHARS
     - naming::PROCESS_COMMAND_SEPARATOR.len_utf8();
 
+/// Owners of the scanned processes. The owner of `/proc/<pid>` is read
+/// when a process is first seen, not every cycle: one instance of a PID
+/// keeps its owner. Only the processes of the last scan are kept.
+#[derive(Debug, Default)]
+pub(crate) struct ProcessOwners {
+    by_process: HashMap<(i32, u64), u32>,
+}
+
+impl ProcessOwners {
+    fn get(&self, key: (i32, u64)) -> Option<u32> {
+        self.by_process.get(&key).copied()
+    }
+
+    /// Keeps the owners of `processes`, those read now included.
+    fn keep(&mut self, processes: &[SeenProcess]) {
+        self.by_process = processes
+            .iter()
+            .filter_map(|process| Some((process.cache_key(), *process.uid.as_ref().ok()?)))
+            .collect();
+    }
+}
+
+/// What the process scan remembers between cycles: names and owners.
+#[derive(Debug, Default)]
+pub(crate) struct ProcessMemo {
+    names: ProcessNames,
+    owners: ProcessOwners,
+}
+
 /// Scans processes in PID order; problems are summarized in the final
 /// page's error code.
-pub(crate) fn scan(scan: &ProcessScan<'_>, names: &mut ProcessNames) -> ReadSnapshot {
+pub(crate) fn scan(scan: &ProcessScan<'_>, memo: &mut ProcessMemo) -> ReadSnapshot {
     let started_boot_ns = scan.clock.now_boot_ns();
     let pids = match list_pids(scan.files) {
         Ok(pids) => pids,
@@ -191,7 +222,7 @@ pub(crate) fn scan(scan: &ProcessScan<'_>, names: &mut ProcessNames) -> ReadSnap
             codes.push("PROCESS_SCAN_DEADLINE".to_owned());
             break;
         }
-        match read_process(scan, *pid) {
+        match read_process(scan, &memo.owners, *pid) {
             ProcessOutcome::Seen(process) => seen.push(*process),
             ProcessOutcome::Vanished => {}
             ProcessOutcome::Denied => tally.denied += 1,
@@ -200,11 +231,12 @@ pub(crate) fn scan(scan: &ProcessScan<'_>, names: &mut ProcessNames) -> ReadSnap
         }
     }
     codes.extend(tally_codes(&tally));
-    let display_names = names.resolve(scan.files, &seen);
+    memo.owners.keep(&seen);
+    let display_names = memo.names.resolve(scan.files, &seen);
     let records = seen
         .iter()
         .zip(&display_names)
-        .flat_map(|(process, (name, command))| process.records(scan, name, command))
+        .filter_map(|(process, (name, command))| process.record(scan, name, command))
         .collect();
     ReadSnapshot {
         records,
@@ -243,7 +275,7 @@ fn list_pids(files: &dyn SystemFiles) -> io::Result<Vec<Pid>> {
     Ok(pids)
 }
 
-fn read_process(scan: &ProcessScan<'_>, pid: Pid) -> ProcessOutcome {
+fn read_process(scan: &ProcessScan<'_>, owners: &ProcessOwners, pid: Pid) -> ProcessOutcome {
     let started_boot_ns = scan.clock.now_boot_ns();
     let text = match scan.files.read_to_string(&format!("/proc/{pid}/stat")) {
         Ok(text) => text,
@@ -252,7 +284,10 @@ fn read_process(scan: &ProcessScan<'_>, pid: Pid) -> ProcessOutcome {
     let Some(stat) = parse_pid_stat(&text).filter(|stat| stat.pid == i64::from(pid.get())) else {
         return ProcessOutcome::Unparsable;
     };
-    let uid = scan.files.owner_uid(&format!("/proc/{pid}"));
+    let uid = match owners.get((pid.get(), stat.start_time_ticks)) {
+        Some(uid) => Ok(uid),
+        None => scan.files.owner_uid(&format!("/proc/{pid}")),
+    };
     if matches!(&uid, Err(error) if is_vanished(error)) {
         return ProcessOutcome::Vanished;
     }
@@ -272,7 +307,7 @@ fn read_process(scan: &ProcessScan<'_>, pid: Pid) -> ProcessOutcome {
     }))
 }
 
-/// One process as read, before its records are built: they carry its
+/// One process as read, before its record is built: it carries its
 /// display name, which may come from its parent.
 struct SeenProcess {
     pid: Pid,
@@ -283,28 +318,40 @@ struct SeenProcess {
 }
 
 impl SeenProcess {
-    /// One instance of a PID: names are cached per start time.
+    /// One instance of a PID: names and owners are cached per start time.
     fn cache_key(&self) -> (i32, u64) {
         (self.pid.get(), self.stat.start_time_ticks)
     }
 
-    /// Its records; the uid record's channel also carries the command line
-    /// (D-73).
-    fn records(&self, scan: &ProcessScan<'_>, name: &str, command: &str) -> Vec<Observation> {
-        let identity = &self.identity;
-        let with_command = if command.is_empty() {
+    /// Its one record (D-79): the CPU ticks as the value, the rest of the
+    /// `stat` and the owner as tags, the name and command line (D-73) in
+    /// the channel.
+    fn record(&self, scan: &ProcessScan<'_>, name: &str, command: &str) -> Option<Observation> {
+        let channel = if command.is_empty() {
             name.to_owned()
         } else {
             format!("{name}{}{command}", naming::PROCESS_COMMAND_SEPARATOR)
         };
-        [
-            identity.cpu_ticks_record(scan, &self.stat, self.window, name),
-            identity.rss_record(scan, &self.stat, self.window, name),
-            identity.uid_record(scan, &self.uid, self.window, &with_command),
-        ]
-        .into_iter()
-        .flatten()
-        .collect()
+        let descriptor = self.identity.descriptor(scan, &channel)?;
+        let mut record =
+            u64_outcome_record(scan.plan, &descriptor, cpu_ticks(&self.stat), self.window)?;
+        let rss = rss_bytes(&self.stat, scan.page_size);
+        if let Err(code) = rss {
+            record.reason_codes.push(code.to_owned());
+        }
+        if self.uid.is_err() {
+            record.reason_codes.push(OWNER_UNREADABLE.to_owned());
+        }
+        let stat = ProcessStat {
+            rss_bytes: rss.ok(),
+            uid: self.uid.as_ref().ok().copied(),
+            ppid: self.stat.ppid,
+            state: self.stat.state,
+            threads: self.stat.num_threads,
+            reaped_ticks: Some(reaped_ticks(&self.stat)),
+        };
+        record.reason_codes.extend(stat.reason_codes());
+        Some(record)
     }
 }
 
@@ -322,7 +369,7 @@ fn failed_scan(error: &io::Error) -> ProcessOutcome {
     }
 }
 
-/// Identity-derived fields shared by the three records of one process.
+/// Identity-derived fields of one process's record.
 struct ProcessIdentity {
     entity_id: EntityId,
     scope: Scope,
@@ -330,36 +377,8 @@ struct ProcessIdentity {
     device_path: String,
 }
 
-/// One emitted process metric: short name, metric id, native unit, kind.
-struct ProcessMetric {
-    short_name: &'static str,
-    metric_id: &'static str,
-    native_unit: &'static str,
-    raw_kind: RawKind,
-    origin_file: &'static str,
-}
-
-const CPU_TICKS: ProcessMetric = ProcessMetric {
-    short_name: "cpu.ticks",
-    metric_id: ids::PROCESS_CPU_TICKS,
-    native_unit: native::TICKS,
-    raw_kind: RawKind::Counter,
-    origin_file: "stat",
-};
-const RSS: ProcessMetric = ProcessMetric {
-    short_name: "rss",
-    metric_id: ids::PROCESS_RSS,
-    native_unit: native::BYTES,
-    raw_kind: RawKind::Gauge,
-    origin_file: "stat",
-};
-const UID: ProcessMetric = ProcessMetric {
-    short_name: "uid",
-    metric_id: ids::PROCESS_UID,
-    native_unit: native::COUNT,
-    raw_kind: RawKind::Static,
-    origin_file: "owner",
-};
+/// The source of the record: its CPU ticks, the value it carries.
+const CPU_TICKS_CHANNEL: &str = "cpu.ticks";
 
 impl ProcessIdentity {
     fn new(scan: &ProcessScan<'_>, pid: Pid, stat: &PidStat) -> Option<Self> {
@@ -378,25 +397,17 @@ impl ProcessIdentity {
         })
     }
 
-    fn descriptor(
-        &self,
-        scan: &ProcessScan<'_>,
-        metric: &ProcessMetric,
-        name: &str,
-    ) -> Option<SourceDescriptor> {
-        let origin = format!(
-            "procfs:{}/{}:{}",
-            self.device_path, metric.origin_file, self.device_id
-        );
+    fn descriptor(&self, scan: &ProcessScan<'_>, channel: &str) -> Option<SourceDescriptor> {
+        let origin = format!("procfs:{}/stat:{}", self.device_path, self.device_id);
         let spec = SourceSpec {
             device_id: &self.device_id,
-            channel: metric.short_name,
+            channel: CPU_TICKS_CHANNEL,
             entity: &self.entity_id,
             scope: &self.scope,
-            metric_id: metric.metric_id,
+            metric_id: ids::PROCESS_CPU_TICKS,
             group: groups::PROCESS,
-            native_unit: metric.native_unit,
-            raw_kind: metric.raw_kind,
+            native_unit: native::TICKS,
+            raw_kind: RawKind::Counter,
             driver: DRIVER,
             device_path: &self.device_path,
             origin: &origin,
@@ -408,58 +419,13 @@ impl ProcessIdentity {
         // Each ProcessKey is its own incarnation (the start time is part of
         // the source id), so the generation never needs bumping.
         descriptor.generation = 1;
-        descriptor.channel = name.to_owned();
+        descriptor.channel = channel.to_owned();
         Some(descriptor)
     }
-
-    fn cpu_ticks_record(
-        &self,
-        scan: &ProcessScan<'_>,
-        stat: &PidStat,
-        window: ReadWindow,
-        name: &str,
-    ) -> Option<Observation> {
-        let descriptor = self.descriptor(scan, &CPU_TICKS, name)?;
-        u64_outcome_record(scan.plan, &descriptor, cpu_ticks(stat), window)
-    }
-
-    fn rss_record(
-        &self,
-        scan: &ProcessScan<'_>,
-        stat: &PidStat,
-        window: ReadWindow,
-        name: &str,
-    ) -> Option<Observation> {
-        let descriptor = self.descriptor(scan, &RSS, name)?;
-        u64_outcome_record(
-            scan.plan,
-            &descriptor,
-            rss_bytes(stat, scan.page_size),
-            window,
-        )
-    }
-
-    fn uid_record(
-        &self,
-        scan: &ProcessScan<'_>,
-        uid: &io::Result<u32>,
-        window: ReadWindow,
-        name: &str,
-    ) -> Option<Observation> {
-        let descriptor = self.descriptor(scan, &UID, name)?;
-        match uid {
-            Ok(uid) => ok_record(
-                scan.plan,
-                &descriptor,
-                Scalar::from_u64(u64::from(*uid)),
-                Quality::Verified,
-                window,
-                Vec::new(),
-            ),
-            Err(error) => io_failed_record(scan.plan, &descriptor, error, window),
-        }
-    }
 }
+
+/// Reason code of an owner that could not be read (the process stays).
+const OWNER_UNREADABLE: &str = "OWNER_UNREADABLE";
 
 /// utime + stime: two same-unit counters of one read, summed exactly.
 fn cpu_ticks(stat: &PidStat) -> Result<u64, DerivationFailure> {
@@ -472,14 +438,23 @@ fn cpu_ticks(stat: &PidStat) -> Result<u64, DerivationFailure> {
     }
 }
 
-/// Resident pages × page size, without overflow and never guessed.
-fn rss_bytes(stat: &PidStat, page_size: Option<u64>) -> Result<u64, DerivationFailure> {
-    let page_size = page_size.ok_or((ReadStatus::Unsupported, "PAGE_SIZE_UNKNOWN"))?;
+/// The reaped children's time; a column the kernel lacks counts as zero,
+/// as a kernel without it has spent none there.
+fn reaped_ticks(stat: &PidStat) -> u64 {
+    let ticks = |field: Field<u64>| match field {
+        Field::Value(value) => value,
+        Field::Absent | Field::Invalid => 0,
+    };
+    ticks(stat.cutime).saturating_add(ticks(stat.cstime))
+}
+
+/// Resident pages × page size, without overflow and never guessed; the
+/// error is the reason code the record carries instead.
+fn rss_bytes(stat: &PidStat, page_size: Option<u64>) -> Result<u64, &'static str> {
+    let page_size = page_size.ok_or("PAGE_SIZE_UNKNOWN")?;
     match stat.rss_pages {
-        Field::Value(pages) => pages
-            .checked_mul(page_size)
-            .ok_or((ReadStatus::Error, "RSS_BYTES_OVERFLOW")),
-        Field::Absent => Err((ReadStatus::Unsupported, FIELD_ABSENT)),
-        Field::Invalid => Err((ReadStatus::Error, PARSE_ERROR)),
+        Field::Value(pages) => pages.checked_mul(page_size).ok_or("RSS_BYTES_OVERFLOW"),
+        Field::Absent => Err("RSS_FIELD_ABSENT"),
+        Field::Invalid => Err("RSS_PARSE_ERROR"),
     }
 }

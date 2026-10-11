@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use dgxtop_core::action::Signal;
-use dgxtop_core::canonical::{ProcessRow, ProcessTable};
+use dgxtop_core::canonical::{ProcessDescendants, ProcessRow, ProcessTable};
 use dgxtop_core::identity::{EntityId, ProcessKey};
 use dgxtop_core::process_history::{
     EndCause, ProcessHistoryLoad, RunBucket, RunDetails, RunMetric, Tier,
@@ -159,14 +159,14 @@ fn samples_aggregate_the_run_and_minutes_reach_the_journal() {
 
 /// Records what the book hands the deriver and gives values that tell
 /// the readings apart: the read time as the disk read rate, the threads as
-/// read, and the read time as the descendants' base.
+/// read, and the read time as the IO base.
 #[derive(Debug, Default)]
 struct RecordingDeriver {
-    calls: Mutex<Vec<(ProbeState, u64, Option<u64>)>>,
+    calls: Mutex<Vec<(ProbeState, u64)>>,
 }
 
 impl RecordingDeriver {
-    fn calls(&self) -> Vec<(ProbeState, u64, Option<u64>)> {
+    fn calls(&self) -> Vec<(ProbeState, u64)> {
         self.calls.lock().unwrap().clone()
     }
 }
@@ -177,18 +177,18 @@ impl ProbeDeriver for RecordingDeriver {
         previous: &ProbeState,
         reading: &ProbeReading,
         read_boot_ns: u64,
-        clk_tck: Option<u64>,
     ) -> ProbeState {
-        self.calls
-            .lock()
-            .unwrap()
-            .push((*previous, read_boot_ns, clk_tck));
+        self.calls.lock().unwrap().push((*previous, read_boot_ns));
         #[allow(clippy::cast_precision_loss)]
         let as_value = |value: u64| value as f64;
         let mut next = *previous;
         next.values.disk = [Some(as_value(read_boot_ns / SECOND)), None];
         next.values.threads = reading.threads.map(as_value);
-        next.bases.child_ticks = Some((read_boot_ns, read_boot_ns));
+        let counters = IoCounters {
+            read_bytes: read_boot_ns,
+            write_bytes: 0,
+        };
+        next.bases.io = Some((counters, read_boot_ns));
         next
     }
 }
@@ -225,8 +225,8 @@ fn probes_give_the_full_command_and_details_once() {
 }
 
 /// The book hands the deriver each running reading with the state the
-/// last reading left, the probe's read time and the table's clock ticks
-/// (D-79), and the next samples take the values it gives.
+/// last reading left and the probe's read time (D-79), and the next samples
+/// take the values it gives.
 #[test]
 fn the_derived_values_become_the_next_samples() {
     let deriver = RecordingDeriver::default();
@@ -238,12 +238,12 @@ fn the_derived_values_become_the_next_samples() {
     book.on_probe(&report(3, None, vec![probed]), now(3), &deriver);
     let calls = deriver.calls();
     assert_eq!(calls.len(), 2);
-    assert_eq!(calls[0], (ProbeState::default(), 2 * SECOND, Some(100)));
-    let (second_previous, second_read, _) = calls[1];
+    assert_eq!(calls[0], (ProbeState::default(), 2 * SECOND));
+    let (second_previous, second_read) = calls[1];
     assert_eq!(second_read, 3 * SECOND);
     assert_eq!(
-        second_previous.bases.child_ticks,
-        Some((2 * SECOND, 2 * SECOND)),
+        second_previous.bases.io.map(|(_, at)| at),
+        Some(2 * SECOND),
         "the state the first reading left"
     );
     let values = book.run(&key(9)).unwrap().probed();
@@ -650,4 +650,37 @@ fn a_probe_ends_a_run_even_when_tables_are_cut() {
         now(2),
     );
     assert_eq!(end_of(&book, 1), Some(EndCause::NotVisible));
+}
+
+/// The descendants come with the table row (D-79): their count, CPU and
+/// memory become the run's samples; a row without them leaves no value.
+#[test]
+fn the_rows_descendants_become_the_samples() {
+    let mut book = book();
+    let mut with = row(9, 10.0, Some(GIB));
+    with.descendants = Some(ProcessDescendants {
+        processes: 3,
+        cpu_percent: Some(150.0),
+        rss_bytes: Some(GIB),
+    });
+    observe(&mut book, 1, vec![with]);
+    observe(&mut book, 2, vec![row(9, 10.0, Some(GIB))]);
+    observe(&mut book, 3, vec![row(9, 10.0, Some(GIB))]);
+    let bucket = *book
+        .run(&key(9))
+        .unwrap()
+        .series()
+        .buckets(Tier::Recent)
+        .next()
+        .unwrap();
+    assert_eq!(bucket.value(RunMetric::Children).mean(), Some(3.0));
+    assert_eq!(bucket.value(RunMetric::ChildrenCpu).mean(), Some(150.0));
+    #[allow(clippy::cast_precision_loss)]
+    let held = GIB as f64;
+    assert_eq!(bucket.value(RunMetric::ChildrenMemory).mean(), Some(held));
+    assert_eq!(
+        bucket.value(RunMetric::Children).count,
+        1,
+        "the rows without descendants add no value"
+    );
 }

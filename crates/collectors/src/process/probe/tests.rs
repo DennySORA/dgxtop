@@ -1,12 +1,10 @@
 use dgxtop_core::identity::{Pid, PidNamespace, ProcessKey};
-use dgxtop_core::process_probe::{ChildUsage, IoCounters, ProbeLiveness, ProbeReading};
+use dgxtop_core::process_probe::{IoCounters, ProbeLiveness, ProbeReading};
 use dgxtop_core::testing::{boot_id, host_id};
 
 use super::*;
 
 const SECOND: u64 = NANOS_PER_SECOND;
-const GIB: u64 = 1 << 30;
-const CLK_TCK: Option<u64> = Some(100);
 
 fn key() -> ProcessKey {
     ProcessKey {
@@ -29,22 +27,17 @@ fn running(io: Option<(u64, u64)>) -> ProbeReading {
     }
 }
 
-fn with_children(ticks: u64) -> ProbeReading {
+fn with_counts() -> ProbeReading {
     let mut reading = running(None);
     reading.threads = Some(24);
     reading.swap_bytes = Some(4096);
     reading.open_files = Some(31);
-    reading.children = Some(ChildUsage {
-        processes: 4,
-        cpu_ticks: ticks,
-        rss_bytes: Some(3 * GIB),
-    });
     reading
 }
 
 /// Derives `reading` read at `second` from `state`.
 fn derive(state: &ProbeState, reading: &ProbeReading, second: u64) -> ProbeState {
-    ProcessProbeDeriver.derive(state, reading, second * SECOND, CLK_TCK)
+    ProcessProbeDeriver.derive(state, reading, second * SECOND)
 }
 
 /// The IO counters become disk rates from the second reading on.
@@ -82,44 +75,16 @@ fn unreadable_counters_clear_and_a_zero_interval_keeps_the_rates() {
     assert_eq!(again.values.disk, [None, None], "it counts from scratch");
 }
 
-/// The threads, swap, open files and descendants become values (D-77): the
-/// descendants' CPU from their ticks since the last reading.
+/// The threads, swap and open files become values as read (D-77); one
+/// that could not be read is unknown.
 #[test]
-fn probes_give_threads_swap_files_and_descendants() {
-    let first = derive(&ProbeState::default(), &with_children(1_000), 1);
-    assert_eq!(first.values.children_cpu, None, "a rate needs two readings");
-    // 300 ticks in 2 s at 100 a second: one and a half cores.
-    let second = derive(&first, &with_children(1_300), 3);
-    let values = second.values;
-    assert_eq!(values.children_cpu, Some(150.0));
-    assert_eq!(values.children, Some(4.0));
-    #[allow(clippy::cast_precision_loss)]
-    let held = (3 * GIB) as f64;
-    assert_eq!(values.children_memory, Some(held));
+fn probes_give_threads_swap_and_files() {
+    let values = derive(&ProbeState::default(), &with_counts(), 1).values;
     assert_eq!(
         (values.threads, values.swap, values.open_files),
         (Some(24.0), Some(4096.0), Some(31.0))
     );
-    // A descendant that left the tree unreaped takes its time along: no
-    // rate for that reading, and the next counts from it.
-    let dropped = derive(&second, &with_children(900), 4);
-    assert_eq!(dropped.values.children_cpu, None);
-    assert_eq!(dropped.values.children, Some(4.0));
-    let after = derive(&dropped, &with_children(1_000), 5);
-    assert_eq!(after.values.children_cpu, Some(100.0));
-    // A list that could not be read: the descendants are unknown.
-    let unknown = derive(&after, &running(None), 6);
-    assert_eq!(unknown.values.children, None);
-    assert_eq!(unknown.values.children_memory, None);
-    assert_eq!(unknown.bases.child_ticks, None);
-    assert_eq!(unknown.values.threads, None, "nothing else was read");
-}
-
-/// Without clock ticks per second the descendants' CPU has no rate.
-#[test]
-fn descendants_cpu_needs_the_clock_ticks() {
-    let first = ProcessProbeDeriver.derive(&ProbeState::default(), &with_children(0), SECOND, None);
-    let second = ProcessProbeDeriver.derive(&first, &with_children(100), 2 * SECOND, Some(0));
-    assert_eq!(second.values.children_cpu, None);
-    assert_eq!(second.values.children, Some(4.0));
+    let unread = derive(&ProbeState::default(), &running(None), 2).values;
+    assert_eq!(unread.threads, None, "nothing else was read");
+    assert_eq!(unread.open_files, None);
 }

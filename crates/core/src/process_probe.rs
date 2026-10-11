@@ -1,9 +1,11 @@
 //! What the process history reads of the GPU processes it follows (D-76,
 //! D-77), beside the process table: the full command line, working folder,
 //! parent, program and control group, the bytes a process read and wrote,
-//! its threads, swap, open files and descendants, and how it ended. Read by a
+//! its threads, swap and open files, and how it ended. Read by a
 //! [`crate::ports::ProcessProbe`] for a few processes at a time, never for
-//! every process on the host.
+//! every process on the host. Its descendants come with the process table
+//! ([`crate::canonical::ProcessDescendants`], D-79), which scans every
+//! process anyway.
 
 use serde::{Deserialize, Serialize};
 
@@ -67,20 +69,6 @@ pub struct IoCounters {
     pub write_bytes: u64,
 }
 
-/// What a process's descendants (at any depth) use, from their `stat`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChildUsage {
-    /// Descendants running now.
-    pub processes: u64,
-    /// CPU time, clock ticks, of the descendants running now and of those
-    /// reaped since it started (the kernel adds a reaped child's time to its
-    /// parent's): it only grows while the descendants stay in the tree.
-    pub cpu_ticks: u64,
-    /// Resident memory of the descendants running now; `None` without the
-    /// page size.
-    pub rss_bytes: Option<u64>,
-}
-
 /// What was read of one process.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProbeReading {
@@ -101,8 +89,6 @@ pub struct ProbeReading {
     pub swap_bytes: Option<u64>,
     /// Entries of its `fd` folder; `None` when unreadable (another user's).
     pub open_files: Option<u64>,
-    /// `None` when the process list could not be read.
-    pub children: Option<ChildUsage>,
 }
 
 impl ProbeReading {
@@ -118,7 +104,6 @@ impl ProbeReading {
             threads: None,
             swap_bytes: None,
             open_files: None,
-            children: None,
         }
     }
 }
@@ -140,10 +125,6 @@ pub struct ProbedValues {
     /// Read and written, bytes per second.
     pub disk: [Option<f64>; 2],
     pub threads: Option<f64>,
-    pub children: Option<f64>,
-    /// Percent of one core.
-    pub children_cpu: Option<f64>,
-    pub children_memory: Option<f64>,
     pub swap: Option<f64>,
     pub open_files: Option<f64>,
 }
@@ -154,8 +135,6 @@ pub struct ProbedValues {
 pub struct ProbeBases {
     /// The IO counters, and when they were read (boot ns).
     pub io: Option<(IoCounters, u64)>,
-    /// The descendants' CPU ticks, and when they were read (boot ns).
-    pub child_ticks: Option<(u64, u64)>,
 }
 
 /// What following one process carries from one probe reading to the next

@@ -43,7 +43,7 @@ use self::mechanics::{
     GroupPagers, PlanTarget, ReprobeGate, invariant, namespace_link, plan_target,
     rejected_discovery, rejected_plan,
 };
-use self::process::{MAX_SCANNED_PROCESSES, ProcessNames, ProcessScan};
+use self::process::{MAX_SCANNED_PROCESSES, ProcessMemo, ProcessScan};
 use crate::common::{RecordFactory, SystemFiles, read_status_of};
 use crate::registry::{AdapterOptions, compile_time_adapter_id, kernel_file_manifest};
 
@@ -82,7 +82,7 @@ pub struct ProcfsAdapter {
     disk_scopes: DiskScopeCache,
     read_gate: ReprobeGate,
     pagers: GroupPagers,
-    process_names: ProcessNames,
+    process_memo: ProcessMemo,
     health: AdapterHealth,
     shut_down: bool,
 }
@@ -132,7 +132,7 @@ impl ProcfsAdapter {
             disk_scopes: DiskScopeCache::default(),
             read_gate: ReprobeGate::new(options.unsupported_probe_ms),
             pagers: GroupPagers::default(),
-            process_names: ProcessNames::default(),
+            process_memo: ProcessMemo::default(),
             health: not_discovered_health(),
             shut_down: false,
             options,
@@ -254,7 +254,7 @@ impl ProcfsAdapter {
             files,
             clock,
             constants,
-            process_names,
+            process_memo,
             ..
         } = self;
         pagers.serve(plan, target, page_size, now_boot_ns, || {
@@ -268,7 +268,7 @@ impl ProcfsAdapter {
                     pid_namespace: &namespace,
                     page_size: constants.page_size,
                 },
-                process_names,
+                process_memo,
             )
         })
     }

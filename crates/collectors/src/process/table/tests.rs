@@ -17,8 +17,40 @@ fn entity_of(pid: i32, start: u64) -> String {
     format!("process:{NS}:{pid}:{start}")
 }
 
-/// procfs records of one process: ticks, RSS (KiB) and uid.
+/// The live adapter's compact record of one process (D-79): its ticks,
+/// with RSS (KiB here, sent in bytes), uid 1000 and the rest of `stat` as
+/// tags.
 fn host(pid: i32, start: u64, ticks: u64, rss_kib: u64, at: u64) -> Vec<Observation> {
+    let stat = ProcessStat {
+        rss_bytes: Some(rss_kib * 1024),
+        uid: Some(1000),
+        ppid: Some(1),
+        state: Some('S'),
+        threads: Some(4),
+        reaped_ticks: Some(0),
+    };
+    vec![compact(pid, start, ticks, stat, at)]
+}
+
+fn compact(pid: i32, start: u64, ticks: u64, stat: ProcessStat, at: u64) -> Observation {
+    let entity = entity_of(pid, start);
+    let mut observation = reading(
+        &metric_key(&entity, ids::PROCESS_CPU_TICKS, "process"),
+        "procfs",
+        &format!("procfs:{entity}:cpu.ticks"),
+        at,
+    )
+    .unit(native::TICKS)
+    .u64(ticks)
+    .build();
+    observation.provenance.channel = format!("worker-{pid}").into();
+    observation.reason_codes = stat.reason_codes();
+    observation
+}
+
+/// A replay's records of one process: ticks, RSS (KiB) and uid, one
+/// record each.
+fn legacy_host(pid: i32, start: u64, ticks: u64, rss_kib: u64, at: u64) -> Vec<Observation> {
     let entity = entity_of(pid, start);
     let record = |metric: &str, unit: &str, value: u64| {
         let mut observation = reading(
@@ -202,12 +234,86 @@ fn a_process_name_keeps_its_folder() {
     assert_eq!(row(&batch, 3).name, "evil/name");
 }
 
-/// The uid record's channel carries the command line after the name
+/// The compact record's channel carries the command line after the name
 /// (D-73): the row keeps both apart, the command cleaned.
 #[test]
 fn a_process_row_carries_its_command_line() {
     let separator = dgxtop_core::naming::PROCESS_COMMAND_SEPARATOR;
-    let procfs: Vec<Observation> = host(7, 100, 0, 10, SECOND)
+    let mut procfs = host(7, 100, 0, 10, SECOND);
+    procfs[0].provenance.channel =
+        format!("worker-7{separator}python train.py --lr 3e-4\u{1b}[2J").into();
+    let collector = ProcessCollector::new().unwrap();
+    let batch = collect(&collector, &plan(procfs, vec![], SECOND + 1).build());
+    assert_eq!(row(&batch, 7).name, "worker-7");
+    assert_eq!(row(&batch, 7).command, "python train.py --lr 3e-4");
+    let plain = collect(
+        &collector,
+        &plan(host(8, 100, 0, 10, SECOND), vec![], SECOND + 1).build(),
+    );
+    assert_eq!(row(&plain, 8).command, "", "no command line, nothing");
+}
+
+/// The compact record (D-79) gives the row everything one `stat` read
+/// says: RSS, owner, state, parent and threads.
+#[test]
+fn a_compact_record_fills_the_whole_row() {
+    let collector = ProcessCollector::new().unwrap();
+    let batch = collect(
+        &collector,
+        &plan(host(42, 500, 1_000, 2048, SECOND), vec![], SECOND + 1).build(),
+    );
+    let process = row(&batch, 42);
+    assert_eq!(process.rss_bytes, Some(2048 * 1024));
+    assert_eq!(process.uid, Some(1000));
+    assert_eq!(process.state, Some('S'));
+    assert_eq!(process.ppid, Some(1));
+    assert_eq!(process.threads, Some(4));
+    assert_eq!(process.name, "worker-42");
+}
+
+/// A field the adapter could not read is missing, never zero.
+#[test]
+fn a_compact_record_without_rss_is_missing_not_zero() {
+    let stat = ProcessStat {
+        uid: Some(7),
+        ..ProcessStat::default()
+    };
+    let collector = ProcessCollector::new().unwrap();
+    let batch = collect(
+        &collector,
+        &plan(vec![compact(9, 1, 0, stat, SECOND)], vec![], SECOND + 1).build(),
+    );
+    let process = row(&batch, 9);
+    assert_eq!(process.rss_bytes, None);
+    assert_eq!(process.uid, Some(7));
+    assert_eq!(process.ppid, None);
+    assert_eq!(process.threads, None);
+}
+
+/// Failed ticks (an overflowing counter) say nothing of the RSS and owner
+/// read from the same `stat`.
+#[test]
+fn failed_ticks_keep_the_rest_of_the_stat() {
+    let mut record = host(9, 1, 0, 3, SECOND).remove(0);
+    record.read_status = ReadStatus::Error;
+    record.value = None;
+    record
+        .reason_codes
+        .insert(0, "CPU_TICKS_OVERFLOW".to_owned());
+    let collector = ProcessCollector::new().unwrap();
+    let batch = collect(&collector, &plan(vec![record], vec![], SECOND + 1).build());
+    let process = row(&batch, 9);
+    assert_eq!(process.cpu_percent, None);
+    assert_eq!(process.rss_bytes, Some(3 * 1024));
+    assert_eq!(process.uid, Some(1000));
+}
+
+/// A replay still sends one record per metric, the command line on the
+/// uid record (D-73): its rows stay the same.
+#[test]
+fn a_replay_records_per_metric_still_make_rows() {
+    let separator = dgxtop_core::naming::PROCESS_COMMAND_SEPARATOR;
+    let procfs: Vec<Observation> = legacy_host(7, 100, 0, 10, SECOND)
         .into_iter()
         .map(|mut observation| {
             if observation.key.metric_id.as_str() == ids::PROCESS_UID {
@@ -219,13 +325,12 @@ fn a_process_row_carries_its_command_line() {
         .collect();
     let collector = ProcessCollector::new().unwrap();
     let batch = collect(&collector, &plan(procfs, vec![], SECOND + 1).build());
-    assert_eq!(row(&batch, 7).name, "worker-7");
-    assert_eq!(row(&batch, 7).command, "python train.py --lr 3e-4");
-    let plain = collect(
-        &collector,
-        &plan(host(8, 100, 0, 10, SECOND), vec![], SECOND + 1).build(),
-    );
-    assert_eq!(row(&plain, 8).command, "", "no command line, nothing");
+    let process = row(&batch, 7);
+    assert_eq!(process.name, "worker-7");
+    assert_eq!(process.command, "python train.py --lr 3e-4");
+    assert_eq!(process.rss_bytes, Some(10 * 1024));
+    assert_eq!(process.uid, Some(1000));
+    assert_eq!(process.ppid, None, "a replay sends no parent");
 }
 
 #[test]
@@ -400,9 +505,9 @@ fn missing_clk_tck_is_never_defaulted() {
 }
 
 #[test]
-fn unreadable_rss_is_missing_not_zero() {
+fn a_replay_unreadable_rss_is_missing_not_zero() {
     let collector = ProcessCollector::new().unwrap();
-    let mut records = host(9, 1, 0, 1, SECOND);
+    let mut records = legacy_host(9, 1, 0, 1, SECOND);
     records[1] = reading(
         &metric_key(&entity_of(9, 1), ids::PROCESS_RSS, "process"),
         "procfs",
@@ -579,4 +684,173 @@ fn bases_stay_bounded_under_heavy_process_churn() {
         assert!(batch.next_state.candidates.is_empty());
         previous = Some(batch);
     }
+}
+
+// ----- descendants ----------------------------------------------------------
+
+/// A compact record of `pid` under `parent` with its own and reaped ticks
+/// and RSS bytes.
+fn child(pid: i32, parent: i64, ticks: u64, reaped: u64, rss: Option<u64>, at: u64) -> Observation {
+    let stat = ProcessStat {
+        rss_bytes: rss,
+        uid: Some(1000),
+        ppid: Some(parent),
+        state: Some('S'),
+        threads: Some(1),
+        reaped_ticks: Some(reaped),
+    };
+    compact(pid, 1, ticks, stat, at)
+}
+
+/// A training process (42) on a GPU with two dataloader workers, one with
+/// a helper of its own, beside an unrelated process (60).
+fn training(at: u64, worker_ticks: u64) -> Vec<Observation> {
+    vec![
+        child(1, 0, 9_999, 0, Some(1), at),
+        child(42, 1, 500, 40, Some(4096), at),
+        child(50, 42, worker_ticks, 0, Some(1_000 * 4096), at),
+        child(51, 42, 200, 5, Some(2_000 * 4096), at),
+        child(52, 51, 7, 0, Some(10 * 4096), at),
+        child(60, 1, 77, 0, Some(5 * 4096), at),
+    ]
+}
+
+fn on_gpu(pid: i32, at: u64) -> Vec<Observation> {
+    vec![gpu_memory(
+        "GPU-a",
+        pid,
+        reasons::GPU_USAGE_COMPUTE,
+        1 << 30,
+        at,
+    )]
+}
+
+/// Collects `first` at 1 s and `second` at 3 s under `limits`; returns
+/// both batches.
+fn descendants_cycles(
+    first: Vec<Observation>,
+    second: Vec<Observation>,
+    limits: CollectionLimits,
+) -> (CollectionBatch, CollectionBatch) {
+    let collector = ProcessCollector::new().unwrap();
+    let warmup = collect(
+        &collector,
+        &plan(first, on_gpu(42, SECOND), SECOND + 1)
+            .limits(limits)
+            .build(),
+    );
+    let next = collect(
+        &collector,
+        &plan(second, on_gpu(42, 3 * SECOND), 3 * SECOND + 1)
+            .limits(limits)
+            .after(&warmup)
+            .cycle(2)
+            .build(),
+    );
+    (warmup, next)
+}
+
+/// The descendants at any depth, their CPU time with what reaped ones
+/// left, and their memory (D-77) are counted from every scanned process,
+/// also those the bounded table drops (D-79).
+#[test]
+fn descendants_count_before_the_table_is_bounded() {
+    let (first, second) = descendants_cycles(
+        training(SECOND, 120),
+        training(3 * SECOND, 420),
+        table_limits(1, 8),
+    );
+    let table = second.process_table.as_ref().unwrap();
+    assert!(table.truncated);
+    let kept: Vec<i32> = table.rows.iter().map(|row| row.key.pid.get()).collect();
+    assert_eq!(kept, vec![42], "the workers are not kept");
+    let warm = row(&first, 42).descendants.unwrap();
+    assert_eq!(warm.processes, 3);
+    assert_eq!(warm.rss_bytes, Some(3_010 * 4096));
+    assert_eq!(warm.cpu_percent, None, "a rate needs two tables");
+    // 300 ticks in 2 s at 100 a second: one and a half cores.
+    let measured = row(&second, 42).descendants.unwrap();
+    assert_eq!(measured.cpu_percent, Some(150.0));
+    assert_eq!(measured.processes, 3);
+    let base = second
+        .next_state
+        .processes
+        .iter()
+        .find(|(key, _)| key.pid.get() == 42)
+        .map(|(_, base)| base.descendant_ticks);
+    assert_eq!(base, Some(Some((40 + 420 + 205 + 7, 3 * SECOND))));
+}
+
+/// Only GPU processes are followed: the others carry no descendants.
+#[test]
+fn only_gpu_processes_carry_descendants() {
+    let (_, second) =
+        descendants_cycles(training(SECOND, 120), training(3 * SECOND, 420), limits());
+    assert!(row(&second, 42).descendants.is_some());
+    assert_eq!(row(&second, 1).descendants, None);
+    assert_eq!(row(&second, 51).descendants, None);
+}
+
+/// A descendant that left the tree unreaped takes its time along: no rate
+/// for that table, and the next counts from it.
+#[test]
+fn a_descendant_that_left_gives_no_rate() {
+    let mut gone = training(3 * SECOND, 120);
+    gone.retain(|record| record.provenance.channel.as_ref() != "worker-51");
+    let (_, second) = descendants_cycles(training(SECOND, 120), gone, limits());
+    let descendants = row(&second, 42).descendants.unwrap();
+    assert_eq!(descendants.cpu_percent, None);
+    assert_eq!(descendants.processes, 1, "52 left with its parent 51");
+}
+
+/// An unknown memory makes the descendants' unknown, never a smaller sum.
+#[test]
+fn an_unknown_memory_is_no_descendants_memory() {
+    let mut unknown = training(SECOND, 120);
+    unknown[2] = child(50, 42, 120, 0, None, SECOND);
+    let (first, _) = descendants_cycles(unknown, training(3 * SECOND, 420), limits());
+    let descendants = row(&first, 42).descendants.unwrap();
+    assert_eq!(descendants.rss_bytes, None);
+    assert_eq!(descendants.processes, 3);
+}
+
+/// Without clock ticks per second the descendants' CPU has no rate.
+#[test]
+fn descendants_cpu_needs_the_clock_ticks() {
+    let usage = DescendantUsage {
+        processes: 4,
+        cpu_ticks: 100,
+        rss_bytes: None,
+    };
+    let before = Some((0, SECOND));
+    let now = (100, 2 * SECOND);
+    assert_eq!(
+        descendants_of(usage, before, now, Some(100)).cpu_percent,
+        Some(100.0)
+    );
+    assert_eq!(descendants_of(usage, before, now, None).cpu_percent, None);
+    assert_eq!(
+        descendants_of(usage, before, now, Some(0)).cpu_percent,
+        None
+    );
+    assert_eq!(
+        descendants_of(usage, Some((0, 2 * SECOND)), now, Some(100)).cpu_percent,
+        None,
+        "no time passed"
+    );
+    assert_eq!(descendants_of(usage, before, now, None).processes, 4);
+}
+
+/// A replay's records name no parents: no tree, no descendants.
+#[test]
+fn a_replay_has_no_descendants() {
+    let mut procfs = legacy_host(42, 1, 0, 1, SECOND);
+    procfs.extend(legacy_host(50, 1, 0, 1, SECOND));
+    let collector = ProcessCollector::new().unwrap();
+    let batch = collect(
+        &collector,
+        &plan(procfs, on_gpu(42, SECOND), SECOND + 1).build(),
+    );
+    assert!(!row(&batch, 42).gpu.is_empty());
+    assert_eq!(row(&batch, 42).descendants, None);
 }
