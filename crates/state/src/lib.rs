@@ -102,6 +102,7 @@ impl LiveState {
             shared: snapshots.clone(),
             current: initial,
             key_owners: BTreeMap::new(),
+            domain_bytes: BTreeMap::new(),
             retained,
             remembered: RememberedBatches::new(&ledger, REMEMBERED_BATCHES),
             epochs: EpochState::default(),
@@ -166,6 +167,9 @@ pub struct StateWriter {
     shared: SharedSnapshot,
     current: Arc<ImmutableSnapshot>,
     key_owners: BTreeMap<MetricKey, CollectorId>,
+    /// Accounted bytes of each published domain, so admitting a commit
+    /// does not re-estimate the whole previous domain.
+    domain_bytes: BTreeMap<CollectorId, u64>,
     retained: RetainedAllocations,
     remembered: RememberedBatches,
     epochs: EpochState,
@@ -296,12 +300,12 @@ impl StateWriter {
     fn admit(
         &mut self,
         batch: &CollectionBatch,
-        previous: Option<&DomainSnapshot>,
+        previous_bytes: Option<u64>,
     ) -> Result<Admission, Rejection> {
         self.retained.sweep();
         let domain = self.reserve(
             Partition::HotState,
-            estimate::domain_upper_bound(previous, batch),
+            estimate::domain_upper_bound(previous_bytes, batch),
             "hot_state (domain snapshot)",
         )?;
         let state = self.reserve(
@@ -358,7 +362,8 @@ impl StateWriter {
         };
         let checked = validate::check_contents(&batch, &rules)?;
         let previous = self.current.domains.get(&batch.collector_id).cloned();
-        let admission = self.admit(&batch, previous.as_deref())?;
+        let previous_bytes = self.domain_bytes.get(&batch.collector_id).copied();
+        let admission = self.admit(&batch, previous_bytes)?;
         Ok(self.build(batch, checked, previous.as_deref(), admission, now))
     }
 
@@ -509,6 +514,9 @@ impl StateWriter {
     fn publish(&mut self, change: SnapshotChange, frame: BytePermit, revision: u64, now: u64) {
         let mut domains = self.current.domains.clone();
         for (collector_id, domain, permit) in change.domains {
+            // Every permit was shrunk to its domain's estimate.
+            self.domain_bytes
+                .insert(collector_id.clone(), permit.bytes());
             let shared = Arc::new(domain);
             self.retained.track(&shared, permit);
             domains.insert(collector_id, shared);

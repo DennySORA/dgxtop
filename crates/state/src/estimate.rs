@@ -125,16 +125,12 @@ pub(crate) fn domain_bytes(domain: &DomainSnapshot) -> u64 {
         .saturating_add(explanations)
 }
 
-/// Upper bound of the domain a batch produces: the previous domain plus
-/// every value and explanation of the batch (as if all keys were new).
-pub(crate) fn domain_upper_bound(
-    previous: Option<&DomainSnapshot>,
-    batch: &CollectionBatch,
-) -> u64 {
-    let base = previous.map_or_else(
-        || bytes(size_of::<DomainSnapshot>()).saturating_add(ARC_HEADER_BYTES),
-        domain_bytes,
-    );
+/// Upper bound of the domain a batch produces: the previous domain's
+/// bytes plus every value and explanation of the batch (as if all keys
+/// were new).
+pub(crate) fn domain_upper_bound(previous_bytes: Option<u64>, batch: &CollectionBatch) -> u64 {
+    let base = previous_bytes
+        .unwrap_or_else(|| bytes(size_of::<DomainSnapshot>()).saturating_add(ARC_HEADER_BYTES));
     let values = batch.canonical.iter().fold(0u64, |sum, value| {
         sum.saturating_add(value_entry_bytes(value))
     });

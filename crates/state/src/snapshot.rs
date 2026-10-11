@@ -1,5 +1,6 @@
 //! The published snapshot slot, domain copy-on-write and recent gaps.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
@@ -8,7 +9,7 @@ use dgxtop_core::canonical::{
     CanonicalSample, CanonicalValue, DomainSnapshot, Explanation, GapRecord, ImmutableSnapshot,
     LastGood, SnapshotEntry,
 };
-use dgxtop_core::identity::SourceId;
+use dgxtop_core::identity::{MetricKey, SourceId};
 use dgxtop_core::ports::SnapshotReader;
 
 use super::counters::StoreCounters;
@@ -134,8 +135,15 @@ impl StaleWindows<'_> {
     }
 }
 
+type SharedEntries<V> = BTreeMap<MetricKey, Arc<V>>;
+
 /// Builds the next domain snapshot: the previous samples with the batch's
 /// keys replaced. A missing value never refreshes `last_good`.
+///
+/// The maps are built in one ordered pass over the previous entries and
+/// the batch's, not cloned and then overwritten key by key; keys the batch
+/// does not touch, and explanations equal to the previous ones, keep the
+/// previous revision's shared entry (D-84).
 pub(crate) fn build_domain(
     previous: Option<&DomainSnapshot>,
     values: Vec<CanonicalValue>,
@@ -143,38 +151,79 @@ pub(crate) fn build_domain(
     windows: &StaleWindows<'_>,
     (revision, cycle_id, now_ns): (u64, u64, u64),
 ) -> DomainSnapshot {
-    let mut samples = previous
-        .map(|domain| domain.samples.clone())
-        .unwrap_or_default();
-    for value in values {
-        let kept = samples
-            .get(&value.key)
-            .and_then(|entry| entry.last_good.clone());
-        let last_good = refreshed_last_good(&value).or(kept);
-        let stale_after_boot_ns = windows.deadline(&value);
-        let sample = CanonicalSample::commit(value, revision, now_ns);
-        samples.insert(
-            sample.key.clone(),
-            Arc::new(SnapshotEntry {
+    let previous_samples = previous.map(|domain| &domain.samples);
+    let previous_explanations = previous.map(|domain| &domain.explanations);
+    let committed = values
+        .into_iter()
+        .map(|value| {
+            let kept = previous_samples
+                .and_then(|samples| samples.get(&value.key))
+                .and_then(|entry| entry.last_good.clone());
+            let last_good = refreshed_last_good(&value).or(kept);
+            let stale_after_boot_ns = windows.deadline(&value);
+            let sample = CanonicalSample::commit(value, revision, now_ns);
+            let entry = SnapshotEntry {
                 sample,
                 last_good,
                 stale_after_boot_ns,
-            }),
-        );
-    }
-    let mut explanation_map = previous
-        .map(|domain| domain.explanations.clone())
-        .unwrap_or_default();
-    for explanation in explanations {
-        explanation_map.insert(explanation.key.clone(), Arc::new(explanation));
-    }
+            };
+            (entry.sample.key.clone(), Arc::new(entry))
+        })
+        .collect();
+    let explained = explanations
+        .into_iter()
+        .map(|explanation| {
+            let shared = previous_explanations
+                .and_then(|known| known.get(&explanation.key))
+                .filter(|known| ***known == explanation)
+                .map_or_else(|| Arc::new(explanation), Arc::clone);
+            (shared.key.clone(), shared)
+        })
+        .collect();
     DomainSnapshot {
         revision,
         cycle_id,
         committed_boot_ns: now_ns,
-        samples,
-        explanations: explanation_map,
+        samples: merged(previous_samples, committed),
+        explanations: merged(previous_explanations, explained),
     }
+}
+
+/// The previous entries with `updates` replacing theirs (the last update of
+/// a key wins), in one ordered pass.
+fn merged<V>(
+    previous: Option<&SharedEntries<V>>,
+    mut updates: Vec<(MetricKey, Arc<V>)>,
+) -> SharedEntries<V> {
+    // Stable, so of two updates of one key the later stays last.
+    updates.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut updates = updates.into_iter().peekable();
+    let mut kept = previous.into_iter().flatten().peekable();
+    let mut entries: Vec<(MetricKey, Arc<V>)> = Vec::new();
+    loop {
+        let order = match (kept.peek(), updates.peek()) {
+            (None, None) => break,
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (Some((kept_key, _)), Some((update_key, _))) => (*kept_key).cmp(update_key),
+        };
+        if order == Ordering::Less {
+            if let Some((key, value)) = kept.next() {
+                entries.push((key.clone(), Arc::clone(value)));
+            }
+            continue;
+        }
+        if order == Ordering::Equal {
+            kept.next();
+        }
+        if let Some(update) = updates.next()
+            && updates.peek().is_none_or(|next| next.0 != update.0)
+        {
+            entries.push(update);
+        }
+    }
+    // Sorted and unique: the map is bulk-built without re-sorting work.
+    entries.into_iter().collect()
 }
 
 /// Bounded list of the most recent gaps; adjacent repeats of the same gap
@@ -304,6 +353,110 @@ mod tests {
             (1, 1, 11),
         );
         assert_eq!(fallback.samples[&key].stale_after_boot_ns, Some(3_010));
+    }
+
+    fn keyed_value(entity: &str, selected: f64) -> CanonicalValue {
+        CanonicalValue {
+            key: metric_key(entity, "gpu.temperature", "gpu"),
+            ..value(Some(selected), 10)
+        }
+    }
+
+    fn explanation(entity: &str, reason: &str) -> Explanation {
+        Explanation {
+            key: metric_key(entity, "gpu.temperature", "gpu"),
+            policy_revision: 1,
+            selection_state: SelectionState::Selected,
+            selected_source: Some(source_id("nvml:0:temp")),
+            pinned_source: None,
+            candidates: vec![],
+            conflict_spread: None,
+            tolerance: None,
+            switch: None,
+            reason_codes: vec![reason.to_owned()],
+        }
+    }
+
+    fn windows(periods: &BTreeMap<SourceId, u64>) -> StaleWindows<'_> {
+        StaleWindows {
+            periods,
+            stale_factor: 3,
+            default_period_ns: 1_000,
+        }
+    }
+
+    #[test]
+    fn untouched_keys_and_unchanged_explanations_keep_their_shared_entries() {
+        let periods = BTreeMap::new();
+        let first = build_domain(
+            None,
+            vec![keyed_value("gpu:0", 50.0), keyed_value("gpu:1", 51.0)],
+            vec![explanation("gpu:0", "a"), explanation("gpu:1", "a")],
+            &windows(&periods),
+            (1, 1, 11),
+        );
+        let second = build_domain(
+            Some(&first),
+            vec![keyed_value("gpu:1", 52.0), keyed_value("gpu:2", 53.0)],
+            vec![explanation("gpu:0", "a"), explanation("gpu:1", "b")],
+            &windows(&periods),
+            (2, 2, 21),
+        );
+        let key = |entity: &str| metric_key(entity, "gpu.temperature", "gpu");
+        assert_eq!(second.samples.len(), 3);
+        assert!(Arc::ptr_eq(
+            &first.samples[&key("gpu:0")],
+            &second.samples[&key("gpu:0")]
+        ));
+        assert_eq!(
+            second.samples[&key("gpu:1")].sample.value,
+            Scalar::from_f64(52.0).ok()
+        );
+        assert!(Arc::ptr_eq(
+            &first.explanations[&key("gpu:0")],
+            &second.explanations[&key("gpu:0")]
+        ));
+        assert!(!Arc::ptr_eq(
+            &first.explanations[&key("gpu:1")],
+            &second.explanations[&key("gpu:1")]
+        ));
+        assert_eq!(second.explanations[&key("gpu:1")].reason_codes, ["b"]);
+    }
+
+    #[test]
+    fn the_last_update_of_a_key_wins_whatever_the_batch_order() {
+        let periods = BTreeMap::new();
+        let previous = build_domain(
+            None,
+            vec![keyed_value("gpu:1", 1.0)],
+            vec![],
+            &windows(&periods),
+            (1, 1, 11),
+        );
+        let next = build_domain(
+            Some(&previous),
+            vec![
+                keyed_value("gpu:2", 2.0),
+                keyed_value("gpu:0", 3.0),
+                keyed_value("gpu:2", 4.0),
+            ],
+            vec![],
+            &windows(&periods),
+            (2, 2, 21),
+        );
+        let values: Vec<(String, Option<Scalar>)> = next
+            .samples
+            .values()
+            .map(|entry| (entry.sample.key.entity_id.to_string(), entry.sample.value))
+            .collect();
+        assert_eq!(
+            values,
+            vec![
+                ("gpu:0".to_owned(), Scalar::from_f64(3.0).ok()),
+                ("gpu:1".to_owned(), Scalar::from_f64(1.0).ok()),
+                ("gpu:2".to_owned(), Scalar::from_f64(4.0).ok()),
+            ]
+        );
     }
 
     #[test]
