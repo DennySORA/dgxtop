@@ -294,6 +294,7 @@ pub(crate) fn process_row(pid: i64, name: &str) -> ProcessRow {
     ProcessRow {
         key: process_key(pid, 1000),
         name: name.to_owned(),
+        command: String::new(),
         uid: Some(1000),
         state: Some('S'),
         cpu_percent: None,

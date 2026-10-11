@@ -59,9 +59,13 @@ GPUs first, shows the whole machine around them, and keeps the history.
 
   A value the GPU does not report gets no row.
 - **GPU processes.** Every process using a GPU, with its GPU, type (compute or graphics), GPU
-  memory, CPU and RAM. Filter by GPU or name, sort by any column, and stop a process after a
-  confirmation. The four processes holding the most GPU memory each get a color: their parts of
-  the memory and VRAM bars and charts use it, and so does the marker beside their names.
+  memory, CPU and RAM. A process is named by what it runs, not only by its executable:
+  `python -m vllm.entrypoints.openai.api_server` shows as `vllm.api_server`, and `python main.py`
+  run in a `ComfyUI` folder as `ComfyUI/main`. Filter by GPU or name, sort by any column, and stop
+  a process after a confirmation. The eight processes holding the most GPU memory each get a
+  color: their parts of the memory and VRAM bars and charts use it, and so does the marker beside
+  their names. The color comes from the name, so a job gets the same color after it or dgxtop
+  restarts, unless another running process already holds it.
 - **History.** Charts from 5 minutes to 24 hours on one time axis:
   - CPU, memory, disks and network;
   - each GPU's utilization, memory, temperature and power;

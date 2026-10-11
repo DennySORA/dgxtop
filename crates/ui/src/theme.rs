@@ -13,18 +13,26 @@ const MID_LEVEL: f64 = 0.70;
 /// Ratio above which gauges switch to the "high" color.
 const HIGH_LEVEL: f64 = 0.90;
 
-/// Colors of the tracked GPU processes, in slot order (D-64), the same in
-/// every theme: orchid, blue, violet, plum. Validated as a categorical set
-/// on each theme's background: every pair stays apart for full color vision
-/// and under protanopia and deuteranopia (OKLab ΔE ≥ 15.5 / ≥ 8.5), each
-/// stays as far from the gauge levels, the track and the gray of other
-/// processes, and each holds 3:1 contrast. Their hues avoid green, amber
-/// and red, which say how full a bar is.
+/// Colors of the tracked GPU processes, in slot order (D-64, D-65), the
+/// same in every theme: teal, orange, magenta, blue, rose, violet, olive,
+/// orchid. Validated as a categorical set on each theme's background
+/// with the data-viz palette validator: any two colors, since any two can
+/// meet in a bar, stay apart for full color vision (OKLab ΔE ≥ 16.0) and
+/// under protanopia and deuteranopia (ΔE ≥ 7.9, so names always go beside
+/// them); neighbors in this order (which processes of one name take,
+/// wrapping around) at least ΔE 21.6 / 10.3; each is at least ΔE 12.3 /
+/// 6.0 from the gauge levels, the tracks and the gray of other processes,
+/// darker than the green and amber that say how full a bar is; each holds
+/// 3:1 contrast.
 const PROCESS_COLORS: [Color; PROCESS_COLOR_SLOTS] = [
-    Color::Rgb(0xcc, 0x5a, 0xcb),
-    Color::Rgb(0x2c, 0x91, 0xf4),
-    Color::Rgb(0x73, 0x4a, 0xd2),
-    Color::Rgb(0x97, 0x50, 0x7b),
+    Color::Rgb(0x1e, 0x6b, 0x98),
+    Color::Rgb(0xd3, 0x7c, 0x07),
+    Color::Rgb(0xc9, 0x03, 0xa4),
+    Color::Rgb(0x4a, 0x8d, 0xef),
+    Color::Rgb(0x9e, 0x4a, 0x5f),
+    Color::Rgb(0x8a, 0x3c, 0xe1),
+    Color::Rgb(0x75, 0x73, 0x07),
+    Color::Rgb(0xbc, 0x77, 0xbc),
 ];
 
 /// Resolved colors of one theme.
@@ -297,9 +305,13 @@ mod tests {
     fn process_colors_are_fixed_and_never_a_level() {
         for theme in [Theme::Dark, Theme::Cyan, Theme::Green, Theme::Amber] {
             let palette = ThemePalette::for_theme(theme);
-            let colors: Vec<Color> = (0..4).map(|slot| palette.process_color(slot)).collect();
+            let slots = u8::try_from(PROCESS_COLOR_SLOTS).unwrap();
+            let colors: Vec<Color> = (0..slots).map(|slot| palette.process_color(slot)).collect();
             assert_eq!(colors, PROCESS_COLORS.to_vec());
-            assert_eq!(palette.process_color(4), palette.other_processes_color());
+            assert_eq!(
+                palette.process_color(slots),
+                palette.other_processes_color()
+            );
             for color in colors {
                 assert!(
                     ![palette.gauge_low, palette.gauge_mid, palette.gauge_high].contains(&color)

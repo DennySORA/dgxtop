@@ -178,6 +178,56 @@ fn cpu_percent_counts_cores_and_may_exceed_100() {
     );
 }
 
+/// The adapter's display name may name a folder (`ComfyUI/main`, D-65) and
+/// a kernel thread's `comm` holds a slash (`kworker/0:1H`): a row keeps the
+/// whole name, cleaned of control sequences.
+#[test]
+fn a_process_name_keeps_its_folder() {
+    let named = |pid: i32, name: &str| -> Vec<Observation> {
+        host(pid, 100, 0, 10, SECOND)
+            .into_iter()
+            .map(|mut observation| {
+                observation.provenance.channel = name.to_owned().into();
+                observation
+            })
+            .collect()
+    };
+    let mut procfs = named(1, "ComfyUI/main");
+    procfs.extend(named(2, "kworker/0:1H"));
+    procfs.extend(named(3, "evil\u{1b}[2J/name"));
+    let collector = ProcessCollector::new().unwrap();
+    let batch = collect(&collector, &plan(procfs, vec![], SECOND + 1).build());
+    assert_eq!(row(&batch, 1).name, "ComfyUI/main");
+    assert_eq!(row(&batch, 2).name, "kworker/0:1H");
+    assert_eq!(row(&batch, 3).name, "evil/name");
+}
+
+/// The uid record's channel carries the command line after the name
+/// (D-73): the row keeps both apart, the command cleaned.
+#[test]
+fn a_process_row_carries_its_command_line() {
+    let separator = dgxtop_core::naming::PROCESS_COMMAND_SEPARATOR;
+    let procfs: Vec<Observation> = host(7, 100, 0, 10, SECOND)
+        .into_iter()
+        .map(|mut observation| {
+            if observation.key.metric_id.as_str() == ids::PROCESS_UID {
+                observation.provenance.channel =
+                    format!("worker-7{separator}python train.py --lr 3e-4\u{1b}[2J").into();
+            }
+            observation
+        })
+        .collect();
+    let collector = ProcessCollector::new().unwrap();
+    let batch = collect(&collector, &plan(procfs, vec![], SECOND + 1).build());
+    assert_eq!(row(&batch, 7).name, "worker-7");
+    assert_eq!(row(&batch, 7).command, "python train.py --lr 3e-4");
+    let plain = collect(
+        &collector,
+        &plan(host(8, 100, 0, 10, SECOND), vec![], SECOND + 1).build(),
+    );
+    assert_eq!(row(&plain, 8).command, "", "no command line, nothing");
+}
+
 #[test]
 fn reused_pid_with_new_start_time_never_inherits_the_old_base() {
     let batch = two_cycles(

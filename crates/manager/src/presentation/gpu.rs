@@ -409,6 +409,7 @@ mod tests {
         Fixture, NOW, candidate, entity_record, explanation_for, gpu_link, host_status,
         process_row, sample,
     };
+    use crate::process_memory::preferred_color;
     use dgxtop_core::canonical::{CandidateDisposition, ProcessGpuLink, RejectReason};
     use dgxtop_core::metric::CanonicalUnit;
     use dgxtop_core::observation::EntityKind;
@@ -528,8 +529,12 @@ mod tests {
                 .map(|share| (share.slot, share.pid, share.bytes))
                 .collect()
         };
-        assert_eq!(held(&view.cards[0]), vec![(0, 1, 6 << 30), (1, 2, 1 << 30)]);
-        assert_eq!(held(&view.cards[1]), vec![(1, 2, 3 << 30)]);
+        // Each process's color follows its name (D-65).
+        let (train, ddp) = (preferred_color("train"), preferred_color("ddp"));
+        let mut expected = vec![(train, 1, 6 << 30), (ddp, 2, 1 << 30)];
+        expected.sort_unstable();
+        assert_eq!(held(&view.cards[0]), expected);
+        assert_eq!(held(&view.cards[1]), vec![(ddp, 2, 3 << 30)]);
     }
 
     #[test]

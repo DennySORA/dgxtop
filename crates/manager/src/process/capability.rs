@@ -320,6 +320,7 @@ mod tests {
         let foreign = ProcessRow {
             key: key(42),
             name: "x".into(),
+            command: String::new(),
             uid: Some(0),
             state: None,
             cpu_percent: None,

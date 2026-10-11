@@ -126,6 +126,113 @@ fn hostile_command_names_are_sanitized() {
     assert_eq!(records[0].provenance.channel, "evilname");
 }
 
+/// A stat line of process `pid` whose parent is `parent`.
+fn write_child(tree: &FakeTree, pid: u32, comm: &str, parent: u32, start: u64) {
+    let stat = format!(
+        "{pid} ({comm}) S {parent} {pid} {pid} 0 -1 4194560 100 0 0 0 1 1 0 0 20 0 1 0 {start} 1234567 10 18446744073709551615 1 1 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0\n"
+    );
+    tree.write(&format!("/proc/{pid}/stat"), &stat);
+}
+
+/// D-65: an interpreter's process is named by what it runs, never by an
+/// option value; a child whose command line names no program takes its
+/// parent's name; a generic name takes its project folder. D-73: the uid
+/// record's channel also carries the command line after the separator;
+/// the command line is read once per process.
+#[test]
+fn processes_are_named_by_what_they_run_and_command_lines_are_read_once() {
+    let tree = FakeTree::new("process-names");
+    write_namespaces(&tree);
+    write_process(&tree, 1, "systemd", 10, 5, 1, "100");
+    write_process(&tree, 50, "python", 1, 1, 500, "10");
+    tree.write(
+        "/proc/50/cmdline",
+        "/venv/bin/python\0-u\0-m\0acme_llm.training.train\0--token\0SECRET\0",
+    );
+    write_child(&tree, 51, "python", 50, 600);
+    tree.write(
+        "/proc/51/cmdline",
+        "python\0-c\0from multiprocessing.spawn import spawn_main\0--multiprocessing-fork\0",
+    );
+    write_process(&tree, 60, "pt_main_thread", 1, 1, 700, "10");
+    tree.write("/proc/60/cmdline", "python3\0main.py\0--listen\0");
+    tree.symlink("/proc/60/cwd", "/home/u/ComfyUI");
+    let files = tree.faulty();
+    let mut adapter = ProcfsAdapter::with_host_constants(
+        FakeClock::new(1_000_000_000),
+        host_id("test-host"),
+        files.clone(),
+        AdapterOptions::default(),
+        HostConstants {
+            clk_tck: Some(100),
+            page_size: Some(4096),
+        },
+    );
+    for cycle in 1..=2 {
+        let records = records(&read_all(&mut adapter, ADAPTER, "process", cycle));
+        let name = |pid: u32| {
+            by_metric(&records, ids::PROCESS_RSS, pid)
+                .provenance
+                .channel
+                .to_string()
+        };
+        assert_eq!(
+            [name(1), name(50), name(51), name(60)],
+            [
+                "systemd",
+                "acme_llm.train",
+                "acme_llm.train",
+                "ComfyUI/main"
+            ]
+        );
+        // No name holds an option value; the command line, shown as it is,
+        // rides on the uid record only.
+        for metric in [ids::PROCESS_RSS, ids::PROCESS_CPU_TICKS] {
+            assert!(
+                !by_metric(&records, metric, 50)
+                    .provenance
+                    .channel
+                    .contains("SECRET")
+            );
+        }
+        let uid = by_metric(&records, ids::PROCESS_UID, 50)
+            .provenance
+            .channel
+            .to_string();
+        assert_eq!(
+            uid,
+            format!(
+                "acme_llm.train{}/venv/bin/python -u -m acme_llm.training.train --token SECRET",
+                dgxtop_core::naming::PROCESS_COMMAND_SEPARATOR
+            )
+        );
+        assert_eq!(
+            by_metric(&records, ids::PROCESS_UID, 1).provenance.channel,
+            "systemd",
+            "no command line, no separator"
+        );
+    }
+    assert_eq!(
+        files.reads_of("/proc/50/cmdline"),
+        1,
+        "read once per process"
+    );
+    assert_eq!(files.reads_of("/proc/60/cwd"), 1);
+    assert_eq!(
+        files.reads_of("/proc/1/cmdline"),
+        1,
+        "every command line once"
+    );
+    // A program that sets its title changes its comm: its name is read again.
+    write_process(&tree, 50, "VLLM::Worker", 1, 1, 500, "10");
+    tree.write("/proc/50/cmdline", "VLLM::Worker\0");
+    let records = records(&read_all(&mut adapter, ADAPTER, "process", 3));
+    assert_eq!(
+        by_metric(&records, ids::PROCESS_RSS, 50).provenance.channel,
+        "VLLM::Worker"
+    );
+}
+
 #[test]
 fn paging_is_consistent_within_a_cycle_and_resnapshots_the_next_cycle() {
     let tree = process_tree("process-paging");

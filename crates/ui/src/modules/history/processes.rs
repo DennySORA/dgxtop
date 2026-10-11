@@ -198,6 +198,7 @@ mod tests {
             slot,
             pid,
             name: name.to_owned(),
+            command: String::new(),
             gpu_label: "GPU 0".to_owned(),
             unit: CanonicalUnit::Bytes,
             mean: Some(mean_gib * GIB),

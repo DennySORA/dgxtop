@@ -173,6 +173,7 @@ mod tests {
     use crate::presentation::testkit::{
         Fixture, NOW, entity_record, gpu_link, process_key, process_row, sample,
     };
+    use crate::process_memory::preferred_color;
     use dgxtop_core::naming::attributes;
     use dgxtop_core::observation::EntityKind;
 
@@ -300,13 +301,14 @@ mod tests {
             .iter()
             .map(|share| (share.slot, share.name.as_str(), share.bytes))
             .collect();
-        assert_eq!(shares, vec![(0, "train", 6 << 30)]);
+        let train = preferred_color("train");
+        assert_eq!(shares, vec![(train, "train", 6 << 30)]);
         let parts: Vec<(u8, Vec<Option<f64>>)> = view
             .gpu_process_trends
             .iter()
             .map(|part| (part.slot, part.trend.points.clone()))
             .collect();
-        assert_eq!(parts, vec![(0, vec![Some(6.0)])]);
+        assert_eq!(parts, vec![(train, vec![Some(6.0)])]);
     }
 
     #[test]

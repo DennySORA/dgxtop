@@ -411,6 +411,8 @@ fn disk_field(stats: &[&str], field: DiskField) -> Field<u64> {
 pub(crate) struct PidStat {
     pub pid: i64,
     pub comm: String,
+    /// The parent's PID (field 4); `None` when unreadable.
+    pub ppid: Option<i64>,
     pub start_time_ticks: u64,
     pub utime: Field<u64>,
     pub stime: Field<u64>,
@@ -418,6 +420,7 @@ pub(crate) struct PidStat {
 }
 
 /// Positions after the closing parenthesis of `comm` (field 3 is index 0).
+const STAT_PPID: usize = 1;
 const STAT_UTIME: usize = 11;
 const STAT_STIME: usize = 12;
 const STAT_START_TIME: usize = 19;
@@ -440,6 +443,9 @@ pub(crate) fn parse_pid_stat(text: &str) -> Option<PidStat> {
     Some(PidStat {
         pid,
         comm,
+        ppid: rest
+            .get(STAT_PPID)
+            .and_then(|ppid| ppid.parse::<i64>().ok()),
         start_time_ticks,
         utime: u64_field(rest.get(STAT_UTIME).copied()),
         stime: u64_field(rest.get(STAT_STIME).copied()),

@@ -465,6 +465,7 @@ mod tests {
                 .map(|pid| ProcessRow {
                     key: key(*pid),
                     name: format!("p{pid}"),
+                    command: String::new(),
                     uid: Some(1000),
                     state: None,
                     cpu_percent: None,

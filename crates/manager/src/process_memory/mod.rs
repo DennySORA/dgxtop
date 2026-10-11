@@ -1,22 +1,25 @@
 //! What each GPU process holds over time (D-64), fed from the committed
 //! process tables.
 //!
-//! The processes that hold the most GPU memory get a color slot each
-//! ([`slots`]); the views draw their parts of the memory bars and charts
-//! in it, and the process table names it. For every tracked process the
+//! The processes that hold the most GPU memory get a color each, the one
+//! their display name hashes to when they can, so a job keeps its color
+//! ([`tracking`], D-65); the views draw their parts of the memory bars and
+//! charts in it, and the process table names it. For every tracked process the
 //! book records what it held on each GPU ([`buckets`]): a table's values
 //! hold until the next table, at most [`HOLD_PERIODS`] sampling periods, so
 //! a stalled read never stretches a value. The time process lists were
 //! recorded is kept beside them: it is the time base of a process's part
 //! of a chart, in which a time it was not listed counts as 0.
 //!
-//! Bounded: [`PROCESS_COLOR_SLOTS`] processes, 24 hours each, recorded
-//! while dgxtop runs (process memory never becomes a store series,
-//! METRICS.md). A process that loses its slot takes its record with it;
-//! its memory then counts among the other processes.
+//! Bounded: [`tracking::MAX_TRACKED_PROCESSES`] processes, 24 hours each,
+//! recorded while dgxtop runs (process memory never becomes a store
+//! series, METRICS.md). An exited process keeps its record until it is a
+//! day old or the oldest exited record gives way to a new process; a
+//! process that loses its place takes its record with it, and its memory
+//! then counts among the other processes.
 
 mod buckets;
-mod slots;
+mod tracking;
 
 use std::collections::BTreeMap;
 
@@ -26,21 +29,27 @@ use dgxtop_core::identity::{EntityId, ProcessKey};
 
 pub(crate) use self::buckets::Held;
 use self::buckets::TimeBuckets;
-use self::slots::ColorSlots;
+#[cfg(test)]
+pub(crate) use self::tracking::preferred_color;
+use self::tracking::{Listed as TrackedListed, Tracking};
 
 /// A table's values hold for at most this many sampling periods.
 const HOLD_PERIODS: u64 = 3;
 /// A process not listed for this long has no time left in any history
-/// window; it gives its slot and record up.
+/// window; it gives its place and record up.
 const RETENTION_NS: u64 = 86_400 * NANOS_PER_SECOND;
 
 /// A tracked process as the views show it.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TrackedProcess<'a> {
+    /// Its color (`0..PROCESS_COLOR_SLOTS`); an exited process's may be a
+    /// listed one's too.
     pub(crate) slot: u8,
     pub(crate) key: &'a ProcessKey,
     pub(crate) pid: i32,
     pub(crate) name: &'a str,
+    /// Its command line as last listed (D-73); empty when unknown.
+    pub(crate) command: &'a str,
     /// Bytes on each GPU in the newest table; empty when it is not listed.
     pub(crate) current: &'a [(EntityId, u64)],
 }
@@ -63,6 +72,7 @@ impl TrackedProcess<'_> {
 struct ProcessRecord {
     pid: i32,
     name: String,
+    command: String,
     current: Vec<(EntityId, u64)>,
     gpus: BTreeMap<EntityId, TimeBuckets>,
 }
@@ -78,7 +88,7 @@ struct Pending {
 /// The process memory record (module docs).
 #[derive(Debug, Clone)]
 pub struct ProcessMemoryBook {
-    slots: ColorSlots,
+    tracking: Tracking,
     processes: BTreeMap<ProcessKey, ProcessRecord>,
     /// When process lists were recorded.
     listing: TimeBuckets,
@@ -92,7 +102,7 @@ impl ProcessMemoryBook {
     /// An empty book for tables read every `interval_ms`.
     pub fn new(interval_ms: u64) -> Self {
         Self {
-            slots: ColorSlots::default(),
+            tracking: Tracking::default(),
             processes: BTreeMap::new(),
             listing: TimeBuckets::default(),
             pending: None,
@@ -117,12 +127,16 @@ impl ProcessMemoryBook {
         self.last_table = Some(stamp);
         self.close_pending(now);
         let listed: Vec<Listed<'_>> = table.rows.iter().filter_map(Listed::of).collect();
-        let sizes: Vec<(ProcessKey, u64)> = listed
+        let sizes: Vec<TrackedListed<'_>> = listed
             .iter()
-            .map(|process| (process.row.key.clone(), total(&process.gpus)))
+            .map(|process| TrackedListed {
+                key: &process.row.key,
+                name: &process.row.name,
+                bytes: total(&process.gpus),
+            })
             .collect();
-        let mut lost = self.slots.update(&sizes, now);
-        lost.extend(self.slots.expire(now.saturating_sub(RETENTION_NS)));
+        let mut lost = self.tracking.update(&sizes, now);
+        lost.extend(self.tracking.expire(now.saturating_sub(RETENTION_NS)));
         for key in lost {
             self.processes.remove(&key);
         }
@@ -158,7 +172,7 @@ impl ProcessMemoryBook {
         }
         let mut held = Vec::new();
         for Listed { row, gpus } in listed {
-            if self.slots.slot_of(&row.key).is_none() {
+            if self.tracking.color_of(&row.key).is_none() {
                 continue;
             }
             held.extend(
@@ -171,24 +185,28 @@ impl ProcessMemoryBook {
                 .or_insert_with(|| ProcessRecord {
                     pid: row.key.pid.get(),
                     name: row.name.clone(),
+                    command: String::new(),
                     current: Vec::new(),
                     gpus: BTreeMap::new(),
                 });
             record.name.clone_from(&row.name);
+            if !row.command.is_empty() {
+                record.command.clone_from(&row.command);
+            }
             record.current = gpus;
         }
         self.pending = Some(Pending { at_ns, held });
     }
 
-    /// The color slot of `key` while it is tracked.
+    /// The color of `key` while it is tracked.
     pub(crate) fn slot_of(&self, key: &ProcessKey) -> Option<u8> {
-        self.slots.slot_of(key)
+        self.tracking.color_of(key)
     }
 
-    /// Every tracked process, in slot order.
+    /// Every tracked process, in color order.
     pub(crate) fn tracked(&self) -> Vec<TrackedProcess<'_>> {
         let mut tracked: Vec<TrackedProcess<'_>> = self
-            .slots
+            .tracking
             .holders()
             .filter_map(|(slot, key, _)| {
                 let record = self.processes.get(key)?;
@@ -197,11 +215,17 @@ impl ProcessMemoryBook {
                     key,
                     pid: record.pid,
                     name: &record.name,
+                    command: &record.command,
                     current: &record.current,
                 })
             })
             .collect();
-        tracked.sort_by_key(|process| process.slot);
+        tracked.sort_by(|left, right| {
+            left.slot
+                .cmp(&right.slot)
+                .then(right.is_listed().cmp(&left.is_listed()))
+                .then_with(|| left.key.cmp(right.key))
+        });
         tracked
     }
 

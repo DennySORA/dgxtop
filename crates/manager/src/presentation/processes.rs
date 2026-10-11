@@ -324,7 +324,8 @@ mod tests {
             .iter()
             .map(|row| (row.name.as_str(), row.color_slot))
             .collect();
-        assert_eq!(slots, vec![("train", Some(0)), ("idle", None)]);
+        let train = crate::process_memory::preferred_color("train");
+        assert_eq!(slots, vec![("train", Some(train)), ("idle", None)]);
     }
 
     /// GPU processes (each has one association with GPU A).

@@ -1,6 +1,7 @@
 use dgxtop_core::canonical::{ProcessRow, ProcessTable};
 use dgxtop_core::identity::{EntityId, ProcessKey};
 
+use super::tracking::preferred_color;
 use super::*;
 use crate::test_support::{gpu_process, process_table, test_process_key};
 
@@ -114,17 +115,27 @@ fn parts_count_a_time_not_listed_as_zero_and_add_up() {
     assert!(close(train[1], gib(6.0)) && close(train[2], gib(6.0)));
     assert!(close(train[3], 0.0), "not listed counts as 0");
     assert!(close(serve[1], gib(2.0)) && close(serve[3], gib(4.0)));
-    // Still tracked after it exited, but holding nothing now.
+    // Still tracked after it exited, but holding nothing now; each has the
+    // color its name hashes to, and they come in color order.
+    let mut expected = vec![
+        (preferred_color("train"), "train", false),
+        (preferred_color("serve"), "serve", true),
+    ];
+    expected.sort_unstable();
     let tracked = book.tracked();
     assert_eq!(
         tracked
             .iter()
             .map(|process| (process.slot, process.name, process.is_listed()))
             .collect::<Vec<_>>(),
-        vec![(0, "train", false), (1, "serve", true)]
+        expected
     );
-    assert_eq!(tracked[1].bytes_on(on_a), 4 * GIB);
-    assert_eq!(book.slot_of(&key(2)), Some(1));
+    let serve = tracked
+        .iter()
+        .find(|process| process.name == "serve")
+        .unwrap();
+    assert_eq!(serve.bytes_on(on_a), 4 * GIB);
+    assert_eq!(book.slot_of(&key(2)), Some(preferred_color("serve")));
     // Over the window: mean over the time each was listed.
     let held = book.held_on(&key(1), &gpu(GPU_A), window);
     assert_eq!(held.covered_ns, 10 * SECOND);
@@ -176,31 +187,62 @@ fn every_gpu_of_a_process_is_recorded_on_its_own() {
     );
 }
 
-/// Only the slots' processes are recorded; one that loses its slot takes
-/// its record along, and a newcomer starts its own.
+/// Only tracked processes are recorded; one that loses its place takes its
+/// record along, and a newcomer starts its own.
 #[test]
-fn a_process_that_loses_its_slot_takes_its_record_along() {
+fn a_process_that_loses_its_place_takes_its_record_along() {
     let mut book = ProcessMemoryBook::new(1000);
     let small = |pid| row(pid, "small", &[(GPU_A, Some(GIB))]);
-    book.record(&table(1, 1, (1..=5).map(small).collect()));
-    assert_eq!(book.tracked().len(), 4);
-    assert_eq!(book.slot_of(&key(5)), None, "four colors, one left over");
-    book.record(&table(2, 2, (1..=5).map(small).collect()));
-    // 5 grows past twice the smallest holders: it takes the lowest slot
-    // among them.
-    let mut rows: Vec<ProcessRow> = (1..=4).map(small).collect();
-    rows.push(row(5, "big", &[(GPU_A, Some(8 * GIB))]));
+    book.record(&table(1, 1, (1..=9).map(small).collect()));
+    assert_eq!(book.tracked().len(), 8);
+    assert_eq!(book.slot_of(&key(9)), None, "eight colors, one left over");
+    book.record(&table(2, 2, (1..=9).map(small).collect()));
+    // 9 grows past twice the smallest holders: it takes the place of one.
+    let mut rows: Vec<ProcessRow> = (1..=8).map(small).collect();
+    rows.push(row(9, "big", &[(GPU_A, Some(8 * GIB))]));
     book.record(&table(3, 3, rows.clone()));
     book.record(&table(4, 4, rows));
-    assert_eq!(book.slot_of(&key(5)), Some(0));
-    assert_eq!(book.slot_of(&key(1)), None);
-    let held = book.held_on(&key(1), &gpu(GPU_A), (0, 10 * SECOND));
-    assert_eq!(held.covered_ns, 0, "its record went with its slot");
-    let held = book.held_on(&key(5), &gpu(GPU_A), (0, 10 * SECOND));
+    assert!(book.slot_of(&key(9)).is_some());
+    let gone: Vec<i64> = (1..=8)
+        .filter(|pid| book.slot_of(&key(*pid)).is_none())
+        .collect();
+    assert_eq!(gone.len(), 1);
+    let held = book.held_on(&key(gone[0]), &gpu(GPU_A), (0, 10 * SECOND));
+    assert_eq!(held.covered_ns, 0, "its record went with its place");
+    let held = book.held_on(&key(9), &gpu(GPU_A), (0, 10 * SECOND));
     assert_eq!(
         held.covered_ns, SECOND,
         "recorded from the table it got a color"
     );
+}
+
+/// An exited process keeps its record, and with it its history, while
+/// new processes come (D-65): until the record is full.
+#[test]
+fn an_exited_process_keeps_its_history_while_new_processes_come() {
+    let mut book = ProcessMemoryBook::new(1000);
+    book.record(&table(
+        1,
+        1,
+        vec![row(1, "first-job", &[(GPU_A, Some(6 * GIB))])],
+    ));
+    book.record(&table(
+        2,
+        2,
+        vec![row(1, "first-job", &[(GPU_A, Some(6 * GIB))])],
+    ));
+    // Eight other jobs come and go after it exits.
+    let mut at = 3;
+    for pid in 2..=9 {
+        let name = format!("job{pid}");
+        book.record(&table(at, at, vec![row(pid, &name, &[(GPU_A, Some(GIB))])]));
+        book.record(&table(at + 1, at + 1, Vec::new()));
+        at += 2;
+    }
+    // Listed in the tables at 1 s and 2 s, each holding until the next.
+    let held = book.held_on(&key(1), &gpu(GPU_A), (0, 100 * SECOND));
+    assert_eq!(held.covered_ns, 2 * SECOND, "still recorded");
+    assert!(close(held.mean(), gib(6.0)));
 }
 
 /// A process not listed for a day gives its slot and record up.
@@ -209,7 +251,7 @@ fn a_day_without_a_list_entry_ends_tracking() {
     let mut book = ProcessMemoryBook::new(1000);
     book.record(&table(1, 1, vec![row(3, "old", &[(GPU_A, Some(GIB))])]));
     book.record(&table(2, 2, Vec::new()));
-    assert_eq!(book.slot_of(&key(3)), Some(0));
+    assert_eq!(book.slot_of(&key(3)), Some(preferred_color("old")));
     book.record(&table(3, 2 + 86_401, Vec::new()));
     assert_eq!(book.slot_of(&key(3)), None);
     assert!(book.tracked().is_empty());
@@ -224,4 +266,28 @@ fn the_hold_follows_the_sampling_interval() {
     book.record(&table(2, 11, vec![row(9, "python", &[(GPU_A, Some(GIB))])]));
     let held = book.held_on(&key(9), &gpu(GPU_A), (0, 20 * SECOND));
     assert_eq!(held.covered_ns, 10 * SECOND);
+}
+
+/// A tracked process keeps the command line it was last listed with
+/// (D-73), also once it exits; a table without one keeps the last.
+#[test]
+fn a_tracked_process_keeps_its_last_command_line() {
+    let mut book = ProcessMemoryBook::new(1000);
+    let mut first = row(10, "train", &[(GPU_A, Some(GIB))]);
+    first.command = "python train.py --lr 3e-4".to_owned();
+    book.record(&table(1, 1, vec![first]));
+    let command = |book: &ProcessMemoryBook| book.tracked()[0].command.to_owned();
+    assert_eq!(command(&book), "python train.py --lr 3e-4");
+    book.record(&table(2, 2, vec![row(10, "train", &[(GPU_A, Some(GIB))])]));
+    assert_eq!(
+        command(&book),
+        "python train.py --lr 3e-4",
+        "an empty one keeps it"
+    );
+    book.record(&table(3, 3, Vec::new()));
+    assert_eq!(
+        command(&book),
+        "python train.py --lr 3e-4",
+        "kept after it exits"
+    );
 }

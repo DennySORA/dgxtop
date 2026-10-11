@@ -562,6 +562,7 @@ impl ActionStack {
         self.snapshots.upsert(ProcessRow {
             key: key.clone(),
             name: "disposable".to_owned(),
+            command: String::new(),
             uid,
             state: Some('S'),
             cpu_percent: None,

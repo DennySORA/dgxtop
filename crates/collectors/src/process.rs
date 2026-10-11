@@ -27,7 +27,7 @@ use dgxtop_core::naming::{self, adapters, attributes, entity, groups};
 use dgxtop_core::observation::BatchStatus;
 use dgxtop_core::ports::Collector;
 use dgxtop_core::quality::SampleKind;
-use dgxtop_core::text::sanitize_basename;
+use dgxtop_core::text::{sanitize_command_name, sanitize_display};
 
 use crate::arbitration::{self, check_namespace};
 use crate::context::{self, CollectorSpec, Record, Route, Session};
@@ -191,6 +191,23 @@ fn host_samples<'a>(session: &mut Session<'a>) -> BTreeMap<ProcessKey, HostSampl
     samples
 }
 
+/// The display name in a process record's channel (D-73).
+fn display_name_of(channel: &str) -> &str {
+    channel
+        .split(naming::PROCESS_COMMAND_SEPARATOR)
+        .next()
+        .unwrap_or(channel)
+}
+
+/// The command line the uid record's channel carries after the name
+/// (D-73), cleaned and bounded; empty when there is none.
+fn command_of(channel: &str) -> String {
+    channel
+        .split_once(naming::PROCESS_COMMAND_SEPARATOR)
+        .map(|(_, command)| sanitize_display(command, naming::MAX_CHANNEL_BYTES))
+        .unwrap_or_default()
+}
+
 /// One host row plus the next CPU tick base of the process.
 fn host_row(
     session: &Session<'_>,
@@ -211,8 +228,11 @@ fn host_row(
         key: key.clone(),
         name: named.map_or_else(
             || "?".to_owned(),
-            |record| sanitize_basename(&record.observation.provenance.channel),
+            |record| sanitize_command_name(display_name_of(&record.observation.provenance.channel)),
         ),
+        command: sample.uid.map_or_else(String::new, |record| {
+            command_of(&record.observation.provenance.channel)
+        }),
         uid: sample.uid.and_then(|record| uid_of(session, record)),
         state: None,
         cpu_percent,

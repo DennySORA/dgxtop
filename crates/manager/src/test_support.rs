@@ -258,6 +258,7 @@ pub(crate) fn gpu_process(pid: i64, name: &str, held: &[(&str, Option<u64>)]) ->
     ProcessRow {
         key: test_process_key(pid),
         name: name.to_owned(),
+        command: String::new(),
         uid: Some(1000),
         state: Some('R'),
         cpu_percent: None,

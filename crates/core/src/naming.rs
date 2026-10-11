@@ -24,6 +24,14 @@
 use crate::identity::{AdapterId, CollectorId, EntityId, IdentityError, Scope};
 
 /// Adapter ids.
+/// Between a process's display name and its command line in the channel of
+/// its `process.uid` record (D-73): the channel is the only string a record
+/// carries.
+pub const PROCESS_COMMAND_SEPARATOR: char = '\u{1f}';
+/// Longest the channel of a record may be (observation schema), so the
+/// longest a process's name and command line together may be.
+pub const MAX_CHANNEL_BYTES: usize = 256;
+
 pub mod adapters {
     pub const PROCFS: &str = "procfs";
     pub const HWMON: &str = "hwmon";

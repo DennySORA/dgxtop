@@ -318,6 +318,9 @@ pub struct ProcessGpuLink {
 pub struct ProcessRow {
     pub key: ProcessKey,
     pub name: String,
+    /// The command line as shown, cleaned and bounded (D-73); empty when
+    /// unknown. Kept in memory only, never persisted.
+    pub command: String,
     pub uid: Option<u32>,
     pub state: Option<char>,
     /// `None` during warmup (first sample of a ProcessKey) or when unreadable.

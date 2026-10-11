@@ -186,6 +186,7 @@ fn with_process_table(harness: &Harness, pids: &[i64]) {
         .map(|pid| ProcessRow {
             key: target(*pid),
             name: "train.py".into(),
+            command: String::new(),
             uid: Some(HARNESS_EUID),
             state: Some('S'),
             cpu_percent: Some(1.0),

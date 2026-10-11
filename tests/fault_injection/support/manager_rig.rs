@@ -185,6 +185,7 @@ pub fn process_row(key: ProcessKey) -> ProcessRow {
     ProcessRow {
         key,
         name: "train.py".to_owned(),
+        command: String::new(),
         uid: Some(TEST_EUID),
         state: Some('S'),
         cpu_percent: Some(1.0),

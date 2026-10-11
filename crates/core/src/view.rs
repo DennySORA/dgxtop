@@ -129,15 +129,16 @@ pub struct Trend {
     pub step_ms: u64,
 }
 
-/// GPU processes that get a color of their own (D-64): the ones holding the
-/// most GPU memory. The Viewer's process palette has this many colors; any
-/// further process counts among the other processes.
-pub const PROCESS_COLOR_SLOTS: usize = 4;
+/// Colors of GPU processes (D-64, D-65): at most this many processes listed
+/// at once have a color of their own, the ones holding the most GPU memory;
+/// any further process counts among the other processes. The Viewer's
+/// process palette has this many colors.
+pub const PROCESS_COLOR_SLOTS: usize = 8;
 
 /// What one GPU process holds of a memory bar now (D-64). `slot`
-/// (`0..PROCESS_COLOR_SLOTS`) picks its color and stays with the process
-/// while it is tracked, so it has the same color on every bar, chart and
-/// table.
+/// (`0..PROCESS_COLOR_SLOTS`) picks its color: it stays with the process
+/// while it is tracked and follows from its name when it can (D-65), so the
+/// process has the same color on every bar, chart and table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessShare {
     pub slot: u8,
@@ -568,6 +569,8 @@ pub struct HistoryProcessView {
     pub slot: u8,
     pub pid: i32,
     pub name: String,
+    /// The command line as last listed, cleaned and bounded (D-73).
+    pub command: String,
     /// `GPU 0`.
     pub gpu_label: String,
     pub unit: CanonicalUnit,

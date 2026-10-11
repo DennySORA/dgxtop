@@ -91,6 +91,7 @@ fn row(key: &ProcessKey, uid: u32) -> ProcessRow {
     ProcessRow {
         key: key.clone(),
         name: "train.py".into(),
+        command: String::new(),
         uid: Some(uid),
         state: Some('S'),
         cpu_percent: Some(10.0),

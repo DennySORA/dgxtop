@@ -15,6 +15,7 @@ use dgxtop_core::view::{
 
 use super::ProcessMemoryBook;
 use super::gpu_directory::GpuDirectory;
+use super::labels::note_text;
 use super::processes::display_name;
 use crate::process_memory::TrackedProcess;
 
@@ -146,6 +147,7 @@ fn window_summaries(
                         slot: process.slot,
                         pid: process.pid,
                         name: display_name(process.name),
+                        command: note_text(process.command),
                         gpu_label: inputs.directory.label_of(gpu),
                         unit: CanonicalUnit::Bytes,
                         mean: held.mean(),
@@ -179,6 +181,7 @@ mod tests {
     use super::*;
     use crate::presentation::index::SampleIndex;
     use crate::presentation::testkit::{Fixture, empty_history, entity_record, history_chart};
+    use crate::process_memory::preferred_color;
     use crate::test_support::{gpu_process, process_table};
     use dgxtop_core::naming::attributes;
     use dgxtop_core::observation::EntityKind;
@@ -299,10 +302,13 @@ mod tests {
             .iter()
             .map(|share| (share.slot, share.name.as_str(), share.bytes))
             .collect();
-        assert_eq!(shown, vec![(0, "train", 6 * GIB), (1, "serve", 2 * GIB)]);
+        let (train, serve) = (preferred_color("train"), preferred_color("serve"));
+        let mut expected = vec![(train, "train", 6 * GIB), (serve, "serve", 2 * GIB)];
+        expected.sort_unstable();
+        assert_eq!(shown, expected, "in color order");
         let discrete = process_shares(book, |gpu| gpu.as_str() == DISCRETE);
         assert_eq!(discrete.len(), 1);
-        assert_eq!((discrete[0].slot, discrete[0].bytes), (1, GIB));
+        assert_eq!((discrete[0].slot, discrete[0].bytes), (serve, GIB));
     }
 
     /// The memory charts get each process's part in its color; the memory
@@ -321,8 +327,11 @@ mod tests {
                     .map(|part| (part.slot, part.means.clone()))
                     .collect()
             };
-            assert_eq!(parts(0), vec![(0, vec![gib(6); 2]), (1, vec![gib(2); 2])]);
-            assert_eq!(parts(1), vec![(1, vec![gib(1); 2])]);
+            let (train, serve) = (preferred_color("train"), preferred_color("serve"));
+            let mut unified = vec![(train, vec![gib(6); 2]), (serve, vec![gib(2); 2])];
+            unified.sort_by_key(|(slot, _)| *slot);
+            assert_eq!(parts(0), unified);
+            assert_eq!(parts(1), vec![(serve, vec![gib(1); 2])]);
             assert_eq!(parts(2), parts(0), "RAM the unified GPU holds");
             assert!(view.charts[3].parts.is_empty());
             let listed: Vec<(&str, &str, Option<f64>, u64)> = view
