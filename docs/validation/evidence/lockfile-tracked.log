@@ -1,0 +1,14 @@
+# evidence: lockfile-tracked
+# command: bash -c git ls-files --error-unmatch Cargo.lock && git log -1 --format="%h %s" -- Cargo.lock
+# started_utc: 2026-10-11T04:45:30Z
+# git_commit: 6e955bbfc7e2d5fa809bf0744ab4f0693d0bef62
+# host: Darwin 25.6.0 arm64
+# cpu: 
+# rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
+# ---- output ----
+Cargo.lock
+c186873 build(deps): update dependencies within their version requirements
+# ---- end ----
+# finished_utc: 2026-10-11T04:45:30Z
+# exit_code: 0
+# redacted: GPU UUIDs and hardware serial numbers

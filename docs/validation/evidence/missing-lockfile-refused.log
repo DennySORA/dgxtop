@@ -1,0 +1,15 @@
+# evidence: missing-lockfile-refused
+# command: bash -c w="$(mktemp -d)" && git clone --quiet --no-local . "$w/dgxtop" && rm "$w/dgxtop/Cargo.lock" && if cargo metadata --format-version 1 --locked --offline --manifest-path "$w/dgxtop/Cargo.toml" > /dev/null; then echo "cargo accepted a workspace without Cargo.lock"; rm -rf "$w"; exit 1; fi; echo "cargo refused the workspace without Cargo.lock under --locked"; rm -rf "$w"
+# started_utc: 2026-10-11T04:45:30Z
+# git_commit: 6e955bbfc7e2d5fa809bf0744ab4f0693d0bef62
+# host: Darwin 25.6.0 arm64
+# cpu: 
+# rustc: rustc 1.92.0 (ded5c06cf 2025-12-08)
+# ---- output ----
+error: the lock file /var/folders/hx/x0tqsmsn1yqccb_lycvd9k180000gn/T/tmp.4GTRZvvvpB/dgxtop/Cargo.lock needs to be updated but --locked was passed to prevent this
+If you want to try to generate the lock file without accessing the network, remove the --locked flag and use --offline instead.
+cargo refused the workspace without Cargo.lock under --locked
+# ---- end ----
+# finished_utc: 2026-10-11T04:45:30Z
+# exit_code: 0
+# redacted: GPU UUIDs and hardware serial numbers

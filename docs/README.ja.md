@@ -186,13 +186,13 @@ just e2e       # 要求時のみのエンドツーエンド：PTY セッショ�
 just hardware  # 実際の procfs/sysfs/NVML でのハードウェアテスト（pidfd は使い捨ての子プロセスのみ）
 ```
 
-フォーマット、lint、テストスイート（x86_64 で 1,373 件、aarch64 で 1,372 件）、依存境界、ハードウェアテストは、Debian 13 のワークステーション（RTX 5080 + RTX 3060）と DGX Spark（GB10）の両方で通っています。ログと SHA-256 は [`docs/validation/evidence/`](validation/evidence/) にあります。[`docs/validation/VALIDATION.md`](validation/VALIDATION.md) は 40 件の受け入れケースを追跡しています（現在 12 PASS、24 NOT_RUN、4 BLOCKED）。3 × 30 分のベンチマークと 72 時間のソークはまだで、リリースの実行も検証の証拠として記録されていないため、検証済みと呼べるプラットフォームはなく、仕様の性能値は目標のままです。
+フォーマット、lint、テストスイート（x86_64 で 1,373 件、aarch64 で 1,372 件）、依存境界、ハードウェアテストは、Debian 13 のワークステーション（RTX 5080 + RTX 3060）と DGX Spark（GB10）の両方で通っています。ログと SHA-256 は [`docs/validation/evidence/`](validation/evidence/) にあります。[`docs/validation/VALIDATION.md`](validation/VALIDATION.md) は 40 件の受け入れケースを追跡しています（現在 14 PASS、24 NOT_RUN、2 BLOCKED）。3 × 30 分のベンチマークと 72 時間のソークはまだのため、検証済みと呼べるプラットフォームはなく、仕様の性能値は目標のままです。
 
 ## ドキュメント
 
 - [設計ノート（英語）](https://dennysora.me/en/projects/tools/dgxtop/)：アーキテクチャとその背景にある考え方（[繁體中文](https://dennysora.me/zh-hant/projects/tools/dgxtop/)）。
 - [`spec/dgxtop-v2/`](../spec/dgxtop-v2/README.md)：仕様（繁体字中国語）。
-- [`docs/design/DECISIONS.md`](design/DECISIONS.md)：実装上の決定 D-01〜D-61。
+- [`docs/design/DECISIONS.md`](design/DECISIONS.md)：実装上の決定 D-01〜D-62。
 - [`docs/design/history-redesign.md`](design/history-redesign.md)：履歴ビューの設計分析。
 
 ## ライセンス

@@ -186,13 +186,13 @@ just e2e       # 依需求執行的端對端測試：PTY 會話、故障注入�
 just hardware  # 在真實 procfs/sysfs/NVML 上的硬體測試（pidfd 只用可拋棄的子程序）
 ```
 
-格式、lint、測試套件（x86_64 上 1,373 項、aarch64 上 1,372 項）、依賴邊界與硬體測試，在 Debian 13 工作站（RTX 5080 + RTX 3060）與 DGX Spark（GB10）上都通過，紀錄與 SHA-256 在 [`docs/validation/evidence/`](validation/evidence/)。[`docs/validation/VALIDATION.md`](validation/VALIDATION.md) 追蹤 40 項驗收案例（目前 12 PASS、24 NOT_RUN、4 BLOCKED）。3 × 30 分鐘的效能基準與 72 小時 soak 都還沒做，release 的執行也還沒記錄成驗收證據，所以沒有任何平台被宣稱為已驗收，規格裡的效能數字仍是目標。
+格式、lint、測試套件（x86_64 上 1,373 項、aarch64 上 1,372 項）、依賴邊界與硬體測試，在 Debian 13 工作站（RTX 5080 + RTX 3060）與 DGX Spark（GB10）上都通過，紀錄與 SHA-256 在 [`docs/validation/evidence/`](validation/evidence/)。[`docs/validation/VALIDATION.md`](validation/VALIDATION.md) 追蹤 40 項驗收案例（目前 14 PASS、24 NOT_RUN、2 BLOCKED）。3 × 30 分鐘的效能基準與 72 小時 soak 都還沒做，所以沒有任何平台被宣稱為已驗收，規格裡的效能數字仍是目標。
 
 ## 文件
 
 - [設計說明](https://dennysora.me/zh-hant/projects/tools/dgxtop/)：架構與背後的想法（[English](https://dennysora.me/en/projects/tools/dgxtop/)）。
 - [`spec/dgxtop-v2/`](../spec/dgxtop-v2/README.md)：規格。
-- [`docs/design/DECISIONS.md`](design/DECISIONS.md)：實作決策 D-01 到 D-61。
+- [`docs/design/DECISIONS.md`](design/DECISIONS.md)：實作決策 D-01 到 D-62。
 - [`docs/design/history-redesign.md`](design/history-redesign.md)：歷史畫面的設計分析。
 
 ## 授權

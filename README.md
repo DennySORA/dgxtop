@@ -226,16 +226,16 @@ Format, lint, the test suite (1,373 tests on x86_64, 1,372 on aarch64), the depe
 and the hardware suites pass on a Debian 13 workstation (RTX 5080 + RTX 3060) and on a DGX Spark
 (GB10). Their logs and SHA-256 hashes are in [`docs/validation/evidence/`](docs/validation/evidence/).
 [`docs/validation/VALIDATION.md`](docs/validation/VALIDATION.md) tracks the 40 acceptance cases
-(currently 12 PASS, 24 NOT_RUN, 4 BLOCKED). The 3 × 30-minute benchmark runs and the 72-hour soak are
-still missing, and the release run is not yet recorded as evidence, so no platform is called validated,
-and the performance numbers in the specification remain targets.
+(currently 14 PASS, 24 NOT_RUN, 2 BLOCKED). The 3 × 30-minute benchmark runs and the 72-hour soak are
+still missing, so no platform is called validated, and the performance numbers in the specification
+remain targets.
 
 ## Documentation
 
 - [Design notes](https://dennysora.me/en/projects/tools/dgxtop/): the architecture and the ideas
   behind it ([繁體中文](https://dennysora.me/zh-hant/projects/tools/dgxtop/)).
 - [`spec/dgxtop-v2/`](spec/dgxtop-v2/README.md): the specification (Traditional Chinese).
-- [`docs/design/DECISIONS.md`](docs/design/DECISIONS.md): implementation decisions D-01 to D-61.
+- [`docs/design/DECISIONS.md`](docs/design/DECISIONS.md): implementation decisions D-01 to D-62.
 - [`docs/design/history-redesign.md`](docs/design/history-redesign.md): how the history view was
   designed.
 

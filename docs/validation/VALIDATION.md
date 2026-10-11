@@ -28,6 +28,8 @@ hardware evidence.
 - **Rewritten history (D-60):** the logs keep the commit IDs they recorded. In today's
   history `b4b5a8d` is `9ab52c4` (the same tree less four v1 screenshots), `d662f0a` is
   `51c9bc5` and `3203771` is `9da9883` (the same trees).
+- **Release v2.0.0 (D-62):** the release run of commit `bd90a8f` (GitHub Actions run 38110420112)
+  is recorded as `release-v2.0.0`. That run is the evidence for AT20 and AT37.
 - **Since these logs (D-61):** the version became 2.0.0 and the dependencies were updated within
   their requirements, so `Cargo.lock` no longer has the hash below. The gates run in CI for that
   tree; those runs are not recorded here as evidence.
@@ -106,10 +108,13 @@ GPU UUIDs and serial numbers are masked before the file is hashed.
 | `release-version-verbose-gb10` | `target/release/dgxtop --version --verbose` | 0 | `36fc2e78e3506c7b4164bb548e889ac0e46a7b0e05650828d92e301ffabcd292` |
 | `gpm-probe-gb10` | `nvidia-smi dmon --gpm-metrics 1,2,3,10 -c 3` | 0 | `42f3a548c475373840b015cc361181a7ab69be8b4c10e4ccf7d2f3d1ef1470b6` |
 | `hwmon-probe-gb10` | `bash -c for h in /sys/class/hwmon/hwmon*; do echo "$h name=$(cat $h/name)"; ls $h \| grep -E "^(power\|ener…` | 0 | `37720f845629dcc81b42e2add2216f2d4fae55f02443f7247302f9598f50077d` |
+| `release-v2.0.0` | `bash -c set -o pipefail; gh run view 38110420112 -R DennySORA/dgxtop --log \| python3 scripts/format_run_log.py` | 0 | `0d00732c69182168292790af4bb7d18b959edb8722ce52849cd5ac5d4e62ffa8` |
+| `lockfile-tracked` | `bash -c git ls-files --error-unmatch Cargo.lock && git log -1 --format="%h %s" -- Cargo.lock` | 0 | `bcc3ed9381dec3eba7ef3fa2f1dedd4b8e82fd08124727c4410474db750f4fa5` |
+| `missing-lockfile-refused` | `bash -c w="$(mktemp -d)" && git clone --quiet --no-local . "$w/dgxtop" && rm "$w/dgxtop/Cargo.lock" && if cargo metadata …` | 0 | `badd82b6cef356eb73f40a09620bb99cd7555981d206decd8fe5a5605ec53a8b` |
 
 ## Acceptance status
 
-Totals: PASS 12, FAIL 0, NOT_RUN 24, BLOCKED 4 (of 40).
+Totals: PASS 14, FAIL 0, NOT_RUN 24, BLOCKED 2 (of 40).
 
 | AT | Requirement | Status | Evidence | Summary |
 |---|---|---|---|---|
@@ -132,7 +137,7 @@ Totals: PASS 12, FAIL 0, NOT_RUN 24, BLOCKED 4 (of 40).
 | [AT17](#at17) | R17 Observability, privacy and capacity targets | NOT_RUN | `gate-test` | Bounded labels, escaped audit names and log drop counters tested; the metrics are not output and nine are never recorded |
 | [AT18](#at18) | R18 Staged migration and recoverable program/configuration | NOT_RUN | `gate-test` | Legacy dry-run/apply, rollback and corrupt-file handling tested; installer disk-full and interrupted switch are not |
 | [AT19](#at19) | R19 Existing rules kept, real verification records | NOT_RUN | `rules-preserved`, `spec-package-validation` | Rules file unchanged and evidence recorded; the owner's manual check is not recorded |
-| [AT20](#at20) | R20 Reproducible build, version and install integrity | BLOCKED | `gate-test` | Installer checks pass locally; the tag gate, locked CI build and tracked Cargo.lock need a commit and a release run |
+| [AT20](#at20) | R20 Reproducible build, version and install integrity | PASS | `gate-test`, `release-v2.0.0`, `lockfile-tracked`, `missing-lockfile-refused` | The v2.0.0 release run checked tag = version, built and tested with `--locked` and installed both archives; Cargo.lock is tracked and a missing one is refused |
 | [AT21](#at21) | R21 Global budget and dual queue quotas | NOT_RUN | `gate-test` | Ledger, dual gate and reservation tests pass; IPC decode still allocates before its decoded-size check |
 | [AT22](#at22) | R22 Multi-rate scheduling, broker de-duplication, epochs | NOT_RUN | `gate-test` | 1 s / 5 s / 10 s / 60 s cadences, one read per group and cycle, no catch-up storms, stale replies dropped; the end-to-end part is opt-in and was not run |
 | [AT23](#at23) | R23 Fixed workers and a fair control loop | NOT_RUN | `gate-test` | Fixed pools, fair iterations and Busy replies tested; the 2 ms slice bound has no executed check |
@@ -149,7 +154,7 @@ Totals: PASS 12, FAIL 0, NOT_RUN 24, BLOCKED 4 (of 40).
 | [AT34](#at34) | R34 Catalog cache and unsupported-probe throttling | PASS | `gate-test` | Metadata cached per generation, unsupported re-probed at most once per 60 s, no nvidia-smi |
 | [AT35](#at35) | R35 Replayable fixtures and benchmark evidence | NOT_RUN | `gate-test`, `spec-package-validation` | Deterministic fixtures in their own namespace; synthetic and wrong-workload reports cannot be measured; metrics are not recomputed from raw files |
 | [AT36](#at36) | R36 Uncertain outcomes of versioned configuration persistence | PASS | `gate-test` | Atomic write, rename and directory sync; commit_uncertain reloads the disk version; no concurrent overwrite |
-| [AT37](#at37) | R37 Release gate separate from hardware evidence | BLOCKED | `gate-test` | Hardware suites are ignored in normal CI and no platform is claimed validated; CI, release and DGX Spark evidence do not exist yet |
+| [AT37](#at37) | R37 Release gate separate from hardware evidence | PASS | `release-v2.0.0`, `hardware-suites`, `hardware-suites-gb10` | The release gate ran the suite with every `hardware_*` test ignored; hardware support rests on the hardware suite logs of both hosts; no platform is claimed validated |
 | [AT38](#at38) | R38 Bounded cardinality, query and NSS cost | PASS | `gate-test` | Point, scan and byte caps; two history workers; numeric UIDs; Busy under memory shortage; bounded pinning |
 | [AT39](#at39) | R39 Layered errors and safe shutdown | NOT_RUN | `gate-test` | Read failures stay local, Manager fail-stop sends nothing, bounded restore and 3 s shutdown, stuck storage never locks the loop; the end-to-end part is opt-in and was not run |
 | [AT40](#at40) | R40 Concrete performance evidence and full specification validation | NOT_RUN | `spec-package-validation`, `spec-copy-verification`, `gate-scripts` | Spec copy verified (CRC, bytes, MANIFEST) and this report is machine-checked; the spec's browser HTML checks were not run, and since D-59 they run only from the delivered archive |
@@ -460,18 +465,25 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 ### AT20 — R20 Reproducible build, version and install integrity
 
-**Status: BLOCKED.** Evidence: `gate-test`. Blocked on owner-authorized steps: Cargo.lock is untracked until committed, and the release workflow has never run.
+**Status: PASS.** Evidence: `gate-test`, `release-v2.0.0`, `lockfile-tracked`, `missing-lockfile-refused`. The v2.0.0 release run (GitHub Actions run 38110420112, commit `bd90a8f`, D-62) did six things:
+
+- checked that the tag equals the workspace version;
+- ran fmt, clippy and the test suite with `--locked`;
+- built both targets with `--locked`;
+- checked each artifact's version, target and SQLite runtime;
+- checked its glibc requirement;
+- installed each archive with `install.sh` against `SHA256SUMS`.
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 --version / manifest / tag agree | `cli::version_verbose_lists_build_metadata_and_sqlite_gate`, `cli::installer::a_binary_reporting_another_version_is_refused`, `cli::installer::a_requested_version_that_only_prefixes_the_binary_version_is_refused`, `contracts::structure::the_release_gate_matches_version_and_target_lines_exactly_and_checks_sqlite` | NEEDS_RELEASE for the tag check |
-| S2 Cargo.lock tracked | `contracts::structure::the_lock_file_exists_is_not_ignored_and_the_toolchain_is_pinned_like_ci` | BLOCKED until committed |
-| S3 --locked builds reproduce dependencies | `contracts::structure::workflows_pin_actions_by_commit_and_build_from_the_lock_file` | Static workflow check; NEEDS_RELEASE |
-| S4 checksum verified | `cli::installer::installs_a_verified_release_keeps_the_previous_binary_and_rolls_back`, `cli::installer::a_checksum_mismatch_is_refused_and_the_installed_binary_is_kept`, `cli::installer::an_archive_without_a_checksum_entry_is_refused` |  |
-| F1 a missing lock fails the build |  | NEEDS_RELEASE |
+| S1 --version / manifest / tag agree | `cli::version_verbose_lists_build_metadata_and_sqlite_gate`, `cli::installer::a_binary_reporting_another_version_is_refused`, `cli::installer::a_requested_version_that_only_prefixes_the_binary_version_is_refused`, `contracts::structure::the_release_gate_matches_version_and_target_lines_exactly_and_checks_sqlite` | `release-v2.0.0`: "Tag must equal the workspace package version" and the artifact check passed for v2.0.0 on both targets |
+| S2 Cargo.lock tracked | `contracts::structure::the_lock_file_exists_is_not_ignored_and_the_toolchain_is_pinned_like_ci` | `lockfile-tracked` |
+| S3 --locked builds reproduce dependencies | `contracts::structure::workflows_pin_actions_by_commit_and_build_from_the_lock_file` | `release-v2.0.0`: every cargo step of the gate and both builds ran with `--locked` |
+| S4 checksum verified | `cli::installer::installs_a_verified_release_keeps_the_previous_binary_and_rolls_back`, `cli::installer::a_checksum_mismatch_is_refused_and_the_installed_binary_is_kept`, `cli::installer::an_archive_without_a_checksum_entry_is_refused` | `release-v2.0.0`: both release archives installed through `install.sh` |
+| F1 a missing lock fails the build |  | `missing-lockfile-refused`: `cargo metadata --locked` refuses this workspace without `Cargo.lock` |
 | F2 a version mismatch fails | `cli::installer::a_binary_reporting_another_version_is_refused`, `cli::installer::a_requested_version_that_only_prefixes_the_binary_version_is_refused` |  |
 | F3 a wrong checksum fails | `cli::installer::a_checksum_mismatch_is_refused_and_the_installed_binary_is_kept` |  |
-| F4 no automatic GNU → musl fallback | `cli::installer::musl_hosts_are_refused_without_a_fallback` |  |
+| F4 no automatic GNU → musl fallback | `cli::installer::musl_hosts_are_refused_without_a_fallback` | The test's `ldd` behaves like musl's since D-61 |
 
 <a id="at21"></a>
 
@@ -719,14 +731,14 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 ### AT37 — R37 Release gate separate from hardware evidence
 
-**Status: BLOCKED.** Evidence: `gate-test`. Blocked: the CI and release workflows have never run (no commit or tag was authorized), and there is no aarch64 / DGX Spark evidence.
+**Status: PASS.** Evidence: `release-v2.0.0`, `hardware-suites`, `hardware-suites-gb10`. The v2.0.0 release gate ran the normal test suite with every `hardware_*` test ignored. The hardware suites ran separately on the x86_64 workstation and on the DGX Spark. This report claims no validated platform.
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 normal CI and hardware gates separate |  | All `hardware_*` tests are `#[ignore]`; `just hardware` runs them; NEEDS_RELEASE for a CI run |
+| S1 normal CI and hardware gates separate |  | `release-v2.0.0`: the gate's `cargo test` reports the eight `hardware_*` tests as ignored. `just hardware` runs them (`hardware-suites`, `hardware-suites-gb10`) |
 | S2 validated only for GNU platforms with evidence |  | This report claims no validated platform |
-| F1 missing hardware or soak report → BLOCKED | `dgxtop::perf::report::tests::only_a_complete_full_report_is_measured` |  |
-| F2 a cross-compile PASS is not GPU support |  | MANUAL; NEEDS_HARDWARE |
+| F1 missing hardware or soak report → BLOCKED | `dgxtop::perf::report::tests::only_a_complete_full_report_is_measured` | AT28 and AT29 stay BLOCKED |
+| F2 a cross-compile PASS is not GPU support |  | Both release targets build natively. GPU support rests on `hardware-suites` and `hardware-suites-gb10`, not on a build |
 | F3 a source version mismatch is refused | `cli::installer::a_binary_reporting_another_version_is_refused`, `dgxtop::perf::environment::tests::commits_are_reported_only_when_known`, `dgxtop::provenance::tests::unstaged_edits_and_branch_moves_re_run_the_build_script` | D-34 |
 
 <a id="at38"></a>
@@ -880,7 +892,6 @@ Micro benchmarks that measure no budgeted metric report a note instead:
 7. **Blocked work:**
    - AT28 needs three 1800 s REF runs from a committed source with ≥ 24 h uptime.
    - AT29 needs a soak driver and two 72 h runs.
-   - AT20 and AT37 need a commit, a tag and a CI/release run.
 8. **Specification tooling:**
    - The spec package's browser HTML checks were not run (Chromium and its Python package
      are not installed).
