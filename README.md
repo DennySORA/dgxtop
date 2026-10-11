@@ -141,10 +141,10 @@ boundary in CI.
 
 ## Install
 
-Linux on x86_64 or aarch64 with glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and later), DGX Spark
-included. WSL 2 runs the Linux build: GPUs need the NVIDIA driver on Windows, and CPU temperature
-and power are usually not available there. WSL 1, musl, macOS and Windows are not supported. GPU
-metrics need the NVIDIA driver (NVML); without it, everything else still works.
+Linux on x86_64 or aarch64 with glibc 2.34 or newer (Ubuntu 22.04, Debian 12, RHEL 9 and later),
+DGX Spark included. WSL 2 runs the Linux build: GPUs need the NVIDIA driver on Windows, and CPU
+temperature and power are usually not available there. WSL 1, musl, macOS and Windows are not
+supported. GPU metrics need the NVIDIA driver (NVML); without it, everything else still works.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash

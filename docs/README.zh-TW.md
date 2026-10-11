@@ -118,7 +118,7 @@ CI 以 [`spec/dgxtop-v2/tools/check_boundaries.py`](../spec/dgxtop-v2/tools/chec
 
 ## 安裝
 
-支援 x86_64 或 aarch64 的 Linux，glibc 2.35 以上（Ubuntu 22.04、Debian 12 及更新版本），包括 DGX Spark。WSL 2 可以執行 Linux 版：GPU 需要在 Windows 安裝 NVIDIA 驅動，CPU 溫度與功耗通常讀不到。不支援 WSL 1、musl、macOS 與 Windows。GPU 指標需要 NVIDIA 驅動（NVML）；沒有驅動時其他功能照常運作。
+支援 x86_64 或 aarch64 的 Linux，glibc 2.34 以上（Ubuntu 22.04、Debian 12、RHEL 9 及更新版本），包括 DGX Spark。WSL 2 可以執行 Linux 版：GPU 需要在 Windows 安裝 NVIDIA 驅動，CPU 溫度與功耗通常讀不到。不支援 WSL 1、musl、macOS 與 Windows。GPU 指標需要 NVIDIA 驅動（NVML）；沒有驅動時其他功能照常運作。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash

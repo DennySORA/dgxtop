@@ -50,7 +50,7 @@ jobs:
         include:
           # GNU targets only: musl builds are not produced because NVML is untested
           # there, and the installer never falls back from GNU to musl. Ubuntu
-          # 22.04 images keep the required glibc at 2.35 at most.
+          # 22.04 images keep the required glibc at 2.34 at most.
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
@@ -70,11 +70,11 @@ jobs:
           grep -qxF "dgxtop ${GITHUB_REF_NAME#v}" version.txt
           grep -qxF "target: ${{ matrix.target }}" version.txt
           grep -qE '^sqlite: [0-9]+(\.[0-9]+)+ \(runtime gate >= 3\.51\.3: ok\)$' version.txt
-      - name: The binary needs glibc 2.35 at most
+      - name: The binary needs glibc 2.34 at most
         run: |
           required="$(objdump -p "target/${{ matrix.target }}/release/dgxtop" | grep -o 'GLIBC_[0-9.]*' | sed 's/^GLIBC_//' | sort -uV | tail -n 1)"
           echo "highest glibc version required: ${required}"
-          test "$(printf '%s\n' "${required}" 2.35 | sort -V | tail -n 1)" = 2.35
+          test "$(printf '%s\n' "${required}" 2.34 | sort -V | tail -n 1)" = 2.34
       - name: Package
         run: |
           name="dgxtop-${GITHUB_REF_NAME}-${{ matrix.target }}"
@@ -115,7 +115,7 @@ jobs:
         with:
           draft: true
           body: |
-            dgxtop for Linux on x86_64 and aarch64 with glibc 2.35 or newer; WSL 2 runs the Linux build.
+            dgxtop for Linux on x86_64 and aarch64 with glibc 2.34 or newer; WSL 2 runs the Linux build.
             Install: curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
             Hardware validation status, test evidence and known gaps: see docs/validation/VALIDATION.md.
             A platform is only "validated" when that document lists measured evidence for it.

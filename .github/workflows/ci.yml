@@ -69,7 +69,7 @@ jobs:
       matrix:
         include:
           # Built on Ubuntu 22.04 like the release, so the binaries need glibc
-          # 2.35 at most and run on Ubuntu 22.04, Debian 12 and newer.
+          # 2.34 at most and run on Ubuntu 22.04, Debian 12, RHEL 9 and newer.
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
@@ -87,11 +87,11 @@ jobs:
       - run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Verify version metadata and SQLite gate
         run: ./target/${{ matrix.target }}/release/dgxtop --version --verbose
-      - name: The binary needs glibc 2.35 at most
+      - name: The binary needs glibc 2.34 at most
         run: |
           required="$(objdump -p "target/${{ matrix.target }}/release/dgxtop" | grep -o 'GLIBC_[0-9.]*' | sed 's/^GLIBC_//' | sort -uV | tail -n 1)"
           echo "highest glibc version required: ${required}"
-          test "$(printf '%s\n' "${required}" 2.35 | sort -V | tail -n 1)" = 2.35
+          test "$(printf '%s\n' "${required}" 2.34 | sort -V | tail -n 1)" = 2.34
       - name: The release archive installs with install.sh
         run: |
           version="$(cargo metadata --format-version 1 --locked --no-deps | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="dgxtop"))')"

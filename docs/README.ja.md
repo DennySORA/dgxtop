@@ -118,7 +118,7 @@ CI は [`spec/dgxtop-v2/tools/check_boundaries.py`](../spec/dgxtop-v2/tools/chec
 
 ## インストール
 
-x86_64 または aarch64 の Linux で、glibc 2.35 以降（Ubuntu 22.04、Debian 12 以降）。DGX Spark も含みます。WSL 2 では Linux 版が動きます。GPU には Windows 側の NVIDIA ドライバが必要で、CPU の温度と電力は通常取得できません。WSL 1、musl、macOS、Windows には対応していません。GPU の値には NVIDIA ドライバ（NVML）が必要で、ない場合もそれ以外は動作します。
+x86_64 または aarch64 の Linux で、glibc 2.34 以降（Ubuntu 22.04、Debian 12、RHEL 9 以降）。DGX Spark も含みます。WSL 2 では Linux 版が動きます。GPU には Windows 側の NVIDIA ドライバが必要で、CPU の温度と電力は通常取得できません。WSL 1、musl、macOS、Windows には対応していません。GPU の値には NVIDIA ドライバ（NVML）が必要で、ない場合もそれ以外は動作します。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
