@@ -18,14 +18,11 @@ struct Rig {
 fn rig() -> Rig {
     let inputs = CapturingDispatch::new();
     let history = StaticProcessHistory::new(ProcessHistoryModel::default());
-    let link = ProcessHistoryLink::new(
-        Some(ProcessHistoryHandles {
-            inputs: Box::new(inputs.clone()),
-            runs: Arc::clone(&history) as Arc<dyn ProcessHistoryReader>,
-            memory: Arc::clone(&history) as Arc<dyn ProcessMemoryReader>,
-        }),
-        Diagnostics::new(),
-    );
+    let link = ProcessHistoryLink::new(Some(ProcessHistoryHandles {
+        inputs: Box::new(inputs.clone()),
+        runs: Arc::clone(&history) as Arc<dyn ProcessHistoryReader>,
+        memory: Arc::clone(&history) as Arc<dyn ProcessMemoryReader>,
+    }));
     Rig {
         link,
         inputs,
@@ -150,7 +147,7 @@ fn the_shutdown_waits_for_the_flush_it_asked_for() {
         ..ProcessHistoryModel::default()
     });
     assert!(rig.link.settled());
-    let mut none = ProcessHistoryLink::new(None, Diagnostics::new());
+    let mut none = ProcessHistoryLink::new(None);
     none.flush();
     assert!(none.settled());
     assert!(none.model().runs.is_empty());

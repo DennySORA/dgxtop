@@ -5,7 +5,7 @@
 //! * Each collector has at most one job in flight and one un-acknowledged
 //!   delta. Cycles arriving meanwhile wait in a bounded backlog and are
 //!   coalesced into the next job's inputs; inputs of an older epoch are
-//!   dropped (counted stale), expired inputs and overflow become gaps.
+//!   dropped, expired inputs and overflow become gaps.
 //! * The plan's delta base is the committed state from the latest snapshot;
 //!   `next_state` becomes the base only after the store acknowledges the
 //!   commit. A stale-base/epoch rejection re-queues the inputs so they are
@@ -24,8 +24,8 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use dgxtop_core::canonical::{
-    AckStatus, CatalogSnapshot, CollectionBatch, CollectionLimits, CollectionPlan, CollectorEvent,
-    CommitGuard, GapRecord, PolicySnapshot, StoreAck,
+    AckStatus, CatalogSnapshot, CollectionBatch, CollectionLimits, CollectionPlan, CommitGuard,
+    GapRecord, PolicySnapshot, StoreAck,
 };
 use dgxtop_core::clock::{NANOS_PER_MILLI, NANOS_PER_SECOND};
 use dgxtop_core::config::{Config, SamplingConfig};
@@ -45,9 +45,6 @@ const MIN_JOB_TIMEOUT_NS: u64 = 10 * NANOS_PER_SECOND;
 const SERVICE_SAMPLES: usize = 32;
 /// Longest wait of an input for the rest of its host's cycle.
 pub(crate) const COALESCE_HOLD_NS: u64 = 25 * NANOS_PER_MILLI;
-/// Collector events turned into Manager events per commit.
-pub(crate) const MAX_EVENTS_PER_COMMIT: usize = 32;
-
 /// One completed read cycle (every page) of one adapter group.
 #[derive(Debug, Clone)]
 pub(crate) struct CycleInput {
@@ -119,8 +116,6 @@ struct InflightJob {
     inputs: Vec<CycleInput>,
     dispatched_ns: u64,
     deadline_ns: u64,
-    events: Vec<CollectorEvent>,
-    sample_count: u32,
 }
 
 #[derive(Debug)]
@@ -206,19 +201,10 @@ pub(crate) enum CollectedOutcome {
     },
 }
 
-/// A successful commit.
-#[derive(Debug)]
-pub(crate) struct CommittedBatch {
-    pub(crate) batch_id: Uuid,
-    pub(crate) snapshot_revision: u64,
-    pub(crate) sample_count: u32,
-    pub(crate) events: Vec<CollectorEvent>,
-}
-
 /// Outcome of a store acknowledgement.
 #[derive(Debug)]
 pub(crate) enum CommitOutcome {
-    Committed(CommittedBatch),
+    Committed,
     /// Stale epoch/base: inputs re-queued for the fresh base.
     Retrying {
         gaps: Vec<GapRecord>,
@@ -375,8 +361,6 @@ impl IngestionService {
                         inputs,
                         dispatched_ns: now_ns,
                         deadline_ns: now_ns.saturating_add(self.settings.job_timeout_ns),
-                        events: Vec::new(),
-                        sample_count: 0,
                     });
                 }
                 Err(DispatchError::Closed) => {
@@ -435,13 +419,6 @@ impl IngestionService {
                 gaps,
             };
         }
-        job.events = batch
-            .events
-            .iter()
-            .take(MAX_EVENTS_PER_COMMIT)
-            .cloned()
-            .collect();
-        job.sample_count = u32::try_from(batch.canonical.len()).unwrap_or(u32::MAX);
         let guard = CommitGuard {
             expected_epoch: epoch,
             collector_id: batch.collector_id.clone(),
@@ -487,12 +464,7 @@ impl IngestionService {
             now_ns.saturating_sub(job.dispatched_ns),
         );
         if ack.status.is_committed() {
-            return CommitOutcome::Committed(CommittedBatch {
-                batch_id: ack.batch_id,
-                snapshot_revision: ack.committed_revision,
-                sample_count: job.sample_count,
-                events: job.events,
-            });
+            return CommitOutcome::Committed;
         }
         match ack.status {
             AckStatus::RejectedStaleBase | AckStatus::RejectedStaleEpoch => {
@@ -799,7 +771,6 @@ mod tests {
             process_table: None,
             next_state: CollectorState::default(),
             failures: Vec::new(),
-            events: Vec::new(),
         })
     }
 
@@ -893,7 +864,7 @@ mod tests {
         let outcome = bench
             .service
             .on_committed(&ack(&first, AckStatus::Committed, 1), 3 * SECOND);
-        assert!(matches!(outcome, CommitOutcome::Committed(_)));
+        assert!(matches!(outcome, CommitOutcome::Committed));
         bench.service.pump(3 * SECOND, &context(1));
         let next = bench.plans.take().pop().unwrap();
         assert_eq!(next.inputs.len(), 2, "both waiting cycles coalesced");

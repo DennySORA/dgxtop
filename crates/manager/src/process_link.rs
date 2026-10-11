@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 use dgxtop_core::action::Signal;
 use dgxtop_core::canonical::ProcessTable;
-use dgxtop_core::diagnostics::{Diagnostics, names};
 use dgxtop_core::identity::{EntityId, ProcessKey, SessionId};
 use dgxtop_core::ports::{
     Dispatch, ProcessHistoryInput, ProcessHistoryReader, ProcessMemoryReader,
@@ -33,7 +32,6 @@ pub(crate) struct ProcessHistoryLink {
     inputs: Option<Box<dyn Dispatch<ProcessHistoryInput>>>,
     runs: Arc<dyn ProcessHistoryReader>,
     memory: Arc<dyn ProcessMemoryReader>,
-    diagnostics: Diagnostics,
     /// The table handed over last (cycle, read time).
     last_table: Option<(u64, u64)>,
     /// What each session asked for last, and when.
@@ -47,7 +45,7 @@ pub(crate) struct ProcessHistoryLink {
 
 impl ProcessHistoryLink {
     /// `None`: no process history (tests and tools without one).
-    pub(crate) fn new(handles: Option<ProcessHistoryHandles>, diagnostics: Diagnostics) -> Self {
+    pub(crate) fn new(handles: Option<ProcessHistoryHandles>) -> Self {
         let (inputs, runs, memory) = match handles {
             Some(handles) => (Some(handles.inputs), handles.runs, handles.memory),
             None => {
@@ -63,7 +61,6 @@ impl ProcessHistoryLink {
             inputs,
             runs,
             memory,
-            diagnostics,
             last_table: None,
             asked: BTreeMap::new(),
             flushes: 0,
@@ -91,10 +88,7 @@ impl ProcessHistoryLink {
     /// next commit.
     pub(crate) fn send_table(&mut self, sample: ProcessTableSample) {
         let identity = table_identity(&sample.table);
-        if self.send(
-            ProcessHistoryInput::Table(Box::new(sample)),
-            "process_table",
-        ) {
+        if self.send(ProcessHistoryInput::Table(Box::new(sample))) {
             self.last_table = Some(identity);
         }
     }
@@ -110,13 +104,10 @@ impl ProcessHistoryLink {
 
     /// dgxtop sent `signal` to `key`.
     pub(crate) fn note_signal(&self, key: &ProcessKey, signal: Signal) {
-        self.send(
-            ProcessHistoryInput::Signal {
-                key: key.clone(),
-                signal,
-            },
-            "process_signal",
-        );
+        self.send(ProcessHistoryInput::Signal {
+            key: key.clone(),
+            signal,
+        });
     }
 
     /// `session` shows `request` (`None`: no run): asked for while the
@@ -133,7 +124,7 @@ impl ProcessHistoryLink {
             *asked != request || now_ns.saturating_sub(*at) >= ASK_AGAIN_NS
         });
         if due {
-            self.send(ProcessHistoryInput::Show(request.clone()), "process_show");
+            self.send(ProcessHistoryInput::Show(request.clone()));
             self.asked.insert(session.clone(), (request, now_ns));
         }
     }
@@ -148,7 +139,7 @@ impl ProcessHistoryLink {
         if self.inputs.is_none() {
             return;
         }
-        if self.send(ProcessHistoryInput::Flush, "process_flush") {
+        if self.send(ProcessHistoryInput::Flush) {
             self.flushes += 1;
             self.flush_owed = false;
         } else {
@@ -174,16 +165,10 @@ impl ProcessHistoryLink {
         changed
     }
 
-    fn send(&self, input: ProcessHistoryInput, label: &str) -> bool {
-        let Some(inputs) = &self.inputs else {
-            return false;
-        };
-        let sent = inputs.try_dispatch(input).is_ok();
-        if !sent {
-            self.diagnostics
-                .increment(names::QUEUE_DROPPED_TOTAL, label, 1);
-        }
-        sent
+    fn send(&self, input: ProcessHistoryInput) -> bool {
+        self.inputs
+            .as_ref()
+            .is_some_and(|inputs| inputs.try_dispatch(input).is_ok())
     }
 }
 

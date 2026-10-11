@@ -142,7 +142,6 @@ mod tests {
             process_table: None,
             next_state: CollectorState::default(),
             failures: Vec::new(),
-            events: Vec::new(),
         };
         StoreJob::Commit {
             batch: Box::new(batch),

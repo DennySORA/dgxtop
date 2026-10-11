@@ -7,7 +7,6 @@
 
 use std::collections::BTreeMap;
 
-use dgxtop_core::event::ModuleHealthState;
 use dgxtop_core::identity::AdapterId;
 use dgxtop_core::observation::AdapterManifest;
 use dgxtop_core::text::sanitize_display;
@@ -134,16 +133,6 @@ pub(crate) const fn is_dispatchable(state: HostState) -> bool {
     )
 }
 
-/// Event-level health of a host state.
-pub(crate) const fn module_health(state: HostState) -> ModuleHealthState {
-    match state {
-        HostState::Starting | HostState::Healthy => ModuleHealthState::Healthy,
-        HostState::Degraded | HostState::CircuitOpen => ModuleHealthState::Degraded,
-        HostState::Quarantined => ModuleHealthState::Quarantined,
-        HostState::Disabled | HostState::Unavailable => ModuleHealthState::Unavailable,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,17 +189,9 @@ mod tests {
     }
 
     #[test]
-    fn dispatchability_and_health_mapping() {
+    fn dispatchability_follows_the_host_state() {
         assert!(is_dispatchable(HostState::Degraded));
         assert!(!is_dispatchable(HostState::CircuitOpen));
         assert!(!is_dispatchable(HostState::Quarantined));
-        assert_eq!(
-            module_health(HostState::Quarantined),
-            ModuleHealthState::Quarantined
-        );
-        assert_eq!(
-            module_health(HostState::Disabled),
-            ModuleHealthState::Unavailable
-        );
     }
 }

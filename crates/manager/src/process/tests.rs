@@ -21,7 +21,6 @@ struct Bench {
     now: Now,
     session: SessionId,
     open: BTreeSet<SessionId>,
-    diagnostics: Diagnostics,
 }
 
 fn identity(euid: u32) -> ActionIdentity {
@@ -37,7 +36,6 @@ fn identity(euid: u32) -> ActionIdentity {
 fn bench_with(config: &Config, euid: u32) -> Bench {
     let audit = CapturingDispatch::new();
     let actions = CapturingDispatch::new();
-    let diagnostics = Diagnostics::new();
     let session = SessionId::new("s1").unwrap();
     let service = ProcessService::new(
         ProcessPorts {
@@ -46,7 +44,6 @@ fn bench_with(config: &Config, euid: u32) -> Bench {
         },
         identity(euid),
         config,
-        diagnostics.clone(),
     );
     let mut bench = Bench {
         service,
@@ -58,7 +55,6 @@ fn bench_with(config: &Config, euid: u32) -> Bench {
         },
         open: BTreeSet::from([session.clone()]),
         session,
-        diagnostics,
     };
     bench.service.start(bench.now);
     let startup = bench.audit.take();
@@ -345,12 +341,7 @@ fn happy_path_sends_exactly_once_after_the_durable_intent() {
     assert_eq!(bench.state_of(prepare_id), ActionState::IntentPending);
 
     bench.advance_ms(5);
-    let fx = bench.durable(intent);
-    assert!(
-        fx.events
-            .iter()
-            .any(|(_, kind)| matches!(kind, EventKind::ActionIntentCommitted(_)))
-    );
+    bench.durable(intent);
     let ops = bench.actions.take();
     let sends = Bench::sends(&ops);
     assert_eq!(sends.len(), 1);
@@ -409,15 +400,10 @@ fn happy_path_sends_exactly_once_after_the_durable_intent() {
     bench.advance_ms(250);
     bench.tick();
     assert_eq!(bench.actions.take().len(), 1);
-    let fx = bench.action_completion(ActionCompletion::ExitObserved {
+    bench.action_completion(ActionCompletion::ExitObserved {
         request_id: confirm_id,
         observation: ExitObservation::ExitObserved,
     });
-    assert!(
-        fx.events
-            .iter()
-            .any(|(_, kind)| matches!(kind, EventKind::ActionExitObserved(_)))
-    );
     assert_eq!(bench.state_of(prepare_id), ActionState::ExitObserved);
     assert!(matches!(
         bench.actions.take()[..],
@@ -1015,7 +1001,6 @@ fn audit_trouble_fails_closed() {
         },
         identity(EUID),
         &Config::defaults().unwrap(),
-        Diagnostics::new(),
     );
     fresh.start(bench.now);
     let mut fx = Effects::default();
@@ -1139,18 +1124,7 @@ fn missing_send_report_is_unknown_and_never_retried() {
     let fx = bench.tick();
     let result = result_for(&fx, confirm_id);
     assert_eq!(result.code, ResultCode::from(ErrorCode::UnknownOutcome));
-    assert!(
-        fx.events
-            .iter()
-            .any(|(_, kind)| matches!(kind, EventKind::ActionOutcomeUnknown(_)))
-    );
     assert_eq!(bench.state_of(prepare_id), ActionState::Unknown);
-    assert_eq!(
-        bench
-            .diagnostics
-            .counter(names::ACTION_UNKNOWN_TOTAL, "send_timeout"),
-        1
-    );
     for _ in 0..20 {
         bench.advance_ms(1_000);
         bench.tick();
@@ -1245,14 +1219,9 @@ fn unknown_outcomes_from_recovery_are_surfaced_and_never_resent() {
         signal: Signal::Sigterm,
         previous_status: "intent_committed".into(),
     };
-    let fx = bench.audit_completion(AuditCompletion::Recovered {
+    bench.audit_completion(AuditCompletion::Recovered {
         result: Ok(vec![recovered.clone()]),
     });
-    assert!(
-        fx.events
-            .iter()
-            .any(|(_, kind)| matches!(kind, EventKind::ActionOutcomeUnknown(_)))
-    );
     assert_eq!(bench.service.unknown_outcomes(), 1);
     let view = bench.service.view_for(&bench.session, bench.now.boot_ns);
     assert_eq!(view.unknown_outcomes, 1);
@@ -1291,7 +1260,6 @@ fn failed_recovery_blocks_actions_and_is_retried() {
         },
         identity(EUID),
         &Config::defaults().unwrap(),
-        Diagnostics::new(),
     );
     let mut now = Now {
         boot_ns: 10 * SECOND,

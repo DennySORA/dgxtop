@@ -44,12 +44,10 @@ use dgxtop::perf::latency::summarize_us;
 use dgxtop::perf::report::{BenchMode, RunRecord};
 use dgxtop::perf::threads::HarnessCpu;
 use dgxtop_core::clock::NANOS_PER_SECOND;
-use dgxtop_core::diagnostics::names;
 use dgxtop_core::ports::{SessionPort, SnapshotReader};
 use frontend::{Frontend, FrontendInputs, FrontendReport};
 use metrics::{
-    WindowData, counter_delta, cpu_breakdown, run_record, unexplained_drops, usage_by_process,
-    usage_by_thread,
+    WindowData, cpu_breakdown, run_record, unexplained_drops, usage_by_process, usage_by_thread,
 };
 use probes::Probes;
 use sampler::{Sampler, SamplerInputs};
@@ -441,7 +439,8 @@ fn measure_window(
     harness: &HarnessCpu,
     shadow: &ShadowHistory,
 ) -> BenchResult<MeasuredWindow> {
-    let diagnostics_before = composition.diagnostics.snapshot();
+    let overload_before = composition.warnings.overload_transitions();
+    let logged_drops_before = composition.warnings.drops();
     let restarts_before = restarts(composition);
     let drops_before = probes
         .completion_drops
@@ -477,7 +476,14 @@ fn measure_window(
     let (projection, history) = probes.end_window();
     let (commands_us, command_statuses, router_evicted) = router.end_window();
     let statuses_after = composition.supervisor.statuses();
-    let diagnostics_after = composition.diagnostics.snapshot();
+    let overload_transitions = composition
+        .warnings
+        .overload_transitions()
+        .saturating_sub(overload_before);
+    let logged_drops = composition
+        .warnings
+        .drops()
+        .saturating_sub(logged_drops_before);
     let completion_drops = probes
         .completion_drops
         .load(std::sync::atomic::Ordering::Relaxed)
@@ -500,8 +506,8 @@ fn measure_window(
             projection,
             history,
             coverage,
-            diagnostics_before,
-            diagnostics_after,
+            overload_transitions,
+            logged_drops,
             completion_drops,
             collector_panics,
             host_restarts,
@@ -537,8 +543,6 @@ fn run_details(
     plan: &RunPlan,
 ) -> Value {
     let data = &window.data;
-    let diagnostics =
-        |metric| counter_delta(&data.diagnostics_before, &data.diagnostics_after, metric);
     json!({
         "ready_after_seconds": ready_after_seconds,
         "audit_sqlite_runtime_ok": window.audit_sqlite_ok,
@@ -563,7 +567,6 @@ fn run_details(
             "committed_batches": data.projection.committed_batches,
             "rejected_batches": data.projection.rejected_batches,
             "committed_reads_by_group_and_status": data.projection.read_census,
-            "manager_commit_to_projection_histogram": data.diagnostics_after.histograms.get(names::COMMIT_TO_PROJECTION_MS),
         },
         "history": {
             "outcomes": data.history.outcomes,
@@ -576,14 +579,15 @@ fn run_details(
         "coverage": data.coverage,
         "drops": {
             "unexplained_total": unexplained_drops(data),
-            "queue_dropped_by_label": label_deltas(data, names::QUEUE_DROPPED_TOTAL),
-            "dispatch_deferred_by_reason": label_deltas(data, names::ADAPTER_DISPATCH_DEFERRED_TOTAL),
+            "logged_drops": data.logged_drops,
             "completion_send_failures": data.completion_drops,
-            "stale_results_dropped": diagnostics(names::STALE_RESULT_DROPPED_TOTAL),
-            "gaps_recorded": diagnostics(names::GAP_RECORDED_TOTAL),
-            "adapter_timeouts": diagnostics(names::ADAPTER_TIMEOUT_TOTAL),
+            "adapter_timeouts": window
+                .statuses_after
+                .iter()
+                .map(|status| status.timeouts_total)
+                .fold(0, u64::saturating_add),
         },
-        "overload_transitions": label_deltas(data, names::OVERLOAD_TRANSITIONS_TOTAL),
+        "overload_transitions": data.overload_transitions,
         "crashes": {
             "host_restarts": data.host_restarts,
             "collector_panics": data.collector_panics,
@@ -593,27 +597,6 @@ fn run_details(
         "stalls": data.stalls,
         "hosts_after": window.statuses_after,
     })
-}
-
-fn label_deltas(data: &WindowData, metric: &str) -> std::collections::BTreeMap<String, u64> {
-    let before = data.diagnostics_before.counters.get(metric);
-    data.diagnostics_after
-        .counters
-        .get(metric)
-        .map(|series| {
-            series
-                .iter()
-                .map(|(label, value)| {
-                    let earlier = before
-                        .and_then(|series| series.get(label))
-                        .copied()
-                        .unwrap_or(0);
-                    (label.clone(), value.saturating_sub(earlier))
-                })
-                .filter(|(_, delta)| *delta > 0)
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 fn write_fixture_evidence(

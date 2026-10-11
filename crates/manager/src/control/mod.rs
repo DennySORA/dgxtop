@@ -2,7 +2,7 @@
 //! driven by one thread (RUNTIME.md §4).
 //!
 //! Handlers here only route typed inputs to the owning service and apply the
-//! returned effects (results, events, gaps, dirty sessions) in one place.
+//! returned effects (results, gaps, dirty sessions) in one place.
 //! Nothing in this module performs I/O: all work leaves through `Dispatch`
 //! ports and comes back as completions.
 
@@ -18,14 +18,10 @@ use std::time::{Duration, Instant};
 use dgxtop_core::budget::{ByteLedger, QueueGate};
 use dgxtop_core::canonical::GapRecord;
 use dgxtop_core::clock::{TimeProvider, ms_to_ns};
-use dgxtop_core::commands::{CommandResult, CommandStatus};
-use dgxtop_core::diagnostics::{Diagnostics, names};
-use dgxtop_core::errors::ResultCode;
-use dgxtop_core::event::{CompletionStatus, EventKind};
+use dgxtop_core::commands::CommandResult;
 use dgxtop_core::identity::{BootId, HostId, SessionId};
 use dgxtop_core::naming::{self, adapters, groups};
 use dgxtop_core::ports::{LogLevel, Logger};
-use dgxtop_core::text::sanitize_display;
 use uuid::Uuid;
 
 use crate::archive::ArchiveTracker;
@@ -33,7 +29,6 @@ use crate::catalog::DeviceCatalog;
 use crate::config::ConfigurationService;
 use crate::effects::Effects;
 use crate::error::ManagerError;
-use crate::events::{EVENT_LOG_CAPACITY, EventFeed, EventRecorder};
 use crate::history::{HistoryService, HistorySettings};
 use crate::hosts::HostTable;
 use crate::ingestion::trends::TrendRecorder;
@@ -56,20 +51,8 @@ use crate::views::ViewSessionService;
 const SHUTDOWN_WAIT_NS: u64 = 3_000_000_000;
 /// Cadence of store maintenance requests (retention, minute rollover).
 const MAINTAIN_NS: u64 = 1_000_000_000;
-/// Events copied into the shutdown summary.
-const SUMMARY_EVENTS: usize = 64;
 /// Safety timeout of a collector job: this many fast periods (≥ 10 s).
 const JOB_TIMEOUT_PERIODS: u64 = 4;
-
-/// Where the single result of an accepted command goes.
-#[derive(Debug, Clone)]
-struct Route {
-    session_id: SessionId,
-    accepted_ns: u64,
-    command: &'static str,
-    /// Non-navigation commands also leave a `CommandCompleted` event.
-    notify: bool,
-}
 
 #[derive(Debug)]
 struct Timers {
@@ -102,8 +85,6 @@ pub(crate) struct QueueLevels {
 pub(crate) struct ControlCore {
     clock: Arc<dyn TimeProvider>,
     logger: Arc<dyn Logger>,
-    diagnostics: Diagnostics,
-    events: EventRecorder,
     host_id: HostId,
     boot_id: BootId,
     facts: HostFacts,
@@ -125,7 +106,8 @@ pub(crate) struct ControlCore {
     archive: ArchiveTracker,
     overload: OverloadController,
     results: ResultCache,
-    routes: BTreeMap<Uuid, Route>,
+    /// The session each accepted command's single result goes to.
+    routes: BTreeMap<Uuid, SessionId>,
     inbox: Arc<CommandInbox>,
     shutdown: Arc<ShutdownSignal>,
     ingress: QueueGate,
@@ -133,9 +115,6 @@ pub(crate) struct ControlCore {
     timers: Timers,
     phase: Phase,
     started: bool,
-    revoked_tokens: u32,
-    rejected_commands: u32,
-    pending_commit_ns: Option<u64>,
     slice: Duration,
 }
 
@@ -194,10 +173,8 @@ impl ControlCore {
                 self_pid: setup.self_pid,
             },
             &effective,
-            ports.diagnostics.clone(),
         );
-        let process_history =
-            ProcessHistoryLink::new(ports.process_history, ports.diagnostics.clone());
+        let process_history = ProcessHistoryLink::new(ports.process_history);
         let catalog = DeviceCatalog::new(
             setup.host_id.clone(),
             setup.boot_id.clone(),
@@ -210,7 +187,6 @@ impl ControlCore {
             setup.value_origins,
         );
         Self {
-            events: EventRecorder::new(setup.boot_id.clone(), EVENT_LOG_CAPACITY),
             hosts: HostTable::new(&setup.adapters),
             trends: TrendRecorder::new(u64::from(fast_ms)),
             process_period_ms: process_ms,
@@ -219,9 +195,8 @@ impl ControlCore {
             presentation: PresentationService::new(
                 ports.ledger.clone(),
                 effective.runtime.max_projection_bytes,
-                ports.diagnostics.clone(),
             ),
-            archive: ArchiveTracker::new(ports.diagnostics.clone()),
+            archive: ArchiveTracker::default(),
             overload: OverloadController::new(&effective.runtime, now),
             results: ResultCache::new(
                 usize::try_from(effective.runtime.result_cache_entries).unwrap_or(128),
@@ -230,7 +205,6 @@ impl ControlCore {
             slice: Duration::from_millis(u64::from(effective.runtime.control_slice_ms)),
             clock: ports.clock,
             logger: ports.logger,
-            diagnostics: ports.diagnostics,
             host_id: setup.host_id,
             boot_id: setup.boot_id,
             facts: setup.facts,
@@ -252,9 +226,6 @@ impl ControlCore {
             },
             phase: Phase::Running,
             started: false,
-            revoked_tokens: 0,
-            rejected_commands: 0,
-            pending_commit_ns: None,
         }
     }
 
@@ -318,10 +289,6 @@ impl ControlCore {
         self.sessions.mark_shutdown_requested_all();
     }
 
-    pub(crate) fn event_feed(&self) -> EventFeed {
-        self.events.feed()
-    }
-
     /// The frame pacing in force: the viewer's frame rate for the current
     /// overload state, and whether a collection cycle is still committing.
     pub(crate) fn frame_pacing(&self) -> FramePacing {
@@ -362,12 +329,8 @@ impl ControlCore {
 
     /// Applies the effects a service produced.
     fn apply(&mut self, fx: Effects) {
-        let now = self.clock.now_boot_ns();
         for result in fx.results {
             self.finish(result);
-        }
-        for (correlation_id, kind) in fx.events {
-            self.events.emit(now, correlation_id, kind);
         }
         for gap in fx.gaps {
             self.record_gap(gap);
@@ -380,7 +343,7 @@ impl ControlCore {
     /// Delivers the single result of an accepted command.
     fn finish(&mut self, result: CommandResult) {
         let request_id = result.request_id;
-        let Some(route) = self.routes.remove(&request_id) else {
+        let Some(session_id) = self.routes.remove(&request_id) else {
             self.logger.log(
                 LogLevel::Warn,
                 "manager.commands",
@@ -390,24 +353,7 @@ impl ControlCore {
         };
         let now = self.clock.now_boot_ns();
         self.results.complete(request_id, &result, now);
-        self.diagnostics.observe_us(
-            names::MANAGER_COMMAND_ACK_MS,
-            route.command,
-            now.saturating_sub(route.accepted_ns) / 1_000,
-        );
-        self.count_rejection(&result);
-        if route.notify {
-            self.events.emit(
-                now,
-                request_id,
-                EventKind::CommandCompleted {
-                    request_id,
-                    status: completion_status(result.status),
-                    code: result.code.as_str().to_owned(),
-                },
-            );
-        }
-        self.deliver(&route.session_id, result);
+        self.deliver(&session_id, result);
     }
 
     /// Hands a result to a session mailbox (or releases its slot when the
@@ -419,35 +365,14 @@ impl ControlCore {
         }
     }
 
-    fn count_rejection(&self, result: &CommandResult) {
-        if let ResultCode::Error(code) = result.code {
-            self.diagnostics
-                .increment(names::COMMAND_REJECTED_TOTAL, code.as_str(), 1);
-        }
-    }
-
-    /// Records a visible gap: store, event and counter.
+    /// Records a visible gap in the store.
     fn record_gap(&mut self, gap: GapRecord) {
-        let now = self.clock.now_boot_ns();
-        let label = gap
-            .adapter_id
-            .as_ref()
-            .map_or_else(|| "none".to_owned(), ToString::to_string);
-        self.diagnostics
-            .increment(names::GAP_RECORDED_TOTAL, &label, 1);
-        self.events.emit(
-            now,
-            Uuid::new_v4(),
-            EventKind::GapRecorded {
-                start_boot_ns: gap.start_boot_ns,
-                end_boot_ns: gap.end_boot_ns,
-                reason: sanitize_display(&gap.reason, 128),
-                affected_count: gap.affected_count,
-            },
-        );
         if self.ingestion.record_gap(gap).is_err() {
-            self.diagnostics
-                .increment(names::QUEUE_DROPPED_TOTAL, "gap_store_busy", 1);
+            self.logger.log(
+                LogLevel::Warn,
+                "manager.gaps",
+                "gap not recorded: the store queue is full",
+            );
         }
     }
 
@@ -468,16 +393,6 @@ fn process_list_period_ms(periods: &BTreeMap<String, u32>) -> Option<u64> {
     periods
         .get(&naming::period_key(adapters::PROCFS, groups::PROCESS))
         .map(|period| u64::from(*period))
-}
-
-fn completion_status(status: CommandStatus) -> CompletionStatus {
-    match status {
-        CommandStatus::Rejected => CompletionStatus::Rejected,
-        CommandStatus::Unknown => CompletionStatus::Unknown,
-        CommandStatus::Completed | CommandStatus::Accepted | CommandStatus::InProgress => {
-            CompletionStatus::Completed
-        }
-    }
 }
 
 #[cfg(test)]

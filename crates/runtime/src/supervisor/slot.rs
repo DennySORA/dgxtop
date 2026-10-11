@@ -23,7 +23,6 @@ use std::sync::Arc;
 
 use dgxtop_core::budget::{BytePermit, QueueTicket};
 use dgxtop_core::clock::{NANOS_PER_MILLI, NANOS_PER_SECOND, ms_to_ns, ns_to_ms};
-use dgxtop_core::diagnostics::names;
 use dgxtop_core::identity::AdapterId;
 use dgxtop_core::observation::{
     CatalogReply, DiscoverRequest, HostHello, Isolation, ObservationBatch, ReadPlan,
@@ -50,7 +49,6 @@ use super::credit::{discover_credit, frame_credit};
 use super::launch::{
     ChildControl, ExitSummary, HostLaunch, HostSpec, LaunchRequest, SignalDelivery,
 };
-use super::names as runtime_names;
 use super::report::{HostShutdown, StopOutcome, StopStage};
 use super::requests::{self, Revisions, failed_completion, failure};
 use super::shared::Execution;
@@ -247,11 +245,6 @@ impl HostSlot {
         };
         if self.generation > 0 {
             self.restarts_total += 1;
-            ctx.diagnostics.increment(
-                runtime_names::HOST_RESTART_TOTAL,
-                self.adapter_id.as_str(),
-                1,
-            );
         }
         self.generation = generation;
         match self.spawn_connection(generation, now, ctx) {
@@ -495,8 +488,6 @@ impl HostSlot {
 
     fn hello_timed_out(&mut self, now: u64, ctx: &mut LoopContext) {
         self.timeouts_total += 1;
-        ctx.diagnostics
-            .increment(names::ADAPTER_TIMEOUT_TOTAL, self.adapter_id.as_str(), 1);
         let message = format!(
             "generation {} sent no hello within {} ms",
             self.generation, ctx.config.hello_timeout_ms
@@ -528,8 +519,6 @@ impl HostSlot {
             inflight.credit.clear();
         }
         self.timeouts_total += 1;
-        ctx.diagnostics
-            .increment(names::ADAPTER_TIMEOUT_TOTAL, self.adapter_id.as_str(), 1);
         let message = format!("no reply within {waited_ms} ms; a late reply will be discarded");
         if is_probe {
             self.probe_failed(now, &message, ctx);
@@ -763,11 +752,6 @@ impl HostSlot {
 
     fn discard_late_reply(&mut self, now: u64, ctx: &mut LoopContext) {
         self.late_replies_total += 1;
-        ctx.diagnostics.increment(
-            names::STALE_RESULT_DROPPED_TOTAL,
-            self.adapter_id.as_str(),
-            1,
-        );
         self.become_idle(now, false, ctx);
         self.publish(ctx);
     }
@@ -801,12 +785,10 @@ impl HostSlot {
         let inflight = *inflight;
         match inflight.kind {
             InFlightKind::Read { plan, key } => {
-                let elapsed_ns = now.saturating_sub(inflight.sent_boot_ns);
                 let reply = ReadReply {
                     plan: &plan,
                     key: &key,
                     credit: inflight.credit,
-                    elapsed_ns,
                 };
                 self.finish_read(payload, reply, now, ctx);
             }
@@ -844,11 +826,6 @@ impl HostSlot {
         match account(batch.decoded_bytes(), reply.credit, ctx) {
             Ok(permit) => {
                 let shared = Arc::new(IngressBatch::new(batch, Some(permit)));
-                ctx.diagnostics.observe_us(
-                    names::ADAPTER_READ_DURATION_MS,
-                    self.adapter_id.as_str(),
-                    reply.elapsed_ns / 1000,
-                );
                 complete_read(reply.key, reply.plan, Ok(shared), ctx);
             }
             Err(message) => {
@@ -955,8 +932,7 @@ impl HostSlot {
                 &format!("{adapter}: {line}"),
             );
         };
-        let suppressed_before = connection.drain().suppressed_total();
-        let more = match connection.read_diagnostics(&mut ctx.scratch) {
+        match connection.read_diagnostics(&mut ctx.scratch) {
             DiagnosticsRead::Bytes(read) => {
                 connection
                     .drain()
@@ -968,16 +944,7 @@ impl HostSlot {
                 connection.drain().finish(now, &mut forward);
                 false
             }
-        };
-        let suppressed = connection.drain().suppressed_total() - suppressed_before;
-        if suppressed > 0 {
-            ctx.diagnostics.increment(
-                runtime_names::HOST_STDERR_SUPPRESSED_TOTAL,
-                self.adapter_id.as_str(),
-                suppressed,
-            );
         }
-        more
     }
 
     pub(crate) fn on_requests_writable(&mut self, now: u64, ctx: &mut LoopContext) {
@@ -1018,11 +985,6 @@ impl HostSlot {
     }
 
     fn protocol_failure(&mut self, now: u64, error: &IpcError, ctx: &mut LoopContext) {
-        ctx.diagnostics.increment(
-            runtime_names::HOST_PROTOCOL_ERROR_TOTAL,
-            self.adapter_id.as_str(),
-            1,
-        );
         let message = format!("protocol error: {error}");
         self.host_failed(now, AdapterFailureKind::Protocol, &message, ctx);
     }
@@ -1176,8 +1138,6 @@ impl HostSlot {
         self.connection = None;
         self.outcome = match reaped {
             Some((stage, exit)) => {
-                ctx.diagnostics
-                    .increment(runtime_names::HOST_STOP_TOTAL, stage.label(), 1);
                 let note = format!(
                     "generation {} stopped after {}: {exit}",
                     self.generation,
@@ -1220,8 +1180,6 @@ impl HostSlot {
             ctx.config.child_reap_ms
         );
         ctx.log(LogLevel::Error, &format!("{}: {message}", self.adapter_id));
-        ctx.diagnostics
-            .increment(runtime_names::HOST_STOP_TOTAL, "unreaped", 1);
         self.note(message);
         self.set_ready(ctx, false);
         self.publish(ctx);
@@ -1453,7 +1411,6 @@ struct ReadReply<'a> {
     plan: &'a ReadPlan,
     key: &'a BrokerKey,
     credit: Vec<QueueTicket>,
-    elapsed_ns: u64,
 }
 
 fn check_isolation(hello: &HostHello, launch: &HostLaunch) -> Result<(), IpcError> {

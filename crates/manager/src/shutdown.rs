@@ -8,7 +8,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use crossbeam_channel::Sender;
-use dgxtop_core::event::Event;
 use dgxtop_core::text::sanitize_display;
 
 /// Longest stored shutdown reason (matches the command schema limit).
@@ -93,12 +92,6 @@ pub struct ShutdownSummary {
     /// Work that did not finish (pending config persist, audit intents,
     /// actions whose outcome is unknown, ...). Empty on a clean shutdown.
     pub unfinished: Vec<String>,
-    /// Confirmation tokens revoked because they had not reached `sending`.
-    pub revoked_tokens: u32,
-    /// Accepted commands answered with `Unavailable` during shutdown.
-    pub rejected_commands: u32,
-    /// Newest events of the bounded event log.
-    pub recent_events: Vec<Event>,
 }
 
 #[cfg(test)]

@@ -17,11 +17,9 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use crossbeam_channel::{Sender, TrySendError};
 use dgxtop_core::budget::{ByteLedger, BytePermit, Partition};
-use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::commands::{
     CommandBody, CommandEnvelope, CommandRejection, CommandResult, CommandSyntaxError,
 };
-use dgxtop_core::diagnostics::{Diagnostics, names};
 use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::identity::SessionId;
 use dgxtop_core::ports::SessionPort;
@@ -40,7 +38,6 @@ const DEFAULT_VIEWPORT: (u16, u16) = (80, 24);
 #[derive(Debug)]
 pub(crate) struct QueuedCommand {
     pub(crate) envelope: CommandEnvelope,
-    pub(crate) accepted_boot_ns: u64,
     /// Reserve-partition bytes of the payload, held until it is processed.
     pub(crate) _permit: Option<BytePermit>,
 }
@@ -269,9 +266,7 @@ pub(crate) struct CommandInbox {
     outstanding: Arc<Outstanding>,
     command_byte_cap: u64,
     ledger: ByteLedger,
-    clock: Arc<dyn TimeProvider>,
     shutdown: Arc<ShutdownSignal>,
-    diagnostics: Diagnostics,
 }
 
 /// Construction inputs of [`CommandInbox`].
@@ -280,9 +275,7 @@ pub(crate) struct InboxParts {
     pub(crate) outstanding: Arc<Outstanding>,
     pub(crate) command_byte_cap: u64,
     pub(crate) ledger: ByteLedger,
-    pub(crate) clock: Arc<dyn TimeProvider>,
     pub(crate) shutdown: Arc<ShutdownSignal>,
-    pub(crate) diagnostics: Diagnostics,
 }
 
 impl CommandInbox {
@@ -293,9 +286,7 @@ impl CommandInbox {
             outstanding: parts.outstanding,
             command_byte_cap: parts.command_byte_cap,
             ledger: parts.ledger,
-            clock: parts.clock,
             shutdown: parts.shutdown,
-            diagnostics: parts.diagnostics,
         }
     }
 
@@ -334,7 +325,6 @@ impl CommandInbox {
         };
         let queued = QueuedCommand {
             envelope,
-            accepted_boot_ns: self.clock.now_boot_ns(),
             _permit: Some(permit),
         };
         let closed = self.closed.read().unwrap_or_else(PoisonError::into_inner);
@@ -382,8 +372,6 @@ impl CommandInbox {
     }
 
     fn reject(&self, request_id: Uuid, code: ErrorCode, message: &str) -> CommandRejection {
-        self.diagnostics
-            .increment(names::COMMAND_REJECTED_TOTAL, code.as_str(), 1);
         CommandRejection {
             request_id,
             code,
@@ -508,7 +496,6 @@ mod tests {
     use super::*;
     use dgxtop_core::budget::ByteLedger;
     use dgxtop_core::commands::{SortKey, ViewKind};
-    use dgxtop_core::testing::FakeClock;
 
     struct Fixture {
         handle: SessionHandle,
@@ -531,9 +518,7 @@ mod tests {
             outstanding: Arc::clone(&outstanding),
             command_byte_cap: 64 * 1024,
             ledger: ledger.clone(),
-            clock: FakeClock::new(1_000),
             shutdown: Arc::clone(&signal),
-            diagnostics: Diagnostics::new(),
         }));
         let shared = Arc::new(SessionShared::new(
             SessionId::new("s1").unwrap(),

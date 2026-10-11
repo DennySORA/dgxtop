@@ -9,8 +9,8 @@
 //! `runtime.max_projection_bytes` is reserved *before* a model is built
 //! (AT21: the peak is admitted before it is allocated) and shrunk to the
 //! measured size afterwards. A frame the ledger cannot admit is skipped
-//! before building, and a projection larger than the cap is dropped; both
-//! are counted instead of over-committing. The previous pending projection
+//! before building, and a projection larger than the cap is dropped, instead
+//! of over-committing. The previous pending projection
 //! is released before the reservation so a session never needs room for
 //! more than one pending plus the renderer's active frame.
 
@@ -18,7 +18,6 @@ use std::sync::Arc;
 
 use dgxtop_core::budget::{ByteLedger, BytePermit, Partition};
 use dgxtop_core::clock::{NANOS_PER_MILLI, NANOS_PER_SECOND};
-use dgxtop_core::diagnostics::{Diagnostics, names};
 use dgxtop_core::view::ViewModel;
 
 use crate::session::SessionShared;
@@ -35,20 +34,14 @@ pub(crate) enum PublishOutcome {
 pub(crate) struct PresentationService {
     ledger: ByteLedger,
     max_projection_bytes: u64,
-    diagnostics: Diagnostics,
     frame_counter: u64,
 }
 
 impl PresentationService {
-    pub(crate) fn new(
-        ledger: ByteLedger,
-        max_projection_bytes: u32,
-        diagnostics: Diagnostics,
-    ) -> Self {
+    pub(crate) fn new(ledger: ByteLedger, max_projection_bytes: u32) -> Self {
         Self {
             ledger,
             max_projection_bytes: u64::from(max_projection_bytes),
-            diagnostics,
             frame_counter: 0,
         }
     }
@@ -68,12 +61,8 @@ impl PresentationService {
         session.discard_pending_projection();
         self.ledger
             .try_reserve(Partition::Presentation, self.max_projection_bytes)
-            .map_err(|_| {
-                self.diagnostics
-                    .increment(names::QUEUE_DROPPED_TOTAL, "projection_ledger_full", 1);
-                PublishOutcome::LedgerFull {
-                    bytes: self.max_projection_bytes,
-                }
+            .map_err(|_| PublishOutcome::LedgerFull {
+                bytes: self.max_projection_bytes,
             })
     }
 
@@ -87,8 +76,6 @@ impl PresentationService {
     ) -> PublishOutcome {
         let bytes = u64::try_from(measured_bytes).unwrap_or(u64::MAX);
         if bytes > self.max_projection_bytes {
-            self.diagnostics
-                .increment(names::QUEUE_DROPPED_TOTAL, "projection_too_large", 1);
             return PublishOutcome::TooLarge { bytes };
         }
         permit.shrink_to(bytes);
@@ -185,7 +172,7 @@ mod tests {
     #[test]
     fn published_projection_holds_its_bytes_until_dropped() {
         let ledger = ByteLedger::for_memory_limit_mib(256);
-        let mut service = PresentationService::new(ledger.clone(), 1_048_576, Diagnostics::new());
+        let mut service = PresentationService::new(ledger.clone(), 1_048_576);
         let session = session();
         let frame = service.next_frame_revision();
         let PublishOutcome::Published { bytes } = service.publish(model(frame, 10), &session)
@@ -210,18 +197,13 @@ mod tests {
 
     #[test]
     fn oversized_or_unadmitted_projections_are_skipped() {
-        let diagnostics = Diagnostics::new();
         let ledger = ByteLedger::for_memory_limit_mib(256);
-        let service = PresentationService::new(ledger.clone(), 65_536, diagnostics.clone());
+        let service = PresentationService::new(ledger.clone(), 65_536);
         let session = session();
         assert!(matches!(
             service.publish(model(1, 100_000), &session),
             PublishOutcome::TooLarge { .. }
         ));
-        assert_eq!(
-            diagnostics.counter(names::QUEUE_DROPPED_TOTAL, "projection_too_large"),
-            1
-        );
         // Fill the presentation partition so the next reservation fails.
         let limit = ledger.limits().limit(Partition::Presentation);
         let _hog = ledger.try_reserve(Partition::Presentation, limit).unwrap();
@@ -235,7 +217,7 @@ mod tests {
     #[test]
     fn a_full_projection_budget_is_reserved_before_building_and_shrunk_after() {
         let ledger = ByteLedger::for_memory_limit_mib(256);
-        let service = PresentationService::new(ledger.clone(), 65_536, Diagnostics::new());
+        let service = PresentationService::new(ledger.clone(), 65_536);
         let session = session();
         let permit = service.reserve_frame(&session).unwrap();
         // AT21: the peak is admitted before the model is allocated.
@@ -256,9 +238,8 @@ mod tests {
 
     #[test]
     fn a_ledger_without_room_for_a_full_projection_skips_the_frame_before_building() {
-        let diagnostics = Diagnostics::new();
         let ledger = ByteLedger::for_memory_limit_mib(256);
-        let service = PresentationService::new(ledger.clone(), 65_536, diagnostics.clone());
+        let service = PresentationService::new(ledger.clone(), 65_536);
         let session = session();
         let limit = ledger.limits().limit(Partition::Presentation);
         // Leaves less than one full projection of room.
@@ -269,10 +250,6 @@ mod tests {
             service.reserve_frame(&session),
             Err(PublishOutcome::LedgerFull { .. })
         ));
-        assert_eq!(
-            diagnostics.counter(names::QUEUE_DROPPED_TOTAL, "projection_ledger_full"),
-            1
-        );
         assert_eq!(ledger.used(Partition::Presentation), limit - 65_535);
     }
 

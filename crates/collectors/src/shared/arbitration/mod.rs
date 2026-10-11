@@ -19,7 +19,7 @@ mod ranking;
 use std::cmp::Reverse;
 
 use dgxtop_core::canonical::{
-    CanonicalValue, CollectorEvent, Explanation, PolicySnapshot, RejectReason, SelectionMemo,
+    CanonicalValue, Explanation, PolicySnapshot, RejectReason, SelectionMemo,
 };
 use dgxtop_core::identity::{MetricKey, SourceId};
 use dgxtop_core::metric::{MetricDescriptor, Scalar};
@@ -123,7 +123,6 @@ pub struct Outcome {
     pub explanation: Explanation,
     /// Next hysteresis memo (`None` clears it).
     pub memo: Option<SelectionMemo>,
-    pub events: Vec<CollectorEvent>,
     pub selection: Option<Selection>,
     /// Whether any candidate belongs to the policy namespace. Without such
     /// evidence the key must not be published in this namespace at all.
@@ -209,7 +208,6 @@ pub fn arbitrate(request: Request<'_>) -> Outcome {
         cycle_id,
         now_boot_ns,
         policy,
-        memo,
         assessed: &assessed,
         ranking: &ranking,
         consistency: &consistency,

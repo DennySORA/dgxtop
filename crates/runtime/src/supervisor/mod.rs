@@ -34,7 +34,6 @@ use std::sync::Arc;
 use crossbeam_channel::{Sender, bounded};
 use dgxtop_core::budget::{ByteLedger, Partition, QueueGate};
 use dgxtop_core::clock::TimeProvider;
-use dgxtop_core::diagnostics::Diagnostics;
 use dgxtop_core::errors::InfraError;
 use dgxtop_core::ports::{IngestionCompletion, Logger};
 use dgxtop_core::view::{HostState, HostStatus};
@@ -60,15 +59,6 @@ use shared::{HostGate, Shared, SharedState};
 use slot::HostSlot;
 use stderr_drain::MAX_STDERR_LINE_BYTES;
 
-/// Diagnostics metric names owned by the runtime (labels are bounded:
-/// adapter ids or stop stages).
-pub mod names {
-    pub const HOST_RESTART_TOTAL: &str = "host_restart_total";
-    pub const HOST_STOP_TOTAL: &str = "host_stop_total";
-    pub const HOST_PROTOCOL_ERROR_TOTAL: &str = "host_protocol_error_total";
-    pub const HOST_STDERR_SUPPRESSED_TOTAL: &str = "host_stderr_suppressed_total";
-}
-
 /// Read scratch shared by all pipes of the supervisor thread.
 const SCRATCH_BYTES: usize = 64 * 1024;
 
@@ -87,7 +77,6 @@ impl Supervisor {
         completions: Sender<IngestionCompletion>,
         clock: Arc<dyn TimeProvider>,
         logger: Arc<dyn Logger>,
-        diagnostics: Diagnostics,
     ) -> Result<SupervisorHandle, InfraError> {
         Self::start_with_launcher(
             config,
@@ -97,7 +86,6 @@ impl Supervisor {
             completions,
             clock,
             logger,
-            diagnostics,
             Arc::new(StandardLauncher),
         )
     }
@@ -112,7 +100,6 @@ impl Supervisor {
         completions: Sender<IngestionCompletion>,
         clock: Arc<dyn TimeProvider>,
         logger: Arc<dyn Logger>,
-        diagnostics: Diagnostics,
         launcher: Arc<dyn HostLauncher>,
     ) -> Result<SupervisorHandle, InfraError> {
         config.validate()?;
@@ -142,7 +129,6 @@ impl Supervisor {
                 shared: Arc::clone(&shared),
                 clock: Arc::clone(&clock),
                 logger,
-                diagnostics,
                 launcher,
                 ingress: ingress.clone(),
                 scratch: vec![0; SCRATCH_BYTES],

@@ -141,7 +141,6 @@ impl Harness {
             process_table: None,
             next_state: CollectorState::default(),
             failures: Vec::new(),
-            events: Vec::new(),
         }
     }
 

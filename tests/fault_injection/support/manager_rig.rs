@@ -16,8 +16,6 @@ use dgxtop_core::commands::{
     CommandBody, CommandEnvelope, CommandRejection, CommandResult, SortKey, ViewKind,
 };
 use dgxtop_core::config::Config;
-use dgxtop_core::diagnostics::Diagnostics;
-use dgxtop_core::event::EventKind;
 use dgxtop_core::identity::{BootId, HostId, Pid, PidNamespace, ProcessKey};
 use dgxtop_core::observation::AdapterManifest;
 use dgxtop_core::ports::{
@@ -28,8 +26,8 @@ use dgxtop_core::testing::{CapturingDispatch, MemoryLogger};
 use dgxtop_core::view::ViewModel;
 use dgxtop_manager::presentation::HostFacts;
 use dgxtop_manager::{
-    EventFeed, Manager, ManagerChannels, ManagerPorts, ManagerSetup, SessionHandle,
-    ShutdownSummary, ShutdownTrigger,
+    Manager, ManagerChannels, ManagerPorts, ManagerSetup, SessionHandle, ShutdownSummary,
+    ShutdownTrigger,
 };
 use uuid::Uuid;
 
@@ -135,7 +133,6 @@ pub fn inert_ports(
         actions: Box::new(CapturingDispatch::<ActionOp>::new()),
         process_history: None,
         logger: Arc::new(MemoryLogger::default()),
-        diagnostics: Diagnostics::new(),
         ledger: ledger.clone(),
         ingress,
     }
@@ -216,7 +213,6 @@ pub fn navigation(view: ViewKind) -> CommandBody {
 pub struct RunningManager {
     pub session: SessionHandle,
     pub trigger: ShutdownTrigger,
-    pub events: EventFeed,
     thread: Option<JoinHandle<ShutdownSummary>>,
     results: Mutex<Vec<CommandResult>>,
 }
@@ -227,7 +223,6 @@ impl RunningManager {
             Manager::with_channels(setup, ports, channels).expect("valid manager setup");
         let session = manager.open_session().expect("open a view session");
         let trigger = manager.shutdown_trigger();
-        let events = manager.event_feed();
         let thread = std::thread::Builder::new()
             .name("fault-manager".to_owned())
             .spawn(move || manager.run())
@@ -235,7 +230,6 @@ impl RunningManager {
         Self {
             session,
             trigger,
-            events,
             thread: Some(thread),
             results: Mutex::new(Vec::new()),
         }
@@ -310,15 +304,6 @@ impl RunningManager {
             );
             std::thread::sleep(POLL_STEP);
         }
-    }
-
-    /// Kinds of the events still held by the bounded event log.
-    pub fn event_kinds(&self) -> Vec<EventKind> {
-        self.events
-            .recent(512)
-            .into_iter()
-            .map(|event| event.kind)
-            .collect()
     }
 
     /// Waits (bounded) for the control thread and returns its outcome

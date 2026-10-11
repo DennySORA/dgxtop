@@ -1,9 +1,9 @@
 //! Step 9: the explainable result — canonical value, per-candidate
-//! dispositions, hysteresis memo and source events.
+//! dispositions and hysteresis memo.
 
 use dgxtop_core::canonical::{
-    CandidateDisposition, CandidateExplanation, CanonicalValue, CollectorEvent, Explanation,
-    PolicySnapshot, RejectReason, SelectionMemo, SwitchExplanation,
+    CandidateDisposition, CandidateExplanation, CanonicalValue, Explanation, PolicySnapshot,
+    RejectReason, SelectionMemo, SwitchExplanation,
 };
 use dgxtop_core::identity::{MetricKey, SourceId};
 use dgxtop_core::metric::MetricDescriptor;
@@ -21,7 +21,6 @@ pub(super) struct Parts<'r, 'c, 'a> {
     pub cycle_id: u64,
     pub now_boot_ns: u64,
     pub policy: &'r PolicySnapshot,
-    pub memo: Option<&'r SelectionMemo>,
     pub assessed: &'r [Assessed<'c, 'a>],
     pub ranking: &'r Ranking,
     pub consistency: &'r Consistency,
@@ -36,7 +35,6 @@ pub(super) fn build(parts: Parts<'_, '_, '_>) -> Outcome {
     Outcome {
         canonical: canonical_value(&parts, state),
         explanation: explanation(&parts, state, memo.as_ref()),
-        events: events(&parts),
         selection: selection(&parts),
         has_namespace_evidence: parts
             .assessed
@@ -418,59 +416,6 @@ fn next_memo(parts: &Parts<'_, '_, '_>) -> Option<SelectionMemo> {
         Decision::Selected { memo, .. } => Some(memo.clone()),
         Decision::Conflict | Decision::Unavailable { .. } => None,
     }
-}
-
-fn events(parts: &Parts<'_, '_, '_>) -> Vec<CollectorEvent> {
-    let previous = parts.memo.and_then(|memo| memo.selected.as_ref());
-    let mut events = Vec::new();
-    match &parts.decision {
-        Decision::Selected { index, .. } => {
-            let selected = parts.assessed[*index].candidate.source_id();
-            if let Some(previous) = previous.filter(|previous| *previous != selected) {
-                events.extend(unavailable_event(parts, previous));
-                events.push(CollectorEvent::SourceChanged {
-                    key: parts.key.clone(),
-                    previous_source: Some(previous.clone()),
-                    source_id: selected.clone(),
-                    policy_revision: parts.policy.revision,
-                });
-            }
-        }
-        Decision::Conflict => {
-            let mut source_ids: Vec<SourceId> = parts
-                .consistency
-                .conflicting
-                .iter()
-                .map(|index| parts.assessed[*index].candidate.source_id().clone())
-                .collect();
-            source_ids.sort();
-            events.push(CollectorEvent::SourceConflict {
-                key: parts.key.clone(),
-                source_ids,
-            });
-        }
-        Decision::Unavailable { .. } => {
-            if let Some(previous) = previous {
-                events.extend(unavailable_event(parts, previous));
-            }
-        }
-    }
-    events
-}
-
-/// `SourceUnavailable` for the previously selected source when it is present
-/// and rejected this round.
-fn unavailable_event(parts: &Parts<'_, '_, '_>, previous: &SourceId) -> Option<CollectorEvent> {
-    let entry = parts
-        .assessed
-        .iter()
-        .find(|entry| entry.candidate.source_id() == previous)?;
-    let reason = entry.rejection()?;
-    Some(CollectorEvent::SourceUnavailable {
-        source_id: previous.clone(),
-        reason: reasons::reject_code(reason, entry.candidate.observation.native_unit.as_str())
-            .to_owned(),
-    })
 }
 
 fn selection(parts: &Parts<'_, '_, '_>) -> Option<Selection> {

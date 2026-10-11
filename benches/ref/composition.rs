@@ -15,6 +15,7 @@
 //!   view commands anyway).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -36,7 +37,6 @@ use dgxtop_core::budget::{ByteLedger, Partition, QueueGate};
 use dgxtop_core::canonical::CollectionPlan;
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::config::Config;
-use dgxtop_core::diagnostics::Diagnostics;
 use dgxtop_core::errors::ErrorDetail;
 use dgxtop_core::identity::{AdapterId, ProcessKey};
 use dgxtop_core::overview_history::{OverviewAnswer, OverviewRequest};
@@ -116,7 +116,8 @@ pub struct RefComposition {
     pub session: SessionHandle,
     pub supervisor: SupervisorHandle,
     pub ledger: ByteLedger,
-    pub diagnostics: Diagnostics,
+    /// Warnings the product logged, counted by kind for the run metrics.
+    pub warnings: Arc<WarningTally>,
     pub clock: Arc<dyn TimeProvider>,
     pub snapshots: SharedSnapshot,
     pub config: Config,
@@ -166,6 +167,51 @@ impl Completions {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.logger
             .log(LogLevel::Warn, "bench.composition", message);
+    }
+}
+
+/// Forwards every record to the run's log and counts the warnings the run
+/// metrics are made of: the product keeps no counters of its own (D-93), so
+/// an overload transition and a dropped gap or frame are known by the one
+/// warning each of them logs.
+pub struct WarningTally {
+    inner: Arc<dyn Logger>,
+    overload_transitions: AtomicU64,
+    drops: AtomicU64,
+}
+
+/// Targets whose warnings each report one item dropped for a full queue or
+/// budget.
+const DROP_TARGETS: [&str; 2] = ["manager.gaps", "manager.presentation"];
+
+impl WarningTally {
+    fn new(inner: Arc<dyn Logger>) -> Self {
+        Self {
+            inner,
+            overload_transitions: AtomicU64::new(0),
+            drops: AtomicU64::new(0),
+        }
+    }
+
+    pub fn overload_transitions(&self) -> u64 {
+        self.overload_transitions.load(Ordering::Relaxed)
+    }
+
+    pub fn drops(&self) -> u64 {
+        self.drops.load(Ordering::Relaxed)
+    }
+}
+
+impl Logger for WarningTally {
+    fn log(&self, level: LogLevel, target: &'static str, message: &str) {
+        if level == LogLevel::Warn {
+            if target == "manager.overload" {
+                self.overload_transitions.fetch_add(1, Ordering::Relaxed);
+            } else if DROP_TARGETS.contains(&target) {
+                self.drops.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        self.inner.log(level, target, message);
     }
 }
 
@@ -226,7 +272,8 @@ impl RefComposition {
             ledger.clone(),
             Partition::Ingress,
         );
-        let diagnostics = Diagnostics::new();
+        let warnings = Arc::new(WarningTally::new(Arc::clone(&logger) as Arc<dyn Logger>));
+        let product_logger = Arc::clone(&warnings) as Arc<dyn Logger>;
         let channels = ManagerChannels::create();
         let inboxes = channels.inboxes();
         let wiring = Wiring {
@@ -301,8 +348,7 @@ impl RefComposition {
             ingress.clone(),
             inboxes.ingestion.clone(),
             Arc::clone(&clock),
-            Arc::clone(&logger) as Arc<dyn Logger>,
-            diagnostics.clone(),
+            Arc::clone(&product_logger),
         )
         .map_err(|error| error.to_string())?;
         let self_pid =
@@ -346,8 +392,7 @@ impl RefComposition {
                 runs: Arc::clone(&published) as Arc<dyn ProcessHistoryReader>,
                 memory: published,
             }),
-            logger: Arc::clone(&logger) as Arc<dyn Logger>,
-            diagnostics: diagnostics.clone(),
+            logger: Arc::clone(&product_logger),
             ledger: ledger.clone(),
             ingress,
         };
@@ -363,7 +408,7 @@ impl RefComposition {
             session,
             supervisor,
             ledger,
-            diagnostics,
+            warnings,
             clock,
             snapshots,
             config,

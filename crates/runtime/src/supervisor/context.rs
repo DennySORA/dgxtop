@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use dgxtop_core::budget::QueueGate;
 use dgxtop_core::clock::{TimeProvider, ms_to_ns};
-use dgxtop_core::diagnostics::{Diagnostics, names};
 use dgxtop_core::ports::{IngestionCompletion, LogLevel, Logger};
 
 use crate::ipc::IpcLimits;
@@ -47,7 +46,6 @@ pub(crate) struct LoopContext {
     pub outbox: Outbox,
     pub clock: Arc<dyn TimeProvider>,
     pub logger: Arc<dyn Logger>,
-    pub diagnostics: Diagnostics,
     pub launcher: Arc<dyn HostLauncher>,
     pub ingress: QueueGate,
     pub scratch: Vec<u8>,
@@ -94,11 +92,7 @@ impl LoopContext {
     }
 
     pub(crate) fn emit(&mut self, completion: IngestionCompletion) {
-        let dropped = self.outbox.push(completion);
-        if dropped > 0 {
-            self.diagnostics
-                .increment(names::QUEUE_DROPPED_TOTAL, "supervisor_outbox", dropped);
-        }
+        self.outbox.push(completion);
     }
 
     pub(crate) fn log(&self, level: LogLevel, message: &str) {

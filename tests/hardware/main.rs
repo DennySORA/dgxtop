@@ -17,7 +17,6 @@ use crossbeam_channel::{Receiver, bounded};
 use dgxtop_core::budget::{ByteLedger, MIB, Partition, QueueGate};
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::config::Config;
-use dgxtop_core::diagnostics::Diagnostics;
 use dgxtop_core::identity::{AdapterId, ReadGroup};
 use dgxtop_core::naming;
 use dgxtop_core::observation::{
@@ -67,7 +66,6 @@ impl LiveHosts {
             sender,
             Arc::clone(&clock),
             Arc::new(NullLogger),
-            Diagnostics::new(),
         )
         .unwrap();
         let mut hosts = Self {

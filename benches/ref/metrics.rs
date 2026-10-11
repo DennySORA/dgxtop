@@ -5,7 +5,6 @@ use dgxtop::perf::coverage::CoverageReport;
 use dgxtop::perf::cpu_percent_of_one_core;
 use dgxtop::perf::latency::summarize_us;
 use dgxtop::perf::report::RunRecord;
-use dgxtop_core::diagnostics::{DiagnosticsSnapshot, names};
 use serde::Serialize;
 
 use super::probes::{HistoryWindow, ProjectionWindow};
@@ -24,8 +23,10 @@ pub struct WindowData {
     pub projection: ProjectionWindow,
     pub history: HistoryWindow,
     pub coverage: CoverageReport,
-    pub diagnostics_before: DiagnosticsSnapshot,
-    pub diagnostics_after: DiagnosticsSnapshot,
+    /// Overload transitions the Manager logged in the window.
+    pub overload_transitions: u64,
+    /// Gaps and frames the Manager logged as dropped in the window.
+    pub logged_drops: u64,
     pub completion_drops: u64,
     pub collector_panics: u64,
     pub host_restarts: u64,
@@ -155,33 +156,12 @@ pub fn usage_by_thread(
     usage
 }
 
-/// Increase of a counter metric over all its labels.
-pub fn counter_delta(
-    before: &DiagnosticsSnapshot,
-    after: &DiagnosticsSnapshot,
-    metric: &str,
-) -> u64 {
-    let total = |snapshot: &DiagnosticsSnapshot| -> u64 {
-        snapshot.counters.get(metric).map_or(0, |series| {
-            series
-                .values()
-                .fold(0, |sum, value| sum.saturating_add(*value))
-        })
-    };
-    total(after).saturating_sub(total(before))
-}
-
-/// Unexplained drops: queue drops counted by the product plus completions
-/// the composition could not deliver. Deferred adapter dispatches are not
-/// drops, because the scheduler retries them (D-37); the run details list
-/// them by reason.
+/// Unexplained drops: the gaps and frames the product dropped for a full
+/// queue or budget plus completions the composition could not deliver.
+/// Deferred adapter dispatches are not drops, because the scheduler retries
+/// them (D-37).
 pub fn unexplained_drops(data: &WindowData) -> u64 {
-    counter_delta(
-        &data.diagnostics_before,
-        &data.diagnostics_after,
-        names::QUEUE_DROPPED_TOTAL,
-    )
-    .saturating_add(data.completion_drops)
+    data.logged_drops.saturating_add(data.completion_drops)
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -244,18 +224,17 @@ pub fn run_record(data: &WindowData) -> BenchResult<RunRecord> {
 
 /// Counts over the whole window (one observation each).
 fn set_window_counts(record: &mut RunRecord, data: &WindowData) -> BenchResult<()> {
-    let throttles = counter_delta(
-        &data.diagnostics_before,
-        &data.diagnostics_after,
-        names::OVERLOAD_TRANSITIONS_TOTAL,
-    );
     let crashes = data
         .host_restarts
         .saturating_add(data.collector_panics)
         .saturating_add(u64::from(data.manager_died))
         .saturating_add(u64::from(data.frontend_failed));
     record.set("unexplained_drops", as_f64(unexplained_drops(data)), 1)?;
-    record.set("adaptive_throttle_events", as_f64(throttles), 1)?;
+    record.set(
+        "adaptive_throttle_events",
+        as_f64(data.overload_transitions),
+        1,
+    )?;
     record.set("crashes", as_f64(crashes), 1)?;
     record.set("deadlocks", as_f64(data.stalls), 1)?;
     Ok(())

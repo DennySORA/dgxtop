@@ -2,9 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use dgxtop_core::canonical::{
-    CandidateDisposition, CollectorEvent, PolicySnapshot, RejectReason, SelectionMemo,
-};
+use dgxtop_core::canonical::{CandidateDisposition, PolicySnapshot, RejectReason, SelectionMemo};
 use dgxtop_core::identity::MetricKey;
 use dgxtop_core::metric::{descriptor, ids, native};
 use dgxtop_core::observation::Observation;
@@ -147,12 +145,7 @@ fn confirmed_alias_is_counted_once_and_keeps_an_inconsistency_hint() {
             .reason_codes
             .contains(&reasons::ALIAS_DISAGREEMENT.to_owned())
     );
-    assert!(
-        !outcome
-            .events
-            .iter()
-            .any(|event| matches!(event, CollectorEvent::SourceConflict { .. }))
-    );
+    assert_ne!(outcome.canonical.selection_state, SelectionState::Conflict);
 }
 
 #[test]
@@ -193,13 +186,10 @@ fn independent_disagreement_is_a_conflict_never_an_average() {
         disposition_of(&outcome, "hwmon:package0:temp1"),
         CandidateDisposition::Conflicting
     );
-    assert!(outcome.events.contains(&CollectorEvent::SourceConflict {
-        key: package(),
-        source_ids: vec![
-            source_id("hwmon:package0:temp1"),
-            source_id("thermal:package0")
-        ],
-    }));
+    assert_eq!(
+        disposition_of(&outcome, "thermal:package0"),
+        CandidateDisposition::Conflicting
+    );
 }
 
 #[test]
@@ -954,11 +944,6 @@ fn healthy_source_switches_only_after_three_wins_and_five_seconds() {
         assert_valid(&outcome);
         if outcome.canonical.source_id == Some(source_id("hwmon:a")) {
             switched_after = Some(round);
-            assert!(outcome.events.iter().any(|event| matches!(
-                event,
-                CollectorEvent::SourceChanged { previous_source: Some(previous), .. }
-                    if previous.as_str() == "thermal:b"
-            )));
             break;
         }
         assert_eq!(

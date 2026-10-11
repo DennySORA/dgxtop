@@ -190,7 +190,6 @@ impl Rig {
             process_table: None,
             next_state: CollectorState::default(),
             failures: Vec::new(),
-            events: Vec::new(),
         };
         let guard = CommitGuard {
             expected_epoch: 1,

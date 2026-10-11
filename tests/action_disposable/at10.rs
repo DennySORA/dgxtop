@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::child::{DisposableChild, ProcessFacts, foreign_user_process, pid_namespace};
 use crate::expect::{
     assert_nothing_sent, assert_refusal_audited, assert_rejected, assert_signal_sent,
-    assert_single_sigterm_through_held_pidfd, kinds,
+    assert_single_sigterm_through_held_pidfd,
 };
 use crate::journal::Step;
 use crate::stack::{ActionStack, AuditBackend, EXIT_WAIT, Kernel, StackOptions};
@@ -96,15 +96,6 @@ fn at10_confirmed_sigterm_reaches_only_the_disposable_child_after_one_durable_in
         steps.outcomes_for(confirm_id),
         [ActionState::SignalSent, ActionState::ExitObserved],
         "\"sent\" and \"exit observed\" are separate outcome rows"
-    );
-    assert_eq!(
-        kinds(&stack.action_events(&[prepared.request_id, confirm_id])),
-        [
-            "ActionPrepared",
-            "ActionIntentCommitted",
-            "ActionSignalSent",
-            "ActionExitObserved"
-        ]
     );
 
     let mut trail = stack.stop().audit_trail();

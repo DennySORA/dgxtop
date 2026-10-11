@@ -95,6 +95,7 @@ impl TimeProvider for FakeClock {
 pub struct CapturingDispatch<J> {
     jobs: Arc<Mutex<Vec<J>>>,
     busy: Arc<std::sync::atomic::AtomicBool>,
+    refused: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl<J> Clone for CapturingDispatch<J> {
@@ -102,6 +103,7 @@ impl<J> Clone for CapturingDispatch<J> {
         Self {
             jobs: Arc::clone(&self.jobs),
             busy: Arc::clone(&self.busy),
+            refused: Arc::clone(&self.refused),
         }
     }
 }
@@ -111,6 +113,7 @@ impl<J> Default for CapturingDispatch<J> {
         Self {
             jobs: Arc::new(Mutex::new(Vec::new())),
             busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            refused: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 }
@@ -122,6 +125,11 @@ impl<J> CapturingDispatch<J> {
 
     pub fn set_busy(&self, busy: bool) {
         self.busy.store(busy, Ordering::SeqCst);
+    }
+
+    /// Jobs refused while busy.
+    pub fn refused(&self) -> usize {
+        self.refused.load(Ordering::SeqCst)
     }
 
     /// Removes and returns every captured job.
@@ -144,6 +152,7 @@ impl<J> CapturingDispatch<J> {
 impl<J: Send> Dispatch<J> for CapturingDispatch<J> {
     fn try_dispatch(&self, job: J) -> Result<(), DispatchError> {
         if self.busy.load(Ordering::SeqCst) {
+            self.refused.fetch_add(1, Ordering::SeqCst);
             return Err(DispatchError::Busy);
         }
         self.jobs

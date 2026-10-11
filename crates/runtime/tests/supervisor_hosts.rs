@@ -29,7 +29,6 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::Receiver;
 use dgxtop_core::budget::{ByteLedger, MIB, Partition, QueueGate};
 use dgxtop_core::clock::{TimeProvider, ms_to_ns};
-use dgxtop_core::diagnostics::{Diagnostics, names as core_names};
 use dgxtop_core::errors::InfraError;
 use dgxtop_core::observation::{
     AdapterHealth, AdapterManifest, AdapterOperation, BatchStatus, CatalogDelta, DiscoverRequest,
@@ -47,7 +46,7 @@ use dgxtop_runtime::host::{host_generation_from_args, host_nonce_from_env};
 use dgxtop_runtime::ipc::{FrameDecoder, encode_frame, read_frame_blocking};
 use dgxtop_runtime::supervisor::{
     ChildControl, CircuitBreaker, ExitSummary, HostLauncher, LaunchRequest, LaunchedHost,
-    SignalDelivery, StandardLauncher, StopOutcome, StopStage, backoff_seed, names,
+    SignalDelivery, StandardLauncher, StopOutcome, StopStage, backoff_seed,
 };
 use dgxtop_runtime::{
     HostLaunch, HostSpec, Supervisor, SupervisorConfig, SupervisorHandle, install_termination_flag,
@@ -489,7 +488,6 @@ struct Harness {
     handle: SupervisorHandle,
     completions: Receiver<IngestionCompletion>,
     ledger: ByteLedger,
-    diagnostics: Diagnostics,
     logger: Arc<MemoryLogger>,
     clock: Arc<dyn TimeProvider>,
 }
@@ -507,7 +505,6 @@ fn start_with(
     let gate = QueueGate::new("ingress", 32, 8 * MIB, ledger.clone(), Partition::Ingress);
     let (sender, completions) = crossbeam_channel::bounded(1024);
     let clock: Arc<dyn TimeProvider> = Arc::new(BootClock::new().unwrap());
-    let diagnostics = Diagnostics::new();
     let logger = Arc::new(MemoryLogger::default());
     let handle = Supervisor::start_with_launcher(
         config,
@@ -517,7 +514,6 @@ fn start_with(
         sender,
         Arc::clone(&clock),
         logger.clone(),
-        diagnostics.clone(),
         launcher,
     )
     .unwrap();
@@ -525,7 +521,6 @@ fn start_with(
         handle,
         completions,
         ledger,
-        diagnostics,
         logger,
         clock,
     }
@@ -631,16 +626,27 @@ impl Harness {
         }
     }
 
-    fn counter(&self, metric: &'static str, label: &str) -> u64 {
-        self.diagnostics.counter(metric, label)
+    fn wait_detail(&self, adapter: &str, fragment: &str) -> HostStatus {
+        self.wait_status(&format!("{adapter} detail {fragment:?}"), |status| {
+            status.adapter_id == adapter
+                && status
+                    .detail
+                    .as_deref()
+                    .is_some_and(|detail| detail.contains(fragment))
+        })
     }
 
-    fn wait_counter(&self, metric: &'static str, label: &str, at_least: u64) {
+    fn wait_log(&self, adapter: &str, fragment: &str) {
         let deadline = Instant::now() + WAIT;
-        while self.counter(metric, label) < at_least {
+        while !self
+            .logger
+            .records()
+            .iter()
+            .any(|(_, _, message)| message.starts_with(adapter) && message.contains(fragment))
+        {
             assert!(
                 Instant::now() < deadline,
-                "{metric}{{{label}}} never reached {at_least}"
+                "{adapter} never logged {fragment:?}"
             );
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -714,7 +720,7 @@ fn hung_host_times_out_and_is_restarted_with_sigterm() {
     assert!(started.elapsed() < Duration::from_secs(2));
     // Continued silence reaches the threshold; protocol shutdown cannot be
     // served by a host stuck in its driver call, so SIGTERM ends it.
-    harness.wait_counter(names::HOST_STOP_TOTAL, "sigterm", 1);
+    harness.wait_detail("hung", "stopped after sigterm");
     let probing = harness.wait_status("half-open generation 2", |status| status.generation == 2);
     assert_eq!(probing.restarts_total, 1);
     let healthy = harness.wait_state("hung", HostState::Healthy);
@@ -741,8 +747,6 @@ fn sigterm_ignoring_host_is_killed_with_sigkill() {
             .is_some_and(|detail| detail.contains("stopped after sigkill: signal 9"))
     });
     assert_eq!(killed.generation, 1);
-    assert_eq!(harness.counter(names::HOST_STOP_TOTAL, "sigkill"), 1);
-    assert_eq!(harness.counter(names::HOST_STOP_TOTAL, "sigterm"), 0);
     harness.wait_status("generation 2", |status| status.generation == 2);
     harness.handle.shutdown(Duration::from_secs(3));
 }
@@ -809,7 +813,6 @@ fn late_reply_is_discarded_and_host_recovers() {
         harness.batch(plan.request_id).unwrap_err().kind,
         AdapterFailureKind::TimedOut
     );
-    harness.wait_counter(core_names::STALE_RESULT_DROPPED_TOTAL, "slow", 1);
     let recovered = harness.plan("slow", 1, 2, 2_000);
     harness.dispatch(AdapterJob::Read(recovered.clone()));
     let batch = harness.batch(recovered.request_id).unwrap();
@@ -935,7 +938,13 @@ fn unreaped_child_is_quarantined_and_never_respawned() {
     assert_eq!(stuck.state, HostState::Quarantined);
     assert_eq!(stuck.generation, 1, "never respawned");
     assert_eq!(pids.lock().unwrap().len(), 1, "no replacement child");
-    assert_eq!(harness.counter(names::HOST_STOP_TOTAL, "unreaped"), 1);
+    assert!(
+        stuck
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("not reaped")),
+        "{stuck:?}"
+    );
     // The other backend is unaffected.
     let plan = harness.plan("procfs", 1, 2, 1_000);
     harness.dispatch(AdapterJob::Read(plan.clone()));
@@ -1062,7 +1071,7 @@ fn protocol_violations_restart_the_host() {
         harness.dispatch(AdapterJob::Read(plan.clone()));
         let failure = harness.batch(plan.request_id).unwrap_err();
         assert_eq!(failure.kind, AdapterFailureKind::Protocol, "{mode}");
-        harness.wait_counter(names::HOST_PROTOCOL_ERROR_TOTAL, "broken", 1);
+        harness.wait_log("broken", "protocol error");
         let restarted = harness.wait_status("restart", |status| status.generation == 2);
         assert_eq!(restarted.restarts_total, 1, "{mode}");
         harness.handle.shutdown(Duration::from_secs(3));
@@ -1078,7 +1087,7 @@ fn wrong_nonce_hello_is_rejected() {
             .is_some_and(|detail| detail.contains("nonce"))
     });
     assert_ne!(rejected.state, HostState::Healthy);
-    harness.wait_counter(names::HOST_PROTOCOL_ERROR_TOTAL, "impostor", 1);
+    harness.wait_log("impostor", "protocol error");
     assert!(
         harness
             .handle

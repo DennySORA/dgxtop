@@ -37,10 +37,8 @@ use dgxtop_core::canonical::ProcessRow;
 use dgxtop_core::clock::{NANOS_PER_MILLI, NANOS_PER_SECOND, ms_to_ns};
 use dgxtop_core::commands::CommandResult;
 use dgxtop_core::config::Config;
-use dgxtop_core::diagnostics::{Diagnostics, names};
 use dgxtop_core::digest::sha256_hex;
 use dgxtop_core::errors::{ErrorCode, ErrorDetail};
-use dgxtop_core::event::{ActionEventPayload, EventKind};
 use dgxtop_core::identity::{ProcessKey, SessionId};
 use dgxtop_core::ports::{Dispatch, DispatchError};
 use dgxtop_core::text::{sanitize_display, sanitize_message};
@@ -70,8 +68,6 @@ const AUDIT_FAILURE_RECHECK_NS: u64 = NANOS_PER_SECOND;
 const AUDIT_RETRY_NS: u64 = 20 * NANOS_PER_MILLI;
 /// Outcome records waiting for a busy audit worker.
 const AUDIT_BACKLOG_LIMIT: usize = 64;
-/// `ActionOutcomeUnknown` events emitted for recovered intents.
-const MAX_UNKNOWN_EVENTS: usize = 32;
 
 /// Current boot and wall clock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,16 +122,10 @@ pub(crate) struct ProcessService {
     shutting_down: bool,
     started: bool,
     next_status_ns: u64,
-    diagnostics: Diagnostics,
 }
 
 impl ProcessService {
-    pub(crate) fn new(
-        ports: ProcessPorts,
-        identity: ActionIdentity,
-        config: &Config,
-        diagnostics: Diagnostics,
-    ) -> Self {
+    pub(crate) fn new(ports: ProcessPorts, identity: ActionIdentity, config: &Config) -> Self {
         Self {
             audit: ports.audit,
             actions: ports.actions,
@@ -153,7 +143,6 @@ impl ProcessService {
             shutting_down: false,
             started: false,
             next_status_ns: 0,
-            diagnostics,
         }
     }
 
@@ -323,7 +312,7 @@ impl ProcessService {
             ActionCompletion::ExitObserved {
                 request_id,
                 observation,
-            } => self.on_exit(request_id, observation, now, fx),
+            } => self.on_exit(request_id, observation, now),
             ActionCompletion::Released { handle } => {
                 if let Some(record) = self
                     .records
@@ -361,7 +350,7 @@ impl ProcessService {
                     self.note_audit_failure(&failure, now);
                 }
             }
-            AuditCompletion::Recovered { result } => self.on_recovered(result, now, fx),
+            AuditCompletion::Recovered { result } => self.on_recovered(result, now),
             AuditCompletion::Status(status) => self.audit_status = Some(status),
             // Lookups are never issued: single-use tokens already make a
             // replayed confirmation harmless.
@@ -748,11 +737,6 @@ impl ProcessService {
         record.expires_ns = expires_ns;
         record.set_state(ActionState::Prepared, "awaiting confirmation", now.boot_ns);
         let request_id = record.prepare_request;
-        let reason = format!(
-            "{} prepared for {}",
-            record.signal.name(),
-            record.target.summary()
-        );
         let payload = record.prepare_payload.clone();
         let digest = record.session_digest.clone();
         let mut result = CommandResult::completed(request_id, "confirmation required")
@@ -760,14 +744,6 @@ impl ProcessService {
         result.confirmation_token = Some(token);
         result.expires_boot_ns = Some(expires_ns);
         fx.reply(result);
-        fx.event(
-            request_id,
-            EventKind::ActionPrepared(ActionEventPayload {
-                request_id,
-                intent_id: None,
-                reason: sanitize_message(&reason),
-            }),
-        );
         self.append_attempt(
             AttemptFacts {
                 request_id,
@@ -1078,8 +1054,6 @@ impl ProcessService {
         fx: &mut Effects,
     ) {
         let Some(index) = self.records.by_confirm(request_id, Some(intent_id)) else {
-            self.diagnostics
-                .increment(names::STALE_RESULT_DROPPED_TOTAL, "audit_intent", 1);
             return;
         };
         let Some(record) = self.records.get_mut(index) else {
@@ -1228,14 +1202,6 @@ impl ProcessService {
             "audit intent durable",
             now.boot_ns,
         );
-        fx.event(
-            confirm.request_id,
-            EventKind::ActionIntentCommitted(ActionEventPayload {
-                request_id: confirm.request_id,
-                intent_id: Some(confirm.intent_id),
-                reason: "audit intent durable".to_owned(),
-            }),
-        );
         let send_deadline = record.expires_ns;
         let op = ActionOp::Send {
             request_id: confirm.request_id,
@@ -1329,8 +1295,6 @@ impl ProcessService {
         fx: &mut Effects,
     ) {
         let Some(index) = self.records.by_confirm(request_id, Some(intent_id)) else {
-            self.diagnostics
-                .increment(names::STALE_RESULT_DROPPED_TOTAL, "action_sent", 1);
             return;
         };
         let Some(record) = self.records.get_mut(index) else {
@@ -1389,24 +1353,10 @@ impl ProcessService {
                     .with_action_state(ActionState::SignalSent),
             );
         }
-        fx.event(
-            request_id,
-            EventKind::ActionSignalSent(ActionEventPayload {
-                request_id,
-                intent_id: Some(intent_id),
-                reason: "signal sent".to_owned(),
-            }),
-        );
         self.append_outcome(index, ActionState::SignalSent, "Ok", "signal sent", now);
     }
 
-    fn on_exit(
-        &mut self,
-        request_id: Uuid,
-        observation: ExitObservation,
-        now: Now,
-        fx: &mut Effects,
-    ) {
+    fn on_exit(&mut self, request_id: Uuid, observation: ExitObservation, now: Now) {
         let Some(index) = self.records.by_confirm(request_id, None) else {
             return;
         };
@@ -1427,15 +1377,6 @@ impl ProcessService {
                 ActionState::ExitObserved,
                 "process exit observed",
                 now.boot_ns,
-            );
-            let intent_id = record.intent_id();
-            fx.event(
-                request_id,
-                EventKind::ActionExitObserved(ActionEventPayload {
-                    request_id,
-                    intent_id,
-                    reason: "process exit observed".to_owned(),
-                }),
             );
             self.release(index);
             self.append_outcome(

@@ -14,7 +14,6 @@ use dgxtop_core::budget::{ByteLedger, Partition, QueueGate};
 use dgxtop_core::canonical::{CollectionBatch, CollectionPlan, ImmutableSnapshot};
 use dgxtop_core::commands::{CommandBody, CommandEnvelope, SortKey, ViewKind};
 use dgxtop_core::config::Config;
-use dgxtop_core::diagnostics::Diagnostics;
 use dgxtop_core::errors::{ErrorCode, ResultCode};
 use dgxtop_core::identity::{AdapterId, CollectorId, PidNamespace};
 use dgxtop_core::observation::{AdapterManifest, AdapterOperation, Isolation};
@@ -67,7 +66,6 @@ impl Collector for NoopCollector {
             process_table: None,
             next_state: (*plan.state).clone(),
             failures: Vec::new(),
-            events: Vec::new(),
         }
     }
 }
@@ -127,7 +125,6 @@ fn fixture_with_audit(audit: Box<dyn Dispatch<AuditOp>>) -> Fixture {
         actions: Box::new(CapturingDispatch::<ActionOp>::new()),
         process_history: None,
         logger: Arc::new(MemoryLogger::default()),
-        diagnostics: Diagnostics::new(),
         ledger: ledger.clone(),
         ingress: QueueGate::new("ingress", 32, 8 << 20, ledger.clone(), Partition::Ingress),
     };

@@ -33,8 +33,6 @@ use dgxtop_core::commands::{
     CommandBody, CommandEnvelope, CommandResult, CommandStatus, SortKey, ViewKind,
 };
 use dgxtop_core::config::Config;
-use dgxtop_core::diagnostics::Diagnostics;
-use dgxtop_core::event::EventKind;
 use dgxtop_core::identity::{BootId, HostId, Pid, PidNamespace, ProcessKey};
 use dgxtop_core::ports::{
     AdapterJob, AuditRepository, ConfigJob, ConfigRepository, ControlCompletion, HistoryJob,
@@ -45,8 +43,8 @@ use dgxtop_core::testing::{CapturingDispatch, MemoryLogger};
 use dgxtop_core::view::{ActionRecordView, ActionsView, ViewModel};
 use dgxtop_manager::presentation::HostFacts;
 use dgxtop_manager::{
-    EventFeed, Manager, ManagerChannels, ManagerPorts, ManagerSetup, SessionHandle,
-    ShutdownSummary, ShutdownTrigger,
+    Manager, ManagerChannels, ManagerPorts, ManagerSetup, SessionHandle, ShutdownSummary,
+    ShutdownTrigger,
 };
 use dgxtop_runtime::clock::{current_euid, host_identity, pid_namespace_of};
 use dgxtop_runtime::queues::{PoolHandle, spawn_actor};
@@ -169,14 +167,6 @@ pub struct Prepared {
     pub request_id: Uuid,
     pub token: ConfirmationToken,
     pub expires_boot_ns: u64,
-}
-
-/// One action lifecycle event of the Manager's event log.
-#[derive(Debug, Clone)]
-pub struct ActionEvent {
-    pub kind: &'static str,
-    pub request_id: Uuid,
-    pub reason: String,
 }
 
 /// A frontend's use of one view session.
@@ -423,7 +413,6 @@ fn pidfd_adapter(plan: &WorkerPlan<'_>) -> PidfdActionAdapter {
 pub struct ActionStack {
     session: SessionDriver,
     bystander: Option<SessionDriver>,
-    events: EventFeed,
     trigger: ShutdownTrigger,
     manager_thread: Option<JoinHandle<ShutdownSummary>>,
     workers: Workers,
@@ -431,7 +420,6 @@ pub struct ActionStack {
     clock: Arc<TestClock>,
     journal: Journal,
     faults: Faults,
-    diagnostics: Diagnostics,
     identity: Identity,
     state: Arc<StateDir>,
 }
@@ -460,13 +448,11 @@ impl ActionStack {
             control_inbox: channels.inboxes().control,
         });
         let snapshots = Arc::new(TableSnapshots::default());
-        let diagnostics = Diagnostics::new();
         let ports = manager_ports(
             &workers,
             &journal,
             Arc::clone(&time),
             Arc::clone(&snapshots) as _,
-            diagnostics.clone(),
             &config,
         );
         let mut manager =
@@ -476,7 +462,6 @@ impl ActionStack {
         let bystander = options
             .bystander_session
             .then(|| SessionDriver::new(manager.open_session().expect("open a second session")));
-        let events = manager.event_feed();
         let trigger = manager.shutdown_trigger();
         let manager_thread = thread::Builder::new()
             .name("suite-manager".to_owned())
@@ -485,7 +470,6 @@ impl ActionStack {
         let stack = Self {
             session,
             bystander,
-            events,
             trigger,
             manager_thread: Some(manager_thread),
             workers,
@@ -493,7 +477,6 @@ impl ActionStack {
             clock,
             journal,
             faults,
-            diagnostics,
             identity,
             state,
         };
@@ -511,10 +494,6 @@ impl ActionStack {
 
     pub fn steps(&self) -> Steps {
         self.journal.steps()
-    }
-
-    pub fn diagnostics(&self) -> &Diagnostics {
-        &self.diagnostics
     }
 
     /// The caller euid the Manager authorizes actions with.
@@ -650,16 +629,6 @@ impl ActionStack {
             .expect("record present")
     }
 
-    /// Action lifecycle events about any of `request_ids`, oldest first.
-    pub fn action_events(&self, request_ids: &[Uuid]) -> Vec<ActionEvent> {
-        self.events
-            .recent(usize::MAX)
-            .iter()
-            .filter_map(|event| action_event(&event.kind))
-            .filter(|event| request_ids.contains(&event.request_id))
-            .collect()
-    }
-
     // ----- synchronization and teardown ------------------------------------------
 
     /// Returns once every completion produced so far was handled by the
@@ -763,22 +732,6 @@ fn never_issued_token() -> ConfirmationToken {
     .expect("64 hex characters form a valid token")
 }
 
-fn action_event(kind: &EventKind) -> Option<ActionEvent> {
-    let (kind, payload) = match kind {
-        EventKind::ActionPrepared(payload) => ("ActionPrepared", payload),
-        EventKind::ActionIntentCommitted(payload) => ("ActionIntentCommitted", payload),
-        EventKind::ActionSignalSent(payload) => ("ActionSignalSent", payload),
-        EventKind::ActionExitObserved(payload) => ("ActionExitObserved", payload),
-        EventKind::ActionOutcomeUnknown(payload) => ("ActionOutcomeUnknown", payload),
-        _ => return None,
-    };
-    Some(ActionEvent {
-        kind,
-        request_id: payload.request_id,
-        reason: payload.reason.clone(),
-    })
-}
-
 fn manager_setup(config: &Config, identity: &Identity) -> ManagerSetup {
     ManagerSetup {
         saved_config: config.clone(),
@@ -801,7 +754,6 @@ fn manager_ports(
     journal: &Journal,
     clock: Arc<dyn TimeProvider>,
     snapshots: Arc<dyn SnapshotReader>,
-    diagnostics: Diagnostics,
     config: &Config,
 ) -> ManagerPorts {
     let ledger = ByteLedger::new(config.partition_limits());
@@ -826,7 +778,6 @@ fn manager_ports(
         )),
         process_history: None,
         logger: Arc::new(MemoryLogger::default()),
-        diagnostics,
         ingress: QueueGate::new("ingress", 32, 8 * MIB, ledger.clone(), Partition::Ingress),
         ledger,
     }

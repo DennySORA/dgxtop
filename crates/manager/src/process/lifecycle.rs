@@ -116,8 +116,6 @@ impl ProcessService {
         };
         record.send_deadline_ns = None;
         record.set_state(ActionState::Unknown, reason, now.boot_ns);
-        let request_id = record.confirm_request();
-        let intent_id = record.intent_id();
         let pending_confirm = record
             .confirm
             .as_mut()
@@ -135,18 +133,6 @@ impl ProcessService {
                 .with_action_state(ActionState::Unknown),
             );
         }
-        if let Some(request_id) = request_id {
-            fx.event(
-                request_id,
-                EventKind::ActionOutcomeUnknown(ActionEventPayload {
-                    request_id,
-                    intent_id,
-                    reason: sanitize_message(reason),
-                }),
-            );
-        }
-        self.diagnostics
-            .increment(names::ACTION_UNKNOWN_TOTAL, "send_timeout", 1);
         // The worker serializes operations: this release closes the
         // descriptor once a stuck send returns.
         self.release(index);
@@ -230,13 +216,7 @@ impl ProcessService {
         }
     }
     pub(super) fn release_untracked(&mut self, handle: ActionHandle) {
-        if self
-            .actions
-            .try_dispatch(ActionOp::Release { handle })
-            .is_err()
-        {
-            self.diagnostics
-                .increment(names::QUEUE_DROPPED_TOTAL, "action_release", 1);
-        }
+        // Best effort: a release refused for a full queue is dropped.
+        let _ = self.actions.try_dispatch(ActionOp::Release { handle });
     }
 }
