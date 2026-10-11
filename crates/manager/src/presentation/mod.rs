@@ -24,7 +24,6 @@ mod plan;
 mod process_parts;
 mod processes;
 mod reader;
-mod run_bars;
 mod run_history;
 mod run_inputs;
 mod settings;

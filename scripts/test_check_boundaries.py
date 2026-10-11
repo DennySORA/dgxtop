@@ -23,10 +23,16 @@ class CheckBoundariesTest(unittest.TestCase):
 
     def test_history_may_use_compression_and_nothing_else_may(self):
         self.assertEqual(check_boundaries.check(metadata([('dgxtop-history', 'dgxtop-compression', None)])), [])
-        errors = check_boundaries.check(metadata([('dgxtop-manager', 'dgxtop-compression', None)]))
-        self.assertEqual(errors, ['dgxtop-manager must not depend on dgxtop-compression'])
+        errors = check_boundaries.check(metadata([('dgxtop-ui', 'dgxtop-compression', None)]))
+        self.assertEqual(errors, ['dgxtop-ui must not depend on dgxtop-compression'])
         errors = check_boundaries.check(metadata([('dgxtop-history', 'dgxtop-store', None)]))
         self.assertEqual(errors, ['dgxtop-history must not depend on dgxtop-store'])
+
+    def test_the_manager_may_use_compression_until_process_history_moves(self):
+        # D-79 transition: removed when process history moves to the history crate (S4)
+        self.assertEqual(check_boundaries.check(metadata([('dgxtop-manager', 'dgxtop-compression', None)])), [])
+        errors = check_boundaries.check(metadata([('dgxtop-manager', 'dgxtop-store', None)]))
+        self.assertEqual(errors, ['dgxtop-manager must not depend on dgxtop-store'])
 
     def test_pure_components_refuse_drivers_and_sqlite(self):
         for name in ('dgxtop-state', 'dgxtop-history', 'dgxtop-compression'):

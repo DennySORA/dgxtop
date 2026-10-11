@@ -1005,8 +1005,8 @@ pub(crate) fn view_model(view: ViewKind, frame_revision: u64) -> ViewModel {
             filter: String::new(),
             sort: SortKey::GpuMemory,
             ascending: false,
-            overview_bar: dgxtop_core::process_history::RunBar::OneMinute,
-            process_bar: dgxtop_core::process_history::RunBar::Auto,
+            overview_bar: dgxtop_core::process_history::BarSize::OneMinute,
+            process_bar: dgxtop_core::process_history::BarSize::Auto,
         },
         modules: full_modules(false),
         banners: Vec::new(),
@@ -1024,7 +1024,7 @@ pub(crate) const RUNS_UTC: i64 = 1_791_072_000_000_000_000;
 pub(crate) fn process_history_view() -> dgxtop_core::view::ProcessHistoryView {
     use dgxtop_core::action::Signal;
     use dgxtop_core::history::HistoryMethod;
-    use dgxtop_core::process_history::{EndCause, RunBar, RunDetails, RunEnd, RunInfo, RunMetric};
+    use dgxtop_core::process_history::{BarSize, EndCause, RunDetails, RunEnd, RunInfo, RunMetric};
     use dgxtop_core::view::{
         HistoryPointView, ProcessHistoryView, RunChartView, RunDetailView, RunRowView,
     };
@@ -1128,7 +1128,7 @@ pub(crate) fn process_history_view() -> dgxtop_core::view::ProcessHistoryView {
         },
         live: false,
         slot: None,
-        bar: RunBar::OneMinute,
+        bar: BarSize::OneMinute,
         window_start_utc_ns: u64::try_from(ended.utc_ns - 80 * MINUTE).unwrap(),
         window_end_utc_ns: u64::try_from(ended.utc_ns).unwrap(),
         charts,
@@ -1140,7 +1140,7 @@ pub(crate) fn process_history_view() -> dgxtop_core::view::ProcessHistoryView {
         opened: Some(opened),
         kept_on_disk: true,
         utc_offset_s: 8 * 3600,
-        bar: RunBar::Auto,
+        bar: BarSize::Auto,
         cpu_scale: Some(2_000.0),
     }
 }

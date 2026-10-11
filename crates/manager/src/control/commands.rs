@@ -7,7 +7,7 @@ use dgxtop_core::action::Signal;
 use dgxtop_core::commands::{CommandBody, CommandEnvelope, CommandResult, ViewKind};
 use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::identity::{ProcessKey, SessionId};
-use dgxtop_core::process_history::RunBar;
+use dgxtop_core::process_history::BarSize;
 use uuid::Uuid;
 
 use super::{ControlCore, Route};
@@ -151,7 +151,7 @@ impl ControlCore {
                     sort,
                     ascending,
                     frame_revision,
-                    overview_bar: overview_bar.unwrap_or(RunBar::overview_default()),
+                    overview_bar: overview_bar.unwrap_or(BarSize::overview_default()),
                     process_bar: process_bar.unwrap_or_default(),
                 },
                 now,

@@ -292,11 +292,12 @@ impl Tier {
 }
 
 /// How much time one bar of a chart covers (D-77, D-78): its mean of every
-/// sample in that time. `Auto` takes the finest that shows the whole run.
-/// Serialized as its token (`1m`, `24h`, `auto`), as the session's bar
-/// sizes travel (D-80).
+/// sample in that time. The Process and the Overview History share these
+/// sizes; `Auto` (Process History only) takes the finest that shows the
+/// whole run. Serialized as its token (`1m`, `24h`, `auto`), as the
+/// session's bar sizes travel (D-80).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum RunBar {
+pub enum BarSize {
     #[serde(rename = "auto")]
     Auto,
     #[serde(rename = "1m")]
@@ -325,14 +326,14 @@ pub enum RunBar {
     OneDay,
 }
 
-impl Default for RunBar {
+impl Default for BarSize {
     /// The Process History's default.
     fn default() -> Self {
         Self::Auto
     }
 }
 
-impl RunBar {
+impl BarSize {
     /// The Overview History's default (it has no `Auto`).
     pub const fn overview_default() -> Self {
         Self::OneMinute
@@ -708,42 +709,42 @@ mod tests {
             "version 2's minutes"
         );
         assert_eq!(Tier::from_code(2), Some(Tier::TenMinutes));
-        for bar in RunBar::fixed() {
+        for bar in BarSize::fixed() {
             assert_eq!(bar.tier().map(Tier::step_ns), bar.step_ns());
         }
     }
 
     #[test]
     fn bars_parse_step_and_wrap() {
-        let tokens: Vec<&str> = RunBar::ALL.iter().map(|bar| bar.token()).collect();
+        let tokens: Vec<&str> = BarSize::ALL.iter().map(|bar| bar.token()).collect();
         assert_eq!(
             tokens,
             vec![
                 "auto", "1m", "5m", "10m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "18h", "24h"
             ]
         );
-        for bar in RunBar::ALL {
-            assert_eq!(RunBar::parse(bar.token()), Some(bar));
+        for bar in BarSize::ALL {
+            assert_eq!(BarSize::parse(bar.token()), Some(bar));
         }
-        assert_eq!(RunBar::parse("3h"), None);
-        assert_eq!(RunBar::Auto.step_ns(), None);
+        assert_eq!(BarSize::parse("3h"), None);
+        assert_eq!(BarSize::Auto.step_ns(), None);
         assert_eq!(
-            RunBar::EighteenHours.step_ns(),
+            BarSize::EighteenHours.step_ns(),
             Some(18 * 3_600 * 1_000_000_000)
         );
-        assert_eq!(RunBar::OneDay.step(true), RunBar::Auto);
-        assert_eq!(RunBar::Auto.step(false), RunBar::OneDay);
-        assert_eq!(RunBar::OneMinute.step(true), RunBar::FiveMinutes);
-        assert_eq!(RunBar::fixed().count(), 12);
+        assert_eq!(BarSize::OneDay.step(true), BarSize::Auto);
+        assert_eq!(BarSize::Auto.step(false), BarSize::OneDay);
+        assert_eq!(BarSize::OneMinute.step(true), BarSize::FiveMinutes);
+        assert_eq!(BarSize::fixed().count(), 12);
         // The Overview History has no `auto`: stepping skips it (D-78).
-        assert_eq!(RunBar::OneDay.step_overview(true), RunBar::OneMinute);
-        assert_eq!(RunBar::OneMinute.step_overview(false), RunBar::OneDay);
-        assert_eq!(RunBar::Auto.for_overview(), RunBar::OneMinute);
+        assert_eq!(BarSize::OneDay.step_overview(true), BarSize::OneMinute);
+        assert_eq!(BarSize::OneMinute.step_overview(false), BarSize::OneDay);
+        assert_eq!(BarSize::Auto.for_overview(), BarSize::OneMinute);
         // Sizes travel as their tokens (D-80).
-        assert_eq!(serde_json::to_value(RunBar::EighteenHours).unwrap(), "18h");
+        assert_eq!(serde_json::to_value(BarSize::EighteenHours).unwrap(), "18h");
         assert_eq!(
-            serde_json::from_value::<RunBar>(serde_json::json!("auto")).unwrap(),
-            RunBar::Auto
+            serde_json::from_value::<BarSize>(serde_json::json!("auto")).unwrap(),
+            BarSize::Auto
         );
     }
 

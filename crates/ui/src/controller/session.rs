@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use dgxtop_core::commands::{CommandBody, SortKey, ViewKind};
 use dgxtop_core::identity::{EntityId, ProcessKey};
-use dgxtop_core::process_history::RunBar;
+use dgxtop_core::process_history::BarSize;
 use dgxtop_core::view::{SessionState, ViewModel};
 
 /// A sent draft no projection has reflected is dropped after this long.
@@ -23,8 +23,8 @@ pub struct SessionFields {
     pub sort: SortKey,
     pub ascending: bool,
     /// The history's bar sizes (D-78, D-80), kept across views.
-    pub overview_bar: RunBar,
-    pub process_bar: RunBar,
+    pub overview_bar: BarSize,
+    pub process_bar: BarSize,
 }
 
 impl SessionFields {
@@ -209,8 +209,8 @@ mod tests {
             filter: "py".into(),
             sort: SortKey::Pid,
             ascending: true,
-            overview_bar: RunBar::OneMinute,
-            process_bar: RunBar::Auto,
+            overview_bar: BarSize::OneMinute,
+            process_bar: BarSize::Auto,
         }
     }
 

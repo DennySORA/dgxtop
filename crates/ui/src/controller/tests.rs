@@ -202,8 +202,8 @@ impl Harness {
     fn last_bars(
         &self,
     ) -> (
-        dgxtop_core::process_history::RunBar,
-        dgxtop_core::process_history::RunBar,
+        dgxtop_core::process_history::BarSize,
+        dgxtop_core::process_history::BarSize,
     ) {
         self.submitted()
             .into_iter()
@@ -531,25 +531,25 @@ fn the_cursor_follows_the_selected_run_when_the_list_moves() {
 /// run's (D-77); the session's filter keeps both.
 #[test]
 fn w_steps_the_window_or_an_opened_runs_bar_size() {
-    use dgxtop_core::process_history::RunBar;
+    use dgxtop_core::process_history::BarSize;
     let mut harness = Harness::new(ViewKind::History);
     let bars = |harness: &Harness| harness.last_bars();
     harness.keys(&[key('w')]);
-    assert_eq!(bars(&harness), (RunBar::FiveMinutes, RunBar::Auto));
+    assert_eq!(bars(&harness), (BarSize::FiveMinutes, BarSize::Auto));
     harness.keys(&[key('4'), code(KeyCode::Enter), key('w')]);
-    assert_eq!(bars(&harness), (RunBar::FiveMinutes, RunBar::OneMinute));
+    assert_eq!(bars(&harness), (BarSize::FiveMinutes, BarSize::OneMinute));
     harness.keys(&[key('W'), key('W')]);
     assert_eq!(
         bars(&harness),
-        (RunBar::FiveMinutes, RunBar::OneDay),
+        (BarSize::FiveMinutes, BarSize::OneDay),
         "back past auto to a day"
     );
     harness.keys(&[code(KeyCode::Right)]);
-    assert_eq!(bars(&harness), (RunBar::FiveMinutes, RunBar::Auto));
+    assert_eq!(bars(&harness), (BarSize::FiveMinutes, BarSize::Auto));
     harness.keys(&[code(KeyCode::Left), key('3'), key('W'), key('W')]);
     assert_eq!(
         bars(&harness),
-        (RunBar::OneDay, RunBar::OneDay),
+        (BarSize::OneDay, BarSize::OneDay),
         "the overview wraps past 1m to a day, the run's stays"
     );
     assert_eq!(

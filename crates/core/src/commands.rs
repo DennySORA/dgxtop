@@ -130,9 +130,9 @@ pub enum CommandBody {
         #[serde(with = "crate::wire::u64_decimal")]
         frame_revision: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        overview_bar: Option<crate::process_history::RunBar>,
+        overview_bar: Option<crate::process_history::BarSize>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        process_bar: Option<crate::process_history::RunBar>,
+        process_bar: Option<crate::process_history::BarSize>,
     },
     PrepareSignal {
         target: ProcessKey,

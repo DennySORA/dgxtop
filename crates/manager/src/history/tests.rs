@@ -74,14 +74,14 @@ impl Bench {
 /// The session on `view` with the Overview History's bar size `bars`, and
 /// after it, optionally, the Process History's (`"6h 30m"`, D-80).
 fn state(view: ViewKind, bars: &str) -> SessionState {
-    use dgxtop_core::process_history::RunBar;
+    use dgxtop_core::process_history::BarSize;
     let mut tokens = bars.split_whitespace();
     let overview_bar = tokens
         .next()
-        .map_or(RunBar::OneMinute, |token| RunBar::parse(token).unwrap());
+        .map_or(BarSize::OneMinute, |token| BarSize::parse(token).unwrap());
     let process_bar = tokens
         .next()
-        .map_or(RunBar::Auto, |token| RunBar::parse(token).unwrap());
+        .map_or(BarSize::Auto, |token| BarSize::parse(token).unwrap());
     SessionState {
         session_id: SessionId::new("s1").unwrap(),
         view,

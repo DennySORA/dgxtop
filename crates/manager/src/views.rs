@@ -27,7 +27,7 @@ use dgxtop_core::commands::{MAX_FILTER_BYTES, SortKey, ViewKind};
 use dgxtop_core::errors::{ErrorCode, ErrorDetail};
 use dgxtop_core::identity::{BootId, EntityId, HostId, MetricKey, ProcessKey, SessionId};
 use dgxtop_core::naming::entity;
-use dgxtop_core::process_history::RunBar;
+use dgxtop_core::process_history::BarSize;
 use dgxtop_core::text::sanitize_display;
 use dgxtop_core::view::SessionState;
 
@@ -47,8 +47,8 @@ pub(crate) struct ViewUpdate {
     pub(crate) sort: SortKey,
     pub(crate) ascending: bool,
     pub(crate) frame_revision: u64,
-    pub(crate) overview_bar: RunBar,
-    pub(crate) process_bar: RunBar,
+    pub(crate) overview_bar: BarSize,
+    pub(crate) process_bar: BarSize,
 }
 
 /// What view validation needs to know about the world.
@@ -329,8 +329,8 @@ fn default_state(session_id: SessionId) -> SessionState {
         filter: String::new(),
         sort: SortKey::GpuMemory,
         ascending: false,
-        overview_bar: RunBar::overview_default(),
-        process_bar: RunBar::default(),
+        overview_bar: BarSize::overview_default(),
+        process_bar: BarSize::default(),
     }
 }
 
@@ -504,8 +504,8 @@ mod tests {
             sort: SortKey::Pid,
             ascending: true,
             frame_revision: frame,
-            overview_bar: dgxtop_core::process_history::RunBar::OneMinute,
-            process_bar: dgxtop_core::process_history::RunBar::Auto,
+            overview_bar: dgxtop_core::process_history::BarSize::OneMinute,
+            process_bar: dgxtop_core::process_history::BarSize::Auto,
         }
     }
 
@@ -701,13 +701,13 @@ mod tests {
         // The history view's bar sizes have their own fields (D-80); its
         // filter stays empty, and an `Auto` Overview bar is the default.
         let mut window = update(ViewKind::History, None, None, 0);
-        window.overview_bar = RunBar::Auto;
-        window.process_bar = RunBar::EighteenHours;
+        window.overview_bar = BarSize::Auto;
+        window.process_bar = BarSize::EighteenHours;
         assert!(apply(&mut bench, window.clone(), &rows, &catalog).is_ok());
         let state = bench.service.state(&bench.session).unwrap();
         assert_eq!(
             (state.overview_bar, state.process_bar),
-            (RunBar::OneMinute, RunBar::EighteenHours)
+            (BarSize::OneMinute, BarSize::EighteenHours)
         );
         window.filter = "24h".into();
         assert!(apply(&mut bench, window, &rows, &catalog).is_err());

@@ -45,7 +45,7 @@ use dgxtop_core::history::{
 };
 use dgxtop_core::identity::{MetricKey, SessionId};
 use dgxtop_core::ports::{ArchiveReadJob, CancelFlag, Dispatch, DispatchError, HistoryJob};
-use dgxtop_core::process_history::RunBar;
+use dgxtop_core::process_history::BarSize;
 use dgxtop_core::view::{
     DiskHistory, HistoryChartKind, HistoryChartView, HistoryView, HistoryWindowSummary,
     SessionState, history_plot_columns,
@@ -97,20 +97,20 @@ pub(crate) enum HistoryWindow {
 }
 
 /// Bar size of the charts when the session gives none.
-const DEFAULT_BAR: RunBar = RunBar::OneMinute;
+const DEFAULT_BAR: BarSize = BarSize::OneMinute;
 
 /// What a session's charts draw (D-78): `columns` bars of `bar` ending now,
 /// each the mean of its time (the query's resolution is the bar).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ChartWindow {
-    bar: RunBar,
+    bar: BarSize,
     columns: u32,
 }
 
 impl ChartWindow {
-    fn new(bar: RunBar, columns: u32) -> Self {
+    fn new(bar: BarSize, columns: u32) -> Self {
         Self {
-            bar: if bar == RunBar::Auto {
+            bar: if bar == BarSize::Auto {
                 DEFAULT_BAR
             } else {
                 bar

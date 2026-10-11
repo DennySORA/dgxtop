@@ -21,7 +21,7 @@ mod runs;
 mod stats;
 mod strip;
 
-use dgxtop_core::process_history::RunBar;
+use dgxtop_core::process_history::BarSize;
 use dgxtop_core::view::{DiskHistory, HISTORY_GUTTER_COLUMNS, HistoryView, ViewModel};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -377,7 +377,7 @@ fn render_window_bar(
     let current = clean(&history.window_label);
     let mut spans = Vec::new();
     // The Overview History's bar sizes (D-78): every size but `auto`.
-    for window in RunBar::fixed().map(RunBar::token) {
+    for window in BarSize::fixed().map(BarSize::token) {
         let style = if window == current {
             theme.selected_row_style()
         } else {
@@ -567,7 +567,7 @@ mod tests {
                 opened: None,
                 kept_on_disk: true,
                 utc_offset_s: 0,
-                bar: dgxtop_core::process_history::RunBar::Auto,
+                bar: dgxtop_core::process_history::BarSize::Auto,
                 cpu_scale: None,
             }),
             1,

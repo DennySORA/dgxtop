@@ -10,6 +10,8 @@ publish = false
 
 [dependencies]
 dgxtop-core.workspace = true
+# D-79 transition: removed when process history moves to the history crate (S4)
+dgxtop-compression.workspace = true
 crossbeam-channel.workspace = true
 serde.workspace = true
 serde_json.workspace = true

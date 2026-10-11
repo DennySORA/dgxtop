@@ -216,8 +216,8 @@ fn contract_extensions_extend_the_spec() {
             sort: SortKey::GpuMemory,
             ascending: false,
             frame_revision: 3,
-            overview_bar: Some(dgxtop_core::process_history::RunBar::OneHour),
-            process_bar: Some(dgxtop_core::process_history::RunBar::Auto),
+            overview_bar: Some(dgxtop_core::process_history::BarSize::OneHour),
+            process_bar: Some(dgxtop_core::process_history::BarSize::Auto),
         },
     );
     let encoded = to_value(&with_bars);

@@ -7,3 +7,15 @@
 //! clock, no threads.
 
 #![forbid(unsafe_code)]
+
+mod bars;
+mod bucket;
+mod run;
+mod series;
+mod whole;
+
+pub use bars::{Bars, bars_of};
+pub use bucket::Bucket;
+pub use run::{RunSample, RunSeries};
+pub use series::TieredSeries;
+pub use whole::{chart_tier, whole_series};
