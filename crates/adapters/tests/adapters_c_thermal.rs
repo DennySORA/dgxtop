@@ -298,6 +298,65 @@ fn gb10_zones_map_by_their_acpi_paths() {
     assert!(sources(&pages).iter().all(|source| source.metric.is_none()));
 }
 
+/// On GB10 the kernel also mirrors the seven `acpitz` zones as hwmon
+/// `acpitz` (`temp1`..`temp7`, its `device` the first zone). Each sensor is
+/// read once (D-81): by the thermal adapter, which keeps the D-68 cluster
+/// and SoC mapping, while hwmon catalogs none of the mirror's channels.
+#[test]
+fn gb10_zones_are_read_once_by_the_thermal_adapter() {
+    let names = ["TSOC", "TS0E", "TS0P", "TS1E", "TS1P", "TGPU", "TUNC"];
+    let sysfs = FakeSysfs::new("thermal-gb10-hwmon-mirror");
+    gb10(&sysfs, &names);
+    let mirror = sysfs.hwmon(0, "virtual/thermal/thermal_zone0", "acpitz");
+    for index in 0..names.len() {
+        sysfs.write(
+            &format!("{mirror}/temp{}_input", index + 1),
+            &format!("{}\n", 70_000 + index),
+        );
+    }
+    let clock = clock();
+
+    let mut hwmon = HwmonAdapter::new(
+        time(&clock),
+        host(),
+        sysfs.files(),
+        AdapterOptions::default(),
+    );
+    let (_, hwmon_pages) = discover(&mut hwmon, "hwmon", 0, deadline(&clock));
+    assert!(
+        sources(&hwmon_pages).is_empty(),
+        "hwmon leaves the zone mirror to the thermal adapter"
+    );
+
+    let mut zones = adapter(&sysfs, &clock);
+    let (_, pages) = discover(&mut zones, ADAPTER, 0, deadline(&clock));
+    let catalog = sources(&pages);
+    assert_eq!(catalog.len(), names.len());
+    let readings = records(&read_all(
+        &mut zones,
+        ADAPTER,
+        "fast",
+        1,
+        deadline(&clock),
+        Vec::new(),
+    ));
+    let expected = [
+        (ids::SOC_TEMPERATURE, "soc"),
+        (ids::CPU_TEMPERATURE_CLUSTER, "cluster:0e"),
+        (ids::CPU_TEMPERATURE_CLUSTER, "cluster:0p"),
+        (ids::CPU_TEMPERATURE_CLUSTER, "cluster:1e"),
+        (ids::CPU_TEMPERATURE_CLUSTER, "cluster:1p"),
+        (ids::SENSOR_TEMPERATURE, "sensor"),
+        (ids::SENSOR_TEMPERATURE, "sensor"),
+    ];
+    for (index, (metric, scope)) in expected.iter().enumerate() {
+        let reading = record(&readings, &zone_id(index));
+        assert_eq!(reading.key.metric_id.as_str(), *metric, "zone {index}");
+        assert_eq!(reading.key.scope.as_str(), *scope, "zone {index}");
+        assert_eq!(value_of(reading), 70_000.0 + index as f64);
+    }
+}
+
 #[test]
 fn arm_cpu_thermal_is_usable_rank_two_on_one_package() {
     let sysfs = FakeSysfs::new("thermal-arm");

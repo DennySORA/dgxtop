@@ -9,6 +9,7 @@
 //! read through the canonical path: a re-numbered `hwmonN` can never make a
 //! source read another device's file.
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
@@ -88,8 +89,25 @@ struct FoundDevice {
 
 enum DeviceScan {
     Found(FoundDevice),
+    /// The kernel's hwmon mirror of a thermal zone: kept in the cache so its
+    /// metadata is not re-read, never catalogued.
+    ThermalZoneMirror {
+        instance: String,
+    },
     Vanished,
     Failed,
+}
+
+/// Whether a device is the kernel's hwmon view of a thermal zone: its
+/// `device` is a `thermal_zoneN`. The thermal adapter reads every zone and
+/// alone knows a zone's ACPI path (D-68), so hwmon leaves the mirror out
+/// instead of reading the same sensors a second time (D-81).
+fn is_thermal_zone_mirror(metadata: &DeviceMetadata) -> bool {
+    metadata
+        .device_path
+        .as_deref()
+        .and_then(|path| path.rsplit('/').next())
+        .is_some_and(|leaf| numbered(leaf, "thermal_zone").is_some())
 }
 
 /// Scanner of the hwmon class with its metadata cache.
@@ -107,6 +125,7 @@ impl Scanner for HwmonScanner {
             Err(error) => return ScanOutput::failed(format!("HWMON_CLASS_{}", reason_of(&error))),
         };
         let mut found = Vec::new();
+        let mut mirrors = Vec::new();
         let mut partial_failures = 0u32;
         for name in &names {
             let Some(index) = numbered(name, "hwmon") else {
@@ -117,6 +136,7 @@ impl Scanner for HwmonScanner {
             }
             match self.scan_device(context.files, index, name) {
                 DeviceScan::Found(device) => found.push(device),
+                DeviceScan::ThermalZoneMirror { instance } => mirrors.push(instance),
                 DeviceScan::Vanished => {}
                 DeviceScan::Failed => partial_failures = partial_failures.saturating_add(1),
             }
@@ -124,6 +144,7 @@ impl Scanner for HwmonScanner {
         let live: BTreeSet<&str> = found
             .iter()
             .map(|device| device.instance.as_str())
+            .chain(mirrors.iter().map(String::as_str))
             .collect();
         self.cache
             .retain(|instance, _| live.contains(instance.as_str()));
@@ -157,36 +178,49 @@ impl HwmonScanner {
             Err(error) if is_missing(&error) => return DeviceScan::Vanished,
             Err(_) => return DeviceScan::Failed,
         };
+        match self.cached_metadata(files, &instance) {
+            Ok(metadata) if is_thermal_zone_mirror(metadata) => {
+                return DeviceScan::ThermalZoneMirror { instance };
+            }
+            Ok(_) => {}
+            Err(error) if is_missing(&error) => return DeviceScan::Vanished,
+            Err(_) => return DeviceScan::Failed,
+        }
         let attributes = match list_names(files, &instance) {
             Ok(attributes) => attributes,
             Err(error) if is_missing(&error) => return DeviceScan::Vanished,
             Err(_) => return DeviceScan::Failed,
         };
         let channels = parse_channels(&attributes);
-        match self.refresh_metadata(files, &instance, &channels) {
-            Ok(()) => DeviceScan::Found(FoundDevice {
-                index,
-                instance,
-                channels,
-            }),
-            Err(error) if is_missing(&error) => DeviceScan::Vanished,
-            Err(_) => DeviceScan::Failed,
-        }
+        self.refresh_labels(files, &instance, &channels);
+        DeviceScan::Found(FoundDevice {
+            index,
+            instance,
+            channels,
+        })
     }
 
-    /// Reads metadata not cached yet for this instance.
-    fn refresh_metadata(
+    /// Static metadata of an instance, read only when not cached yet.
+    fn cached_metadata(
+        &mut self,
+        files: &dyn SystemFiles,
+        instance: &str,
+    ) -> io::Result<&DeviceMetadata> {
+        Ok(match self.cache.entry(instance.to_owned()) {
+            Entry::Occupied(cached) => cached.into_mut(),
+            Entry::Vacant(slot) => slot.insert(read_device_metadata(files, instance)?),
+        })
+    }
+
+    /// Reads the labels not cached yet for this instance's channels.
+    fn refresh_labels(
         &mut self,
         files: &dyn SystemFiles,
         instance: &str,
         channels: &[ChannelFiles],
-    ) -> io::Result<()> {
-        if !self.cache.contains_key(instance) {
-            let metadata = read_device_metadata(files, instance)?;
-            self.cache.insert(instance.to_owned(), metadata);
-        }
+    ) {
         let Some(metadata) = self.cache.get_mut(instance) else {
-            return Ok(());
+            return;
         };
         for channel in channels.iter().filter(|channel| channel.has_label) {
             let base = channel.base();
@@ -198,7 +232,6 @@ impl HwmonScanner {
                 metadata.labels.insert(base, label);
             }
         }
-        Ok(())
     }
 
     fn build_output(&mut self, context: &ScanContext<'_>, found: &[FoundDevice]) -> ScanOutput {
@@ -610,6 +643,27 @@ mod tests {
         assert_eq!(channels[3].attribute(), "power1_average");
         assert_eq!(channels[2].source_channel(), "power1");
         assert_eq!(temp.attribute(), "temp1_input");
+    }
+
+    fn device_at(path: Option<&str>) -> DeviceMetadata {
+        DeviceMetadata {
+            name: "acpitz".to_owned(),
+            device_path: path.map(str::to_owned),
+            ..DeviceMetadata::default()
+        }
+    }
+
+    #[test]
+    fn only_devices_of_a_thermal_zone_are_mirrors() {
+        let mirror = device_at(Some("/sys/devices/virtual/thermal/thermal_zone0"));
+        assert!(is_thermal_zone_mirror(&mirror));
+        let cooling = device_at(Some("/sys/devices/virtual/thermal/cooling_device0"));
+        assert!(!is_thermal_zone_mirror(&cooling));
+        let unnumbered = device_at(Some("/sys/devices/virtual/thermal/thermal_zone"));
+        assert!(!is_thermal_zone_mirror(&unnumbered));
+        let platform = device_at(Some("/sys/devices/platform/coretemp.0"));
+        assert!(!is_thermal_zone_mirror(&platform));
+        assert!(!is_thermal_zone_mirror(&device_at(None)));
     }
 
     #[test]

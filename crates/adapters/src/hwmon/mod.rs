@@ -6,7 +6,10 @@
 //! only when a versioned profile proves it (coretemp, AMD k10temp/zenpower,
 //! NVIDIA GB10); every other channel is a `sensor.*` diagnostics source with
 //! unknown origin and quality. A driver fault flag keeps the value but marks
-//! it invalid (`SENSOR_FAULT`); an alarm flag only adds `ALARM`.
+//! it invalid (`SENSOR_FAULT`); an alarm flag only adds `ALARM`. The
+//! kernel's hwmon mirror of thermal zones (a device whose `device` is a
+//! `thermal_zoneN`, such as `acpitz`) is skipped: the thermal adapter reads
+//! those sensors (D-81).
 //!
 //! The submodules `sysfs`, `reader`, `mapping`, `catalog`, `table` and
 //! `engine` are the sysfs mechanics shared with the thermal, powercap (and,
