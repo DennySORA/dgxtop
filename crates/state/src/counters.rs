@@ -1,7 +1,7 @@
-//! Visible counters of the hot store (finer than `StoreHealth`).
+//! Visible counters of the live state (finer than `StoreHealth`).
 
 use crate::candidates::CandidateReport;
-use crate::history::output::HistoryReport;
+use dgxtop_core::ports::HistoryOutcome;
 
 /// Monotonic counters exposed through `SharedSnapshot::counters`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -33,23 +33,21 @@ fn add(counter: &mut u64, amount: u64) {
 }
 
 impl StoreCounters {
-    pub(crate) fn absorb_history(&mut self, report: &HistoryReport) {
+    pub(crate) fn absorb_history(&mut self, outcome: &HistoryOutcome) {
         add(
             &mut self.history_values_dropped_total,
-            report.gauge_drops.total(),
+            outcome.values_dropped,
         );
         add(
             &mut self.history_intervals_dropped_total,
-            report.interval_drops.total(),
+            outcome.intervals_dropped,
         );
+        add(&mut self.series_rejected_total, outcome.series_rejected);
+        add(&mut self.evicted_records_total, outcome.evicted_records);
         add(
-            &mut self.series_rejected_total,
-            report
-                .gauge_drops
-                .series_limit
-                .saturating_add(report.interval_drops.series_limit),
+            &mut self.archive_rows_dropped_total,
+            outcome.archive_rows_dropped,
         );
-        add(&mut self.evicted_records_total, report.evicted_records);
     }
 
     pub(crate) fn absorb_candidates(&mut self, report: &CandidateReport) {
@@ -76,9 +74,5 @@ impl StoreCounters {
 
     pub(crate) fn count_invalid_gap(&mut self) {
         add(&mut self.invalid_gaps_total, 1);
-    }
-
-    pub(crate) fn count_archive_drops(&mut self, rows: u64) {
-        add(&mut self.archive_rows_dropped_total, rows);
     }
 }

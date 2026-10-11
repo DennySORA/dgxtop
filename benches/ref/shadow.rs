@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use dgxtop::live_store::LiveStore;
 use dgxtop::perf::history_load::{HistoryFeeder, PreloadReport, PreloadShape, history_series};
 use dgxtop::perf::threads::HarnessCpu;
 use dgxtop_core::budget::{ByteLedger, Partition};
@@ -19,8 +20,8 @@ use dgxtop_core::clock::{NANOS_PER_SECOND, TimeProvider};
 use dgxtop_core::config::Config;
 use dgxtop_core::ports::StoreWriter;
 use dgxtop_core::quality::Namespace;
-use dgxtop_store::history::HistoryIndex;
-use dgxtop_store::hot::{HotStore, HotStoreWriter};
+use dgxtop_history::HistoryIndex;
+use dgxtop_state::StateWriter;
 
 use crate::common::BenchResult;
 
@@ -55,7 +56,7 @@ impl ShadowHistory {
             return Err("the replay snapshot holds no history-capable series yet".to_owned());
         }
         let ledger = ByteLedger::for_memory_limit_mib(u64::from(config.store.memory_limit_mib));
-        let (mut writer, _snapshots, index) = HotStore::new(
+        let (mut writer, _snapshots, index) = LiveStore::new(
             &config.store,
             &config.sampling,
             &config.runtime,
@@ -111,7 +112,7 @@ pub fn history_bytes(ledger: &ByteLedger) -> u64 {
 
 fn spawn_feeder(
     mut feeder: HistoryFeeder,
-    mut writer: HotStoreWriter,
+    mut writer: StateWriter,
     clock: Arc<dyn TimeProvider>,
     stop: Arc<AtomicBool>,
     harness: HarnessCpu,

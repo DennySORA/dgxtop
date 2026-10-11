@@ -128,6 +128,18 @@ impl StoreConfig {
     pub fn process_history_on_disk(&self) -> bool {
         self.process_history_enabled.unwrap_or(self.archive_enabled)
     }
+
+    /// `raw_history_seconds` in nanoseconds (at least one second).
+    pub fn raw_history_ns(&self) -> u64 {
+        u64::from(self.raw_history_seconds.max(1)).saturating_mul(crate::clock::NANOS_PER_SECOND)
+    }
+
+    /// `aggregate_retention_hours` in nanoseconds (at least one hour).
+    pub fn aggregate_retention_ns(&self) -> u64 {
+        u64::from(self.aggregate_retention_hours.max(1))
+            .saturating_mul(crate::clock::NANOS_PER_SECOND)
+            .saturating_mul(3600)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use dgxtop::live_store::LiveStore;
 use dgxtop_core::budget::ByteLedger;
 use dgxtop_core::canonical::{
     CanonicalValue, CollectionBatch, CollectorState, CommitGuard, CounterInterval, StoreAck,
@@ -21,8 +22,8 @@ use dgxtop_core::metric::{CanonicalUnit, Scalar, descriptor, ids};
 use dgxtop_core::ports::{CancelFlag, HistoryReader, IngressBatch, SnapshotReader, StoreWriter};
 use dgxtop_core::quality::{Freshness, Namespace, Quality, SampleKind, SelectionState};
 use dgxtop_core::testing::{FakeClock, ObservationBuilder, batch_of, metric_key, source_id};
-use dgxtop_store::history::HistoryIndex;
-use dgxtop_store::hot::{HotStore, HotStoreWriter, SharedSnapshot};
+use dgxtop_history::HistoryIndex;
+use dgxtop_state::{SharedSnapshot, StateWriter};
 use uuid::Uuid;
 
 pub const SECOND: u64 = 1_000_000_000;
@@ -35,7 +36,7 @@ pub fn config() -> Config {
 
 /// A hot store plus a fake clock and one collector's commit bookkeeping.
 pub struct Harness {
-    pub writer: HotStoreWriter,
+    pub writer: StateWriter,
     pub snapshots: SharedSnapshot,
     pub history: HistoryIndex,
     pub ledger: ByteLedger,
@@ -72,7 +73,7 @@ impl Harness {
     }
 
     pub fn build(config: Config, ledger: ByteLedger, namespace: Namespace, archive: bool) -> Self {
-        let store = HotStore::new(
+        let store = LiveStore::new(
             &config.store,
             &config.sampling,
             &config.runtime,

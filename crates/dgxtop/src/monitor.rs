@@ -465,7 +465,7 @@ impl Wiring {
         };
         let mut workers: Vec<Box<dyn StopOnShutdown>> = Vec::new();
 
-        let (writer, snapshots, history_index) = dgxtop_store::hot::HotStore::new(
+        let (writer, snapshots, history_index) = crate::live_store::LiveStore::new(
             &effective.store,
             &effective.sampling,
             &effective.runtime,
@@ -658,7 +658,7 @@ impl Wiring {
 
     fn spawn_store(
         &self,
-        writer: dgxtop_store::hot::HotStoreWriter,
+        writer: dgxtop_state::StateWriter,
         archive: Option<PoolHandle<ArchiveJournal>>,
         completions: Completions,
         archive_bytes: u64,
@@ -669,7 +669,7 @@ impl Wiring {
             "hot-store",
             64,
             writer,
-            move |writer: &mut dgxtop_store::hot::HotStoreWriter, job: StoreJob| {
+            move |writer: &mut dgxtop_state::StateWriter, job: StoreJob| {
                 // After a fail-stop the writer's state is not trusted again.
                 if fail_stop.is_halted() {
                     return;

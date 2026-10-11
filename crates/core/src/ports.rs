@@ -6,8 +6,10 @@
 //! * Process history (D-76): `ProcessProbe` (read-only, beside the
 //!   adapters) and `ProcessHistoryStore`.
 //! * Collectors are pure (`Collector::collect`).
-//! * Store: `StoreWriter` (HotStore actor only), `SnapshotReader`,
-//!   `HistoryReader`, `ConfigRepository`, `AuditRepository`, `ArchiveSink`,
+//! * State (D-79): `StoreWriter` (HotStore actor only) and `SnapshotReader`.
+//! * History (D-79): `HistoryIngest`, through which the live state hands
+//!   each commit to the history, and `HistoryReader`.
+//! * Store: `ConfigRepository`, `AuditRepository`, `ArchiveSink`,
 //!   `ArchiveReader` (D-51).
 //! * Runtime: `Dispatch<J>` submits jobs to fixed workers without blocking;
 //!   results come back as `IngestionCompletion` / `ControlCompletion`.
@@ -68,7 +70,7 @@ pub trait Collector: Send + Sync {
     fn collect(&self, plan: &CollectionPlan) -> CollectionBatch;
 }
 
-/// Single writer of the hot store (HotStore actor only).
+/// Single writer of the live state (HotStore actor only).
 pub trait StoreWriter: Send {
     /// Validates epoch/base/namespace/units, then commits samples, history and
     /// collector state atomically, or rejects the whole batch.
@@ -127,6 +129,122 @@ pub trait HistoryReader: Send + Sync {
 
     /// Series currently held (for the history module's series picker).
     fn series(&self) -> Vec<MetricKey>;
+}
+
+/// Everything whose change cuts a history segment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SegmentIdentity {
+    pub source_id: SourceId,
+    pub source_generation: u32,
+    pub policy_revision: u32,
+    pub sample_kind: crate::quality::SampleKind,
+    pub method: crate::history::HistoryMethod,
+}
+
+/// One committed gauge value entering history.
+#[derive(Debug, Clone)]
+pub struct GaugeAppend {
+    pub key: MetricKey,
+    pub descriptor: &'static crate::metric::MetricDescriptor,
+    pub identity: SegmentIdentity,
+    pub unit: crate::metric::CanonicalUnit,
+    pub time_ns: u64,
+    pub stale_deadline_ns: u64,
+    pub value: crate::metric::Scalar,
+}
+
+/// A history-eligible key committed without a value at `time_ns`.
+#[derive(Debug, Clone)]
+pub struct CutAppend {
+    pub key: MetricKey,
+    pub time_ns: u64,
+    /// End of the visible gap recorded for the missing value.
+    pub gap_end_ns: u64,
+    pub reason: String,
+}
+
+/// One committed exact counter interval entering history.
+#[derive(Debug, Clone)]
+pub struct IntervalAppend {
+    pub key: MetricKey,
+    pub descriptor: &'static crate::metric::MetricDescriptor,
+    pub identity: SegmentIdentity,
+    pub unit: crate::metric::CanonicalUnit,
+    pub start_ns: u64,
+    pub end_ns: u64,
+    pub delta: crate::metric::Scalar,
+}
+
+/// Everything one committed batch adds to history.
+#[derive(Debug, Clone, Default)]
+pub struct HistoryAppends {
+    pub gauges: Vec<GaugeAppend>,
+    pub cuts: Vec<CutAppend>,
+    pub intervals: Vec<IntervalAppend>,
+}
+
+/// What one history mutation means for the live state: the counters, the
+/// health and the recent gaps of the snapshot it publishes next.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HistoryOutcome {
+    /// Gauge values that did not enter history (any reason).
+    pub values_dropped: u64,
+    /// Counter intervals that did not enter history (any reason).
+    pub intervals_dropped: u64,
+    /// New series refused because `store.max_series` series exist.
+    pub series_rejected: u64,
+    /// Records removed because a partition was full (not normal retention).
+    pub evicted_records: u64,
+    /// Gaps that became visible (new or extended) in this mutation.
+    pub new_gaps: Vec<GapRecord>,
+    /// Distinct gap entries created (extensions of a merged gap excluded).
+    pub gaps_added: u64,
+    pub series_count: u32,
+    pub truncated: bool,
+    /// Finished rows the archive queue could not hold.
+    pub archive_rows_dropped: u64,
+}
+
+impl HistoryOutcome {
+    /// Whether the mutation changed what a snapshot shows (evictions, gaps).
+    pub fn changed_visible_state(&self) -> bool {
+        self.evicted_records > 0 || !self.new_gaps.is_empty()
+    }
+}
+
+/// The history's side of the live state's commits (D-79).
+///
+/// The state calls it on its own actor thread inside each commit, gap and
+/// maintenance step, before it publishes the snapshot, so a committed batch
+/// is in history by the time its ack and snapshot are visible (the
+/// single-writer atomicity of `StoreWriter` holds across the two crates).
+/// The finished rows it queues for the archive are drained on the same
+/// thread through [`HistoryIngest::take_archive_journal`].
+pub trait HistoryIngest: Send {
+    /// Applies one committed batch at snapshot `revision`.
+    fn ingest(
+        &mut self,
+        appends: HistoryAppends,
+        now_boot_ns: u64,
+        revision: u64,
+    ) -> HistoryOutcome;
+    /// Records a gap reported from outside the history (Manager or state).
+    fn record_gap(&mut self, gap: GapRecord) -> HistoryOutcome;
+    /// Retention, finalization, eviction and gap settlement.
+    fn maintain(&mut self, now_boot_ns: u64) -> HistoryOutcome;
+    /// Overload relief: drops raw history older than `keep_ns` (only
+    /// minutes that already have rollups).
+    fn shed_raw(&mut self, now_boot_ns: u64, keep_ns: u64) -> HistoryOutcome;
+    /// The snapshot revision queries and journals report; follows every publish.
+    fn set_revision(&mut self, revision: u64);
+    /// Applies a new finalization horizon to future minutes only.
+    fn set_finalize_grace(&mut self, grace_ns: u64);
+    /// Records the boot-to-UTC relation; a wall clock step becomes a clock
+    /// discontinuity, and archive rows need at least one observation.
+    fn observe_wall_clock(&mut self, boot_ns: u64, utc_ns: i128);
+    /// Finished rows queued since the last call, at most about `max_bytes`;
+    /// `None` when the archive is off, nothing is queued or no UTC mapping is known.
+    fn take_archive_journal(&mut self, max_bytes: u64) -> Option<ArchiveJournal>;
 }
 
 /// Reader of the history archive (D-51): the minutes earlier runs and

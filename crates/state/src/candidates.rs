@@ -18,7 +18,7 @@ use dgxtop_core::observation::{Observation, ObservationBatch};
 use dgxtop_core::ports::IngressBatch;
 use dgxtop_core::quality::{Namespace, Quality, ReadStatus, SampleKind};
 
-use crate::history::accounted::{Account, AccountedDeque};
+use dgxtop_core::budget::accounted::{Account, AccountedDeque};
 
 /// Readings retained per source (`ARCHITECTURE.md` §7.1).
 pub const MAX_READINGS_PER_SOURCE: usize = 600;

@@ -27,7 +27,7 @@ use dgxtop_core::identity::{
 use dgxtop_core::metric::{CanonicalUnit, METRIC_CATALOG, MetricRole, Scalar, descriptor};
 use dgxtop_core::ports::StoreWriter;
 use dgxtop_core::quality::{Freshness, Quality, SampleKind, SelectionState};
-use dgxtop_store::hot::HotStoreWriter;
+use dgxtop_state::StateWriter;
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -215,7 +215,7 @@ impl HistoryFeeder {
     /// Fills `[end − span, end]` and returns what was committed.
     pub fn preload(
         &mut self,
-        writer: &mut HotStoreWriter,
+        writer: &mut StateWriter,
         shape: PreloadShape,
         end_ns: u64,
     ) -> PreloadReport {
@@ -251,7 +251,7 @@ impl HistoryFeeder {
 
     /// One more live-cadence step at `at_ns` (continuous feeding after a
     /// preload); the caller runs `maintain` as the Manager would.
-    pub fn append(&mut self, writer: &mut HotStoreWriter, at_ns: u64, step_ns: u64) -> StoreAck {
+    pub fn append(&mut self, writer: &mut StateWriter, at_ns: u64, step_ns: u64) -> StoreAck {
         let ack = self.commit_at(writer, at_ns, step_ns);
         self.report.end_ns = self.report.end_ns.max(at_ns);
         ack
@@ -261,7 +261,7 @@ impl HistoryFeeder {
         &self.report
     }
 
-    fn use_cadence(&mut self, writer: &mut HotStoreWriter, step_ns: u64) {
+    fn use_cadence(&mut self, writer: &mut StateWriter, step_ns: u64) {
         let milliseconds = u32::try_from(step_ns / 1_000_000)
             .unwrap_or(u32::MAX)
             .clamp(100, 60_000);
@@ -269,7 +269,7 @@ impl HistoryFeeder {
         writer.set_sampling(&self.sampling);
     }
 
-    fn commit_at(&mut self, writer: &mut HotStoreWriter, at_ns: u64, step_ns: u64) -> StoreAck {
+    fn commit_at(&mut self, writer: &mut StateWriter, at_ns: u64, step_ns: u64) -> StoreAck {
         let batch = self.batch_at(at_ns, step_ns);
         let guard = CommitGuard {
             expected_epoch: batch.epoch,
@@ -484,15 +484,15 @@ mod tests {
     use dgxtop_core::history::{HISTORY_SCHEMA_VERSION, HistoryQuery, HistoryStat};
     use dgxtop_core::ports::{CancelFlag, HistoryReader};
     use dgxtop_core::quality::Namespace;
-    use dgxtop_store::hot::HotStore;
 
+    use crate::live_store::LiveStore;
     use crate::perf::pipeline::ManualClock;
 
     const HOUR_NS: u64 = 3_600 * NANOS_PER_SECOND;
 
-    fn preloaded(series: usize, span_ns: u64) -> (HotStore, HistoryFeeder, PreloadReport, u64) {
+    fn preloaded(series: usize, span_ns: u64) -> (LiveStore, HistoryFeeder, PreloadReport, u64) {
         let config = Config::defaults().unwrap();
-        let store = HotStore::new(
+        let store = LiveStore::new(
             &config.store,
             &config.sampling,
             &config.runtime,

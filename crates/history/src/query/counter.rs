@@ -15,10 +15,10 @@ use super::guard::ScanGuard;
 use super::plan::{RegionKind, RegionPlan, Window, cells};
 use super::points::{DataPoint, PointSink, SourceSet};
 use super::push_null_region;
-use crate::history::chunk::Slices;
-use crate::history::gaps::GapEntry;
-use crate::history::records::{BUCKET_NS, CounterBucket, CounterSample, CounterTotal};
-use crate::history::segment::SegmentsView;
+use crate::chunk::Slices;
+use crate::gaps::GapEntry;
+use crate::records::{BUCKET_NS, CounterBucket, CounterSample, CounterTotal};
+use crate::segment::SegmentsView;
 
 /// Pinned counter history plus query context.
 pub(crate) struct CounterInputs<'p> {

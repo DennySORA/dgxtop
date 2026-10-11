@@ -7,7 +7,7 @@
 //! bridges reference (the sink upserts them), so a journal never depends on
 //! an earlier one. When the queue is full the oldest rows are dropped and the
 //! dropped time is reported to the archive as an `archive_overflow` gap: the
-//! HotStore is never blocked by the archive.
+//! live state is never blocked by the archive.
 
 use std::collections::{BTreeSet, VecDeque};
 
@@ -18,11 +18,13 @@ use dgxtop_core::identity::{BootId, HostId};
 use dgxtop_core::metric::ScalarView;
 use dgxtop_core::ports::{ArchiveJournal, ArchivedBridge, ArchivedBucket, ArchivedSegment};
 
-use super::wall_clock::{WallClock, format_utc};
-use crate::history::accounted::Account;
-use crate::history::output::ArchiveRow;
-use crate::history::records::BUCKET_NS;
-use crate::history::segment::SegmentMeta;
+use dgxtop_core::clock::format_utc_ns;
+
+use crate::output::ArchiveRow;
+use crate::records::BUCKET_NS;
+use crate::segment::SegmentMeta;
+use crate::wall_clock::WallClock;
+use dgxtop_core::budget::accounted::Account;
 
 /// Most bytes queued for the archive (`queues.archive_bytes` upper bound).
 pub(crate) const MAX_QUEUED_BYTES: u64 = 8 * 1024 * 1024;
@@ -204,7 +206,7 @@ impl ArchiveQueue {
 fn utc_text(clock: &WallClock, boot_ns: u64) -> String {
     clock
         .utc_of(boot_ns)
-        .and_then(format_utc)
+        .and_then(format_utc_ns)
         .unwrap_or_default()
 }
 
@@ -311,8 +313,8 @@ mod tests {
     use dgxtop_core::testing::{metric_key, source_id};
     use uuid::Uuid;
 
-    use crate::history::records::{CounterSample, GaugeBucket};
-    use crate::history::segment::SegmentIdentity;
+    use crate::records::{CounterSample, GaugeBucket};
+    use crate::segment::SegmentIdentity;
 
     fn segment() -> Arc<SegmentMeta> {
         Arc::new(SegmentMeta {

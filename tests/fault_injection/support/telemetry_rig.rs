@@ -1,10 +1,11 @@
 //! The telemetry path of the composition root: adapter-host supervisor →
-//! Manager (scheduler, ingestion) → real collectors → real HotStore, with
+//! Manager (scheduler, ingestion) → real collectors → real LiveState, with
 //! replay hosts as the only data sources.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use dgxtop::live_store::LiveStore;
 use dgxtop_collectors::registry::default_collectors;
 use dgxtop_core::budget::ByteLedger;
 use dgxtop_core::clock::TimeProvider;
@@ -22,7 +23,7 @@ use dgxtop_runtime::supervisor::{
     HostLauncher, HostSpec, ShutdownReport, StandardLauncher, Supervisor, SupervisorConfig,
     SupervisorHandle,
 };
-use dgxtop_store::hot::{HotStore, SharedSnapshot};
+use dgxtop_state::SharedSnapshot;
 
 use super::manager_rig::{Identity, RunningManager, inert_ports, ingress_gate, manager_setup};
 use super::workers::{
@@ -118,7 +119,7 @@ impl TelemetryRig {
         let channels = ManagerChannels::create();
         let inboxes = channels.inboxes();
         let completions = Completions::from_inboxes(&inboxes);
-        let (writer, snapshots, history) = HotStore::new(
+        let (writer, snapshots, history) = LiveStore::new(
             &config.store,
             &config.sampling,
             &config.runtime,

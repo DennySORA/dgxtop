@@ -10,11 +10,11 @@ use super::guard::ScanGuard;
 use super::plan::{RegionKind, RegionPlan, Window, cells};
 use super::points::{DataPoint, PointSink, SourceSet};
 use super::{gap_reason, push_null_region};
-use crate::history::chunk::Slices;
-use crate::history::gaps::GapEntry;
-use crate::history::records::{BUCKET_NS, GaugeBucket, GaugeSample};
-use crate::history::segment::SegmentsView;
-use crate::history::steps::{RawGauge, Step, StepIter};
+use crate::chunk::Slices;
+use crate::gaps::GapEntry;
+use crate::records::{BUCKET_NS, GaugeBucket, GaugeSample};
+use crate::segment::SegmentsView;
+use crate::steps::{RawGauge, Step, StepIter};
 
 /// Nanoseconds per second as `f64`, for integrals of rates.
 const NANOS_PER_SECOND_F64: f64 = 1e9;

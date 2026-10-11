@@ -11,7 +11,6 @@ use dgxtop_core::budget::{ByteLedger, CapacityError, Partition};
 use dgxtop_core::identity::MetricKey;
 use dgxtop_core::metric::{CanonicalUnit, MetricDescriptor, Scalar};
 
-use super::accounted::Account;
 use super::chunk::ChunkLog;
 use super::gaps::GapList;
 use super::output::{ArchiveRow, DropReason, HistoryReport};
@@ -21,6 +20,7 @@ use super::records::{
 use super::rollup::{self, CounterRollup};
 use super::segment::{SegmentIdentity, SegmentTable};
 use super::steps::{RawGauge, StepIter};
+use dgxtop_core::budget::accounted::Account;
 
 /// Most minute buckets one finalization pass may produce per series.
 pub(crate) const MAX_FINALIZE_BUCKETS: u64 = 1440;
@@ -546,11 +546,6 @@ impl Series {
     }
 }
 
-/// Stale deadline of a sample: `time + stale_factor x period`, saturating.
-pub(crate) fn stale_deadline(time_ns: u64, stale_factor: u32, period_ns: u64) -> u64 {
-    time_ns.saturating_add(u64::from(stale_factor.max(1)).saturating_mul(period_ns))
-}
-
 /// Builds a gauge record from a scalar value (or a cut when `None`).
 pub(crate) fn gauge_record(
     time_ns: u64,
@@ -572,6 +567,7 @@ mod tests {
     use dgxtop_core::history::HistoryMethod;
     use dgxtop_core::metric::{descriptor, ids};
     use dgxtop_core::quality::SampleKind;
+    use dgxtop_core::sampling::stale_deadline;
     use dgxtop_core::testing::{metric_key, source_id};
 
     const SECOND: u64 = 1_000_000_000;

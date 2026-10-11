@@ -7,7 +7,7 @@
 
 use dgxtop_core::clock::{NANOS_PER_MILLI, ms_to_ns};
 
-use crate::history::records::{BUCKET_NS, floor_bucket};
+use crate::records::{BUCKET_NS, floor_bucket};
 
 /// Half-open query window `[start, end)` with `end > start`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

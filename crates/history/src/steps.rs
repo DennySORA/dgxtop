@@ -120,7 +120,7 @@ impl Iterator for StepIter<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::history::chunk::ChunkLog;
+    use crate::chunk::ChunkLog;
     use dgxtop_core::budget::{ByteLedger, Partition};
 
     fn record(time_ns: u64, deadline_ns: u64, value: Option<f64>) -> GaugeSample {

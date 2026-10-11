@@ -112,9 +112,3 @@ pub(crate) struct HistoryReport {
     pub series_count: u32,
     pub truncated: bool,
 }
-
-impl HistoryReport {
-    pub(crate) fn changed_visible_state(&self) -> bool {
-        self.evicted_records > 0 || !self.new_gaps.is_empty()
-    }
-}

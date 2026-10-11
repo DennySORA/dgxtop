@@ -13,7 +13,7 @@ use dgxtop_core::ports::SnapshotReader;
 
 use super::counters::StoreCounters;
 use crate::candidates::{CandidateStore, RetainedCandidate};
-use crate::history::series::stale_deadline;
+use dgxtop_core::sampling::stale_deadline;
 
 /// Gaps listed in `ImmutableSnapshot::recent_gaps`.
 pub(crate) const RECENT_GAPS: usize = 64;
@@ -24,7 +24,7 @@ struct SharedState {
     counters: Mutex<StoreCounters>,
 }
 
-/// Read side of the hot store (`SnapshotReader`): the latest immutable
+/// Read side of the live state (`SnapshotReader`): the latest immutable
 /// snapshot behind a lock held only to clone one `Arc`, plus the retained
 /// raw candidates and the store counters. Cheap to clone.
 #[derive(Clone)]

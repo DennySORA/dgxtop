@@ -8,20 +8,20 @@ use dgxtop_core::clock::ms_to_ns;
 use dgxtop_core::history::HistoryMethod;
 use dgxtop_core::identity::{MetricKey, SourceId};
 use dgxtop_core::naming::{PeriodClass, READ_GROUPS, is_replay_adapter};
-use dgxtop_core::ports::IngressBatch;
+use dgxtop_core::ports::{
+    CutAppend, GaugeAppend, HistoryAppends, IngressBatch, IntervalAppend, SegmentIdentity,
+};
 use dgxtop_core::quality::{SampleKind, SelectionState};
 
-use super::settings::Timing;
 use super::validate::CheckedBatch;
-use crate::history::segment::SegmentIdentity;
-use crate::history::series::stale_deadline;
-use crate::history::state::{CutAppend, GaugeAppend, HistoryAppends, IntervalAppend};
+use dgxtop_core::sampling::SamplingTiming;
+use dgxtop_core::sampling::stale_deadline;
 
 /// Period of an adapter read group (replay groups mirror `<adapter>.<group>`;
 /// the `:<page>` suffix of paged groups is ignored, see
 /// `dgxtop_core::observation::split_page`). Unknown groups use the fast
 /// period, which can only shorten (never stretch) a stale deadline.
-fn group_period_ns(timing: &Timing, adapter: &str, read_group: &str) -> u64 {
+fn group_period_ns(timing: &SamplingTiming, adapter: &str, read_group: &str) -> u64 {
     let (unpaged, _page) = dgxtop_core::observation::split_page(read_group);
     let (adapter, base) = if is_replay_adapter(adapter) {
         unpaged.split_once('.').unwrap_or((adapter, unpaged))
@@ -43,7 +43,7 @@ fn group_period_ns(timing: &Timing, adapter: &str, read_group: &str) -> u64 {
 /// `max(read group period, source update interval)`, as for freshness.
 pub(crate) fn source_periods(
     inputs: &[Arc<IngressBatch>],
-    timing: &Timing,
+    timing: &SamplingTiming,
 ) -> BTreeMap<SourceId, u64> {
     let mut periods = BTreeMap::new();
     for input in inputs {
@@ -82,7 +82,7 @@ pub(crate) fn history_appends(
     batch: &CollectionBatch,
     checked: &CheckedBatch,
     periods: &BTreeMap<SourceId, u64>,
-    timing: &Timing,
+    timing: &SamplingTiming,
 ) -> HistoryAppends {
     let mut appends = HistoryAppends::default();
     for (value, descriptor) in batch.canonical.iter().zip(&checked.value_descriptors) {
@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn periods_follow_read_groups_and_update_intervals() {
-        let timing = Timing::from_sampling(&Config::defaults().unwrap().sampling);
+        let timing = SamplingTiming::from_sampling(&Config::defaults().unwrap().sampling);
         assert_eq!(
             group_period_ns(&timing, "nvml", "fast"),
             timing.fast_period_ns

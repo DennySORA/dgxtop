@@ -11,7 +11,6 @@
 //! evicted (raw first, then rollups are shortened) and the truncation is
 //! recorded as an `evicted` gap.
 
-pub(crate) mod accounted;
 pub(crate) mod chunk;
 pub(crate) mod gaps;
 mod index;

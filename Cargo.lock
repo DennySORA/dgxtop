@@ -653,6 +653,7 @@ name = "dgxtop-history"
 version = "2.0.2"
 dependencies = [
  "dgxtop-core",
+ "uuid",
 ]
 
 [[package]]
@@ -690,6 +691,7 @@ name = "dgxtop-state"
 version = "2.0.2"
 dependencies = [
  "dgxtop-core",
+ "uuid",
 ]
 
 [[package]]
@@ -699,7 +701,6 @@ dependencies = [
  "dgxtop-core",
  "libc",
  "nix 0.31.3",
- "proptest",
  "rusqlite",
  "serde",
  "serde_json",

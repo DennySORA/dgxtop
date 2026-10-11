@@ -11,13 +11,13 @@ use dgxtop_core::history::HistoryStat;
 use dgxtop_core::identity::MetricKey;
 use dgxtop_core::metric::MetricDescriptor;
 
-use super::accounted::bytes_of;
 use super::chunk::LogPin;
 use super::gaps::GapEntry;
 use super::records::{CounterBucket, CounterSample, GaugeBucket, GaugeSample};
 use super::segment::SegmentsView;
 use super::series::Series;
 use super::state::HistoryState;
+use dgxtop_core::budget::accounted::bytes_of;
 
 /// Fixed bytes of one pin (chunk pointer vectors, segment view, bookkeeping).
 const PIN_OVERHEAD_BYTES: u64 = 4096;
@@ -172,9 +172,9 @@ impl HistoryState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::history::chunk::chunk_bytes;
-    use crate::history::segment::SegmentIdentity;
-    use crate::history::state::{GaugeAppend, HistoryAppends, HistorySettings};
+    use crate::chunk::chunk_bytes;
+    use crate::segment::SegmentIdentity;
+    use crate::state::{GaugeAppend, HistoryAppends, HistorySettings};
     use dgxtop_core::history::HistoryMethod;
     use dgxtop_core::metric::{CanonicalUnit, Scalar, descriptor, ids};
     use dgxtop_core::quality::SampleKind;
