@@ -31,12 +31,12 @@ use dgxtop_core::ports::Collector;
 use dgxtop_core::process_stat::{self, ProcessStat};
 use dgxtop_core::text::{sanitize_command_name, sanitize_display};
 
-use crate::process::gpu_processes::{self, PidRecords};
 use crate::process::tree::{DescendantUsage, ProcessTree, TreeNode};
 use crate::shared::arbitration::{self, check_namespace};
 use crate::shared::context::{self, CollectorSpec, Record, Route, Session};
 use crate::shared::counter::{self, CounterReading};
 use crate::shared::counter_inputs;
+use crate::shared::gpu_processes::{self, PidRecords};
 use crate::shared::output::Subject;
 use crate::shared::reasons;
 use crate::shared::state_bounds::PROCESS_BASES_PER_ROW;
@@ -401,14 +401,7 @@ fn descendants_of(
 // ----- GPU links ------------------------------------------------------------
 
 fn attach_gpu_links(session: &mut Session<'_>, rows: &mut [ProcessRow], clk_tck: Option<u64>) {
-    let (groups, invalid) = gpu_processes::group_by_gpu(session);
-    for record in invalid {
-        session.failure(
-            reasons::INVALID_ENTITY,
-            &format!("not a gpupid entity: {}", record.key().entity_id),
-            Subject::source(record.source_id()),
-        );
-    }
+    let groups = gpu_processes::group_by_gpu(session);
     if groups.values().all(|group| group.by_pid.is_empty()) {
         return;
     }

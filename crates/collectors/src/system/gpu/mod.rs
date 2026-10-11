@@ -19,11 +19,11 @@ use dgxtop_core::observation::Observation;
 use dgxtop_core::ports::Collector;
 use dgxtop_core::quality::{Freshness, RawKind, ReadStatus};
 
-use crate::process::gpu_processes::{self, GpuProcesses, PROCESS_GPU_METRICS};
 use crate::shared::arbitration::{self, Candidate, CatalogMapping, Deadlines};
 use crate::shared::context::{self, CollectorSpec, Record, Route, Session};
 use crate::shared::counter_inputs::{self, Step};
 use crate::shared::formulas::{self, Selections};
+use crate::shared::gpu_processes::{self, GpuProcesses, PROCESS_GPU_METRICS};
 use crate::shared::output::Subject;
 use crate::shared::reasons;
 use crate::shared::values::{self, Evidence};
@@ -124,14 +124,7 @@ fn emit_energy_intervals(session: &mut Session<'_>) {
 /// `gpu.memory.process_allocated` per GPU: the de-duplicated sum of the
 /// visible processes' allocations, arbitrated with any direct reading.
 fn publish_process_allocations(session: &mut Session<'_>) {
-    let (groups, invalid) = gpu_processes::group_by_gpu(session);
-    for record in invalid {
-        session.failure(
-            reasons::INVALID_ENTITY,
-            &format!("not a gpupid entity: {}", record.key().entity_id),
-            Subject::source(record.source_id()),
-        );
-    }
+    let groups = gpu_processes::group_by_gpu(session);
     let direct = direct_keys(session);
     let mut targets: BTreeSet<EntityId> = groups
         .values()

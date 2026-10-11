@@ -902,3 +902,24 @@ fn a_stale_compact_record_shows_no_rss() {
         "the same read, fresh"
     );
 }
+
+/// A GPU process record whose entity names no valid PID is reported, not
+/// linked.
+#[test]
+fn an_invalid_gpu_process_entity_is_reported() {
+    let at = 2 * SECOND;
+    let batch = two_cycles(
+        (host(9, 1, 0, 10, SECOND), vec![]),
+        (
+            host(9, 1, 10, 10, at),
+            vec![gpu_memory("GPU-a", 0, reasons::GPU_USAGE_COMPUTE, 300, at)],
+        ),
+    );
+    assert!(row(&batch, 9).gpu.is_empty());
+    assert!(
+        batch
+            .failures
+            .iter()
+            .any(|failure| failure.code == reasons::INVALID_ENTITY)
+    );
+}

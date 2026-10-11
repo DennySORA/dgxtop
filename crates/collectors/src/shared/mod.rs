@@ -1,6 +1,7 @@
 //! Helpers shared by the system and process collectors (D-79): the
-//! collection session, source arbitration, exact counter derivation and the
-//! value/output plumbing every collector uses.
+//! collection session, source arbitration, exact counter derivation, the
+//! per-GPU grouping of NVML process records and the value/output plumbing
+//! every collector uses.
 
 pub(crate) mod arbitration;
 pub(crate) mod counter;
@@ -9,6 +10,7 @@ pub(crate) mod reasons;
 pub(crate) mod context;
 pub(crate) mod counter_inputs;
 pub(crate) mod formulas;
+pub(crate) mod gpu_processes;
 pub(crate) mod output;
 pub(crate) mod state_bounds;
 pub(crate) mod values;
