@@ -291,26 +291,70 @@ impl Tier {
     }
 }
 
-/// How much time one bar of a run's chart covers (D-77): its mean of every
+/// How much time one bar of a chart covers (D-77, D-78): its mean of every
 /// sample in that time. `Auto` takes the finest that shows the whole run.
+/// Serialized as its token (`1m`, `24h`, `auto`), as the session's bar
+/// sizes travel (D-80).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum RunBar {
+    #[serde(rename = "auto")]
     Auto,
+    #[serde(rename = "1m")]
     OneMinute,
+    #[serde(rename = "5m")]
     FiveMinutes,
+    #[serde(rename = "10m")]
     TenMinutes,
+    #[serde(rename = "30m")]
     ThirtyMinutes,
+    #[serde(rename = "1h")]
     OneHour,
+    #[serde(rename = "2h")]
     TwoHours,
+    #[serde(rename = "4h")]
     FourHours,
+    #[serde(rename = "6h")]
     SixHours,
+    #[serde(rename = "8h")]
     EightHours,
+    #[serde(rename = "12h")]
     TwelveHours,
+    #[serde(rename = "18h")]
     EighteenHours,
+    #[serde(rename = "24h")]
     OneDay,
 }
 
+impl Default for RunBar {
+    /// The Process History's default.
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
 impl RunBar {
+    /// The Overview History's default (it has no `Auto`).
+    pub const fn overview_default() -> Self {
+        Self::OneMinute
+    }
+
+    /// As the Overview History draws it: `Auto` is its default.
+    pub const fn for_overview(self) -> Self {
+        match self {
+            Self::Auto => Self::overview_default(),
+            fixed => fixed,
+        }
+    }
+
+    /// The next (or previous) size the Overview History steps to, wrapping
+    /// past `Auto`.
+    pub fn step_overview(self, forward: bool) -> Self {
+        match self.for_overview().step(forward) {
+            Self::Auto => self.for_overview().step(forward).step(forward),
+            next => next,
+        }
+    }
+
     /// In the order `w` steps through.
     pub const ALL: [Self; 13] = [
         Self::Auto,
@@ -391,38 +435,6 @@ impl RunBar {
     /// The sizes `Auto` chooses from, finest first.
     pub fn fixed() -> impl Iterator<Item = Self> {
         Self::ALL.into_iter().skip(1)
-    }
-}
-
-/// The History view's session filter (D-77): the Overview History window
-/// token, then the Process History bar unless it is `Auto` (`6h 30m`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HistoryFilter<'a> {
-    /// The window token as given (empty for the default); the Manager
-    /// checks it is a window.
-    pub window: &'a str,
-    pub bar: RunBar,
-}
-
-impl<'a> HistoryFilter<'a> {
-    /// Splits `filter`; `None` when its bar token is no bar or more tokens
-    /// follow.
-    pub fn parse(filter: &'a str) -> Option<Self> {
-        let mut tokens = filter.split_whitespace();
-        let window = tokens.next().unwrap_or("");
-        let bar = match tokens.next() {
-            Some(token) => RunBar::parse(token)?,
-            None => RunBar::Auto,
-        };
-        tokens.next().is_none().then_some(Self { window, bar })
-    }
-
-    /// The filter of `window` and `bar`.
-    pub fn format(window: &str, bar: RunBar) -> String {
-        match bar {
-            RunBar::Auto => window.to_owned(),
-            bar => format!("{window} {}", bar.token()),
-        }
     }
 }
 
@@ -723,28 +735,16 @@ mod tests {
         assert_eq!(RunBar::Auto.step(false), RunBar::OneDay);
         assert_eq!(RunBar::OneMinute.step(true), RunBar::FiveMinutes);
         assert_eq!(RunBar::fixed().count(), 12);
-    }
-
-    #[test]
-    fn the_history_filter_holds_a_window_and_a_bar() {
+        // The Overview History has no `auto`: stepping skips it (D-78).
+        assert_eq!(RunBar::OneDay.step_overview(true), RunBar::OneMinute);
+        assert_eq!(RunBar::OneMinute.step_overview(false), RunBar::OneDay);
+        assert_eq!(RunBar::Auto.for_overview(), RunBar::OneMinute);
+        // Sizes travel as their tokens (D-80).
+        assert_eq!(serde_json::to_value(RunBar::EighteenHours).unwrap(), "18h");
         assert_eq!(
-            HistoryFilter::parse(""),
-            Some(HistoryFilter {
-                window: "",
-                bar: RunBar::Auto
-            })
+            serde_json::from_value::<RunBar>(serde_json::json!("auto")).unwrap(),
+            RunBar::Auto
         );
-        assert_eq!(
-            HistoryFilter::parse("6h 30m"),
-            Some(HistoryFilter {
-                window: "6h",
-                bar: RunBar::ThirtyMinutes
-            })
-        );
-        assert_eq!(HistoryFilter::parse("6h 3h"), None, "no such bar");
-        assert_eq!(HistoryFilter::parse("6h 1h 1h"), None);
-        assert_eq!(HistoryFilter::format("1h", RunBar::Auto), "1h");
-        assert_eq!(HistoryFilter::format("1h", RunBar::OneDay), "1h 24h");
     }
 
     /// A bucket saved before metrics were added reads with them empty.

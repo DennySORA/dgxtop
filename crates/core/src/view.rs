@@ -885,6 +885,12 @@ pub struct SessionState {
     pub filter: String,
     pub sort: SortKey,
     pub ascending: bool,
+    /// The bar sizes of the Overview History (never `Auto`) and of the
+    /// Process History (D-78, D-80).
+    #[serde(default = "RunBar::overview_default")]
+    pub overview_bar: RunBar,
+    #[serde(default)]
+    pub process_bar: RunBar,
 }
 
 /// Module-level sub-projections (only subscribed/visible topics are filled).
@@ -993,6 +999,8 @@ mod tests {
                 filter: String::new(),
                 sort: SortKey::GpuMemory,
                 ascending: false,
+                overview_bar: crate::process_history::RunBar::OneMinute,
+                process_bar: crate::process_history::RunBar::Auto,
             },
             modules: ModuleViews::default(),
             banners: Vec::new(),

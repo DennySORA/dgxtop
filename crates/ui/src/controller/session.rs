@@ -7,16 +7,11 @@ use std::time::Duration;
 
 use dgxtop_core::commands::{CommandBody, SortKey, ViewKind};
 use dgxtop_core::identity::{EntityId, ProcessKey};
+use dgxtop_core::process_history::RunBar;
 use dgxtop_core::view::{SessionState, ViewModel};
 
 /// A sent draft no projection has reflected is dropped after this long.
 const PENDING_TTL: Duration = Duration::from_secs(2);
-/// Default Overview History bar size (D-78).
-pub const DEFAULT_HISTORY_WINDOW: &str = "1m";
-/// Overview History bar sizes in cycle order: the Process History's.
-pub const HISTORY_WINDOWS: [&str; 12] = [
-    "1m", "5m", "10m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "18h", "24h",
-];
 
 /// All fields of an `UpdateViewSession` except the frame revision.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +22,9 @@ pub struct SessionFields {
     pub filter: String,
     pub sort: SortKey,
     pub ascending: bool,
+    /// The history's bar sizes (D-78, D-80), kept across views.
+    pub overview_bar: RunBar,
+    pub process_bar: RunBar,
 }
 
 impl SessionFields {
@@ -38,6 +36,8 @@ impl SessionFields {
             filter: state.filter.clone(),
             sort: state.sort,
             ascending: state.ascending,
+            overview_bar: state.overview_bar,
+            process_bar: state.process_bar,
         }
     }
 
@@ -50,6 +50,8 @@ impl SessionFields {
             sort: self.sort,
             ascending: self.ascending,
             frame_revision,
+            overview_bar: Some(self.overview_bar),
+            process_bar: Some(self.process_bar),
         }
     }
 }
@@ -72,17 +74,6 @@ const fn memory_slot(view: ViewKind) -> usize {
         ViewKind::Sources => 3,
         ViewKind::Settings => 4,
         ViewKind::Actions => 5,
-    }
-}
-
-fn default_memory(view: ViewKind) -> ViewMemory {
-    ViewMemory {
-        filter: if view == ViewKind::History {
-            DEFAULT_HISTORY_WINDOW.to_owned()
-        } else {
-            String::new()
-        },
-        ..ViewMemory::default()
     }
 }
 
@@ -190,9 +181,7 @@ impl SessionDrafts {
                 filter: current.filter.clone(),
             }
         } else {
-            self.memory[memory_slot(view)]
-                .clone()
-                .unwrap_or_else(|| default_memory(view))
+            self.memory[memory_slot(view)].clone().unwrap_or_default()
         };
         SessionFields {
             view,
@@ -201,6 +190,8 @@ impl SessionDrafts {
             filter: memory.filter,
             sort: current.sort,
             ascending: current.ascending,
+            overview_bar: current.overview_bar,
+            process_bar: current.process_bar,
         }
     }
 }
@@ -218,6 +209,8 @@ mod tests {
             filter: "py".into(),
             sort: SortKey::Pid,
             ascending: true,
+            overview_bar: RunBar::OneMinute,
+            process_bar: RunBar::Auto,
         }
     }
 

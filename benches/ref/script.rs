@@ -226,6 +226,8 @@ impl ViewChoice {
             sort: self.sort,
             ascending: self.ascending,
             frame_revision,
+            overview_bar: None,
+            process_bar: None,
         }
     }
 }

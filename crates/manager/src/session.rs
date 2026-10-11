@@ -555,6 +555,8 @@ mod tests {
                 sort: SortKey::Pid,
                 ascending: true,
                 frame_revision: 0,
+                overview_bar: None,
+                process_bar: None,
             },
         )
     }
@@ -620,6 +622,8 @@ mod tests {
                 sort: SortKey::Pid,
                 ascending: true,
                 frame_revision: 0,
+                overview_bar: None,
+                process_bar: None,
             },
         );
         assert_eq!(

@@ -104,8 +104,11 @@ impl SortKey {
 ///   filter (None = all GPUs), `filter` = name filter.
 /// * `gpu_detail`: `selected_entity_id` = shown GPU.
 /// * `history`/`sources`: `selected_entity_id` = series selector
-///   (`metric_id|scope|entity_id`), `filter` = history window token
-///   (`5m`, `1h`, `6h`, `12h`, `24h`) or the sources text filter.
+///   (`metric_id|scope|entity_id`), `filter` = the sources text filter
+///   (empty on the history view).
+/// * `overview_bar` / `process_bar` (D-80, a contract extension in
+///   `contracts/command.schema.json`): the bar sizes of the Overview and the
+///   Process History; unset is 1 minute and `auto`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum CommandBody {
@@ -126,6 +129,10 @@ pub enum CommandBody {
         ascending: bool,
         #[serde(with = "crate::wire::u64_decimal")]
         frame_revision: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        overview_bar: Option<crate::process_history::RunBar>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        process_bar: Option<crate::process_history::RunBar>,
     },
     PrepareSignal {
         target: ProcessKey,
@@ -461,6 +468,8 @@ mod tests {
                 sort: SortKey::Pid,
                 ascending: true,
                 frame_revision: 1,
+                overview_bar: None,
+                process_bar: None,
             },
         );
         assert_eq!(

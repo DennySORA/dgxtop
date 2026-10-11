@@ -7,6 +7,7 @@ use dgxtop_core::action::Signal;
 use dgxtop_core::commands::{CommandBody, CommandEnvelope, CommandResult, ViewKind};
 use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::identity::{ProcessKey, SessionId};
+use dgxtop_core::process_history::RunBar;
 use uuid::Uuid;
 
 use super::{ControlCore, Route};
@@ -137,6 +138,8 @@ impl ControlCore {
                 sort,
                 ascending,
                 frame_revision,
+                overview_bar,
+                process_bar,
             } => self.update_view(
                 request_id,
                 &session_id,
@@ -148,6 +151,8 @@ impl ControlCore {
                     sort,
                     ascending,
                     frame_revision,
+                    overview_bar: overview_bar.unwrap_or(RunBar::overview_default()),
+                    process_bar: process_bar.unwrap_or_default(),
                 },
                 now,
             ),

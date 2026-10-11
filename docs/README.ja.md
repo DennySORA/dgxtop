@@ -182,7 +182,7 @@ dgxtop --version --verbose   # バージョン、commit、ツールチェーン�
 |---|---|
 | 設定 | `$XDG_CONFIG_HOME/dgxtop/v2/config.json`（`~/.config/dgxtop/v2/config.json`） |
 | 履歴（7 日、最大 1 GiB） | `$XDG_STATE_HOME/dgxtop/v2/history.sqlite3`（`~/.local/state/...`） |
-| プロセス履歴（最大 64 MiB） | `$XDG_STATE_HOME/dgxtop/v2/process_history.sqlite3` と `process_recent.json` |
+| プロセス履歴（最大 64 MiB。`store.process_history_enabled`、未設定なら archive に従う） | `$XDG_STATE_HOME/dgxtop/v2/process_history.sqlite3` と `process_recent.json` |
 | プロセス操作の記録 | `$XDG_STATE_HOME/dgxtop/v2/audit.sqlite3` |
 | ログとインスタンスロック | `$XDG_STATE_HOME/dgxtop/v2/` |
 

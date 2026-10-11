@@ -291,6 +291,8 @@ impl SessionDriver {
             sort: SortKey::Pid,
             ascending: true,
             frame_revision,
+            overview_bar: None,
+            process_bar: None,
         });
         let result = self.result(request_id);
         assert_eq!(

@@ -182,7 +182,7 @@ dgxtop --version --verbose   # 版本、commit、工具鏈、target、SQLite run
 |---|---|
 | 設定 | `$XDG_CONFIG_HOME/dgxtop/v2/config.json`（`~/.config/dgxtop/v2/config.json`） |
 | 歷史（7 天、最多 1 GiB） | `$XDG_STATE_HOME/dgxtop/v2/history.sqlite3`（`~/.local/state/...`） |
-| 程序歷史（最多 64 MiB） | `$XDG_STATE_HOME/dgxtop/v2/process_history.sqlite3` 與 `process_recent.json` |
+| 程序歷史（最多 64 MiB；`store.process_history_enabled`，未設定時跟著 archive） | `$XDG_STATE_HOME/dgxtop/v2/process_history.sqlite3` 與 `process_recent.json` |
 | 程序操作紀錄 | `$XDG_STATE_HOME/dgxtop/v2/audit.sqlite3` |
 | 日誌與執行個體鎖 | `$XDG_STATE_HOME/dgxtop/v2/` |
 

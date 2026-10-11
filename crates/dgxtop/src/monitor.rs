@@ -843,8 +843,9 @@ impl Wiring {
         Ok(Some(handle))
     }
 
-    /// The process history's stores (D-76), on with the history archive:
-    /// without it the runs live only while dgxtop runs.
+    /// The process history's stores (D-76), on with
+    /// `store.process_history_enabled`, unset following the history archive
+    /// (D-80): without them the runs live only while dgxtop runs.
     fn spawn_process_history(
         &self,
         effective: &Config,
@@ -853,7 +854,8 @@ impl Wiring {
         completions: Completions,
         workers: &mut Vec<Box<dyn StopOnShutdown>>,
     ) -> Result<Option<PoolHandle<ProcessHistoryJob>>, StartError> {
-        if !(effective.store.archive_enabled && sqlite_ok) {
+        // Its own switch, unset following the archive (D-80).
+        if !(effective.store.process_history_on_disk() && sqlite_ok) {
             return Ok(None);
         }
         let store = ProcessHistoryFiles::open(

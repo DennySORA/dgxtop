@@ -71,15 +71,27 @@ impl Bench {
     }
 }
 
-fn state(view: ViewKind, filter: &str) -> SessionState {
+/// The session on `view` with the Overview History's bar size `bars`, and
+/// after it, optionally, the Process History's (`"6h 30m"`, D-80).
+fn state(view: ViewKind, bars: &str) -> SessionState {
+    use dgxtop_core::process_history::RunBar;
+    let mut tokens = bars.split_whitespace();
+    let overview_bar = tokens
+        .next()
+        .map_or(RunBar::OneMinute, |token| RunBar::parse(token).unwrap());
+    let process_bar = tokens
+        .next()
+        .map_or(RunBar::Auto, |token| RunBar::parse(token).unwrap());
     SessionState {
         session_id: SessionId::new("s1").unwrap(),
         view,
         selected_entity_id: None,
         selected_process: None,
-        filter: filter.into(),
+        filter: String::new(),
         sort: SortKey::GpuMemory,
         ascending: false,
+        overview_bar,
+        process_bar,
     }
 }
 

@@ -109,6 +109,10 @@ pub struct StoreConfig {
     pub max_candidates_per_series: u32,
     pub max_history_points: u32,
     pub archive_enabled: bool,
+    /// Whether the Process History is kept on disk (D-80, a contract
+    /// extension); unset follows `archive_enabled`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_history_enabled: Option<bool>,
     pub archive_retention_days: u32,
     pub archive_limit_mib: u32,
     pub audit_retention_days: u32,
@@ -116,6 +120,14 @@ pub struct StoreConfig {
     pub max_processes: u32,
     pub max_process_gpu_links: u32,
     pub max_query_scan_records: u32,
+}
+
+impl StoreConfig {
+    /// Whether the Process History is kept on disk: as set, else as the
+    /// history archive (D-80).
+    pub fn process_history_on_disk(&self) -> bool {
+        self.process_history_enabled.unwrap_or(self.archive_enabled)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -778,6 +790,9 @@ impl Config {
         if store.0.archive_enabled != store.1.archive_enabled {
             changed.push("store.archive_enabled");
         }
+        if store.0.process_history_on_disk() != store.1.process_history_on_disk() {
+            changed.push("store.process_history_enabled");
+        }
         changed
     }
 
@@ -1191,6 +1206,9 @@ mod tests {
         // D-71: F9 force-kills by default; the spec document keeps it off.
         assert!(!reference.actions.allow_force);
         assert!(defaults.actions.allow_force);
+        // D-80: the Process History follows the archive unless set.
+        assert_eq!(defaults.store.process_history_enabled, None);
+        assert!(defaults.store.process_history_on_disk());
         let mut only_the_owners = defaults.clone();
         only_the_owners.store.archive_enabled = false;
         only_the_owners.actions.allow_force = false;
@@ -1323,6 +1341,39 @@ mod tests {
         let changed = base.restart_required_changes(&candidate);
         assert!(changed.contains(&"queues"));
         assert!(changed.contains(&"store.max_series"));
+    }
+
+    /// The Process History's own switch (D-80): unset follows the archive,
+    /// set wins, and a change that flips it needs a restart.
+    #[test]
+    fn the_process_history_follows_the_archive_unless_set() {
+        let mut store = defaults().store;
+        store.archive_enabled = false;
+        assert!(!store.process_history_on_disk());
+        store.process_history_enabled = Some(true);
+        assert!(store.process_history_on_disk());
+        store.archive_enabled = true;
+        store.process_history_enabled = Some(false);
+        assert!(!store.process_history_on_disk());
+        let base = defaults();
+        let mut candidate = base.clone();
+        candidate.store.process_history_enabled = Some(true);
+        assert!(
+            base.restart_required_changes(&candidate).is_empty(),
+            "already on with the archive"
+        );
+        candidate.store.process_history_enabled = Some(false);
+        assert!(
+            base.restart_required_changes(&candidate)
+                .contains(&"store.process_history_enabled")
+        );
+        // Unset, it is not written: the spec's document stays valid.
+        let json = serde_json::to_value(&base).unwrap();
+        assert!(json["store"].get("process_history_enabled").is_none());
+        let mut set = json.clone();
+        set["store"]["process_history_enabled"] = serde_json::json!(false);
+        let parsed: Config = serde_json::from_value(set).unwrap();
+        assert_eq!(parsed.store.process_history_enabled, Some(false));
     }
 
     #[test]

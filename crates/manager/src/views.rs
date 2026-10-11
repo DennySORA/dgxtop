@@ -27,12 +27,11 @@ use dgxtop_core::commands::{MAX_FILTER_BYTES, SortKey, ViewKind};
 use dgxtop_core::errors::{ErrorCode, ErrorDetail};
 use dgxtop_core::identity::{BootId, EntityId, HostId, MetricKey, ProcessKey, SessionId};
 use dgxtop_core::naming::entity;
-use dgxtop_core::process_history::HistoryFilter;
+use dgxtop_core::process_history::RunBar;
 use dgxtop_core::text::sanitize_display;
 use dgxtop_core::view::SessionState;
 
 use crate::error::ManagerError;
-use crate::history::ChartWindow;
 use crate::session::SessionShared;
 
 /// Recent frame revisions remembered per session (4 s at 4 fps).
@@ -48,6 +47,8 @@ pub(crate) struct ViewUpdate {
     pub(crate) sort: SortKey,
     pub(crate) ascending: bool,
     pub(crate) frame_revision: u64,
+    pub(crate) overview_bar: RunBar,
+    pub(crate) process_bar: RunBar,
 }
 
 /// What view validation needs to know about the world.
@@ -170,6 +171,8 @@ impl ViewSessionService {
             filter: sanitize_display(&update.filter, MAX_FILTER_BYTES),
             sort: update.sort,
             ascending: update.ascending,
+            overview_bar: update.overview_bar.for_overview(),
+            process_bar: update.process_bar,
         };
         let Some(record) = self.sessions.get_mut(session_id) else {
             return Ok(false);
@@ -326,6 +329,8 @@ fn default_state(session_id: SessionId) -> SessionState {
         filter: String::new(),
         sort: SortKey::GpuMemory,
         ascending: false,
+        overview_bar: RunBar::overview_default(),
+        process_bar: RunBar::default(),
     }
 }
 
@@ -348,18 +353,12 @@ fn validate_view(
             .map_or(Ok(()), |gpu| validate_gpu(gpu, stale, context)),
         ViewKind::History => {
             validate_series(update, context)?;
-            let Some(filter) = HistoryFilter::parse(&update.filter) else {
+            // The bar sizes travel in their own fields (D-80).
+            if !update.filter.is_empty() {
                 return Err(ErrorDetail::new(
                     ErrorCode::ValidationFailed,
-                    "history filter must be a bar size, then optionally the Process History's: \
-                     auto, 1m, 5m, 10m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 18h or 24h",
-                ));
-            };
-            if ChartWindow::bar_of(filter.window).is_none() {
-                return Err(ErrorDetail::new(
-                    ErrorCode::ValidationFailed,
-                    "history bar size must be one of 1m, 5m, 10m, 30m, 1h, 2h, 4h, 6h, 8h, \
-                     12h, 18h, 24h",
+                    "the history view takes no filter; its bar sizes are overview_bar and \
+                     process_bar",
                 ));
             }
             Ok(())
@@ -505,6 +504,8 @@ mod tests {
             sort: SortKey::Pid,
             ascending: true,
             frame_revision: frame,
+            overview_bar: dgxtop_core::process_history::RunBar::OneMinute,
+            process_bar: dgxtop_core::process_history::RunBar::Auto,
         }
     }
 
@@ -697,22 +698,18 @@ mod tests {
             )
             .is_err()
         );
+        // The history view's bar sizes have their own fields (D-80); its
+        // filter stays empty, and an `Auto` Overview bar is the default.
         let mut window = update(ViewKind::History, None, None, 0);
-        // The Overview History's bar size (D-78), then the Process
-        // History's (D-77).
-        window.filter = "3h".into();
-        assert!(apply(&mut bench, window.clone(), &rows, &catalog).is_err());
-        window.filter = "18h".into();
+        window.overview_bar = RunBar::Auto;
+        window.process_bar = RunBar::EighteenHours;
         assert!(apply(&mut bench, window.clone(), &rows, &catalog).is_ok());
+        let state = bench.service.state(&bench.session).unwrap();
+        assert_eq!(
+            (state.overview_bar, state.process_bar),
+            (RunBar::OneMinute, RunBar::EighteenHours)
+        );
         window.filter = "24h".into();
-        assert!(apply(&mut bench, window.clone(), &rows, &catalog).is_ok());
-        window.filter = "24h 18h".into();
-        assert!(apply(&mut bench, window.clone(), &rows, &catalog).is_ok());
-        window.filter = "24h 3h".into();
-        assert!(apply(&mut bench, window.clone(), &rows, &catalog).is_err());
-        window.filter = "3h 1h".into();
-        assert!(apply(&mut bench, window.clone(), &rows, &catalog).is_err());
-        window.filter = "24h 1h 1h".into();
         assert!(apply(&mut bench, window, &rows, &catalog).is_err());
         let mut sources = update(ViewKind::Sources, None, None, 0);
         sources.filter = "temp\u{1b}[31m".into();

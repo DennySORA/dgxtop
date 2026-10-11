@@ -561,6 +561,7 @@ fn pin_restart_only(effective: &mut Config, running: &Config) {
     store.max_processes = running.store.max_processes;
     store.max_process_gpu_links = running.store.max_process_gpu_links;
     store.archive_enabled = running.store.archive_enabled;
+    store.process_history_enabled = running.store.process_history_enabled;
 }
 
 fn with_module(saved: &Config, module: &str, enabled: bool) -> Config {
@@ -1127,7 +1128,8 @@ mod tests {
         moved.store.max_processes = 100;
         moved.store.max_process_gpu_links = 100;
         moved.store.archive_enabled = !running.store.archive_enabled;
-        assert_eq!(running.restart_required_changes(&moved).len(), 9);
+        moved.store.process_history_enabled = Some(!running.store.process_history_on_disk());
+        assert_eq!(running.restart_required_changes(&moved).len(), 10);
         pin_restart_only(&mut moved, &running);
         assert!(running.restart_required_changes(&moved).is_empty());
     }

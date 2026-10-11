@@ -1,7 +1,9 @@
 //! Contract suite: every serialized Rust DTO must validate against the JSON
-//! Schemas in `spec/dgxtop-v2/contracts/`, every synthetic example must parse
-//! into the Rust type and re-serialize to a schema-valid document, and the
-//! closed enum sets of the schemas must equal the Rust enums (AT02, AT40).
+//! Schemas in `spec/dgxtop-v2/contracts/` (or, for a schema dgxtop extends
+//! by D-80, against its successor in `contracts/`), every synthetic example
+//! must parse into the Rust type and re-serialize to a schema-valid document
+//! under both, and the closed enum sets of the schemas must equal the Rust
+//! enums (AT02, AT40).
 
 // Test helpers outside #[test] functions may unwrap: a broken fixture must fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -41,12 +43,32 @@ fn load_json(relative: &str) -> Value {
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
 
-fn validator(schema_name: &str) -> jsonschema::Validator {
-    let schema = load_json(&format!("contracts/{schema_name}"));
+/// dgxtop's own contracts (D-80): the spec's schemas plus its extensions.
+fn repository_contract(schema_name: &str) -> Option<Value> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../contracts")
+        .join(schema_name);
+    let text = std::fs::read_to_string(&path).ok()?;
+    Some(serde_json::from_str(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display())))
+}
+
+fn compile(schema_name: &str, schema: &Value) -> jsonschema::Validator {
     jsonschema::options()
         .should_validate_formats(true)
-        .build(&schema)
+        .build(schema)
         .unwrap_or_else(|error| panic!("{schema_name} does not compile: {error}"))
+}
+
+/// The schema a document is held to: dgxtop's when it extends the spec's.
+fn validator(schema_name: &str) -> jsonschema::Validator {
+    let schema = repository_contract(schema_name)
+        .unwrap_or_else(|| load_json(&format!("contracts/{schema_name}")));
+    compile(schema_name, &schema)
+}
+
+/// The sealed spec's schema itself.
+fn spec_validator(schema_name: &str) -> jsonschema::Validator {
+    compile(schema_name, &load_json(&format!("contracts/{schema_name}")))
 }
 
 #[track_caller]
@@ -99,6 +121,8 @@ macro_rules! example_round_trip {
                 .unwrap_or_else(|error| panic!("{} does not parse: {error}", $example));
             let reencoded = to_value(&parsed);
             assert_valid($schema, &reencoded);
+            // What the spec accepts, dgxtop writes back as the spec wrote it.
+            assert!(spec_validator($schema).is_valid(&reencoded), "{reencoded}");
         }
     };
 }
@@ -176,6 +200,41 @@ example_round_trip!(
     AdapterManifest
 );
 
+/// D-80: the history's bar sizes and the Process History switch are
+/// dgxtop's extensions: its contracts accept them, the sealed spec does not,
+/// and documents without them stay valid under both.
+#[test]
+fn contract_extensions_extend_the_spec() {
+    let session = SessionId::new("session-1").unwrap();
+    let with_bars = CommandEnvelope::new(
+        session.clone(),
+        CommandBody::UpdateViewSession {
+            view: ViewKind::History,
+            selected_entity_id: None,
+            selected_process: None,
+            filter: String::new(),
+            sort: SortKey::GpuMemory,
+            ascending: false,
+            frame_revision: 3,
+            overview_bar: Some(dgxtop_core::process_history::RunBar::OneHour),
+            process_bar: Some(dgxtop_core::process_history::RunBar::Auto),
+        },
+    );
+    let encoded = to_value(&with_bars);
+    assert_eq!(encoded["body"]["overview_bar"], "1h");
+    assert_valid("command.schema.json", &encoded);
+    assert!(!spec_validator("command.schema.json").is_valid(&encoded));
+    let mut wrong = encoded.clone();
+    wrong["body"]["process_bar"] = json!("3h");
+    assert_invalid("command.schema.json", &wrong);
+    let mut config = load_json("examples/config.default.json");
+    config["store"]["process_history_enabled"] = json!(false);
+    assert_valid("config.schema.json", &config);
+    assert!(!spec_validator("config.schema.json").is_valid(&config));
+    let parsed = Config::from_json(&config.to_string()).unwrap();
+    assert_eq!(parsed.store.process_history_enabled, Some(false));
+}
+
 #[test]
 fn display_module_example_matches_schema() {
     assert_valid(
@@ -211,6 +270,8 @@ fn every_command_body() -> Vec<CommandBody> {
             sort: SortKey::GpuMemory,
             ascending: false,
             frame_revision: u64::MAX,
+            overview_bar: None,
+            process_bar: None,
         },
         CommandBody::UpdateViewSession {
             view: ViewKind::History,
@@ -220,6 +281,8 @@ fn every_command_body() -> Vec<CommandBody> {
             sort: SortKey::Pid,
             ascending: true,
             frame_revision: 0,
+            overview_bar: None,
+            process_bar: None,
         },
         CommandBody::PrepareSignal {
             target: process_key(),

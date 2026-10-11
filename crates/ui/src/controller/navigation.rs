@@ -8,7 +8,6 @@
 use dgxtop_core::identity::{EntityId, ProcessKey};
 use dgxtop_core::view::ProcessesView;
 
-use super::session::{DEFAULT_HISTORY_WINDOW, HISTORY_WINDOWS};
 use crate::num::saturate_u32;
 
 /// Sampling interval ladder for `+` (faster) and `-` (slower), in ms.
@@ -130,29 +129,6 @@ pub fn cycle_gpu_filter(
             choices.get(position + 1).map(|(id, _)| id.clone())
         }
     }
-}
-
-/// History window token cycle (wraps).
-pub fn cycle_window(current: &str, forward: bool) -> &'static str {
-    let count = HISTORY_WINDOWS.len();
-    let position = HISTORY_WINDOWS
-        .iter()
-        .position(|token| *token == current)
-        .or_else(|| {
-            HISTORY_WINDOWS
-                .iter()
-                .position(|token| *token == DEFAULT_HISTORY_WINDOW)
-        })
-        .unwrap_or(0);
-    let next = if forward {
-        (position + 1) % count
-    } else {
-        (position + count - 1) % count
-    };
-    HISTORY_WINDOWS
-        .get(next)
-        .copied()
-        .unwrap_or(DEFAULT_HISTORY_WINDOW)
 }
 
 /// Next interval on the ladder (`None` at either end).

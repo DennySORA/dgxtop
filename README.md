@@ -226,7 +226,7 @@ Command-line values override saved settings only for the current run.
 |---|---|
 | Configuration | `$XDG_CONFIG_HOME/dgxtop/v2/config.json` (`~/.config/dgxtop/v2/config.json`) |
 | History (7 days, at most 1 GiB) | `$XDG_STATE_HOME/dgxtop/v2/history.sqlite3` (`~/.local/state/...`) |
-| Process History (at most 64 MiB) | `$XDG_STATE_HOME/dgxtop/v2/process_history.sqlite3` and `process_recent.json` |
+| Process History (at most 64 MiB; `store.process_history_enabled`, unset following the archive) | `$XDG_STATE_HOME/dgxtop/v2/process_history.sqlite3` and `process_recent.json` |
 | Log of process actions | `$XDG_STATE_HOME/dgxtop/v2/audit.sqlite3` |
 | Log file and instance lock | `$XDG_STATE_HOME/dgxtop/v2/` |
 

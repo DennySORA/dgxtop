@@ -208,6 +208,8 @@ pub fn navigation(view: ViewKind) -> CommandBody {
         sort: SortKey::Pid,
         ascending: true,
         frame_revision: 0,
+        overview_bar: None,
+        process_bar: None,
     }
 }
 

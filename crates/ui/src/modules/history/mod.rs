@@ -21,6 +21,7 @@ mod runs;
 mod stats;
 mod strip;
 
+use dgxtop_core::process_history::RunBar;
 use dgxtop_core::view::{DiskHistory, HISTORY_GUTTER_COLUMNS, HistoryView, ViewModel};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -49,8 +50,6 @@ use crate::registry::{
 /// Process History tabs (D-75).
 pub const HISTORY_MODULE_ID: &str = "history";
 
-/// Bar sizes `w` and `W` step through, in order (D-78).
-const WINDOWS: [&str; 12] = crate::controller::HISTORY_WINDOWS;
 /// Share of the window below which the bar says how much is recorded.
 const FULL_COVERAGE: f64 = 0.99;
 
@@ -377,7 +376,8 @@ fn render_window_bar(
     let theme = &context.theme;
     let current = clean(&history.window_label);
     let mut spans = Vec::new();
-    for window in WINDOWS {
+    // The Overview History's bar sizes (D-78): every size but `auto`.
+    for window in RunBar::fixed().map(RunBar::token) {
         let style = if window == current {
             theme.selected_row_style()
         } else {

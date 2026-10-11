@@ -167,6 +167,8 @@ fn navigation(view: ViewKind, process: Option<ProcessKey>, filter: &str) -> Comm
         sort: SortKey::Pid,
         ascending: true,
         frame_revision: 0,
+        overview_bar: None,
+        process_bar: None,
     }
 }
 
@@ -873,7 +875,7 @@ fn history_view_queries_and_drops_stale_generations() {
         vec![("cpu", sample_entry(&cpu, Some(42.0), now))],
     ));
     harness
-        .submit(navigation(ViewKind::History, None, "1h"))
+        .submit(navigation(ViewKind::History, None, ""))
         .unwrap();
     harness.settle();
     let jobs = harness.ports.history.take();

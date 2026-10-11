@@ -8,3 +8,5 @@ __pycache__/
 .serena/
 # Validation evidence is part of the repository.
 !docs/validation/evidence/*.log
+# Claude Code agent worktrees.
+.claude/worktrees/

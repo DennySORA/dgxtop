@@ -1005,6 +1005,8 @@ pub(crate) fn view_model(view: ViewKind, frame_revision: u64) -> ViewModel {
             filter: String::new(),
             sort: SortKey::GpuMemory,
             ascending: false,
+            overview_bar: dgxtop_core::process_history::RunBar::OneMinute,
+            process_bar: dgxtop_core::process_history::RunBar::Auto,
         },
         modules: full_modules(false),
         banners: Vec::new(),

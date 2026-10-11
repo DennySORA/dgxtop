@@ -51,7 +51,6 @@ use dgxtop_core::commands::ViewKind;
 use dgxtop_core::config::{Config, ValueOrigin};
 use dgxtop_core::identity::{MetricKey, ModuleId};
 use dgxtop_core::naming::adapters;
-use dgxtop_core::process_history::{HistoryFilter, RunBar};
 use dgxtop_core::view::{
     ActionsView, GpuView, HeaderView, HistoryView, HostStatus, IntervalView, ModuleViews,
     OverloadState, SessionState, Trend, ViewModel,
@@ -354,8 +353,7 @@ fn build_modules(
                 cells: layout.history_chart_points(),
             },
         ));
-        let bar =
-            HistoryFilter::parse(&context.session.filter).map_or(RunBar::Auto, |filter| filter.bar);
+        let bar = context.session.process_bar;
         modules.process_history = Some(Arc::new(run_history::build_process_history_view(
             &run_history::RunHistoryInputs {
                 book: context.process_history,

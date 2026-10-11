@@ -17,7 +17,7 @@ use super::labels::note_text;
 /// Whole sections that only take effect after a restart (CONFIG.md matrix).
 const RESTART_ONLY_SECTIONS: [&str; 2] = ["queues", "runtime"];
 /// Individual restart-only fields (`Config::restart_required_changes`).
-const RESTART_ONLY_FIELDS: [&str; 7] = [
+const RESTART_ONLY_FIELDS: [&str; 8] = [
     "sampling.max_adapters",
     "store.memory_limit_mib",
     "store.max_series",
@@ -25,6 +25,7 @@ const RESTART_ONLY_FIELDS: [&str; 7] = [
     "store.max_processes",
     "store.max_process_gpu_links",
     "store.archive_enabled",
+    "store.process_history_enabled",
 ];
 /// Document metadata shown as the view revision, not as editable fields.
 const METADATA_PATHS: [&str; 2] = ["schema_version", "revision"];

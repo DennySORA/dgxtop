@@ -4,8 +4,8 @@
 //! * Charts: the overview's series over a longer window, as the
 //!   presentation picks them ([`HistoryChartSpec`]): the CPU total, the RAM
 //!   in use, each GPU's utilization and the rates of a disk and an
-//!   interface. Window (D-78): a bar of the session filter's size (`1m` to
-//!   `24h`, as the Process History's, default `1m`) for each column of a
+//!   interface. Window (D-78): a bar of the session's `overview_bar` size
+//!   (`1m` to `24h`, D-80, default `1m`) for each column of a
 //!   plot, ending now ([`ChartWindow`]). Every chart of a session queries
 //!   the same window, so all of them share one time axis.
 //! * Statistics (D-48): each GPU's utilization, memory in use, temperature
@@ -45,7 +45,7 @@ use dgxtop_core::history::{
 };
 use dgxtop_core::identity::{MetricKey, SessionId};
 use dgxtop_core::ports::{ArchiveReadJob, CancelFlag, Dispatch, DispatchError, HistoryJob};
-use dgxtop_core::process_history::{HistoryFilter, RunBar};
+use dgxtop_core::process_history::RunBar;
 use dgxtop_core::view::{
     DiskHistory, HistoryChartKind, HistoryChartView, HistoryView, HistoryWindowSummary,
     SessionState, history_plot_columns,
@@ -108,15 +108,6 @@ pub(crate) struct ChartWindow {
 }
 
 impl ChartWindow {
-    /// The bar of a filter's window token: a fixed bar size; any other
-    /// (empty, `auto`) is the default.
-    pub(crate) fn bar_of(token: &str) -> Option<RunBar> {
-        match token {
-            "" | "auto" => Some(DEFAULT_BAR),
-            token => RunBar::parse(token),
-        }
-    }
-
     fn new(bar: RunBar, columns: u32) -> Self {
         Self {
             bar: if bar == RunBar::Auto {
@@ -850,11 +841,7 @@ impl HistoryService {
         if state.view != ViewKind::History {
             return None;
         }
-        // The filter's first token is the Overview History's bar size, the
-        // second the Process History's (D-77, D-78).
-        let bar = HistoryFilter::parse(&state.filter)
-            .and_then(|filter| ChartWindow::bar_of(filter.window))
-            .unwrap_or(DEFAULT_BAR);
+        let bar = state.overview_bar;
         let upper = self.settings.max_points.clamp(1, MAX_HISTORY_POINTS);
         // A bar for each column of the plot.
         let points_target = u32::from(history_plot_columns(columns)).clamp(1, upper);

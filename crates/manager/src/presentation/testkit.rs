@@ -428,6 +428,8 @@ impl Fixture {
                 filter: String::new(),
                 sort: SortKey::GpuMemory,
                 ascending: false,
+                overview_bar: dgxtop_core::process_history::RunBar::OneMinute,
+                process_bar: dgxtop_core::process_history::RunBar::Auto,
             },
             viewport: (160, 50),
             saved: config.clone(),
