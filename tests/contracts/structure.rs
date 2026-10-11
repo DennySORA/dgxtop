@@ -75,8 +75,6 @@ const IMPLEMENTATION_CRATES: [&str; 9] = [
 fn allowed_edges(crate_dir: &str) -> &'static [&'static str] {
     match crate_dir {
         "history" => &["dgxtop-compression"],
-        // D-79 transition: removed when process history moves to the history crate (S4)
-        "manager" => &["dgxtop-compression"],
         _ => &[],
     }
 }

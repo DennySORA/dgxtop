@@ -28,9 +28,9 @@ class CheckBoundariesTest(unittest.TestCase):
         errors = check_boundaries.check(metadata([('dgxtop-history', 'dgxtop-store', None)]))
         self.assertEqual(errors, ['dgxtop-history must not depend on dgxtop-store'])
 
-    def test_the_manager_may_use_compression_until_process_history_moves(self):
-        # D-79 transition: removed when process history moves to the history crate (S4)
-        self.assertEqual(check_boundaries.check(metadata([('dgxtop-manager', 'dgxtop-compression', None)])), [])
+    def test_the_manager_uses_neither_compression_nor_store(self):
+        errors = check_boundaries.check(metadata([('dgxtop-manager', 'dgxtop-compression', None)]))
+        self.assertEqual(errors, ['dgxtop-manager must not depend on dgxtop-compression'])
         errors = check_boundaries.check(metadata([('dgxtop-manager', 'dgxtop-store', None)]))
         self.assertEqual(errors, ['dgxtop-manager must not depend on dgxtop-store'])
 

@@ -662,7 +662,6 @@ name = "dgxtop-manager"
 version = "2.0.2"
 dependencies = [
  "crossbeam-channel",
- "dgxtop-compression",
  "dgxtop-core",
  "proptest",
  "serde",
