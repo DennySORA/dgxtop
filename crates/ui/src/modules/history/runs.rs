@@ -8,7 +8,8 @@
 //! command line.
 
 use dgxtop_core::metric::CanonicalUnit;
-use dgxtop_core::process_history::{BarSize, RunInfo, RunMetric};
+use dgxtop_core::process_history::{RunInfo, RunMetric};
+use dgxtop_core::tiers::BarSize;
 use dgxtop_core::view::{ProcessHistoryView, RunChartView, RunDetailView, RunRowView};
 use ratatui::Frame;
 use ratatui::layout::Rect;

@@ -5,13 +5,14 @@ use dgxtop_core::action::Signal;
 use dgxtop_core::canonical::{ProcessRow, ProcessTable};
 use dgxtop_core::identity::EntityId;
 use dgxtop_core::ports::{ProcessHistoryCompletion, ProcessHistoryReader, ProcessMemoryReader};
-use dgxtop_core::process_history::{BarSize, EndCause, ProcessHistoryLoad, RunEnd, RunMetric};
+use dgxtop_core::process_history::{EndCause, ProcessHistoryLoad, RunEnd, RunMetric};
 use dgxtop_core::process_model::RunRequest;
 use dgxtop_core::process_probe::{ProbeLiveness, ProbeReading, ProbeReport};
 use dgxtop_core::testing::{
     CapturingDispatch, FakeClock, IdleProbeDeriver, MemoryLogger, boot_id, gpu_process,
     process_table, test_process_key,
 };
+use dgxtop_core::tiers::BarSize;
 
 use super::*;
 

@@ -4,7 +4,7 @@
 //! latest sample and reach back as many bars as a plot has columns; the
 //! latest takes the finer buckets being filled that it has not merged yet.
 
-use dgxtop_core::process_history::{BarSize, Tier};
+use dgxtop_core::tiers::{BarSize, Tier};
 
 use crate::bucket::{Bucket, merged_at};
 use crate::series::TieredSeries;
@@ -150,7 +150,8 @@ pub(crate) fn step_of(tier: Tier) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use dgxtop_core::process_history::{RUN_METRICS, RunBucket, RunMetric, TIER_BUCKETS};
+    use dgxtop_core::process_history::{RUN_METRICS, RunBucket, RunMetric};
+    use dgxtop_core::tiers::TIER_BUCKETS;
 
     use super::*;
     use crate::bucket::Tally;

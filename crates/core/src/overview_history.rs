@@ -1,7 +1,7 @@
 //! The Overview History's long-term buckets (D-82): the history keeps each
 //! Overview series in every bar size (1 minute to 24 hours, [`Tier`]),
 //! each size aligned to the local clock and keeping its latest
-//! [`crate::process_history::TIER_BUCKETS`], fed by the minutes it
+//! [`crate::tiers::TIER_BUCKETS`], fed by the minutes it
 //! finalizes. A bucket carries what makes merging exact: the time it holds
 //! a value, the time-weighted sum, the minimum, the maximum, the sample
 //! count and, for a counter, the exact total. Its mean is the weighted sum
@@ -17,7 +17,7 @@ use crate::history::SeriesInEveryBoot;
 use crate::identity::HostId;
 use crate::metric::ids;
 use crate::naming::entity;
-use crate::process_history::Tier;
+use crate::tiers::Tier;
 
 const NANOS_PER_SECOND_F64: f64 = 1e9;
 

@@ -40,7 +40,7 @@ use dgxtop_core::overview_history::{
     TierRow, is_overview_series,
 };
 use dgxtop_core::ports::{Dispatch, DispatchError};
-use dgxtop_core::process_history::{TIER_BUCKETS, Tier};
+use dgxtop_core::tiers::{TIER_BUCKETS, Tier};
 
 use self::book::{Eviction, TierBook, TierMinute};
 

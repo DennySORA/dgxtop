@@ -11,7 +11,7 @@ use std::time::Duration;
 use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::identity::{EntityId, HostId, MetricId, Scope};
 use dgxtop_core::overview_history::{OverviewBucket, StoredTierSeries, TierJournal, TierRow};
-use dgxtop_core::process_history::Tier;
+use dgxtop_core::tiers::Tier;
 use rusqlite::{Connection, Row, Transaction, params};
 
 use crate::sqlite::{

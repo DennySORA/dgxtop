@@ -5,9 +5,10 @@ use dgxtop_core::action::Signal;
 use dgxtop_core::identity::{Pid, PidNamespace};
 use dgxtop_core::process_history::{
     EndCause, ProcessHistoryJournal, RUN_METRICS, RecentHistory, RecentRun, RunBucket,
-    RunBucketRow, RunDetails, RunEnd, RunInfo, RunMetric, Tier,
+    RunBucketRow, RunDetails, RunEnd, RunInfo, RunMetric,
 };
 use dgxtop_core::testing::{FakeClock, boot_id, host_id};
+use dgxtop_core::tiers::Tier;
 
 use super::*;
 use crate::sqlite::{

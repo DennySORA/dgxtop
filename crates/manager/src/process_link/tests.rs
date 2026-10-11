@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use dgxtop_core::action::Signal;
-use dgxtop_core::process_history::BarSize;
 use dgxtop_core::process_model::{ProcessHistoryModel, WriteProgress};
 use dgxtop_core::testing::{
     CapturingDispatch, StaticProcessHistory, process_table, test_process_key,
 };
+use dgxtop_core::tiers::BarSize;
 
 use super::*;
 

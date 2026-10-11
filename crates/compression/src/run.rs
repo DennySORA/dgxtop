@@ -1,7 +1,8 @@
 //! The tiered series of a process run (D-76, D-77): its buckets are
 //! [`RunBucket`]s and a sample is each [`RunMetric`]'s value.
 
-use dgxtop_core::process_history::{RUN_METRICS, RunBucket, RunMetric, Tier};
+use dgxtop_core::process_history::{RUN_METRICS, RunBucket, RunMetric};
+use dgxtop_core::tiers::Tier;
 
 use crate::series::TieredSeries;
 

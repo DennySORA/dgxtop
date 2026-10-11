@@ -39,7 +39,7 @@ use dgxtop_core::overview_history::{
     OverviewAnswer, OverviewBars, OverviewBucket, OverviewRequest,
 };
 use dgxtop_core::ports::{CancelFlag, Dispatch, DispatchError, HistoryJob};
-use dgxtop_core::process_history::{BarSize, Tier};
+use dgxtop_core::tiers::{BarSize, Tier};
 use dgxtop_core::view::{
     DiskHistory, HistoryChartKind, HistoryChartView, HistoryPointView, HistoryView,
     HistoryWindowSummary, SessionState, history_plot_columns,

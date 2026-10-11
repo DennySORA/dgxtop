@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use dgxtop_core::canonical::ProcessRow;
 use dgxtop_core::identity::{EntityId, ProcessKey};
-use dgxtop_core::process_history::{BarSize, EndCause, ProcessHistoryLoad, RunEnd, RunMetric};
+use dgxtop_core::process_history::{EndCause, ProcessHistoryLoad, RunEnd, RunMetric};
 use dgxtop_core::testing::{boot_id, gpu_process, process_table, test_process_key};
+use dgxtop_core::tiers::BarSize;
 
 use super::*;
 use crate::process::Now;

@@ -1,7 +1,7 @@
 //! A whole series as one bucket (D-77, D-79): its averages and peaks over
 //! everything it holds, every sample counted once.
 
-use dgxtop_core::process_history::Tier;
+use dgxtop_core::tiers::Tier;
 
 use crate::bars::step_of;
 use crate::bucket::Bucket;

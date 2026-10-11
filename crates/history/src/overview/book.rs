@@ -19,7 +19,7 @@ use dgxtop_compression::{TieredSeries, bars_in, merged_between};
 use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::identity::MetricKey;
 use dgxtop_core::overview_history::{ArchivePrune, OverviewBars, OverviewBucket, TierRow};
-use dgxtop_core::process_history::Tier;
+use dgxtop_core::tiers::Tier;
 
 /// Series the cache holds at most: the host's charts and every GPU's,
 /// disk's and interface's with room to spare.
@@ -27,7 +27,7 @@ pub(crate) const MAX_TIER_SERIES: usize = 160;
 /// The most one series holds: every size full, plus what each fills.
 #[cfg(test)]
 pub(crate) const MAX_SERIES_BYTES: usize = (Tier::ALL.len() - 1)
-    * (dgxtop_core::process_history::TIER_BUCKETS + 1)
+    * (dgxtop_core::tiers::TIER_BUCKETS + 1)
     * std::mem::size_of::<OverviewBucket>();
 /// Live minutes a series keeps while its earlier history is being read.
 pub(crate) const MAX_PENDING_MINUTES: usize = 240;

@@ -30,11 +30,11 @@ use dgxtop_core::ports::ProbeDeriver;
 use dgxtop_core::process_history::{
     EndCause, MAX_LISTED_RUNS, MAX_LIVE_RUNS, ProcessHistoryJournal, ProcessHistoryLoad,
     RUN_METRICS, RecentHistory, RecentRun, RunBucket, RunBucketRow, RunEnd, RunInfo, RunMetric,
-    Tier,
 };
 use dgxtop_core::process_probe::{
     ProbeLiveness, ProbeReading, ProbeReport, ProbeState, ProbeTarget, ProbedValues,
 };
+use dgxtop_core::tiers::Tier;
 
 use self::ending::{EndEvidence, end_cause};
 use crate::process::Now;

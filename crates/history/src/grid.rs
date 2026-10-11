@@ -12,7 +12,7 @@
 //! the time before the first boundary (`[0, phase)`, only when dgxtop
 //! starts within a minute of boot) is a shorter head minute.
 
-use dgxtop_core::process_history::Tier;
+use dgxtop_core::tiers::Tier;
 
 use crate::records::BUCKET_NS;
 

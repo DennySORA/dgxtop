@@ -27,8 +27,8 @@ use dgxtop_core::commands::{MAX_FILTER_BYTES, SortKey, ViewKind};
 use dgxtop_core::errors::{ErrorCode, ErrorDetail};
 use dgxtop_core::identity::{BootId, EntityId, HostId, MetricKey, ProcessKey, SessionId};
 use dgxtop_core::naming::entity;
-use dgxtop_core::process_history::BarSize;
 use dgxtop_core::text::sanitize_display;
+use dgxtop_core::tiers::BarSize;
 use dgxtop_core::view::SessionState;
 
 use crate::error::ManagerError;
@@ -512,8 +512,8 @@ mod tests {
             sort: SortKey::Pid,
             ascending: true,
             frame_revision: frame,
-            overview_bar: dgxtop_core::process_history::BarSize::OneMinute,
-            process_bar: dgxtop_core::process_history::BarSize::Auto,
+            overview_bar: dgxtop_core::tiers::BarSize::OneMinute,
+            process_bar: dgxtop_core::tiers::BarSize::Auto,
         }
     }
 

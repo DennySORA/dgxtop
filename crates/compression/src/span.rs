@@ -5,7 +5,7 @@
 //! mean, peak and energy are exact merges of what the sizes hold, and stay
 //! right after the finer sizes (or the archive's minutes) let old time go.
 
-use dgxtop_core::process_history::Tier;
+use dgxtop_core::tiers::Tier;
 
 use crate::bars::step_of;
 use crate::bucket::Bucket;

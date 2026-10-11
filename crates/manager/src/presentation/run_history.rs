@@ -9,8 +9,9 @@ use std::collections::BTreeMap;
 use dgxtop_core::commands::ViewKind;
 use dgxtop_core::history::HistoryMethod;
 use dgxtop_core::metric::CanonicalUnit;
-use dgxtop_core::process_history::{BarSize, RunBucket, RunInfo, RunMetric};
+use dgxtop_core::process_history::{RunBucket, RunInfo, RunMetric};
 use dgxtop_core::process_model::{ProcessHistoryModel, RunBars, RunDetail, RunRequest, RunRow};
+use dgxtop_core::tiers::BarSize;
 use dgxtop_core::view::{
     HistoryPointView, ProcessHistoryView, RunChartView, RunDetailView, RunRowView, SessionState,
 };

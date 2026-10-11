@@ -7,7 +7,8 @@ use std::io;
 use std::path::Path;
 
 use dgxtop_core::errors::InfraError;
-use dgxtop_core::process_history::{MAX_LIVE_RUNS, RecentHistory, Tier};
+use dgxtop_core::process_history::{MAX_LIVE_RUNS, RecentHistory};
+use dgxtop_core::tiers::Tier;
 use uuid::Uuid;
 
 use crate::fs::{FileSystemOps, ReadLimitedError};

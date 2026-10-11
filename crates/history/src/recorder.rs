@@ -344,7 +344,7 @@ mod tests {
         use dgxtop_core::history::SeriesInEveryBoot;
         use dgxtop_core::overview_history::{OverviewAnswer, OverviewRequest};
         use dgxtop_core::ports::{CancelFlag, OverviewReader};
-        use dgxtop_core::process_history::Tier;
+        use dgxtop_core::tiers::Tier;
 
         let (mut history, _ledger) = history(false);
         let offset_s = 5_400;
@@ -427,7 +427,7 @@ mod tests {
         use dgxtop_core::history::SeriesInEveryBoot;
         use dgxtop_core::overview_history::{OverviewAnswer, OverviewRequest};
         use dgxtop_core::ports::{CancelFlag, OverviewReader};
-        use dgxtop_core::process_history::Tier;
+        use dgxtop_core::tiers::Tier;
 
         let (mut history, _ledger) = history(false);
         history.recorder.observe_wall_clock(0, UTC_AT_BOOT);

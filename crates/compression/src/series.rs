@@ -12,7 +12,7 @@
 
 use std::collections::VecDeque;
 
-use dgxtop_core::process_history::Tier;
+use dgxtop_core::tiers::Tier;
 
 use crate::bucket::{Bucket, merged_at};
 
@@ -337,7 +337,8 @@ fn step(tier: Tier) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use dgxtop_core::process_history::{RUN_METRICS, RunBucket, RunMetric, TIER_BUCKETS};
+    use dgxtop_core::process_history::{RUN_METRICS, RunBucket, RunMetric};
+    use dgxtop_core::tiers::TIER_BUCKETS;
 
     use super::*;
     use crate::bucket::Tally;

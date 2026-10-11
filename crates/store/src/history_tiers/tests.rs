@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::overview_history::{OverviewBucket, TierRow};
-use dgxtop_core::process_history::{TIER_BUCKETS, Tier};
 use dgxtop_core::testing::metric_key;
+use dgxtop_core::tiers::{TIER_BUCKETS, Tier};
 
 use super::*;
 use crate::sqlite::{SchemaKind, SqliteGateError, SqliteVersion};

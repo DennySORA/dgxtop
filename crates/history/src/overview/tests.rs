@@ -12,8 +12,8 @@ use dgxtop_core::overview_history::{
     ArchivePrune, ArchivedMinutes, HistoryTierCompletion, HistoryTierJob, OverviewBucket,
     StoredTierSeries, TierJournal,
 };
-use dgxtop_core::process_history::{TIER_BUCKETS, Tier};
 use dgxtop_core::testing::{CapturingDispatch, host_id, metric_key};
+use dgxtop_core::tiers::{TIER_BUCKETS, Tier};
 
 use super::book::{MAX_SERIES_BYTES, MAX_TIER_SERIES, TierMinute};
 use super::*;

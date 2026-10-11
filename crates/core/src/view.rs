@@ -15,8 +15,9 @@ use crate::config::{Theme, ValueOrigin};
 use crate::history::HistoryMethod;
 use crate::identity::{EntityId, MetricKey, ModuleId, ProcessKey, SessionId};
 use crate::metric::{CanonicalUnit, Scalar};
-use crate::process_history::{BarSize, RunEnd, RunInfo, RunMetric};
+use crate::process_history::{RunEnd, RunInfo, RunMetric};
 use crate::quality::{Freshness, Quality, SampleKind, SelectionState};
+use crate::tiers::BarSize;
 
 /// Why a cell has (or lacks) a value; always rendered as text, never only color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1035,8 +1036,8 @@ mod tests {
                 filter: String::new(),
                 sort: SortKey::GpuMemory,
                 ascending: false,
-                overview_bar: crate::process_history::BarSize::OneMinute,
-                process_bar: crate::process_history::BarSize::Auto,
+                overview_bar: crate::tiers::BarSize::OneMinute,
+                process_bar: crate::tiers::BarSize::Auto,
             },
             modules: ModuleViews::default(),
             banners: Vec::new(),

@@ -11,7 +11,8 @@ use std::sync::Arc;
 
 use crate::canonical::ProcessTable;
 use crate::identity::{EntityId, ProcessKey};
-use crate::process_history::{BarSize, RunBucket, RunEnd, RunInfo};
+use crate::process_history::{RunBucket, RunEnd, RunInfo};
+use crate::tiers::BarSize;
 
 /// A committed process table, new since the last one handed over, and
 /// what its sample of the runs takes from the snapshot beside it.
