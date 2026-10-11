@@ -7,7 +7,7 @@ use dgxtop_core::errors::InfraError;
 use dgxtop_core::identity::EntityId;
 use dgxtop_core::ports::{ProcessHistoryCompletion, ProcessHistoryReader, ProcessMemoryReader};
 use dgxtop_core::process_history::{
-    EndCause, ProcessHistoryLoad, RunDetails, RunEnd, RunInfo, RunMetric,
+    EndCause, ProcessHistoryLoad, RunDetails, RunEnd, RunInfo, RunMetric, StoreUsage,
 };
 use dgxtop_core::process_model::RunRequest;
 use dgxtop_core::process_probe::{ProbeLiveness, ProbeReading, ProbeReport};
@@ -94,7 +94,7 @@ fn tables_become_runs_and_colors_in_the_published_model() {
     let mut rig = rig();
     assert_eq!(rig.published.latest().revision, 1, "an empty model at once");
     table(&mut rig, 1, vec![row(9, 4 * GIB)]);
-    assert!(matches!(rig.store.take()[..], [ProcessHistoryJob::Load]));
+    assert!(matches!(rig.store.take()[..], [ProcessHistoryJob::Load(_)]));
     for second in 2..10 {
         table(&mut rig, second, vec![row(9, 4 * GIB)]);
     }
@@ -209,7 +209,7 @@ fn shown_runs_get_their_details_and_ended_ones_are_read_once() {
     rig.actor.handle(ProcessHistoryInput::Show(ended.clone()));
     let reads = rig.store.take();
     assert_eq!(reads.len(), 1, "read once: {reads:?}");
-    assert!(matches!(reads[0], ProcessHistoryJob::ReadRun(_)));
+    assert!(matches!(reads[0], ProcessHistoryJob::ReadRun { .. }));
     assert!(rig.published.latest().detail_for(&ended).unwrap().loading);
 }
 
@@ -234,7 +234,7 @@ fn a_flush_is_settled_once_its_writes_are_answered() {
     assert_eq!((writes.flushes, writes.pending), (1, 2));
     assert!(!writes.settled_after(1));
     for answer in [
-        ProcessHistoryCompletion::Appended(Ok(())),
+        ProcessHistoryCompletion::Appended(Ok(StoreUsage::default())),
         ProcessHistoryCompletion::Saved(Ok(())),
     ] {
         rig.actor.handle(ProcessHistoryInput::Store(answer));

@@ -55,7 +55,8 @@ use crate::overview_history::{
     OverviewRequest, StoredTierSeries, TierJournal,
 };
 use crate::process_history::{
-    ProcessHistoryJournal, ProcessHistoryLoad, RecentHistory, RunBucketRow,
+    BucketRequest, ProcessHistoryJournal, ProcessHistoryLoad, ProcessHistoryLoadRequest,
+    RecentHistory, RunBucketRow, StoreUsage,
 };
 use crate::process_model::{MemoryPart, ProcessHistoryModel, ProcessTableSample, RunRequest};
 use crate::process_probe::{ProbeReading, ProbeReport, ProbeState, ProbeTarget};
@@ -528,16 +529,25 @@ pub trait ProbeDeriver: Send + Sync {
 }
 
 /// The stores of the process history (D-76): a long-term database of runs
-/// and their minute and ten-minute buckets, and a short-term file of the
-/// live runs' recent buckets.
+/// and their buckets of a minute and more, and a short-term file of the
+/// live runs' recent buckets. They keep what they are told and read what
+/// they are asked; what stays is the history's decision (D-94).
 pub trait ProcessHistoryStore: Send {
-    /// What both stores kept, read at startup.
-    fn load(&mut self) -> Result<ProcessHistoryLoad, InfraError>;
-    fn append(&mut self, journal: &ProcessHistoryJournal) -> Result<(), InfraError>;
+    /// What both stores kept, read at startup, as `request` asks.
+    fn load(
+        &mut self,
+        request: &ProcessHistoryLoadRequest,
+    ) -> Result<ProcessHistoryLoad, InfraError>;
+    /// Writes the journal and says what the store holds then.
+    fn append(&mut self, journal: &ProcessHistoryJournal) -> Result<StoreUsage, InfraError>;
     /// Replaces the short-term file.
     fn save_recent(&mut self, recent: &RecentHistory) -> Result<(), InfraError>;
     /// One run's buckets, for a run whose buckets are not in memory.
-    fn read_run(&mut self, key: &ProcessKey) -> Result<Vec<RunBucketRow>, InfraError>;
+    fn read_run(
+        &mut self,
+        key: &ProcessKey,
+        buckets: &BucketRequest,
+    ) -> Result<Vec<RunBucketRow>, InfraError>;
 }
 
 /// Process probe work (D-76).
@@ -549,17 +559,20 @@ pub struct ProcessProbeJob {
 /// Process history store work (D-76).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProcessHistoryJob {
-    Load,
+    Load(ProcessHistoryLoadRequest),
     Append(ProcessHistoryJournal),
     SaveRecent(RecentHistory),
-    ReadRun(ProcessKey),
+    ReadRun {
+        key: ProcessKey,
+        buckets: BucketRequest,
+    },
 }
 
 /// What became of a [`ProcessHistoryJob`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProcessHistoryCompletion {
     Loaded(Result<ProcessHistoryLoad, InfraError>),
-    Appended(Result<(), InfraError>),
+    Appended(Result<StoreUsage, InfraError>),
     Saved(Result<(), InfraError>),
     RunRead {
         key: ProcessKey,

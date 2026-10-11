@@ -147,7 +147,7 @@ restart. Display modules can be switched on and off.
 - **Any terminal size.** The full layout from 80×24, a compact one below that. Keyboard and mouse.
 - **Private.** No network access and no telemetry. Settings and history are files only you can
   read. Process History keeps the command lines, working folders and programs of GPU processes
-  (the latest 2000 runs); environments are never stored.
+  (the latest 512 runs); environments are never stored.
 - **Safe modes.** `--read-only` turns off process actions. `--replay` shows simulated data for
   demos and tests. `--diagnostics-json` prints versions and health.
 - **Safe upgrades.** The installer verifies every download and keeps the previous version for a

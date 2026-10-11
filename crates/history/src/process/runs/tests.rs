@@ -157,6 +157,14 @@ fn samples_aggregate_the_run_and_minutes_reach_the_journal() {
     );
     assert_eq!(minute.value(RunMetric::DiskRead).count, 0, "no probe yet");
     assert_eq!(journal.runs.len(), 1, "the run, with its last-seen time");
+    assert!(
+        journal.keep_latest.iter().any(|keep| keep.key == key(9)
+            && keep.tier == Tier::OneMinute
+            && keep.buckets == Tier::OneMinute.capacity()),
+        "each size written keeps its latest buckets in the store: {:?}",
+        journal.keep_latest
+    );
+    assert!(journal.forget.is_empty() && journal.keep_runs.is_none());
 }
 
 /// Records what the book hands the deriver and gives values that tell
@@ -528,6 +536,44 @@ fn runs_are_bounded() {
     );
     assert_eq!(book.runs().count(), MAX_LIVE_RUNS);
     assert_eq!(book.probe_targets().len(), MAX_LIVE_RUNS);
+}
+
+/// The runs past the listed ones that the book lets go are forgotten by
+/// the store too (D-94), the ones that ended first.
+#[test]
+fn runs_the_list_lets_go_are_forgotten_in_the_store() {
+    let mut book = book();
+    let template = {
+        let mut writer = self::book();
+        observe(&mut writer, 1, vec![row(1, 10.0, Some(GIB))]);
+        writer.run(&key(1)).unwrap().info().clone()
+    };
+    let runs: Vec<RunInfo> = (1..=i64::try_from(MAX_LISTED_RUNS).unwrap() + 2)
+        .map(|pid| {
+            let mut info = template.clone();
+            info.key = key(pid);
+            info.end = Some(RunEnd {
+                utc_ns: template.last_seen_utc_ns + pid,
+                cause: EndCause::Exit(0),
+            });
+            info
+        })
+        .collect();
+    book.restore(
+        ProcessHistoryLoad {
+            runs,
+            ..ProcessHistoryLoad::default()
+        },
+        now(10),
+    );
+    assert_eq!(book.runs().count(), MAX_LISTED_RUNS);
+    let forgotten: Vec<i32> = book
+        .take_journal()
+        .forget
+        .iter()
+        .map(|key| key.pid.get())
+        .collect();
+    assert_eq!(forgotten, vec![1, 2]);
 }
 
 /// A restart: the run restored from the stores keeps running when the

@@ -10,12 +10,14 @@
 //! (D-79), and, for a run the table no longer lists,
 //! whether it ended and how ([`ending`]). Closed buckets and changed
 //! runs leave through [`ProcessHistoryBook::take_journal`] for the
-//! long-term store; the short-term file takes [`ProcessHistoryBook::recent`].
+//! long-term store, with what the store no longer keeps ([`retention`],
+//! D-94); the short-term file takes [`ProcessHistoryBook::recent`].
 //! Each run keeps its whole-life figures as its buckets close, so the read
 //! model never merges a run's buckets to list it (D-79).
 //! Nothing here performs I/O.
 
 mod ending;
+mod retention;
 mod service;
 
 pub(crate) use self::service::{ProcessHistoryService, ServicePorts};
@@ -30,6 +32,7 @@ use dgxtop_core::ports::ProbeDeriver;
 use dgxtop_core::process_history::{
     EndCause, MAX_LISTED_RUNS, MAX_LIVE_RUNS, ProcessHistoryJournal, ProcessHistoryLoad,
     RUN_METRICS, RecentHistory, RecentRun, RunBucket, RunBucketRow, RunEnd, RunInfo, RunMetric,
+    StoreUsage,
 };
 use dgxtop_core::process_probe::{
     ProbeLiveness, ProbeReading, ProbeReport, ProbeState, ProbeTarget, ProbedValues,
@@ -416,13 +419,59 @@ impl ProcessHistoryBook {
     }
 
     /// What closed and changed since the last call, for the long-term
-    /// store.
+    /// store, with the latest buckets each size written keeps (D-94).
     pub(crate) fn take_journal(&mut self) -> ProcessHistoryJournal {
         for run in self.runs.values_mut().filter(|run| run.changed) {
             run.changed = false;
             self.journal.runs.push(run.info.clone());
         }
-        std::mem::take(&mut self.journal)
+        let mut journal = std::mem::take(&mut self.journal);
+        journal.keep_latest = retention::keep_latest_of(&journal.buckets);
+        journal
+    }
+
+    /// Lets the ended runs last seen longest ago go, from the book and the
+    /// store, as many as bring `usage` back within `budget_bytes` (D-94);
+    /// how many went.
+    pub(crate) fn give_way(&mut self, usage: StoreUsage, budget_bytes: u64) -> usize {
+        let count = retention::runs_giving_way(usage, budget_bytes);
+        let mut ended: Vec<(i64, ProcessKey)> = self
+            .runs
+            .iter()
+            .filter(|(_, run)| run.info.end.is_some())
+            .map(|(key, run)| (run.info.last_seen_utc_ns, key.clone()))
+            .collect();
+        ended.sort();
+        let giving_way: Vec<ProcessKey> =
+            ended.into_iter().take(count).map(|(_, key)| key).collect();
+        for key in &giving_way {
+            self.forget(key);
+        }
+        if !giving_way.is_empty() {
+            self.revision += 1;
+        }
+        giving_way.len()
+    }
+
+    /// The store keeps only the `runs` last seen (it holds runs the book
+    /// no longer lists).
+    pub(crate) fn keep_stored_runs(&mut self, usage: StoreUsage) {
+        if let Some(runs) = retention::runs_to_keep(usage) {
+            self.journal.keep_runs = Some(runs);
+        }
+    }
+
+    /// Whether the journal holds deletions not sent yet.
+    pub(crate) fn has_unsent_deletions(&self) -> bool {
+        !self.journal.forget.is_empty() || self.journal.keep_runs.is_some()
+    }
+
+    /// Removes `key` and asks the store to delete it.
+    fn forget(&mut self, key: &ProcessKey) {
+        self.runs.remove(key);
+        self.reading.remove(key);
+        self.signals.remove(key);
+        self.journal.forget.push(key.clone());
     }
 
     /// Marks every live run changed, so the next journal carries the time
@@ -564,7 +613,7 @@ impl ProcessHistoryBook {
     }
 
     /// Keeps at most [`MAX_LISTED_RUNS`] runs: the ended runs that ended
-    /// first give way.
+    /// first give way, in the store too.
     fn bound(&mut self) {
         let excess = self.runs.len().saturating_sub(MAX_LISTED_RUNS);
         if excess > 0 {
@@ -575,7 +624,7 @@ impl ProcessHistoryBook {
                 .collect();
             ended.sort();
             for (_, key) in ended.into_iter().take(excess) {
-                self.runs.remove(&key);
+                self.forget(&key);
             }
         }
         self.limit_series(None);

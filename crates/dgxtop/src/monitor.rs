@@ -982,11 +982,8 @@ impl Wiring {
         if !(effective.store.process_history_on_disk() && sqlite_ok) {
             return Ok(None);
         }
-        let store = ProcessHistoryFiles::open(
-            &paths.process_history_database,
-            &paths.process_recent_file,
-            Arc::clone(&self.clock),
-        );
+        let store =
+            ProcessHistoryFiles::open(&paths.process_history_database, &paths.process_recent_file);
         log_recreated(
             self.logger.as_ref(),
             &paths.process_history_database,
@@ -1000,15 +997,17 @@ impl Wiring {
             store,
             move |store: &mut ProcessHistoryFiles, job: ProcessHistoryJob| {
                 let completion = match job {
-                    ProcessHistoryJob::Load => ProcessHistoryCompletion::Loaded(store.load()),
+                    ProcessHistoryJob::Load(request) => {
+                        ProcessHistoryCompletion::Loaded(store.load(&request))
+                    }
                     ProcessHistoryJob::Append(journal) => {
                         ProcessHistoryCompletion::Appended(store.append(&journal))
                     }
                     ProcessHistoryJob::SaveRecent(recent) => {
                         ProcessHistoryCompletion::Saved(store.save_recent(&recent))
                     }
-                    ProcessHistoryJob::ReadRun(key) => {
-                        let result = store.read_run(&key);
+                    ProcessHistoryJob::ReadRun { key, buckets } => {
+                        let result = store.read_run(&key, &buckets);
                         ProcessHistoryCompletion::RunRead { key, result }
                     }
                 };
@@ -1387,7 +1386,7 @@ mod tests {
         let inbox: ProcessInbox = Arc::new(OnceLock::new());
         deliver_process_input(
             &inbox,
-            ProcessHistoryInput::Store(ProcessHistoryCompletion::Appended(Ok(()))),
+            ProcessHistoryInput::Store(ProcessHistoryCompletion::Appended(Ok(Default::default()))),
             &logger,
         );
         let records = memory.records();

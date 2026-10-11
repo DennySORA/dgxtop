@@ -21,10 +21,10 @@ use dgxtop_core::ports::{
     Dispatch, LogLevel, Logger, ProbeDeriver, ProcessHistoryCompletion, ProcessHistoryJob,
     ProcessProbeJob,
 };
-use dgxtop_core::process_history::ProcessHistoryJournal;
+use dgxtop_core::process_history::{ProcessHistoryJournal, StoreUsage};
 use dgxtop_core::process_probe::ProbeReport;
 
-use super::{ProcessHistoryBook, SampleInputs};
+use super::{ProcessHistoryBook, SampleInputs, retention};
 use crate::process::Now;
 
 const NANOS_PER_SECOND: u64 = 1_000_000_000;
@@ -57,12 +57,19 @@ enum Load {
     Done,
 }
 
+/// A write sent: when it left, and whether it deletes runs.
+#[derive(Debug, Clone, Copy)]
+struct Sent {
+    boot_ns: u64,
+    deletes: bool,
+}
+
 /// The writes sent and not answered yet, by kind (one store worker answers
-/// them in order), each with the time it left.
+/// them in order).
 #[derive(Debug, Default)]
 struct PendingWrites {
-    appends: VecDeque<u64>,
-    saves: VecDeque<u64>,
+    appends: VecDeque<Sent>,
+    saves: VecDeque<Sent>,
 }
 
 impl PendingWrites {
@@ -70,11 +77,17 @@ impl PendingWrites {
         self.appends.len() + self.saves.len()
     }
 
+    /// Whether an append unanswered deletes runs: until it is answered, the
+    /// store's usage does not show it.
+    fn deleting(&self) -> bool {
+        self.appends.iter().any(|sent| sent.deletes)
+    }
+
     /// Drops the writes sent before `cutoff_ns`; how many it dropped.
     fn drop_sent_before(&mut self, cutoff_ns: u64) -> usize {
         let mut dropped = 0;
         for queue in [&mut self.appends, &mut self.saves] {
-            while queue.front().is_some_and(|sent| *sent < cutoff_ns) {
+            while queue.front().is_some_and(|sent| sent.boot_ns < cutoff_ns) {
                 queue.pop_front();
                 dropped += 1;
             }
@@ -145,7 +158,8 @@ impl ProcessHistoryService {
             sent_boot_ns: now.boot_ns,
             attempts,
         };
-        if let Err(error) = store.try_dispatch(ProcessHistoryJob::Load) {
+        let request = retention::startup_request();
+        if let Err(error) = store.try_dispatch(ProcessHistoryJob::Load(request)) {
             self.warn(&format!("PROCESS_HISTORY_LOAD_NOT_SENT: {error}"));
         }
     }
@@ -189,7 +203,11 @@ impl ProcessHistoryService {
         if !self.book.wants_buckets(key) {
             return;
         }
-        if let Err(error) = store.try_dispatch(ProcessHistoryJob::ReadRun(key.clone())) {
+        let read = ProcessHistoryJob::ReadRun {
+            key: key.clone(),
+            buckets: retention::held_buckets(),
+        };
+        if let Err(error) = store.try_dispatch(read) {
             self.warn(&format!("PROCESS_HISTORY_READ_NOT_SENT: {error}"));
         }
     }
@@ -207,7 +225,10 @@ impl ProcessHistoryService {
             }
             ProcessHistoryCompletion::Appended(result) => {
                 self.writing.appends.pop_front();
-                self.warn_failed_write(result);
+                match result {
+                    Ok(usage) => self.on_usage(usage),
+                    Err(error) => self.warn(&format!("PROCESS_HISTORY_WRITE_FAILED: {error}")),
+                }
             }
             ProcessHistoryCompletion::Saved(result) => {
                 self.writing.saves.pop_front();
@@ -319,6 +340,33 @@ impl ProcessHistoryService {
         }
     }
 
+    /// What the store holds after an append: past the budget the ended
+    /// runs last seen longest ago give way, and runs the book no longer
+    /// lists are cut (D-94). Not while deletions are on their way: the
+    /// usage would not show them yet.
+    fn on_usage(&mut self, usage: StoreUsage) {
+        if self.writing.deleting()
+            || self.book.has_unsent_deletions()
+            || has_deletions(&self.backlog)
+        {
+            return;
+        }
+        self.book.keep_stored_runs(usage);
+        let gave_way = self.book.give_way(usage, retention::STORED_BUDGET_BYTES);
+        if gave_way > 0 {
+            self.logger.log(
+                LogLevel::Info,
+                LOG_TARGET,
+                &format!(
+                    "PROCESS_HISTORY_RUNS_GIVE_WAY: {gave_way} ended runs; the store uses {} \
+                     of {} bytes",
+                    usage.used_bytes,
+                    retention::STORED_BUDGET_BYTES
+                ),
+            );
+        }
+    }
+
     fn warn_failed_write(&self, result: Result<(), InfraError>) {
         if let Err(error) = result {
             self.warn(&format!("PROCESS_HISTORY_WRITE_FAILED: {error}"));
@@ -330,14 +378,21 @@ impl ProcessHistoryService {
         let fresh = self.book.take_journal();
         journal.runs.extend(fresh.runs);
         journal.buckets.extend(fresh.buckets);
+        journal.keep_latest.extend(fresh.keep_latest);
+        journal.forget.extend(fresh.forget);
+        journal.keep_runs = fresh.keep_runs.or(journal.keep_runs);
         if journal.is_empty() {
             return;
         }
         let Some(store) = &self.store else {
             return;
         };
+        let sent = Sent {
+            boot_ns: now.boot_ns,
+            deletes: has_deletions(&journal),
+        };
         match store.try_dispatch(ProcessHistoryJob::Append(journal.clone())) {
-            Ok(()) => self.writing.appends.push_back(now.boot_ns),
+            Ok(()) => self.writing.appends.push_back(sent),
             Err(error) => {
                 self.warn(&format!("PROCESS_HISTORY_APPEND_DEFERRED: {error}"));
                 let excess = journal.buckets.len().saturating_sub(MAX_BACKLOG_BUCKETS);
@@ -352,8 +407,12 @@ impl ProcessHistoryService {
             return;
         };
         let recent = self.book.recent(now);
+        let sent = Sent {
+            boot_ns: now.boot_ns,
+            deletes: false,
+        };
         match store.try_dispatch(ProcessHistoryJob::SaveRecent(recent)) {
-            Ok(()) => self.writing.saves.push_back(now.boot_ns),
+            Ok(()) => self.writing.saves.push_back(sent),
             Err(error) => self.warn(&format!("PROCESS_HISTORY_SAVE_DEFERRED: {error}")),
         }
     }
@@ -363,11 +422,16 @@ impl ProcessHistoryService {
     }
 }
 
+/// Whether `journal` deletes runs.
+fn has_deletions(journal: &ProcessHistoryJournal) -> bool {
+    !journal.forget.is_empty() || journal.keep_runs.is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use dgxtop_core::process_history::ProcessHistoryLoad;
+    use dgxtop_core::process_history::{MAX_LISTED_RUNS, ProcessHistoryLoad};
     use dgxtop_core::testing::{
         CapturingDispatch, IdleProbeDeriver, MemoryLogger, boot_id, gpu_process, process_table,
     };
@@ -462,7 +526,7 @@ mod tests {
     fn writes_wait_for_the_load_then_follow_their_cadence() {
         let mut rig = rig();
         rig.service.start(now(0));
-        assert!(matches!(rig.store.take()[..], [ProcessHistoryJob::Load]));
+        assert!(matches!(rig.store.take()[..], [ProcessHistoryJob::Load(_)]));
         observe(&mut rig, 1);
         rig.service.tick(now(20));
         assert!(rig.store.is_empty(), "the load is pending");
@@ -480,8 +544,10 @@ mod tests {
         rig.service.tick(now(42));
         assert!(rig.store.is_empty(), "not due again");
         assert_eq!(rig.service.writes_pending(), 2, "two writes unanswered");
-        rig.service
-            .on_completion(ProcessHistoryCompletion::Appended(Ok(())), now(43));
+        rig.service.on_completion(
+            ProcessHistoryCompletion::Appended(Ok(StoreUsage::default())),
+            now(43),
+        );
         rig.service
             .on_completion(ProcessHistoryCompletion::Saved(Ok(())), now(43));
         assert_eq!(rig.service.writes_pending(), 0);
@@ -568,14 +634,14 @@ mod tests {
     fn a_lost_load_answer_is_asked_again_then_given_up() {
         let mut rig = rig();
         rig.service.start(now(0));
-        assert!(matches!(rig.store.take()[..], [ProcessHistoryJob::Load]));
+        assert!(matches!(rig.store.take()[..], [ProcessHistoryJob::Load(_)]));
         observe(&mut rig, 1);
         rig.service.tick(now(20));
         assert!(rig.store.is_empty(), "not overdue yet");
         rig.service.tick(now(31));
-        assert!(matches!(rig.store.take()[..], [ProcessHistoryJob::Load]));
+        assert!(matches!(rig.store.take()[..], [ProcessHistoryJob::Load(_)]));
         rig.service.tick(now(62));
-        assert!(matches!(rig.store.take()[..], [ProcessHistoryJob::Load]));
+        assert!(matches!(rig.store.take()[..], [ProcessHistoryJob::Load(_)]));
         rig.service.tick(now(93));
         let jobs = rig.store.take();
         assert!(
@@ -607,5 +673,121 @@ mod tests {
             "the first two are overdue; the two sent since are pending"
         );
         assert!(logged(&rig).contains(&"PROCESS_HISTORY_WRITE_LOST".to_owned()));
+    }
+
+    /// An ended run the stores kept, last seen `last_seen_s` seconds after
+    /// the tests' boot.
+    fn ended_run(pid: i64, last_seen_s: u64) -> dgxtop_core::process_history::RunInfo {
+        let seen = i64::try_from(now(last_seen_s).utc_ns).unwrap();
+        dgxtop_core::process_history::RunInfo {
+            key: dgxtop_core::testing::test_process_key(pid),
+            name: "acme_llm.eval".to_owned(),
+            command: String::new(),
+            cwd: String::new(),
+            uid: None,
+            gpus: Vec::new(),
+            details: dgxtop_core::process_history::RunDetails::default(),
+            started_utc_ns: seen,
+            last_seen_utc_ns: seen,
+            end: Some(dgxtop_core::process_history::RunEnd {
+                utc_ns: seen,
+                cause: dgxtop_core::process_history::EndCause::Exit(0),
+            }),
+        }
+    }
+
+    /// A store just over the history's budget, one run's worth.
+    fn over_budget() -> ProcessHistoryCompletion {
+        ProcessHistoryCompletion::Appended(Ok(StoreUsage {
+            used_bytes: retention::STORED_BUDGET_BYTES + 1,
+            runs: 4,
+        }))
+    }
+
+    /// The journals sent since the last call: what each forgets.
+    fn forgotten(rig: &Rig) -> Vec<Vec<i32>> {
+        rig.store
+            .take()
+            .into_iter()
+            .filter_map(|job| match job {
+                ProcessHistoryJob::Append(journal) => {
+                    Some(journal.forget.iter().map(|key| key.pid.get()).collect())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Past its byte budget the history lets the ended run last seen
+    /// longest ago go, from the list and the store (D-94); while that
+    /// deletion is unanswered, another usage over the budget (an append
+    /// sent before it) lets nothing more go; its answer decides again.
+    #[test]
+    fn over_the_budget_ended_runs_give_way_once_per_answered_deletion() {
+        let mut rig = rig();
+        rig.service.start(now(0));
+        rig.store.take();
+        rig.service.on_completion(
+            ProcessHistoryCompletion::Loaded(Ok(ProcessHistoryLoad {
+                runs: vec![ended_run(1, 1), ended_run(2, 2), ended_run(3, 3)],
+                ..ProcessHistoryLoad::default()
+            })),
+            now(4),
+        );
+        observe(&mut rig, 5);
+        rig.service.flush(now(5));
+        rig.service.flush(now(6));
+        assert_eq!(forgotten(&rig), vec![Vec::<i32>::new(), Vec::new()]);
+        rig.service.on_completion(over_budget(), now(7));
+        assert!(rig.service.book().run(&key_of(1)).is_none(), "gave way");
+        rig.service.flush(now(8));
+        assert_eq!(forgotten(&rig), vec![vec![1]]);
+        rig.service.on_completion(over_budget(), now(9));
+        assert!(
+            rig.service.book().run(&key_of(2)).is_some(),
+            "the deletion is not answered yet"
+        );
+        rig.service.on_completion(over_budget(), now(10));
+        rig.service.flush(now(11));
+        assert_eq!(forgotten(&rig), vec![vec![2]]);
+        assert!(rig.service.book().run(&key_of(3)).is_some());
+        assert!(
+            rig.service.book().run(&key_of(9)).is_some(),
+            "the live run stays"
+        );
+        let gave_way = logged(&rig)
+            .into_iter()
+            .filter(|code| code == "PROCESS_HISTORY_RUNS_GIVE_WAY")
+            .count();
+        assert_eq!(gave_way, 2);
+    }
+
+    /// Within the budget nothing gives way; a store holding more runs than
+    /// the history lists is cut to them.
+    #[test]
+    fn within_the_budget_only_unlisted_runs_are_cut() {
+        let mut rig = rig();
+        load_answered(&mut rig, 1);
+        observe(&mut rig, 1);
+        rig.service.flush(now(2));
+        rig.store.take();
+        rig.service.on_completion(
+            ProcessHistoryCompletion::Appended(Ok(StoreUsage {
+                used_bytes: 1,
+                runs: 600,
+            })),
+            now(3),
+        );
+        rig.service.flush(now(4));
+        let jobs = rig.store.take();
+        let Some(ProcessHistoryJob::Append(journal)) = jobs.first() else {
+            panic!("{jobs:?}");
+        };
+        assert_eq!(journal.keep_runs, Some(MAX_LISTED_RUNS));
+        assert!(journal.forget.is_empty());
+    }
+
+    fn key_of(pid: i64) -> ProcessKey {
+        dgxtop_core::testing::test_process_key(pid)
     }
 }

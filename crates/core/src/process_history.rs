@@ -341,18 +341,65 @@ pub struct RunBucketRow {
     pub bucket: RunBucket,
 }
 
-/// What the history hands its long-term store: runs that changed and
-/// buckets that closed.
+/// What the history hands its long-term store (D-94): runs that changed
+/// and buckets that closed, and what the history decided the store no
+/// longer keeps. The store applies them in this order, in one transaction.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ProcessHistoryJournal {
     pub runs: Vec<RunInfo>,
     pub buckets: Vec<RunBucketRow>,
+    /// Each named size of a run keeps only its latest buckets.
+    pub keep_latest: Vec<KeepLatest>,
+    /// Runs deleted with their buckets.
+    pub forget: Vec<ProcessKey>,
+    /// Only this many runs stay, the last seen; the others are deleted.
+    pub keep_runs: Option<usize>,
 }
 
 impl ProcessHistoryJournal {
     pub fn is_empty(&self) -> bool {
-        self.runs.is_empty() && self.buckets.is_empty()
+        self.runs.is_empty()
+            && self.buckets.is_empty()
+            && self.keep_latest.is_empty()
+            && self.forget.is_empty()
+            && self.keep_runs.is_none()
     }
+}
+
+/// One run's size keeps only its latest `buckets` buckets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeepLatest {
+    pub key: ProcessKey,
+    pub tier: Tier,
+    pub buckets: usize,
+}
+
+/// What the long-term store holds after an append, for the history's
+/// byte budget (D-94).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct StoreUsage {
+    /// Bytes of the database pages in use.
+    pub used_bytes: u64,
+    /// Runs it holds.
+    pub runs: u64,
+}
+
+/// Which of a run's stored buckets to read: of each size named, its latest
+/// this many, coarsest size first and each oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct BucketRequest {
+    pub latest: Vec<(Tier, usize)>,
+}
+
+/// What the history asks of its stores at startup (D-94).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ProcessHistoryLoadRequest {
+    /// The runs last seen, at most this many, the last seen first.
+    pub runs: usize,
+    /// The unfinished runs among them, and this many of the ended ones
+    /// last seen, come with their buckets.
+    pub ended_runs_with_buckets: usize,
+    pub buckets: BucketRequest,
 }
 
 /// The short-term file: the live runs' recent buckets and the minute each
