@@ -154,15 +154,20 @@ impl StartError {
 /// spawned after them, since it holds their handles).
 type ProcessInbox = Arc<OnceLock<PoolHandle<ProcessHistoryInput>>>;
 
+/// Where a dropped process answer is logged: beside the process actor's own
+/// lines, whose deadlines then recover from it.
+const PROCESS_HISTORY_LOG_TARGET: &str = "history.process";
+
 /// Hands a probe report or a store answer to the process actor, waiting a
 /// bounded time while its queue is full: the actor never waits on these
-/// workers, so this cannot deadlock, and a lost answer would leave a probe
-/// or a write unanswered.
+/// workers, so this cannot deadlock. An answer still not taken is dropped
+/// and logged; the actor's deadlines stop it waiting for it.
 fn deliver_process_input(
     inbox: &ProcessInbox,
     input: ProcessHistoryInput,
     logger: &Arc<dyn Logger>,
 ) {
+    let answer = answer_name(&input);
     let delivered = inbox.get().is_some_and(|actor| {
         actor
             .dispatch_within(input, COMPLETION_SEND_TIMEOUT)
@@ -171,9 +176,24 @@ fn deliver_process_input(
     if !delivered {
         logger.log(
             LogLevel::Error,
-            "composition",
-            "process history actor full or stopped; probe or store answer dropped",
+            PROCESS_HISTORY_LOG_TARGET,
+            &format!(
+                "PROCESS_HISTORY_ANSWER_DROPPED: the process actor is full or stopped; \
+                 its {answer} was dropped"
+            ),
         );
+    }
+}
+
+/// What answer `input` is, for the log.
+fn answer_name(input: &ProcessHistoryInput) -> &'static str {
+    match input {
+        ProcessHistoryInput::Probe(_) => "probe report",
+        ProcessHistoryInput::Store(ProcessHistoryCompletion::Loaded(_)) => "load answer",
+        ProcessHistoryInput::Store(ProcessHistoryCompletion::Appended(_)) => "append answer",
+        ProcessHistoryInput::Store(ProcessHistoryCompletion::Saved(_)) => "save answer",
+        ProcessHistoryInput::Store(ProcessHistoryCompletion::RunRead { .. }) => "run read answer",
+        _ => "input",
     }
 }
 
@@ -961,11 +981,8 @@ impl Wiring {
         if !(effective.store.process_history_on_disk() && sqlite_ok) {
             return Ok(None);
         }
-        let store = ProcessHistoryFiles::open(
-            &paths.process_history_database,
-            &paths.process_recent_file,
-            Arc::clone(&self.clock),
-        );
+        let store =
+            ProcessHistoryFiles::open(&paths.process_history_database, &paths.process_recent_file);
         log_recreated(
             self.logger.as_ref(),
             &paths.process_history_database,
@@ -979,15 +996,17 @@ impl Wiring {
             store,
             move |store: &mut ProcessHistoryFiles, job: ProcessHistoryJob| {
                 let completion = match job {
-                    ProcessHistoryJob::Load => ProcessHistoryCompletion::Loaded(store.load()),
+                    ProcessHistoryJob::Load(request) => {
+                        ProcessHistoryCompletion::Loaded(store.load(&request))
+                    }
                     ProcessHistoryJob::Append(journal) => {
                         ProcessHistoryCompletion::Appended(store.append(&journal))
                     }
                     ProcessHistoryJob::SaveRecent(recent) => {
                         ProcessHistoryCompletion::Saved(store.save_recent(&recent))
                     }
-                    ProcessHistoryJob::ReadRun(key) => {
-                        let result = store.read_run(&key);
+                    ProcessHistoryJob::ReadRun { key, buckets } => {
+                        let result = store.read_run(&key, &buckets);
                         ProcessHistoryCompletion::RunRead { key, result }
                     }
                 };
@@ -1355,6 +1374,29 @@ mod tests {
         assert!(SIGNAL_POLL >= Duration::from_millis(200));
         assert!(SIGNAL_POLL * 10 <= SHUTDOWN_BUDGET);
         assert!(FRONTEND_EXIT_POLL < SIGNAL_POLL);
+    }
+
+    /// An answer the process actor cannot take is logged as dropped under
+    /// the process history's target, naming the answer.
+    #[test]
+    fn a_dropped_process_answer_is_logged_by_the_process_history() {
+        let memory = Arc::new(dgxtop_core::testing::MemoryLogger::default());
+        let logger = Arc::clone(&memory) as Arc<dyn Logger>;
+        let inbox: ProcessInbox = Arc::new(OnceLock::new());
+        deliver_process_input(
+            &inbox,
+            ProcessHistoryInput::Store(ProcessHistoryCompletion::Appended(Ok(Default::default()))),
+            &logger,
+        );
+        let records = memory.records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].0, LogLevel::Error);
+        assert_eq!(records[0].1, "history.process");
+        assert!(
+            records[0].2.starts_with("PROCESS_HISTORY_ANSWER_DROPPED: "),
+            "{records:?}"
+        );
+        assert!(records[0].2.contains("append answer"), "{records:?}");
     }
 
     #[test]

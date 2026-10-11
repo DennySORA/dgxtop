@@ -10,23 +10,28 @@
 //! makes every call fail with its reason, and the history stays in memory.
 //! A failed call maps like every partition's (`sqlite::Writer`):
 //! corruption stops the database until the next start recreates it. A
-//! bucket packs 12 bytes a metric; a run keeps at most 300 buckets a size,
-//! so at most about a megabyte however long it runs.
-//! No run expires by age: past [`MAX_USED_BYTES`] the ended runs last seen
-//! longest ago give way.
+//! bucket packs 12 bytes a metric.
+//!
+//! Nothing here decides what is kept (D-94): the history's journal says
+//! which buckets and runs go and its requests what to read. The one bound
+//! of the store's own is the small database's page cap (`max_page_count`):
+//! a write past it fails with `DiskFull` and deletes nothing. No
+//! `CapacityPolicy::admit` runs before a write: the database is best
+//! effort and reserves room for no outcome, so admission would protect
+//! nothing the page cap does not refuse already, and the history's byte
+//! budget gives runs way below it.
 
 mod database;
 mod recent;
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::errors::InfraError;
 use dgxtop_core::identity::ProcessKey;
 use dgxtop_core::ports::ProcessHistoryStore;
 use dgxtop_core::process_history::{
-    ProcessHistoryJournal, ProcessHistoryLoad, RecentHistory, RunBucketRow,
+    BucketRequest, ProcessHistoryJournal, ProcessHistoryLoad, ProcessHistoryLoadRequest,
+    RecentHistory, RunBucketRow, StoreUsage,
 };
 use rusqlite::Connection;
 
@@ -36,13 +41,6 @@ use crate::sqlite::{
     path_problem,
 };
 
-const MIB: u64 = 1024 * 1024;
-/// The pages in use past which ended runs give way: room left for the WAL
-/// and the live runs' growth below the 64 MiB of a small database.
-const MAX_USED_BYTES: u64 = 48 * MIB;
-/// Retention runs at most this often (boot clock).
-const RETENTION_EVERY_NS: u64 = 3_600 * 1_000_000_000;
-
 /// The process history's stores in dgxtop's state directory.
 pub struct ProcessHistoryFiles {
     database: Writer,
@@ -50,9 +48,6 @@ pub struct ProcessHistoryFiles {
     /// The short-term file, or why its path cannot be used.
     recent_path: Result<PathBuf, String>,
     fs: Box<dyn FileSystemOps>,
-    clock: Arc<dyn TimeProvider>,
-    last_retention_boot_ns: Option<u64>,
-    max_used_bytes: u64,
 }
 
 impl std::fmt::Debug for ProcessHistoryFiles {
@@ -69,11 +64,10 @@ impl ProcessHistoryFiles {
     /// Opens (creating when missing) the database at `database_path`; the
     /// short-term file lives at `recent_path`. Never fails: an unusable
     /// database is reported by every call.
-    pub fn open(database_path: &Path, recent_path: &Path, clock: Arc<dyn TimeProvider>) -> Self {
+    pub fn open(database_path: &Path, recent_path: &Path) -> Self {
         Self::open_with(
             database_path,
             recent_path,
-            clock,
             Box::new(RealFileSystem),
             ensure_sqlite_version,
         )
@@ -82,7 +76,6 @@ impl ProcessHistoryFiles {
     pub(crate) fn open_with(
         database_path: &Path,
         recent_path: &Path,
-        clock: Arc<dyn TimeProvider>,
         fs: Box<dyn FileSystemOps>,
         gate: VersionGate,
     ) -> Self {
@@ -98,9 +91,6 @@ impl ProcessHistoryFiles {
             recreated,
             recent_path,
             fs,
-            clock,
-            last_retention_boot_ns: None,
-            max_used_bytes: MAX_USED_BYTES,
         }
     }
 
@@ -131,33 +121,15 @@ impl ProcessHistoryFiles {
             .as_deref()
             .map_err(|reason| InfraError::Unavailable(format!("process history file: {reason}")))
     }
-
-    #[cfg(test)]
-    fn with_max_used_bytes(mut self, bytes: u64) -> Self {
-        self.max_used_bytes = bytes;
-        self
-    }
-
-    /// Retention when it is due: at the first call and then hourly.
-    fn maybe_retain(&mut self) -> Result<(), InfraError> {
-        let now = self.clock.now_boot_ns();
-        let due = self
-            .last_retention_boot_ns
-            .is_none_or(|last| now.saturating_sub(last) >= RETENTION_EVERY_NS);
-        if !due {
-            return Ok(());
-        }
-        let max_used_bytes = self.max_used_bytes;
-        self.with_database(|connection| database::retain(connection, max_used_bytes))?;
-        self.last_retention_boot_ns = Some(now);
-        Ok(())
-    }
 }
 
 impl ProcessHistoryStore for ProcessHistoryFiles {
-    fn load(&mut self) -> Result<ProcessHistoryLoad, InfraError> {
-        self.maybe_retain()?;
-        let (runs, buckets) = self.with_database(database::load)?;
+    fn load(
+        &mut self,
+        request: &ProcessHistoryLoadRequest,
+    ) -> Result<ProcessHistoryLoad, InfraError> {
+        let (runs, buckets) =
+            self.with_database(|connection| database::load(connection, request))?;
         // A short-term file that cannot be read only loses the last minutes.
         let recent = self
             .recent_path()
@@ -170,17 +142,20 @@ impl ProcessHistoryStore for ProcessHistoryFiles {
         })
     }
 
-    fn append(&mut self, journal: &ProcessHistoryJournal) -> Result<(), InfraError> {
-        self.with_database(|connection| database::append(connection, journal))?;
-        self.maybe_retain()
+    fn append(&mut self, journal: &ProcessHistoryJournal) -> Result<StoreUsage, InfraError> {
+        self.with_database(|connection| database::append(connection, journal))
     }
 
     fn save_recent(&mut self, recent: &RecentHistory) -> Result<(), InfraError> {
         recent::write(self.fs.as_ref(), self.recent_path()?, recent)
     }
 
-    fn read_run(&mut self, key: &ProcessKey) -> Result<Vec<RunBucketRow>, InfraError> {
-        self.with_database(|connection| database::read_run(connection, key))
+    fn read_run(
+        &mut self,
+        key: &ProcessKey,
+        buckets: &BucketRequest,
+    ) -> Result<Vec<RunBucketRow>, InfraError> {
+        self.with_database(|connection| database::read_run(connection, key, buckets))
     }
 }
 

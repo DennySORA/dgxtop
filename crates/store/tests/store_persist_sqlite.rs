@@ -93,11 +93,7 @@ fn every_partition_initializes_once_and_reopens_idempotently() {
     for _ in 0..3 {
         let tiers = SqliteHistoryTiers::open(&tiers_path);
         assert_eq!(tiers.recreated(), None);
-        let process = ProcessHistoryFiles::open(
-            &process_path,
-            &dir.0.join("process_recent.json"),
-            FakeClock::new(1),
-        );
+        let process = ProcessHistoryFiles::open(&process_path, &dir.0.join("process_recent.json"));
         assert_eq!(process.recreated(), None);
         let mut audit = SqliteAuditRepository::open(
             &audit_path,

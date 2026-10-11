@@ -10,12 +10,15 @@
 //! (D-79), and, for a run the table no longer lists,
 //! whether it ended and how ([`ending`]). Closed buckets and changed
 //! runs leave through [`ProcessHistoryBook::take_journal`] for the
-//! long-term store; the short-term file takes [`ProcessHistoryBook::recent`].
+//! long-term store, with what the store no longer keeps ([`retention`],
+//! D-94); the short-term file takes [`ProcessHistoryBook::recent`].
 //! Each run keeps its whole-life figures as its buckets close, so the read
 //! model never merges a run's buckets to list it (D-79).
 //! Nothing here performs I/O.
 
+mod backlog;
 mod ending;
+mod retention;
 mod service;
 
 pub(crate) use self::service::{ProcessHistoryService, ServicePorts};
@@ -30,6 +33,7 @@ use dgxtop_core::ports::ProbeDeriver;
 use dgxtop_core::process_history::{
     EndCause, MAX_LISTED_RUNS, MAX_LIVE_RUNS, ProcessHistoryJournal, ProcessHistoryLoad,
     RUN_METRICS, RecentHistory, RecentRun, RunBucket, RunBucketRow, RunEnd, RunInfo, RunMetric,
+    StoreUsage,
 };
 use dgxtop_core::process_probe::{
     ProbeLiveness, ProbeReading, ProbeReport, ProbeState, ProbeTarget, ProbedValues,
@@ -40,16 +44,24 @@ use self::ending::{EndEvidence, end_cause};
 use crate::process::Now;
 
 const NANOS_PER_SECOND: u64 = 1_000_000_000;
-/// What one held bucket costs.
-const BUCKET_BYTES: usize = std::mem::size_of::<dgxtop_core::process_history::RunBucket>();
 /// A live run the table stops listing ends after this long even when no
 /// probe answers.
 const MISSING_GRACE_NS: u64 = 10 * NANOS_PER_SECOND;
 /// Bytes the ended runs' buckets may hold in memory (D-79: a byte budget,
 /// the oldest ended go first); the others keep their figures and read their
 /// buckets from the long-term store when opened. Live runs are always held:
-/// at most 64, each at most one size's TIER_BUCKETS a size.
+/// at most [`MAX_LIVE_RUNS`], each at most [`TIER_BUCKETS`] buckets of
+/// each size.
+///
+/// [`TIER_BUCKETS`]: dgxtop_core::tiers::TIER_BUCKETS
 pub(crate) const ENDED_SERIES_BUDGET_BYTES: usize = 48 * 1024 * 1024;
+
+/// Where the long-term store's read of a run's buckets is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Read {
+    Asked,
+    Answered,
+}
 
 /// What a cycle's sample needs beside the process table.
 #[derive(Debug, Clone, Copy)]
@@ -150,14 +162,12 @@ pub(crate) struct ProcessHistoryBook {
     runs: BTreeMap<ProcessKey, Run>,
     signals: BTreeMap<ProcessKey, (Signal, u64)>,
     oom_kills: Option<u64>,
-    /// The table sampled last (cycle, read time): every committed batch
-    /// hands over the snapshot's table, sampled once.
-    last_table: Option<(u64, u64)>,
     /// The local clock's offset, nanoseconds east: where buckets begin.
     shift_ns: i64,
     journal: ProcessHistoryJournal,
-    /// Runs whose buckets were asked of the long-term store.
-    reading: BTreeSet<ProcessKey>,
+    /// Runs whose buckets were asked of the long-term store, and whether
+    /// the store answered.
+    reading: BTreeMap<ProcessKey, Read>,
     /// Moves whenever what a run shows may have changed (the read model
     /// is built again then).
     revision: u64,
@@ -172,20 +182,12 @@ impl ProcessHistoryBook {
             runs: BTreeMap::new(),
             signals: BTreeMap::new(),
             oom_kills: None,
-            last_table: None,
             shift_ns: 0,
             journal: ProcessHistoryJournal::default(),
-            reading: BTreeSet::new(),
+            reading: BTreeMap::new(),
             revision: 0,
             series_budget_bytes: ENDED_SERIES_BUDGET_BYTES,
         }
-    }
-
-    /// The ended runs' buckets keep within `bytes` (tests).
-    #[cfg(test)]
-    pub(crate) fn with_series_budget(mut self, bytes: usize) -> Self {
-        self.series_budget_bytes = bytes;
-        self
     }
 
     /// Moves whenever what a run shows may have changed.
@@ -213,10 +215,6 @@ impl ProcessHistoryBook {
     /// process not yet followed; notes the live runs the table no longer
     /// lists and ends the ones gone for longer than the grace.
     pub(crate) fn observe(&mut self, table: &ProcessTable, inputs: &SampleInputs<'_>) {
-        if self.has_sampled(table) {
-            return;
-        }
-        self.last_table = Some(table_identity(table));
         self.revision += 1;
         let utc_ns = utc_of(inputs.now);
         let mut listed = BTreeSet::new();
@@ -245,12 +243,6 @@ impl ProcessHistoryBook {
             self.note_missing(&listed, inputs.now);
         }
         self.bound();
-    }
-
-    /// Whether `table` is the one sampled last, so observing it would add
-    /// nothing.
-    pub(crate) fn has_sampled(&self, table: &ProcessTable) -> bool {
-        self.last_table == Some(table_identity(table))
     }
 
     /// The live runs to probe this cycle: first the ones the table lost.
@@ -367,16 +359,36 @@ impl ProcessHistoryBook {
         let Some(run) = self.runs.get(key) else {
             return false;
         };
-        if !run.series.is_empty() || run.is_live() || self.reading.contains(key) {
+        if !run.series.is_empty() || run.is_live() || self.reading.contains_key(key) {
             return false;
         }
-        self.reading.insert(key.clone());
+        self.reading.insert(key.clone(), Read::Asked);
         true
+    }
+
+    /// Whether `run` waits for its buckets: it holds none and the store
+    /// has not answered for it (an answer without rows leaves it empty,
+    /// not loading).
+    pub(crate) fn is_loading(&self, run: &Run) -> bool {
+        run.series.is_empty()
+            && !run.is_live()
+            && self.reading.get(&run.info.key) != Some(&Read::Answered)
+    }
+
+    /// The store could not read `key`'s buckets: it is answered, with none.
+    pub(crate) fn on_read_failed(&mut self, key: &ProcessKey) {
+        if self.reading.contains_key(key) {
+            self.reading.insert(key.clone(), Read::Answered);
+            self.revision += 1;
+        }
     }
 
     /// Takes the buckets read for `key`; drops the buckets of the ended
     /// runs that ended longest ago beyond the ones kept in memory.
     pub(crate) fn on_buckets(&mut self, key: &ProcessKey, rows: Vec<RunBucketRow>) {
+        if let Some(read) = self.reading.get_mut(key) {
+            *read = Read::Answered;
+        }
         if let Some(run) = self.runs.get_mut(key) {
             for row in rows.into_iter().filter(|row| row.key == *key) {
                 run.series.restore_closed(row.tier, row.bucket);
@@ -388,13 +400,59 @@ impl ProcessHistoryBook {
     }
 
     /// What closed and changed since the last call, for the long-term
-    /// store.
+    /// store, with the latest buckets each size written keeps (D-94).
     pub(crate) fn take_journal(&mut self) -> ProcessHistoryJournal {
         for run in self.runs.values_mut().filter(|run| run.changed) {
             run.changed = false;
             self.journal.runs.push(run.info.clone());
         }
-        std::mem::take(&mut self.journal)
+        let mut journal = std::mem::take(&mut self.journal);
+        journal.keep_latest = retention::keep_latest_of(&journal.buckets);
+        journal
+    }
+
+    /// Lets the ended runs last seen longest ago go, from the book and the
+    /// store, as many as bring `usage` back within `budget_bytes` (D-94);
+    /// how many went.
+    pub(crate) fn give_way(&mut self, usage: StoreUsage, budget_bytes: u64) -> usize {
+        let count = retention::runs_giving_way(usage, budget_bytes);
+        let mut ended: Vec<(i64, ProcessKey)> = self
+            .runs
+            .iter()
+            .filter(|(_, run)| run.info.end.is_some())
+            .map(|(key, run)| (run.info.last_seen_utc_ns, key.clone()))
+            .collect();
+        ended.sort();
+        let giving_way: Vec<ProcessKey> =
+            ended.into_iter().take(count).map(|(_, key)| key).collect();
+        for key in &giving_way {
+            self.forget(key);
+        }
+        if !giving_way.is_empty() {
+            self.revision += 1;
+        }
+        giving_way.len()
+    }
+
+    /// The store keeps only the `runs` last seen (it holds runs the book
+    /// no longer lists).
+    pub(crate) fn keep_stored_runs(&mut self, usage: StoreUsage) {
+        if let Some(runs) = retention::runs_to_keep(usage) {
+            self.journal.keep_runs = Some(runs);
+        }
+    }
+
+    /// Whether the journal holds deletions not sent yet.
+    pub(crate) fn has_unsent_deletions(&self) -> bool {
+        !self.journal.forget.is_empty() || self.journal.keep_runs.is_some()
+    }
+
+    /// Removes `key` and asks the store to delete it.
+    fn forget(&mut self, key: &ProcessKey) {
+        self.runs.remove(key);
+        self.reading.remove(key);
+        self.signals.remove(key);
+        self.journal.forget.push(key.clone());
     }
 
     /// Marks every live run changed, so the next journal carries the time
@@ -536,7 +594,7 @@ impl ProcessHistoryBook {
     }
 
     /// Keeps at most [`MAX_LISTED_RUNS`] runs: the ended runs that ended
-    /// first give way.
+    /// first give way, in the store too.
     fn bound(&mut self) {
         let excess = self.runs.len().saturating_sub(MAX_LISTED_RUNS);
         if excess > 0 {
@@ -547,7 +605,7 @@ impl ProcessHistoryBook {
                 .collect();
             ended.sort();
             for (_, key) in ended.into_iter().take(excess) {
-                self.runs.remove(&key);
+                self.forget(&key);
             }
         }
         self.limit_series(None);
@@ -556,7 +614,7 @@ impl ProcessHistoryBook {
     /// Keeps the ended runs' buckets within the byte budget: `keep` (the
     /// run being opened) and then the ones that ended last.
     fn limit_series(&mut self, keep: Option<&ProcessKey>) {
-        let bytes_of = |run: &Run| run.series.len().saturating_mul(BUCKET_BYTES);
+        let bytes_of = |run: &Run| series_bytes(&run.series);
         let mut used = keep.and_then(|key| self.runs.get(key)).map_or(0, &bytes_of);
         let mut ended: Vec<(i64, ProcessKey, usize)> = self
             .runs
@@ -578,13 +636,16 @@ impl ProcessHistoryBook {
     }
 }
 
-fn utc_of(now: Now) -> i64 {
-    i64::try_from(now.utc_ns).unwrap_or(i64::MAX)
+/// What a series' buckets cost in memory, the room its sizes hold
+/// included.
+fn series_bytes(series: &RunSeries) -> usize {
+    series
+        .allocated_buckets()
+        .saturating_mul(std::mem::size_of::<RunBucket>())
 }
 
-/// What tells one sampled table from the next: its cycle and read time.
-fn table_identity(table: &ProcessTable) -> (u64, u64) {
-    (table.cycle_id, table.read_finished_boot_ns)
+fn utc_of(now: Now) -> i64 {
+    i64::try_from(now.utc_ns).unwrap_or(i64::MAX)
 }
 
 fn new_run(row: &ProcessRow, inputs: &SampleInputs<'_>, (utc_ns, shift_ns): (i64, i64)) -> Run {

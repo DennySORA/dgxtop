@@ -1,7 +1,9 @@
 //! The process actor (D-79): one owner of the runs, the process memory
 //! record and the jobs that leave for the probe and the stores. It takes
 //! one input at a time, reads its clock for it, and publishes a new read
-//! model when what it shows changed.
+//! model when what it shows changed. A table goes to the runs and the
+//! memory record once: the same table handed again (a Manager that resends
+//! one) counts as a commit without a new table.
 
 use std::sync::{Arc, PoisonError, RwLock};
 
@@ -51,6 +53,8 @@ pub struct ProcessHistory {
     clock: Arc<dyn TimeProvider>,
     started: bool,
     flushes: u64,
+    /// The table taken last (cycle, read time).
+    last_table: Option<(u64, u64)>,
 }
 
 impl ProcessHistory {
@@ -83,6 +87,7 @@ impl ProcessHistory {
             clock: ports.clock,
             started: false,
             flushes: 0,
+            last_table: None,
         };
         actor.publish();
         (actor, published)
@@ -90,19 +95,19 @@ impl ProcessHistory {
 
     /// Takes one input and publishes what changed.
     pub fn handle(&mut self, input: ProcessHistoryInput) {
-        if !self.started {
-            self.started = true;
-            self.service.start();
-        }
         let now = Now {
             boot_ns: self.clock.now_boot_ns(),
             utc_ns: self.clock.now_utc_ns(),
         };
+        if !self.started {
+            self.started = true;
+            self.service.start(now);
+        }
         // A flush sends everything; nothing is due after it.
         let due = !matches!(input, ProcessHistoryInput::Flush);
         match input {
             ProcessHistoryInput::Table(sample) => self.on_table(&sample, now),
-            ProcessHistoryInput::Tick => self.service.on_sampled_table(),
+            ProcessHistoryInput::Tick => self.service.on_sampled_table(now),
             ProcessHistoryInput::Probe(report) => self.service.on_probe(&report, now),
             ProcessHistoryInput::Store(completion) => self.service.on_completion(completion, now),
             ProcessHistoryInput::Signal { key, signal } => {
@@ -124,6 +129,11 @@ impl ProcessHistory {
     }
 
     fn on_table(&mut self, sample: &ProcessTableSample, now: Now) {
+        let identity = (sample.table.cycle_id, sample.table.read_finished_boot_ns);
+        if self.last_table.replace(identity) == Some(identity) {
+            self.service.on_sampled_table(now);
+            return;
+        }
         {
             let mut memory = self.memory.write().unwrap_or_else(PoisonError::into_inner);
             memory.set_interval(sample.process_period_ms);

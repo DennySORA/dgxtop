@@ -127,7 +127,7 @@ impl ModelBuilder {
                 continue;
             }
             if let Some(run) = book.run(&request.key) {
-                details.push((revision, detail_of(run, request)));
+                details.push((revision, detail_of(run, request, book.is_loading(run))));
             }
         }
         self.details = details;
@@ -194,8 +194,9 @@ fn row_of(run: &Run) -> RunRow {
 }
 
 /// `run` as `request` shows it: its bars of the size asked for (the
-/// compression's [`bars_of`], D-79) over the plot's columns.
-fn detail_of(run: &Run, request: &RunRequest) -> RunDetail {
+/// compression's [`bars_of`], D-79) over the plot's columns; `loading`
+/// while its buckets are being read.
+fn detail_of(run: &Run, request: &RunRequest, loading: bool) -> RunDetail {
     let columns = request.columns.clamp(1, MAX_RUN_CHART_POINTS);
     let series = run.series();
     RunDetail {
@@ -209,7 +210,7 @@ fn detail_of(run: &Run, request: &RunRequest) -> RunDetail {
             bars: bars.bars,
         }),
         whole: *run.whole(),
-        loading: series.is_empty() && !run.is_live(),
+        loading,
     }
 }
 

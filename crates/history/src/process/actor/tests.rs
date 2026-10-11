@@ -3,9 +3,12 @@ use std::sync::Arc;
 
 use dgxtop_core::action::Signal;
 use dgxtop_core::canonical::{ProcessRow, ProcessTable};
+use dgxtop_core::errors::InfraError;
 use dgxtop_core::identity::EntityId;
 use dgxtop_core::ports::{ProcessHistoryCompletion, ProcessHistoryReader, ProcessMemoryReader};
-use dgxtop_core::process_history::{EndCause, ProcessHistoryLoad, RunEnd, RunMetric};
+use dgxtop_core::process_history::{
+    EndCause, ProcessHistoryLoad, RunDetails, RunEnd, RunInfo, RunMetric, StoreUsage,
+};
 use dgxtop_core::process_model::RunRequest;
 use dgxtop_core::process_probe::{ProbeLiveness, ProbeReading, ProbeReport};
 use dgxtop_core::testing::{
@@ -91,7 +94,7 @@ fn tables_become_runs_and_colors_in_the_published_model() {
     let mut rig = rig();
     assert_eq!(rig.published.latest().revision, 1, "an empty model at once");
     table(&mut rig, 1, vec![row(9, 4 * GIB)]);
-    assert!(matches!(rig.store.take()[..], [ProcessHistoryJob::Load]));
+    assert!(matches!(rig.store.take()[..], [ProcessHistoryJob::Load(_)]));
     for second in 2..10 {
         table(&mut rig, second, vec![row(9, 4 * GIB)]);
     }
@@ -109,6 +112,33 @@ fn tables_become_runs_and_colors_in_the_published_model() {
         Some(model.tracked[0].slot)
     );
     assert_eq!(model.tracked[0].current.len(), 1);
+}
+
+/// The same table handed again (a cycle's later commits carry the
+/// snapshot's table) is taken once by the runs and the memory record: it
+/// counts as a commit without a table, so a finished probe is still
+/// followed by the next.
+#[test]
+fn a_table_handed_again_is_taken_once() {
+    let mut rig = rig();
+    table(&mut rig, 1, vec![row(9, 4 * GIB)]);
+    assert_eq!(rig.probe.take().len(), 1);
+    let revision = rig.published.latest().revision;
+    rig.actor
+        .handle(ProcessHistoryInput::Probe(ProbeReport::default()));
+    let after_probe = rig.published.latest().revision;
+    assert!(after_probe > revision);
+    for _ in 0..3 {
+        table(&mut rig, 1, vec![row(9, 4 * GIB)]);
+    }
+    let model = rig.published.latest();
+    assert_eq!(model.revision, after_probe, "nothing new to show");
+    assert_eq!(model.runs[0].whole.value(RunMetric::Cpu).count, 1);
+    assert_eq!(rig.probe.take().len(), 1, "the next probe left");
+    table(&mut rig, 2, vec![row(9, 4 * GIB)]);
+    let model = rig.published.latest();
+    assert_eq!(model.runs[0].whole.value(RunMetric::Cpu).count, 2);
+    assert!(model.revision > after_probe);
 }
 
 /// A tick changes nothing shown, so nothing is published again.
@@ -206,7 +236,7 @@ fn shown_runs_get_their_details_and_ended_ones_are_read_once() {
     rig.actor.handle(ProcessHistoryInput::Show(ended.clone()));
     let reads = rig.store.take();
     assert_eq!(reads.len(), 1, "read once: {reads:?}");
-    assert!(matches!(reads[0], ProcessHistoryJob::ReadRun(_)));
+    assert!(matches!(reads[0], ProcessHistoryJob::ReadRun { .. }));
     assert!(rig.published.latest().detail_for(&ended).unwrap().loading);
 }
 
@@ -230,11 +260,11 @@ fn a_flush_is_settled_once_its_writes_are_answered() {
     let writes = rig.published.latest().writes;
     assert_eq!((writes.flushes, writes.pending), (1, 2));
     assert!(!writes.settled_after(1));
-    for _ in 0..2 {
-        rig.actor
-            .handle(ProcessHistoryInput::Store(ProcessHistoryCompletion::Saved(
-                Ok(()),
-            )));
+    for answer in [
+        ProcessHistoryCompletion::Appended(Ok(StoreUsage::default())),
+        ProcessHistoryCompletion::Saved(Ok(())),
+    ] {
+        rig.actor.handle(ProcessHistoryInput::Store(answer));
     }
     assert!(rig.published.latest().writes.settled_after(1));
 }
@@ -258,4 +288,77 @@ fn the_memory_record_answers_the_parts_of_a_window() {
             .parts(&other, (10 * SECOND, 20 * SECOND), 2)
             .is_empty()
     );
+}
+
+/// What the stores kept of an ended run: its row, without buckets.
+fn ended_info(pid: i64) -> RunInfo {
+    RunInfo {
+        key: test_process_key(pid),
+        name: "acme_llm.eval".to_owned(),
+        command: String::new(),
+        cwd: String::new(),
+        uid: None,
+        gpus: vec!["GPU 0".to_owned()],
+        details: RunDetails::default(),
+        started_utc_ns: 1_789_999_000_000_000_000,
+        last_seen_utc_ns: 1_789_999_600_000_000_000,
+        end: Some(RunEnd {
+            utc_ns: 1_789_999_600_000_000_000,
+            cause: EndCause::Exit(0),
+        }),
+    }
+}
+
+/// An ended run restored without its buckets, opened in the tab.
+fn opened_ended_run(rig: &mut Rig) -> RunRequest {
+    table(rig, 1, vec![row(9, GIB)]);
+    loaded(
+        rig,
+        ProcessHistoryLoad {
+            runs: vec![ended_info(5)],
+            ..ProcessHistoryLoad::default()
+        },
+    );
+    rig.store.take();
+    let request = RunRequest {
+        key: test_process_key(5),
+        bar: BarSize::OneMinute,
+        columns: 30,
+    };
+    rig.actor.handle(ProcessHistoryInput::Show(request.clone()));
+    request
+}
+
+/// A run the store holds no buckets of (it gave way, or its writes were
+/// lost) is no longer loading once the read answered: its detail shows
+/// it has no bars instead of waiting for good.
+#[test]
+fn an_empty_read_answer_ends_the_loading() {
+    let mut rig = rig();
+    let request = opened_ended_run(&mut rig);
+    assert!(rig.published.latest().detail_for(&request).unwrap().loading);
+    rig.actor.handle(ProcessHistoryInput::Store(
+        ProcessHistoryCompletion::RunRead {
+            key: test_process_key(5),
+            result: Ok(Vec::new()),
+        },
+    ));
+    let model = rig.published.latest();
+    let detail = model.detail_for(&request).unwrap();
+    assert!(!detail.loading, "answered: nothing to wait for");
+    assert!(detail.bars.is_none());
+}
+
+/// A failed read ends the loading too (the failure is logged).
+#[test]
+fn a_failed_read_answer_ends_the_loading() {
+    let mut rig = rig();
+    let request = opened_ended_run(&mut rig);
+    rig.actor.handle(ProcessHistoryInput::Store(
+        ProcessHistoryCompletion::RunRead {
+            key: test_process_key(5),
+            result: Err(InfraError::Unavailable("acme".to_owned())),
+        },
+    ));
+    assert!(!rig.published.latest().detail_for(&request).unwrap().loading);
 }
