@@ -808,6 +808,10 @@ fn forbidden_requests_are_rejected_before_the_worker_sees_them() {
     read_only.actions.read_only = true;
     let mut disabled = defaults.clone();
     disabled.actions.enabled = false;
+    // SIGKILL is allowed by default (D-71); a configuration that turns it
+    // off still refuses it.
+    let mut no_force = defaults.clone();
+    no_force.actions.allow_force = false;
     struct Case {
         name: &'static str,
         config: Config,
@@ -857,7 +861,7 @@ fn forbidden_requests_are_rejected_before_the_worker_sees_them() {
         },
         Case {
             name: "force",
-            config: defaults.clone(),
+            config: no_force,
             euid: EUID,
             key: target(4242),
             signal: Signal::Sigkill,

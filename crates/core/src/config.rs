@@ -5,7 +5,8 @@
 //! defaults is `spec/dgxtop-v2/examples/config.default.json`, embedded
 //! verbatim: the REF workload's configuration ([`Config::reference`]). The
 //! built-in defaults are that document with the owner's decisions applied
-//! ([`Config::defaults`]: the history archive on, D-51); the spec copy stays
+//! ([`Config::defaults`]: the history archive on, D-51; SIGKILL allowed,
+//! D-71); the spec copy stays
 //! byte-identical (D-02).
 
 use serde::{Deserialize, Serialize};
@@ -259,12 +260,14 @@ impl Config {
         Self::from_json(DEFAULT_CONFIG_JSON)
     }
 
-    /// The built-in defaults: the spec's document with the history archive
-    /// on, so the history view keeps earlier runs and boots (owner decision,
-    /// D-51). REF runs use [`Config::reference`].
+    /// The built-in defaults: the spec's document with the owner's
+    /// decisions: the history archive on, so the history view keeps earlier
+    /// runs and boots (D-51), and SIGKILL allowed, so F9 force-kills after
+    /// its confirmation (D-71). REF runs use [`Config::reference`].
     pub fn defaults() -> Result<Self, ConfigError> {
         let mut config = Self::reference()?;
         config.store.archive_enabled = true;
+        config.actions.allow_force = true;
         config.validate().map_err(ConfigError::Invalid)?;
         Ok(config)
     }
@@ -1185,9 +1188,13 @@ mod tests {
         assert!(!reference.store.archive_enabled);
         let defaults = defaults();
         assert!(defaults.store.archive_enabled);
-        let mut only_the_archive = defaults.clone();
-        only_the_archive.store.archive_enabled = false;
-        assert_eq!(only_the_archive, reference, "nothing else differs");
+        // D-71: F9 force-kills by default; the spec document keeps it off.
+        assert!(!reference.actions.allow_force);
+        assert!(defaults.actions.allow_force);
+        let mut only_the_owners = defaults.clone();
+        only_the_owners.store.archive_enabled = false;
+        only_the_owners.actions.allow_force = false;
+        assert_eq!(only_the_owners, reference, "nothing else differs");
         assert!(defaults.validate().is_ok());
     }
 

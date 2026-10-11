@@ -292,8 +292,13 @@ mod tests {
         let me = identity(1000);
         let rules = policy();
         assert!(check_target(&me, &rules, &key(42), Signal::Sigterm, None, &[]).is_ok());
+        // SIGKILL is allowed by default (D-71) and refused once turned off.
+        assert!(check_target(&me, &rules, &key(42), Signal::Sigkill, None, &[]).is_ok());
+        let mut no_force = Config::defaults().unwrap();
+        no_force.actions.allow_force = false;
+        let strict = ActionPolicy::from_config(&no_force);
         assert_eq!(
-            check_target(&me, &rules, &key(42), Signal::Sigkill, None, &[])
+            check_target(&me, &strict, &key(42), Signal::Sigkill, None, &[])
                 .unwrap_err()
                 .code,
             ErrorCode::CapabilityDenied
@@ -346,6 +351,6 @@ mod tests {
         assert_eq!(context.policy_revision, 3);
         assert_eq!(context.protected_pids, vec![1, 77, 4000]);
         assert!(context.actions_enabled);
-        assert!(!context.allow_force);
+        assert!(context.allow_force, "SIGKILL allowed by default (D-71)");
     }
 }
