@@ -21,6 +21,25 @@ CPU · GPU · メモリ · ディスク · ネットワーク · GPU プロセ�
 
 dgxtop は偽の 0 を決して表示しません。読み取れなかった値は**非対応**、**読み取り失敗**、**古い**、**ソース競合**として、取得元とともに表示します。
 
+## インストール
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
+```
+
+x86_64 または aarch64 の Linux で、glibc 2.34 以降（Ubuntu 22.04、Debian 12、RHEL 9 以降）。DGX Spark も含みます。WSL 2 では Linux 版が動きます。GPU には Windows 側の NVIDIA ドライバが必要で、CPU の温度と電力は通常取得できません。WSL 1、musl、macOS、Windows には対応していません。GPU の値には NVIDIA ドライバ（NVML）が必要で、ない場合もそれ以外は動作します。
+
+`install.sh` は CPU に合ったビルドを選び、`SHA256SUMS` とアーカイブ構成を検証して `dgxtop --version --verbose` を実行し、`~/.local/bin/dgxtop` をアトミックに置き換え、以前のバイナリを `dgxtop.previous` として残します（`./install.sh --rollback` で戻せます）。特定のリリースを入れるには、`bash` の後ろに `-s -- --version v2.0.0` を付けます。v2.0.0 より前のリリースは以前の v1 実装です。
+
+ソースからビルドすることもできます（`rust-toolchain.toml` で Rust 1.92.0 に固定）：
+
+```bash
+git clone https://github.com/DennySORA/dgxtop.git
+cd dgxtop
+cargo build --release --locked
+./target/release/dgxtop
+```
+
 ## 画面
 
 ### Overview
@@ -115,25 +134,6 @@ Overview のリソースを 5 分〜24 時間の範囲で表示します（`w` /
 CI は [`spec/dgxtop-v2/tools/check_boundaries.py`](../spec/dgxtop-v2/tools/check_boundaries.py) でこの境界を検査します。
 
 </details>
-
-## インストール
-
-x86_64 または aarch64 の Linux で、glibc 2.34 以降（Ubuntu 22.04、Debian 12、RHEL 9 以降）。DGX Spark も含みます。WSL 2 では Linux 版が動きます。GPU には Windows 側の NVIDIA ドライバが必要で、CPU の温度と電力は通常取得できません。WSL 1、musl、macOS、Windows には対応していません。GPU の値には NVIDIA ドライバ（NVML）が必要で、ない場合もそれ以外は動作します。
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
-```
-
-`install.sh` は CPU に合ったビルドを選び、`SHA256SUMS` とアーカイブ構成を検証して `dgxtop --version --verbose` を実行し、`~/.local/bin/dgxtop` をアトミックに置き換え、以前のバイナリを `dgxtop.previous` として残します（`./install.sh --rollback` で戻せます）。特定のリリースを入れるには、`bash` の後ろに `-s -- --version v2.0.0` を付けます。v2.0.0 より前のリリースは以前の v1 実装です。
-
-ソースからビルドすることもできます（`rust-toolchain.toml` で Rust 1.92.0 に固定）：
-
-```bash
-git clone https://github.com/DennySORA/dgxtop.git
-cd dgxtop
-cargo build --release --locked
-./target/release/dgxtop
-```
 
 ## 使い方
 

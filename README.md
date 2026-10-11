@@ -22,6 +22,31 @@ isolated collection · explainable sources · exact history · protected process
 dgxtop never shows a fake zero. A value it cannot read is shown as **unsupported**, **read failed**,
 **stale** or **source conflict**, together with where it came from.
 
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
+```
+
+Linux on x86_64 or aarch64 with glibc 2.34 or newer (Ubuntu 22.04, Debian 12, RHEL 9 and later),
+DGX Spark included. WSL 2 runs the Linux build: GPUs need the NVIDIA driver on Windows, and CPU
+temperature and power are usually not available there. WSL 1, musl, macOS and Windows are not
+supported. GPU metrics need the NVIDIA driver (NVML); without it, everything else still works.
+
+`install.sh` picks the build for your CPU, verifies `SHA256SUMS` and the archive layout, runs
+`dgxtop --version --verbose`, then atomically replaces `~/.local/bin/dgxtop` and keeps the previous
+binary as `dgxtop.previous` (`./install.sh --rollback` restores it). For a specific release, append
+`-s -- --version v2.0.0` to `bash`. Releases before v2.0.0 are the earlier v1 program.
+
+Or build from source (Rust 1.92.0 is pinned by `rust-toolchain.toml`):
+
+```bash
+git clone https://github.com/DennySORA/dgxtop.git
+cd dgxtop
+cargo build --release --locked
+./target/release/dgxtop
+```
+
 ## Views
 
 ### Overview
@@ -138,31 +163,6 @@ boundary is kept as an exact bridge instead of being split by guesswork.
 boundary in CI.
 
 </details>
-
-## Install
-
-Linux on x86_64 or aarch64 with glibc 2.34 or newer (Ubuntu 22.04, Debian 12, RHEL 9 and later),
-DGX Spark included. WSL 2 runs the Linux build: GPUs need the NVIDIA driver on Windows, and CPU
-temperature and power are usually not available there. WSL 1, musl, macOS and Windows are not
-supported. GPU metrics need the NVIDIA driver (NVML); without it, everything else still works.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
-```
-
-`install.sh` picks the build for your CPU, verifies `SHA256SUMS` and the archive layout, runs
-`dgxtop --version --verbose`, then atomically replaces `~/.local/bin/dgxtop` and keeps the previous
-binary as `dgxtop.previous` (`./install.sh --rollback` restores it). For a specific release, append
-`-s -- --version v2.0.0` to `bash`. Releases before v2.0.0 are the earlier v1 program.
-
-Or build from source (Rust 1.92.0 is pinned by `rust-toolchain.toml`):
-
-```bash
-git clone https://github.com/DennySORA/dgxtop.git
-cd dgxtop
-cargo build --release --locked
-./target/release/dgxtop
-```
 
 ## Usage
 

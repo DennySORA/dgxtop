@@ -21,6 +21,25 @@ CPU · GPU · 記憶體 · 磁碟 · 網路 · GPU 程序<br>
 
 dgxtop 不會顯示假的 0。讀不到的值會標示為**不支援**、**讀取失敗**、**過期**或**來源衝突**，並附上資料來源。
 
+## 安裝
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
+```
+
+支援 x86_64 或 aarch64 的 Linux，glibc 2.34 以上（Ubuntu 22.04、Debian 12、RHEL 9 及更新版本），包括 DGX Spark。WSL 2 可以執行 Linux 版：GPU 需要在 Windows 安裝 NVIDIA 驅動，CPU 溫度與功耗通常讀不到。不支援 WSL 1、musl、macOS 與 Windows。GPU 指標需要 NVIDIA 驅動（NVML）；沒有驅動時其他功能照常運作。
+
+`install.sh` 會依 CPU 選擇對應的版本、驗證 `SHA256SUMS` 與壓縮檔結構、執行 `dgxtop --version --verbose`，再以原子方式替換 `~/.local/bin/dgxtop`，並把舊版保留為 `dgxtop.previous`（用 `./install.sh --rollback` 還原）。要安裝特定版本，在 `bash` 後面加上 `-s -- --version v2.0.0`。v2.0.0 之前的 release 是先前的 v1 程式。
+
+也可以從原始碼建置（`rust-toolchain.toml` 固定 Rust 1.92.0）：
+
+```bash
+git clone https://github.com/DennySORA/dgxtop.git
+cd dgxtop
+cargo build --release --locked
+./target/release/dgxtop
+```
+
 ## 畫面
 
 ### 總覽（Overview）
@@ -115,25 +134,6 @@ CPU 與記憶體、每張 GPU 的使用率與記憶體、最忙的磁碟與網�
 CI 以 [`spec/dgxtop-v2/tools/check_boundaries.py`](../spec/dgxtop-v2/tools/check_boundaries.py) 檢查這條邊界。
 
 </details>
-
-## 安裝
-
-支援 x86_64 或 aarch64 的 Linux，glibc 2.34 以上（Ubuntu 22.04、Debian 12、RHEL 9 及更新版本），包括 DGX Spark。WSL 2 可以執行 Linux 版：GPU 需要在 Windows 安裝 NVIDIA 驅動，CPU 溫度與功耗通常讀不到。不支援 WSL 1、musl、macOS 與 Windows。GPU 指標需要 NVIDIA 驅動（NVML）；沒有驅動時其他功能照常運作。
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
-```
-
-`install.sh` 會依 CPU 選擇對應的版本、驗證 `SHA256SUMS` 與壓縮檔結構、執行 `dgxtop --version --verbose`，再以原子方式替換 `~/.local/bin/dgxtop`，並把舊版保留為 `dgxtop.previous`（用 `./install.sh --rollback` 還原）。要安裝特定版本，在 `bash` 後面加上 `-s -- --version v2.0.0`。v2.0.0 之前的 release 是先前的 v1 程式。
-
-也可以從原始碼建置（`rust-toolchain.toml` 固定 Rust 1.92.0）：
-
-```bash
-git clone https://github.com/DennySORA/dgxtop.git
-cd dgxtop
-cargo build --release --locked
-./target/release/dgxtop
-```
 
 ## 使用方式
 
