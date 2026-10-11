@@ -887,3 +887,17 @@ fn missing_parent_directory_fails_closed() {
     assert_eq!(audit.status().state, PersistenceState::Failed);
     assert!(audit.append_intent(&fixture.intent(130)).is_err());
 }
+
+/// A status read is a read: it never deletes rows, however old they are
+/// or however long ago the audit last deleted anything (D-96).
+#[test]
+fn status_never_deletes_rows() {
+    let fixture = Fixture::new("status-read-only");
+    let mut audit = fixture.open(AuditLimits::default());
+    let mut old = fixture.intent(80);
+    old.created_utc = fixture.utc_days_ago(40);
+    audit.append_intent(&old).unwrap();
+    fixture.clock.advance_ns(2 * 3600 * 1_000_000_000);
+    assert!(audit.status().accepts_writes());
+    assert!(audit.lookup(old.request_id).unwrap().is_some());
+}

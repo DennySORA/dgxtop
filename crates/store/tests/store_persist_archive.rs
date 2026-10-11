@@ -729,3 +729,26 @@ fn eviction_never_deletes_a_segment_the_append_writes_into() {
         .unwrap();
     assert_eq!(seg_a_rows, 1);
 }
+
+/// A status read is a read: it never deletes rows, however old they are
+/// or however long ago the archive last deleted anything (D-96).
+#[test]
+fn status_never_deletes_rows() {
+    let fixture = Fixture::new("status-read-only");
+    let mut archive = fixture.open(ArchiveLimits::default());
+    let old_start = fixture.utc_days_ago(10);
+    let old_end = format_utc_rfc3339(fixture.clock.now_utc_ns() - 10 * DAY_NS + 60_000_000_000);
+    archive
+        .append(journal(
+            1,
+            vec![segment("seg-old", &old_start)],
+            vec![bucket("seg-old", 0, &old_start, &old_end)],
+        ))
+        .unwrap();
+    fixture.clock.advance_ns(3600 * 1_000_000_000);
+    let status = archive.status();
+    assert_eq!(status.state, PersistenceState::Healthy);
+    let reader = fixture.reader();
+    assert_eq!(count(&reader, "history_segments"), 1);
+    assert_eq!(count(&reader, "history_buckets"), 1);
+}

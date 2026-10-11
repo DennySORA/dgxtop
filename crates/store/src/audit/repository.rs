@@ -243,7 +243,7 @@ impl SqliteAuditRepository {
     }
 
     /// Deletes rows older than `retention_days` (bounded per run). Also runs
-    /// automatically at open and at most hourly from `status()`.
+    /// automatically at open; never from `status()` (a read, D-96).
     pub fn run_retention(&mut self) -> Result<AuditRetentionReport, AuditFailure> {
         let cutoff_utc = utc_cutoff(self.clock.now_utc_ns(), self.limits.retention_days);
         self.last_retention_boot_ns = Some(self.clock.now_boot_ns());
@@ -390,7 +390,6 @@ impl SqliteAuditRepository {
         if let Some(unusable) = self.writer.unusable() {
             return (PersistenceState::Failed, Some(unusable.reason.clone()));
         }
-        self.maybe_run_retention();
         let view = match self.capacity_view(WriteClass::NewRecord) {
             Ok(view) => view,
             Err(error) => return (PersistenceState::Failed, Some(error.message)),
