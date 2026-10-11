@@ -16,7 +16,7 @@ use dgxtop_core::identity::{
 };
 use dgxtop_core::metric::{NativeUnit, Scalar};
 use dgxtop_core::naming::collector_id;
-use dgxtop_core::observation::{Attribute, EntityKind, EntityRecord};
+use dgxtop_core::observation::EntityRecord;
 use dgxtop_core::process_model::ProcessHistoryModel;
 use dgxtop_core::quality::{Freshness, Quality, ReadStatus, SampleKind, SelectionState};
 use dgxtop_core::testing::{
@@ -240,29 +240,7 @@ pub(crate) fn explanation_for(
     }
 }
 
-pub(crate) fn entity_record(
-    id: &str,
-    kind: EntityKind,
-    display_name: &str,
-    attributes: &[(&str, &str)],
-) -> EntityRecord {
-    EntityRecord {
-        entity_id: EntityId::new(id).unwrap(),
-        kind,
-        parent_id: None,
-        generation: 1,
-        discovered_boot_ns: 0,
-        removed_boot_ns: None,
-        display_name: display_name.to_owned(),
-        attributes: attributes
-            .iter()
-            .map(|(key, value)| Attribute {
-                key: (*key).to_owned(),
-                value: (*value).to_owned(),
-            })
-            .collect(),
-    }
-}
+pub(crate) use dgxtop_core::testing::entity_record;
 
 pub(crate) fn process_key(pid: i64, start_time_ticks: u64) -> ProcessKey {
     ProcessKey {

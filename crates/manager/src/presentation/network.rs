@@ -100,15 +100,7 @@ fn interface_view(reader: &MetricReader<'_>, entity_id: &EntityId) -> InterfaceV
 
 /// Interfaces are identified by namespace + ifindex; the name is display only.
 fn interface_name(catalog: &CatalogSnapshot, entity_id: &EntityId) -> String {
-    let record = catalog.entity(entity_id);
-    let named = record
-        .and_then(|record| record.attribute(attributes::IFNAME))
-        .or_else(|| {
-            record
-                .map(|record| record.display_name.as_str())
-                .filter(|name| !name.is_empty())
-        });
-    label_text(named.unwrap_or(entity_id.as_str()))
+    label_text(catalog.interface_name(entity_id))
 }
 
 #[cfg(test)]

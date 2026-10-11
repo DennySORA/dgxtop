@@ -9,12 +9,10 @@ use dgxtop_core::naming::{attributes, entity};
 use dgxtop_core::observation::EntityRecord;
 
 use super::index::SnapshotLookup;
-use super::labels::label_text;
 
 /// GPUs kept per projection (DGX-class hosts have at most 16).
 pub(crate) const MAX_GPUS: usize = 64;
 const GPU_ENTITY_PREFIX: &str = "gpu:";
-const SHORT_UUID_CHARS: usize = 8;
 /// `memory_model` attribute value of a GPU that allocates from system RAM.
 const UNIFIED_MEMORY_MODEL: &str = "unified";
 
@@ -87,7 +85,10 @@ impl<'a> GpuDirectory<'a> {
         self.gpus
             .iter()
             .find(|gpu| &gpu.entity_id == entity_id)
-            .map_or_else(|| uuid_label(entity_id.as_str()), |gpu| gpu.label.clone())
+            .map_or_else(
+                || entity::gpu_label(entity_id.as_str(), None),
+                |gpu| gpu.label.clone(),
+            )
     }
 
     /// The GPUs that allocate from system RAM (D-36): the one place this
@@ -116,28 +117,13 @@ fn identity(entity_id: EntityId, record: Option<&EntityRecord>) -> GpuIdentity<'
     let nvml_index = record
         .and_then(|record| record.attribute(attributes::NVML_INDEX))
         .and_then(|index| index.trim().parse::<u32>().ok());
-    let label = nvml_index.map_or_else(
-        || uuid_label(entity_id.as_str()),
-        |index| format!("GPU {index}"),
-    );
+    let label = entity::gpu_label(entity_id.as_str(), nvml_index);
     GpuIdentity {
         entity_id,
         label,
         record,
         nvml_index,
     }
-}
-
-/// "GPU 1a2b3c4d" from `gpu:GPU-1a2b3c4d-...` when no NVML index is known.
-fn uuid_label(entity_id: &str) -> String {
-    let uuid = entity::parse_gpu(entity_id).unwrap_or(entity_id);
-    let short: String = uuid
-        .strip_prefix("GPU-")
-        .unwrap_or(uuid)
-        .chars()
-        .take(SHORT_UUID_CHARS)
-        .collect();
-    label_text(&format!("GPU {short}"))
 }
 
 #[cfg(test)]

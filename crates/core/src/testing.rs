@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use uuid::Uuid;
 
 use crate::canonical::{
-    CanonicalSample, DomainSnapshot, GpuUsageKind, ImmutableSnapshot, ProcessGpuLink, ProcessRow,
-    ProcessTable, SnapshotEntry,
+    CanonicalSample, CatalogSnapshot, DomainSnapshot, GpuUsageKind, ImmutableSnapshot,
+    ProcessGpuLink, ProcessRow, ProcessTable, SnapshotEntry,
 };
 use crate::clock::TimeProvider;
 use crate::identity::{
@@ -19,13 +19,14 @@ use crate::identity::{
 };
 use crate::metric::{CanonicalUnit, NativeUnit, Scalar};
 use crate::observation::{
-    BatchStatus, IPC_PROTOCOL_VERSION, Observation, ObservationBatch, Provenance,
+    Attribute, BatchStatus, EntityKind, EntityRecord, IPC_PROTOCOL_VERSION, Observation,
+    ObservationBatch, Provenance,
 };
 use crate::ports::{
     Dispatch, DispatchError, LogLevel, Logger, ProbeDeriver, ProcessHistoryReader,
     ProcessMemoryReader,
 };
-use crate::process_model::{MemoryPart, ProcessHistoryModel};
+use crate::process_model::{MemoryPart, ProcessHistoryModel, ProcessTableSample};
 use crate::process_probe::{ProbeReading, ProbeState};
 use crate::quality::{Freshness, Quality, ReadStatus, SampleKind, SelectionState};
 
@@ -533,6 +534,59 @@ pub fn snapshot_entry(key: &MetricKey, value: Option<f64>, read_ns: u64) -> Snap
             read_finished_boot_ns: read_ns,
         },
         last_good: None,
+    }
+}
+
+/// A catalog entity of `kind` with `attributes`.
+pub fn entity_record(
+    id: &str,
+    kind: EntityKind,
+    display_name: &str,
+    attributes: &[(&str, &str)],
+) -> EntityRecord {
+    EntityRecord {
+        entity_id: EntityId::new(id).unwrap_or_else(|error| panic!("test entity: {error}")),
+        kind,
+        parent_id: None,
+        generation: 1,
+        discovered_boot_ns: 0,
+        removed_boot_ns: None,
+        display_name: display_name.to_owned(),
+        attributes: attributes
+            .iter()
+            .map(|(key, value)| Attribute {
+                key: (*key).to_owned(),
+                value: (*value).to_owned(),
+            })
+            .collect(),
+    }
+}
+
+/// A catalog holding `entities`.
+pub fn catalog_of(entities: Vec<EntityRecord>) -> CatalogSnapshot {
+    CatalogSnapshot {
+        entities: entities
+            .into_iter()
+            .map(|record| (record.entity_id.clone(), Arc::new(record)))
+            .collect(),
+        ..CatalogSnapshot::default()
+    }
+}
+
+/// `table` handed to the history as the Manager does, in a snapshot of its
+/// own beside `catalog`.
+pub fn table_sample(
+    table: ProcessTable,
+    catalog: CatalogSnapshot,
+    process_period_ms: u64,
+) -> ProcessTableSample {
+    ProcessTableSample {
+        snapshot: Arc::new(ImmutableSnapshot {
+            process_table: Arc::new(table),
+            ..ImmutableSnapshot::default()
+        }),
+        catalog: Arc::new(catalog),
+        process_period_ms,
     }
 }
 

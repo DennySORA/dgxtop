@@ -19,6 +19,7 @@ use super::memory::ProcessMemoryBook;
 use super::model::{ModelBuilder, ModelInputs};
 use super::published::PublishedProcessHistory;
 use super::runs::{ProcessHistoryService, SampleInputs, ServicePorts};
+use super::sample::TableContext;
 
 /// The memory record's period until the first table brings its own.
 const DEFAULT_PERIOD_MS: u64 = 1_000;
@@ -133,7 +134,8 @@ impl ProcessHistory {
     }
 
     fn on_table(&mut self, sample: &ProcessTableSample, now: Now) {
-        let identity = (sample.table.cycle_id, sample.table.read_finished_boot_ns);
+        let table = sample.table();
+        let identity = (table.cycle_id, table.read_finished_boot_ns);
         if self.last_table.replace(identity) == Some(identity) {
             self.service.on_sampled_table(now);
             return;
@@ -141,15 +143,16 @@ impl ProcessHistory {
         {
             let mut memory = self.memory.write().unwrap_or_else(PoisonError::into_inner);
             memory.set_interval(sample.process_period_ms);
-            memory.record(&sample.table, now.utc_ns - i128::from(now.boot_ns));
+            memory.record(table, now.utc_ns - i128::from(now.boot_ns));
         }
+        let context = TableContext::of(sample);
         self.service.on_table(
-            &sample.table,
+            table,
             &SampleInputs {
                 now,
-                clk_tck: sample.clk_tck,
-                gpu_labels: &sample.gpu_labels,
-                host_network: sample.host_network,
+                clk_tck: context.clk_tck,
+                gpu_labels: &context.gpu_labels,
+                host_network: context.host_network,
             },
         );
     }

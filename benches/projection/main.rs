@@ -292,10 +292,8 @@ impl SnapshotWorld {
         let snapshot = self.snapshots.latest();
         self.processes
             .handle(ProcessHistoryInput::Table(Box::new(ProcessTableSample {
-                table: Arc::clone(&snapshot.process_table),
-                clk_tck: None,
-                gpu_labels: BTreeMap::new(),
-                host_network: [None, None],
+                snapshot,
+                catalog: Arc::clone(self.pipeline.catalog()),
                 process_period_ms: self.process_period_ms,
             })));
         self.model = self.published.latest();

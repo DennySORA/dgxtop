@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use dgxtop_core::action::Signal;
+use dgxtop_core::canonical::CatalogSnapshot;
 use dgxtop_core::process_model::{ProcessHistoryModel, WriteProgress};
 use dgxtop_core::testing::{
-    CapturingDispatch, StaticProcessHistory, process_table, test_process_key,
+    CapturingDispatch, StaticProcessHistory, process_table, table_sample, test_process_key,
 };
 use dgxtop_core::tiers::BarSize;
 
@@ -31,13 +32,7 @@ fn rig() -> Rig {
 }
 
 fn sample(table: ProcessTable) -> ProcessTableSample {
-    ProcessTableSample {
-        table: Arc::new(table),
-        clk_tck: Some(100),
-        gpu_labels: BTreeMap::new(),
-        host_network: [None, None],
-        process_period_ms: 1_000,
-    }
+    table_sample(table, CatalogSnapshot::default(), 1_000)
 }
 
 fn session() -> SessionId {

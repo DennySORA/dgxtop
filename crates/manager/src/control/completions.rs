@@ -25,7 +25,6 @@ use crate::effects::Effects;
 use crate::hosts::HostStatusRejection;
 use crate::ingestion::pages::PagePush;
 use crate::ingestion::{CollectedOutcome, CommitOutcome, CycleInput};
-use crate::presentation::run_inputs;
 use crate::process::Now;
 use crate::scheduler::{ReadReply, ReplyMatch, RequestKind};
 
@@ -502,28 +501,24 @@ impl ControlCore {
         }
     }
 
-    // ----- hosts --------------------------------------------------------------
-
-    /// Hands the committed process table to the history's process actor
-    /// (D-76, D-79).
-    fn forward_process_table(&mut self, snapshot: &ImmutableSnapshot) {
-        // Most commits of a cycle carry the table handed over already; the
-        // sample's inputs (a reader, an index, the GPU directory) are built
-        // only for a new one.
+    /// Hands a new committed process table to the history's process actor
+    /// (D-76, D-79), as committed and with the catalog of the moment: the
+    /// history takes the GPUs' labels, the clock ticks and the host's
+    /// network from them (D-99). Most commits of a cycle carry the table
+    /// handed over already.
+    fn forward_process_table(&mut self, snapshot: &Arc<ImmutableSnapshot>) {
         if self.process_history.has_table(&snapshot.process_table) {
             self.process_history.tick();
             return;
         }
-        let catalog = self.catalog.snapshot();
-        let inputs = run_inputs(snapshot, &catalog, self.now_boot_ns());
         self.process_history.send_table(ProcessTableSample {
-            table: Arc::clone(&snapshot.process_table),
-            clk_tck: inputs.clk_tck,
-            gpu_labels: inputs.gpu_labels,
-            host_network: inputs.host_network,
+            snapshot: Arc::clone(snapshot),
+            catalog: self.catalog.snapshot(),
             process_period_ms: self.process_period_ms,
         });
     }
+
+    // ----- hosts --------------------------------------------------------------
 
     fn on_host_status(&mut self, status: HostStatus, now: u64) {
         let update = match self.hosts.apply(status) {

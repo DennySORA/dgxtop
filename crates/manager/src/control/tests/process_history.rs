@@ -41,9 +41,19 @@ fn a_committed_table_goes_to_the_process_actor_once() {
         })
         .collect();
     assert_eq!(tables.len(), 1, "{inputs:?}");
-    assert_eq!(tables[0].table.cycle_id, 5);
-    assert_eq!(tables[0].table.rows.len(), 1);
+    assert_eq!(tables[0].table().cycle_id, 5);
+    assert_eq!(tables[0].table().rows.len(), 1);
     assert!(tables[0].process_period_ms > 0);
+    // Handed over as committed, with the catalog of the moment (D-99).
+    let committed = dgxtop_core::ports::SnapshotReader::latest(harness.ports.snapshots.as_ref());
+    assert!(Arc::ptr_eq(
+        &tables[0].snapshot.process_table,
+        &committed.process_table
+    ));
+    assert_eq!(
+        *tables[0].catalog,
+        *harness.manager.core().catalog.snapshot()
+    );
     let ticks = inputs
         .iter()
         .filter(|input| matches!(input, ProcessHistoryInput::Tick))

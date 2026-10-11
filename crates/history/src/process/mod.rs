@@ -17,6 +17,7 @@ mod memory;
 mod model;
 mod published;
 mod runs;
+mod sample;
 
 pub use self::actor::{ProcessHistory, ProcessHistoryPorts, ProcessHistorySettings};
 pub use self::published::PublishedProcessHistory;

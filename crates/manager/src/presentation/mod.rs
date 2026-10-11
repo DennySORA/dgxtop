@@ -25,7 +25,6 @@ mod process_parts;
 mod processes;
 mod reader;
 mod run_history;
-mod run_inputs;
 mod settings;
 #[cfg(test)]
 mod testkit;
@@ -37,7 +36,6 @@ pub(crate) use history_charts::history_charts;
 pub use plan::visible_modules;
 pub use processes::PROCESS_OVERSCAN_ROWS;
 pub(crate) use run_history::run_request;
-pub(crate) use run_inputs::run_inputs;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

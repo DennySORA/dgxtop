@@ -87,7 +87,7 @@ impl ProcessHistoryLink {
     /// Hands over a new table; one refused for a full queue goes with the
     /// next commit.
     pub(crate) fn send_table(&mut self, sample: ProcessTableSample) {
-        let identity = table_identity(&sample.table);
+        let identity = table_identity(sample.table());
         if self.send(ProcessHistoryInput::Table(Box::new(sample))) {
             self.last_table = Some(identity);
         }

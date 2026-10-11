@@ -384,6 +384,27 @@ pub mod entity {
     pub fn parse_gpu(entity_id: &str) -> Option<&str> {
         entity_id.strip_prefix("gpu:")
     }
+
+    /// Characters of the UUID a GPU without an NVML index is labelled by.
+    const SHORT_UUID_CHARS: usize = 8;
+    /// Longest GPU label kept (the presentation's label bound).
+    const MAX_GPU_LABEL_BYTES: usize = 128;
+
+    /// The label of GPU `entity_id`: `GPU 0` by its NVML index, else
+    /// `GPU 1a2b3c4d` from `gpu:GPU-1a2b3c4d-...`, sanitized for display.
+    pub fn gpu_label(entity_id: &str, nvml_index: Option<u32>) -> String {
+        if let Some(index) = nvml_index {
+            return format!("GPU {index}");
+        }
+        let uuid = parse_gpu(entity_id).unwrap_or(entity_id);
+        let short: String = uuid
+            .strip_prefix("GPU-")
+            .unwrap_or(uuid)
+            .chars()
+            .take(SHORT_UUID_CHARS)
+            .collect();
+        crate::text::sanitize_display(&format!("GPU {short}"), MAX_GPU_LABEL_BYTES)
+    }
 }
 
 /// Well-known entity attribute keys.
