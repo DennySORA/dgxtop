@@ -603,6 +603,30 @@ fn a_table_is_sampled_once() {
     assert_eq!(bucket.value(RunMetric::Cpu).count, 1);
 }
 
+/// The commits after a cycle's first hand over the same table: the book
+/// says so before anyone builds its inputs, and a new cycle or read time is
+/// a new table.
+#[test]
+fn a_sampled_table_is_known_before_its_inputs_are_built() {
+    let mut book = book();
+    let sampled = process_table(7, 5 * SECOND, vec![row(1, 10.0, Some(GIB))]);
+    assert!(!book.has_sampled(&sampled), "nothing sampled yet");
+    let labels = labels();
+    book.observe(
+        &sampled,
+        &SampleInputs {
+            now: now(5),
+            clk_tck: Some(100),
+            gpu_labels: &labels,
+            host_network: [None, None],
+        },
+    );
+    assert!(book.has_sampled(&sampled));
+    assert!(book.has_sampled(&process_table(7, 5 * SECOND, Vec::new())));
+    assert!(!book.has_sampled(&process_table(8, 5 * SECOND, Vec::new())));
+    assert!(!book.has_sampled(&process_table(7, 6 * SECOND, Vec::new())));
+}
+
 /// On a busy host every table is cut short, so the table never says a run
 /// is gone; the probe, which reads the process itself, does.
 #[test]

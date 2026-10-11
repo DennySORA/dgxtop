@@ -633,6 +633,13 @@ impl ControlCore {
 
     /// Samples the process history from the committed process table (D-76).
     fn sample_process_history(&mut self, snapshot: &ImmutableSnapshot) {
+        // Most commits of a cycle carry the table already sampled; the
+        // inputs (a reader, an index, the GPU directory) are built only for
+        // a new one.
+        if self.process_history.has_sampled(&snapshot.process_table) {
+            self.process_history.on_sampled_table();
+            return;
+        }
         let now = self.now();
         let catalog = self.catalog.snapshot();
         let inputs = run_inputs(snapshot, &catalog, now.boot_ns);
