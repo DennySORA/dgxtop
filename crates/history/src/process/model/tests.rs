@@ -39,7 +39,7 @@ fn observe(book: &mut ProcessHistoryBook, second: u64, rows: Vec<ProcessRow>) {
 fn build(builder: &mut ModelBuilder, book: &ProcessHistoryBook) -> Option<ProcessHistoryModel> {
     builder.build(&ModelInputs {
         book,
-        memory: &ProcessMemoryBook::new(1_000),
+        memory: &ProcessMemoryBook::new(1_000, 0),
         kept_on_disk: false,
         writes: WriteProgress::default(),
     })

@@ -269,24 +269,30 @@ fn a_flush_is_settled_once_its_writes_are_answered() {
     assert!(rig.published.latest().writes.settled_after(1));
 }
 
-/// The memory record answers a chart's parts for the exact window asked.
+/// The memory record answers a chart's parts for the exact window asked,
+/// on the wall clock: each table's read time is placed by the clock's
+/// offset when it was taken.
 #[test]
 fn the_memory_record_answers_the_parts_of_a_window() {
     let mut rig = rig();
     for second in [10, 15, 20] {
         table(&mut rig, second, vec![row(9, 2 * GIB)]);
     }
+    let offset = u64::try_from(rig.clock.now_utc_ns()).unwrap() - rig.clock.now_boot_ns();
+    let window = (offset + 10 * SECOND, offset + 20 * SECOND);
     let gpus = std::collections::BTreeSet::from([EntityId::new(GPU).unwrap()]);
-    let parts = rig.published.parts(&gpus, (10 * SECOND, 20 * SECOND), 2);
+    let parts = rig.published.parts(&gpus, window, 2);
     assert_eq!(parts.len(), 1);
     #[allow(clippy::cast_precision_loss)]
     let held = (2 * GIB) as f64;
     assert_eq!(parts[0].means, vec![Some(held), Some(held)]);
     let other = std::collections::BTreeSet::from([EntityId::new("gpu:GPU-bbbb").unwrap()]);
+    assert!(rig.published.parts(&other, window, 2).is_empty());
     assert!(
         rig.published
-            .parts(&other, (10 * SECOND, 20 * SECOND), 2)
-            .is_empty()
+            .parts(&gpus, (10 * SECOND, 20 * SECOND), 2)
+            .is_empty(),
+        "the boot clock's times are not the window's"
     );
 }
 

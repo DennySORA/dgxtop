@@ -382,8 +382,6 @@ pub(crate) struct Fixture {
     /// What the history's process actor published.
     pub(crate) processes: ProcessHistoryModel,
     pub(crate) process_memory: Arc<StaticProcessHistory>,
-    /// Wall clock minus boot clock (0: the history's times are boot times).
-    pub(crate) boot_to_utc_ns: i128,
     pub(crate) facts: HostFacts,
     pub(crate) enabled_modules: Vec<String>,
     pub(crate) now_boot_ns: u64,
@@ -433,7 +431,6 @@ impl Fixture {
             trends: TrendBook::new(120),
             processes: ProcessHistoryModel::default(),
             process_memory: StaticProcessHistory::new(ProcessHistoryModel::default()),
-            boot_to_utc_ns: 0,
             facts: HostFacts {
                 host_name: "dgx-test".to_owned(),
                 version: "0.2.0".to_owned(),
@@ -469,7 +466,6 @@ impl Fixture {
             trends: &self.trends,
             processes: &self.processes,
             process_memory: self.process_memory.as_ref(),
-            boot_to_utc_ns: self.boot_to_utc_ns,
             facts: &self.facts,
             enabled_modules: &self.enabled_modules,
             archive: self.archive_status.as_ref(),

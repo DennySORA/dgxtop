@@ -503,7 +503,6 @@ impl StaticInputs {
             trends: &world.trends.book,
             processes: &world.model,
             process_memory: &world.published,
-            boot_to_utc_ns: 0,
             facts: &self.facts,
             enabled_modules: &self.config.viewer.enabled_modules,
             archive: None,
