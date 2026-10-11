@@ -11,8 +11,9 @@
 //! an earlier one. When the queue is full the oldest rows are dropped and the
 //! dropped time is reported to the archive as an `archive_overflow` gap: the
 //! live state is never blocked by the archive. A journal also carries the
-//! deletions the Overview's sizes allow (D-82), alone when no row waits;
-//! a queued row such a deletion covers is dropped before it is written.
+//! deletions the Overview's sizes allow (D-82) and the age expiry the
+//! history asks for (D-96), alone when no row waits; a queued row such a
+//! prune covers is dropped before it is written.
 
 use std::collections::{BTreeSet, VecDeque};
 
@@ -22,10 +23,13 @@ use dgxtop_core::history::{HistoryMethod, SeriesInEveryBoot};
 use dgxtop_core::identity::{BootId, HostId};
 use dgxtop_core::metric::ScalarView;
 use dgxtop_core::overview_history::{ArchivePrune, is_overview_series};
-use dgxtop_core::ports::{ArchiveJournal, ArchivedBridge, ArchivedBucket, ArchivedSegment};
+use dgxtop_core::ports::{
+    ArchiveExpiry, ArchiveJournal, ArchivedBridge, ArchivedBucket, ArchivedSegment,
+};
 
 use dgxtop_core::clock::format_utc_ns;
 
+use crate::archive_expiry::WHEN_FULL;
 use crate::output::ArchiveRow;
 use crate::segment::SegmentMeta;
 use crate::wall_clock::WallClock;
@@ -210,16 +214,19 @@ impl ArchiveQueue {
     }
 
     /// Takes up to `max_bytes` of rows (at least one) of a single host/boot,
-    /// with `prunes`. Returns `None` when nothing is queued or no
-    /// boot-to-UTC mapping is known yet (rows stay queued).
+    /// with `prunes` and `expire`. Returns `None` when nothing is queued or
+    /// asked for, or no boot-to-UTC mapping is known yet (rows stay queued).
     pub(crate) fn take(
         &mut self,
         max_bytes: u64,
         clock: &WallClock,
         revision: u64,
-        prunes: Vec<ArchivePrune>,
+        (prunes, expire): (Vec<ArchivePrune>, Option<ArchiveExpiry>),
     ) -> Option<ArchiveJournal> {
-        let nothing = self.rows.is_empty() && self.overflow.is_none() && prunes.is_empty();
+        let nothing = self.rows.is_empty()
+            && self.overflow.is_none()
+            && prunes.is_empty()
+            && expire.is_none();
         if !clock.is_known() || nothing {
             return None;
         }
@@ -274,6 +281,8 @@ impl ArchiveQueue {
             bridges: collected.bridges,
             gaps: collected.gaps,
             prunes,
+            expire,
+            when_full: WHEN_FULL,
             permit,
         })
     }
@@ -437,11 +446,13 @@ mod tests {
         );
         assert!(
             queue
-                .take(1 << 20, &WallClock::default(), 1, Vec::new())
+                .take(1 << 20, &WallClock::default(), 1, (Vec::new(), None))
                 .is_none(),
             "no UTC mapping yet"
         );
-        let journal = queue.take(1 << 20, &clock(), 9, Vec::new()).unwrap();
+        let journal = queue
+            .take(1 << 20, &clock(), 9, (Vec::new(), None))
+            .unwrap();
         assert_eq!(journal.revision, 9);
         assert_eq!(journal.segments.len(), 1);
         assert_eq!(journal.buckets.len(), 2);
@@ -456,11 +467,17 @@ mod tests {
                 .as_ref()
                 .is_some_and(|permit| permit.bytes() == 2 * ROW_BYTES)
         );
-        assert!(queue.take(1 << 20, &clock(), 10, Vec::new()).is_none());
+        assert!(
+            queue
+                .take(1 << 20, &clock(), 10, (Vec::new(), None))
+                .is_none()
+        );
         drop(journal);
         assert_eq!(ledger.used(Partition::Reserve), 0);
         queue.enqueue(vec![bucket_row(&segment, 2)]);
-        let later = queue.take(1 << 20, &clock(), 11, Vec::new()).unwrap();
+        let later = queue
+            .take(1 << 20, &clock(), 11, (Vec::new(), None))
+            .unwrap();
         assert_eq!(
             later.segments.len(),
             1,
@@ -517,7 +534,9 @@ mod tests {
             2 * ROW_BYTES + ROW_BYTES + 2 * (ROW_BYTES + 14),
             "only the rows kept are accounted"
         );
-        let journal = queue.take(1 << 20, &clock(), 1, Vec::new()).unwrap();
+        let journal = queue
+            .take(1 << 20, &clock(), 1, (Vec::new(), None))
+            .unwrap();
         let mut segments: Vec<&str> = journal
             .segments
             .iter()
@@ -569,7 +588,9 @@ mod tests {
             2 * ROW_BYTES + (ROW_BYTES + 14),
             "what was dropped is released"
         );
-        let journal = queue.take(1 << 20, &clock(), 1, Vec::new()).unwrap();
+        let journal = queue
+            .take(1 << 20, &clock(), 1, (Vec::new(), None))
+            .unwrap();
         let kept: Vec<(&str, u64)> = journal
             .buckets
             .iter()
@@ -601,13 +622,19 @@ mod tests {
             before_utc_ns: i64::try_from(UTC_ON_A_WHOLE_MINUTE_NS).unwrap(),
         };
         assert!(!queue.knows_identity());
-        assert!(queue.take(1 << 20, &clock(), 1, Vec::new()).is_none());
+        assert!(
+            queue
+                .take(1 << 20, &clock(), 1, (Vec::new(), None))
+                .is_none()
+        );
         queue.enqueue(vec![bucket_row(&segment(), 0)]);
         assert!(queue.knows_identity());
-        let rows = queue.take(1 << 20, &clock(), 2, Vec::new()).unwrap();
+        let rows = queue
+            .take(1 << 20, &clock(), 2, (Vec::new(), None))
+            .unwrap();
         assert!(rows.prunes.is_empty());
         let alone = queue
-            .take(1 << 20, &clock(), 3, vec![prune.clone()])
+            .take(1 << 20, &clock(), 3, (vec![prune.clone()], None))
             .unwrap();
         assert_eq!(alone.prunes, vec![prune]);
         assert!(alone.buckets.is_empty());
@@ -636,10 +663,12 @@ mod tests {
             bridge(Scalar::from_u64(300)),
             bridge(Scalar::from_f64(1.5).unwrap()),
         ]);
-        let first = queue.take(1, &clock(), 1, Vec::new()).unwrap();
+        let first = queue.take(1, &clock(), 1, (Vec::new(), None)).unwrap();
         assert_eq!(first.buckets.len(), 1);
         assert!(first.bridges.is_empty());
-        let rest = queue.take(1 << 20, &clock(), 2, Vec::new()).unwrap();
+        let rest = queue
+            .take(1 << 20, &clock(), 2, (Vec::new(), None))
+            .unwrap();
         assert_eq!(rest.bridges.len(), 1);
         assert_eq!(rest.bridges[0].delta, 300);
         assert_eq!(rest.gaps.len(), 1);
@@ -659,7 +688,9 @@ mod tests {
         let dropped = queue.enqueue(rows);
         assert!(dropped > 0);
         assert!(ledger.used(Partition::Reserve) <= ledger.limits().limit(Partition::Reserve));
-        let journal = queue.take(u64::MAX, &clock(), 1, Vec::new()).unwrap();
+        let journal = queue
+            .take(u64::MAX, &clock(), 1, (Vec::new(), None))
+            .unwrap();
         assert!(
             journal
                 .gaps

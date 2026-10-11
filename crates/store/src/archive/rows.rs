@@ -420,6 +420,8 @@ mod tests {
                 affected_count: 3,
             }],
             prunes: Vec::new(),
+            expire: None,
+            when_full: dgxtop_core::ports::ArchiveWhenFull::EvictOldest,
             permit: None,
         }
     }

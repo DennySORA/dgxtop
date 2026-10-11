@@ -1,5 +1,6 @@
 //! Optional history archive: bounded batch inserts, exact TEXT encodings,
-//! 20-digit key ordering (AT27 key part), retention with cascade, and
+//! 20-digit key ordering (AT27 key part), the deletions a journal asks for
+//! (expiry with cascade, eviction when full; D-96) and nothing else, and
 //! ENOSPC/budget/WAL failures that leave the caller running (AT06).
 
 // Test helpers panic on setup failures; the lints target production code.
@@ -18,7 +19,8 @@ use dgxtop_core::history::{HistoryMethod, SeriesInEveryBoot};
 use dgxtop_core::metric::CanonicalUnit;
 use dgxtop_core::overview_history::ArchivePrune;
 use dgxtop_core::ports::{
-    ArchiveJournal, ArchiveSink, ArchivedBridge, ArchivedBucket, ArchivedSegment,
+    ArchiveExpiry, ArchiveJournal, ArchiveSink, ArchiveWhenFull, ArchivedBridge, ArchivedBucket,
+    ArchivedSegment,
 };
 use dgxtop_core::quality::SampleKind;
 use dgxtop_core::testing::{FakeClock, metric_key, source_id};
@@ -100,6 +102,16 @@ impl Fixture {
         format_utc_rfc3339(self.clock.now_utc_ns() - days * DAY_NS)
     }
 
+    /// What the history asks for with a seven-day age limit (D-96).
+    fn seven_day_expiry(&self) -> ArchiveExpiry {
+        let week_ns = 7 * u64::try_from(DAY_NS).unwrap();
+        ArchiveExpiry {
+            before_utc_ns: i64::try_from(self.clock.now_utc_ns()).unwrap()
+                - i64::try_from(week_ns).unwrap(),
+            current_boot_before_ns: self.clock.now_boot_ns().saturating_sub(week_ns),
+        }
+    }
+
     fn reader(&self) -> Connection {
         Connection::open_with_flags(
             self.dir.database(),
@@ -154,6 +166,8 @@ fn journal(
         bridges: Vec::new(),
         gaps: Vec::new(),
         prunes: Vec::new(),
+        expire: None,
+        when_full: ArchiveWhenFull::EvictOldest,
         permit: None,
     }
 }
@@ -356,7 +370,7 @@ fn invalid_journals_are_rejected_without_writing() {
 }
 
 #[test]
-fn retention_deletes_old_data_and_cascades_to_empty_segments() {
+fn an_expiry_deletes_old_data_and_cascades_to_empty_segments() {
     let fixture = Fixture::new("retention");
     let mut archive = fixture.open(ArchiveLimits::default());
     let old_start = fixture.utc_days_ago(10);
@@ -406,7 +420,12 @@ fn retention_deletes_old_data_and_cascades_to_empty_segments() {
         affected_count: 2,
     });
     archive.append(other_boot).unwrap();
-    let report = archive.run_retention().unwrap();
+    assert_eq!(
+        count(&fixture.reader(), "history_buckets"),
+        3,
+        "no append expires"
+    );
+    let report = archive.expire(&fixture.seven_day_expiry()).unwrap();
     assert_eq!(report.buckets, 2, "both 10-day-old buckets expire");
     assert_eq!(report.segments, 1, "the segment without buckets is deleted");
     assert_eq!(report.gaps, 1, "only the gap of a boot without data goes");
@@ -795,4 +814,111 @@ fn a_failed_deletion_after_the_commit_keeps_the_append_committed() {
     assert_eq!(status.state, PersistenceState::Degraded);
     assert!(status.detail.unwrap().contains("delet"));
     assert_eq!(count(&fixture.reader(), "history_buckets"), 2);
+}
+
+/// Neither opening the archive nor an append that asks for nothing deletes
+/// old rows: the age they are kept is the history's (D-96).
+#[test]
+fn only_an_expiry_request_deletes_old_rows() {
+    let fixture = Fixture::new("no-own-expiry");
+    let old_start = fixture.utc_days_ago(10);
+    let old_end = format_utc_rfc3339(fixture.clock.now_utc_ns() - 10 * DAY_NS + 60_000_000_000);
+    let mut archive = fixture.open(ArchiveLimits::default());
+    archive
+        .append(journal(
+            1,
+            vec![segment("seg-old", &old_start)],
+            vec![bucket("seg-old", 0, &old_start, &old_end)],
+        ))
+        .unwrap();
+    drop(archive);
+    fixture.clock.advance_ns(3600 * 1_000_000_000);
+    let mut archive = fixture.open(ArchiveLimits::default());
+    assert_eq!(
+        count(&fixture.reader(), "history_buckets"),
+        1,
+        "open deletes nothing"
+    );
+    let now = minute_utc(&fixture, 0);
+    archive
+        .append(journal(
+            2,
+            vec![segment("seg-new", &now)],
+            vec![bucket("seg-new", 60 * MINUTE_NS, &now, &now)],
+        ))
+        .unwrap();
+    assert_eq!(
+        count(&fixture.reader(), "history_buckets"),
+        2,
+        "nor an append"
+    );
+    let mut expiring = journal(3, Vec::new(), Vec::new());
+    expiring.expire = Some(fixture.seven_day_expiry());
+    let receipt = archive.append(expiring).unwrap();
+    assert_eq!(receipt.deletion_failure, None);
+    let reader = fixture.reader();
+    assert_eq!(count(&reader, "history_buckets"), 1);
+    assert_eq!(
+        count(&reader, "history_segments"),
+        1,
+        "seg-old went with it"
+    );
+    assert_eq!(archive.stats().buckets_expired, 1);
+}
+
+/// A journal that asks to be refused when the budget is reached deletes
+/// nothing to make room (D-96).
+#[test]
+fn a_full_archive_refuses_a_journal_that_does_not_ask_for_eviction() {
+    let fixture = Fixture::new("refuse-when-full");
+    let limits = ArchiveLimits {
+        limit_bytes: 768 * KIB,
+        wal_checkpoint_bytes: 64 * KIB,
+        wal_stop_bytes: 128 * KIB,
+        batch_rows: 64,
+        batch_bytes: 16 * KIB,
+        ..ArchiveLimits::default()
+    };
+    let mut archive = fixture.open(limits);
+    let started = minute_utc(&fixture, 3000);
+    archive
+        .append(journal(1, vec![segment("seg-a", &started)], Vec::new()))
+        .unwrap();
+    let mut refused = None;
+    for first in (0..3000u64).step_by(50) {
+        let buckets: Vec<ArchivedBucket> = (first..first + 50)
+            .map(|minute| {
+                let utc = minute_utc(&fixture, 3000 - i128::from(minute));
+                let mut entry = bucket("seg-a", minute * MINUTE_NS, &utc, &utc);
+                entry.reason_code = Some("x".repeat(100));
+                entry
+            })
+            .collect();
+        let mut full = journal(2 + first, Vec::new(), buckets);
+        full.when_full = ArchiveWhenFull::Refuse;
+        if let Err(error) = archive.append(full) {
+            refused = Some(error);
+            break;
+        }
+    }
+    assert_eq!(
+        refused,
+        Some(InfraError::DiskFull {
+            operation: "archive.limit"
+        })
+    );
+    assert_eq!(archive.stats().buckets_evicted, 0);
+    let oldest: String = fixture
+        .reader()
+        .query_row(
+            "SELECT min(start_boot_ns) FROM history_buckets",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        parse_fixed_width(&oldest).unwrap(),
+        0,
+        "the oldest minute stays"
+    );
 }

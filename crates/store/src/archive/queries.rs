@@ -1,5 +1,5 @@
 //! Prepared statements of the archive tables: idempotent inserts, age-based
-//! retention, oldest-first capacity eviction and the dependent cleanup of
+//! expiry, oldest-first capacity eviction and the dependent cleanup of
 //! bridges, empty segments and orphaned gaps. Every value is bound.
 
 use rusqlite::{Connection, OptionalExtension, params};

@@ -43,6 +43,7 @@
 #![forbid(unsafe_code)]
 
 mod archive;
+mod archive_expiry;
 pub(crate) mod chunk;
 pub(crate) mod gaps;
 pub(crate) mod grid;
@@ -76,6 +77,7 @@ pub use process::{
 pub use recorder::HistoryRecorder;
 
 use archive::ArchiveQueue;
+use archive_expiry::ArchiveExpiryPolicy;
 use state::HistoryState;
 
 /// The two handles of one history, built together: `recorder` goes to the
@@ -104,6 +106,7 @@ impl History {
         let recorder = HistoryRecorder::new(
             HistoryWriter::new(shared),
             ArchiveQueue::new(ledger),
+            ArchiveExpiryPolicy::new(store.archive_retention_days),
             archive_enabled,
             overview,
         );

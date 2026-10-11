@@ -107,6 +107,8 @@ impl Fixture {
             bridges: Vec::new(),
             gaps: Vec::new(),
             prunes: Vec::new(),
+            expire: None,
+            when_full: dgxtop_core::ports::ArchiveWhenFull::EvictOldest,
             permit: None,
         };
         self.archive.append(journal).unwrap();
@@ -452,6 +454,8 @@ fn a_prune_deletes_one_series_minutes_before_its_cutoff() {
             bridges: Vec::new(),
             gaps: Vec::new(),
             prunes: vec![prune],
+            expire: None,
+            when_full: dgxtop_core::ports::ArchiveWhenFull::EvictOldest,
             permit: None,
         })
         .unwrap();

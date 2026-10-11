@@ -7,7 +7,8 @@
 //! (counters, health, recent gaps) crosses back. Finished rows stay here,
 //! in the archive queue, until the actor drains them as journals; the
 //! Overview series' finished minutes also go into their sizes (D-82), and
-//! the journals carry the archive deletions those sizes allow. The first
+//! the journals carry the archive deletions those sizes allow and the age
+//! expiry the history decides (D-96). The first
 //! boot-to-UTC pairing fixes the boot's minute grid (whole UTC minutes);
 //! no minute is finished before it, so every finished minute already has
 //! its place on the wall clock.
@@ -18,6 +19,7 @@ use dgxtop_core::canonical::GapRecord;
 use dgxtop_core::ports::{ArchiveJournal, HistoryAppends, HistoryIngest, HistoryOutcome};
 
 use crate::archive::ArchiveQueue;
+use crate::archive_expiry::ArchiveExpiryPolicy;
 use crate::grid::MinuteGrid;
 use crate::index::HistoryWriter;
 use crate::output::{ArchiveRow, HistoryReport};
@@ -29,6 +31,7 @@ use crate::wall_clock::WallClock;
 pub struct HistoryRecorder {
     writer: HistoryWriter,
     archive: ArchiveQueue,
+    expiry: ArchiveExpiryPolicy,
     clock: WallClock,
     archive_enabled: bool,
     /// Snapshot revision of the last ingest or publish; journals carry it.
@@ -51,12 +54,14 @@ impl HistoryRecorder {
     pub(crate) fn new(
         writer: HistoryWriter,
         archive: ArchiveQueue,
+        expiry: ArchiveExpiryPolicy,
         archive_enabled: bool,
         overview: OverviewTiers,
     ) -> Self {
         Self {
             writer,
             archive,
+            expiry,
             clock: WallClock::default(),
             archive_enabled,
             revision: 0,
@@ -159,14 +164,18 @@ impl HistoryIngest for HistoryRecorder {
         if !self.archive_enabled {
             return None;
         }
-        let prunes = if self.archive.knows_identity() {
-            self.overview.take_prunes(self.now_boot_ns)
+        // A journal of deletions alone needs a host and boot to carry.
+        let (prunes, expire) = if self.archive.knows_identity() {
+            (
+                self.overview.take_prunes(self.now_boot_ns),
+                self.expiry.due(self.now_boot_ns, &self.clock),
+            )
         } else {
-            Vec::new()
+            (Vec::new(), None)
         };
         self.archive.drop_pruned(&prunes, &self.clock);
         self.archive
-            .take(max_bytes, &self.clock, self.revision, prunes)
+            .take(max_bytes, &self.clock, self.revision, (prunes, expire))
     }
 }
 
@@ -324,6 +333,43 @@ mod tests {
         }
         assert!(journal.buckets[0].end_utc.ends_with(":00.000000000Z"));
         assert_eq!(journal.buckets[0].covered_ns, 3 * SECOND);
+    }
+
+    /// The history decides the archive's age limit (D-96): its first
+    /// journal asks to expire what is older than
+    /// `store.archive_retention_days`, the next ones within ten minutes ask
+    /// nothing, and after ten minutes a journal of the expiry alone comes;
+    /// every journal lets the oldest minutes give way when the archive is
+    /// full.
+    #[test]
+    fn the_history_asks_the_archive_to_expire_old_rows_every_ten_minutes() {
+        use dgxtop_core::ports::ArchiveWhenFull;
+
+        let (mut history, _ledger) = history(true);
+        history.recorder.observe_wall_clock(0, UTC_AT_BOOT);
+        for minute in 0..3 {
+            let seconds = minute * 60 + 1;
+            history
+                .recorder
+                .ingest(one_gauge(seconds, 40.0), (seconds + 1) * SECOND, minute + 1);
+        }
+        let now = 5 * MINUTE;
+        history.recorder.maintain(now);
+        let first = history.recorder.take_archive_journal(1 << 20).unwrap();
+        assert_eq!(first.when_full, ArchiveWhenFull::EvictOldest);
+        let expiry = first.expire.expect("the first journal asks for the expiry");
+        let week = 7 * 86_400 * i128::from(SECOND);
+        assert_eq!(
+            i128::from(expiry.before_utc_ns),
+            UTC_AT_BOOT + i128::from(now) - week
+        );
+        assert_eq!(expiry.current_boot_before_ns, 0, "this boot is younger");
+        assert!(history.recorder.take_archive_journal(1 << 20).is_none());
+        let later = now + 10 * MINUTE;
+        history.recorder.maintain(later);
+        let alone = history.recorder.take_archive_journal(1 << 20).unwrap();
+        assert!(alone.expire.is_some());
+        assert!(history.recorder.take_archive_journal(1 << 20).is_none());
     }
 
     /// A boot 20 s into a UTC minute, on a local clock an hour and a half
