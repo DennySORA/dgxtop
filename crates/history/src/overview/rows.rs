@@ -107,7 +107,8 @@ impl<'r> OverviewRow<'r> {
     /// The minute on the wall clock, filed under the UTC minute it ends
     /// nearest.
     fn place(&self, clock: &WallClock) -> Option<TierMinute> {
-        let start = i64::try_from(utc_minute_ending_near(clock.utc_of(self.end_ns)?)).ok()?;
+        let end_utc_ns = i64::try_from(clock.utc_of(self.end_ns)?).ok()?;
+        let start = utc_minute_ending_near(end_utc_ns);
         Some(TierMinute {
             series: SeriesInEveryBoot::from(&self.segment.key),
             key: self.segment.key.clone(),

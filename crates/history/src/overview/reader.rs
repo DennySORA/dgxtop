@@ -79,7 +79,7 @@ impl HistoryIndex {
             .filter(|minute| minute.covered_ns > 0)
             .filter_map(|minute| {
                 let end_utc_ns = i128::from(minute.end_ns).saturating_add(offset_ns);
-                let start = i64::try_from(utc_minute_ending_near(end_utc_ns)).ok()?;
+                let start = utc_minute_ending_near(i64::try_from(end_utc_ns).ok()?);
                 Some(OverviewBucket::gauge(
                     start,
                     minute.covered_ns,
