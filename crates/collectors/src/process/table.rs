@@ -19,8 +19,8 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use dgxtop_core::canonical::{
-    CollectionBatch, CollectionPlan, CounterBase, GpuUsageKind, ProcessBase, ProcessDescendants,
-    ProcessGpuLink, ProcessRow, ProcessTable, RejectReason,
+    CollectionBatch, CollectionPlan, CounterBase, DescendantTicks, GpuUsageKind, ProcessBase,
+    ProcessDescendants, ProcessGpuLink, ProcessRow, ProcessTable, RejectReason,
 };
 use dgxtop_core::clock::NANOS_PER_SECOND;
 use dgxtop_core::identity::{AdapterId, CollectorId, EntityId, IdentityError, ProcessKey};
@@ -358,9 +358,10 @@ fn attach_descendants(
         let Some(usage) = tree.usage_of(i64::from(row.key.pid.get())) else {
             continue;
         };
-        let now = usage
-            .cpu_ticks
-            .map(|ticks| (ticks, row.read_finished_boot_ns));
+        let now = usage.cpu_ticks.map(|ticks| DescendantTicks {
+            ticks,
+            read_boot_ns: row.read_finished_boot_ns,
+        });
         let before = session
             .committed_process(&row.key)
             .and_then(|base| base.descendant_ticks);
@@ -378,21 +379,18 @@ fn attach_descendants(
 /// an orphan): that table gives no rate, and the next one counts from it.
 fn descendants_of(
     usage: DescendantUsage,
-    before: Option<(u64, u64)>,
-    now: Option<(u64, u64)>,
+    before: Option<DescendantTicks>,
+    now: Option<DescendantTicks>,
     clk_tck: Option<u64>,
 ) -> ProcessDescendants {
-    #[allow(clippy::cast_precision_loss)]
-    let cpu_percent = before
-        .zip(now)
-        .and_then(|((before_ticks, before_at), (ticks, at))| {
-            let spent = ticks.checked_sub(before_ticks)?;
-            let elapsed = at.checked_sub(before_at).filter(|elapsed| *elapsed > 0)?;
-            let per_second = clk_tck.filter(|ticks| *ticks > 0)?;
-            Some(
-                spent as f64 * 100.0 * NANOS_PER_SECOND as f64 / per_second as f64 / elapsed as f64,
-            )
-        });
+    let cpu_percent = before.zip(now).and_then(|(before, now)| {
+        let spent = now.ticks.checked_sub(before.ticks)?;
+        let elapsed = now.read_boot_ns.checked_sub(before.read_boot_ns)?;
+        let per_second = clk_tck.filter(|ticks| *ticks > 0)?;
+        #[allow(clippy::cast_precision_loss)]
+        let cpu_seconds = spent as f64 / per_second as f64;
+        counter::rate_of(cpu_seconds, elapsed).map(|share| share * 100.0)
+    });
     ProcessDescendants {
         processes: usage.processes,
         cpu_percent,

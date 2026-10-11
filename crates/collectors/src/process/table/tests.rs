@@ -706,7 +706,13 @@ fn descendants_count_before_the_table_is_bounded() {
         .iter()
         .find(|(key, _)| key.pid.get() == 42)
         .map(|(_, base)| base.descendant_ticks);
-    assert_eq!(base, Some(Some((40 + 420 + 205 + 7, 3 * SECOND))));
+    assert_eq!(
+        base,
+        Some(Some(DescendantTicks {
+            ticks: 40 + 420 + 205 + 7,
+            read_boot_ns: 3 * SECOND,
+        }))
+    );
 }
 
 /// Only GPU processes are followed: the others carry no descendants.
@@ -750,8 +756,14 @@ fn descendants_cpu_needs_the_clock_ticks() {
         cpu_ticks: Some(100),
         rss_bytes: None,
     };
-    let before = Some((0, SECOND));
-    let now = Some((100, 2 * SECOND));
+    let at = |ticks: u64, read_boot_ns: u64| {
+        Some(DescendantTicks {
+            ticks,
+            read_boot_ns,
+        })
+    };
+    let before = at(0, SECOND);
+    let now = at(100, 2 * SECOND);
     assert_eq!(
         descendants_of(usage, before, now, Some(100)).cpu_percent,
         Some(100.0)
@@ -762,7 +774,7 @@ fn descendants_cpu_needs_the_clock_ticks() {
         None
     );
     assert_eq!(
-        descendants_of(usage, Some((0, 2 * SECOND)), now, Some(100)).cpu_percent,
+        descendants_of(usage, at(0, 2 * SECOND), now, Some(100)).cpu_percent,
         None,
         "no time passed"
     );
