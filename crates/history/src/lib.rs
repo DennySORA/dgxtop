@@ -1,7 +1,7 @@
 //! # dgxtop-history
 //!
 //! The history of dgxtop (D-79): it takes what the state committed, keeps
-//! each series' recent samples and minutes in memory, decides what is
+//! each series' recent samples in memory, decides what is
 //! saved and for how long, answers the Manager's history reads (through
 //! the Overview's sizes only, D-90), and follows GPU process runs (D-76).
 //! Compression is the compression component's; the SQLite files are the
@@ -9,15 +9,18 @@
 //!
 //! Bounded canonical history (`STORAGE.md` §2–4). Per series (`MetricKey`):
 //! raw gauge steps and exact counter intervals kept apart in fixed-width
-//! chunked logs (`raw_history_seconds`), minute rollups derived from them
-//! once the finalization horizon passes (covered time, time-weighted sum,
-//! min/max, sample count, exact `u128` counter totals), counter bridges for
-//! intervals crossing a minute boundary, segments cut on
-//! source/generation/policy/kind changes, and a merged gap index. Raw
-//! history lives in the `raw_history` partition, rollups/bridges/segments/
-//! gaps in the `aggregates` partition; when a partition is full the oldest
-//! data is evicted (raw first, then rollups are shortened) and the
-//! truncation is recorded as an `evicted` gap.
+//! chunked logs (`raw_history_seconds`), segments cut on
+//! source/generation/policy/kind changes, and a merged gap index. Minute
+//! rollups (covered time, time-weighted sum, min/max, sample count, exact
+//! `u128` counter totals) and counter bridges for intervals crossing a
+//! minute boundary are cut from the raw data once the finalization horizon
+//! passes and handed on as finished rows, to the Overview's sizes and the
+//! archive; the series keeps none of them (D-90). Raw history lives in the
+//! `raw_history` partition, segments and gaps in the `aggregates`
+//! partition; when a partition is full the oldest data is evicted (raw
+//! already handed on first, else raw by boot time before the minutes are
+//! known, recorded as an `evicted` gap; the oldest gaps of the aggregates,
+//! reported as truncation).
 //!
 //! The state feeds it through the `HistoryIngest` port ([`HistoryRecorder`])
 //! inside each commit, so history never lags the snapshot; the Manager reads

@@ -71,8 +71,11 @@ fn at25_the_store_retains_only_the_latest_snapshot() {
     assert_eq!(harness.snapshots.latest().revision, 200);
 }
 
+/// Finished minutes are handed on, not kept (D-90): eighteen hours of ten
+/// series fit a 1 MiB budget without evicting anything, every partition
+/// stays under its limit and the Overview still holds the whole time.
 #[test]
-fn eviction_under_a_tiny_budget_never_exceeds_partitions_and_reports_truncation() {
+fn a_tiny_budget_holds_hours_of_history_within_its_partitions() {
     let ledger = ByteLedger::new(PartitionLimits::for_memory_limit_mib(1));
     let mut settings = config();
     settings.sampling.interval_ms = 5000;
@@ -80,8 +83,6 @@ fn eviction_under_a_tiny_budget_never_exceeds_partitions_and_reports_truncation(
     let keys: Vec<_> = (0..10)
         .map(|index| temperature_key(&format!("gpu:{index}")))
         .collect();
-    // Eighteen hours of minute rollups for ten series do not fit the
-    // 512 KiB aggregates partition of a 1 MiB budget (D-84).
     let hours = 18u64;
     for second in (0..hours * 3600).step_by(5) {
         let at = second * SECOND;
@@ -104,21 +105,24 @@ fn eviction_under_a_tiny_budget_never_exceeds_partitions_and_reports_truncation(
             usage.limit
         );
     }
+    assert!(!snapshot.health.truncated_history);
     assert!(
-        snapshot.health.truncated_history,
-        "aggregates were shortened"
-    );
-    assert!(snapshot.health.evicted_total > 0);
-    assert!(
-        snapshot
+        !snapshot
             .recent_gaps
             .iter()
-            .any(|gap| gap.reason == "evicted")
+            .any(|gap| gap.reason == "evicted"),
+        "nothing was lost to the budget"
+    );
+    let held = harness.window(&keys[0], EVERYTHING_NS);
+    assert!(
+        held.covered_ns >= now - MINUTE,
+        "the Overview holds the whole time: {} ns",
+        held.covered_ns
     );
     let recent = harness.window(&keys[0], 10 * MINUTE);
     assert!(
         recent.covered_ns > 10 * MINUTE * 98 / 100,
-        "recent history survives eviction: {} ns",
+        "recent history: {} ns",
         recent.covered_ns
     );
 }
