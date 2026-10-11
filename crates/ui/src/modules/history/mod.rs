@@ -29,7 +29,6 @@ use ratatui::text::{Line, Span};
 use self::axis::{Tick, render_axis, ticks};
 use self::layout::{HistoryLayout, plan};
 use self::panels::{Panel, Strip, panels};
-pub(crate) use self::runs::cursor_run;
 use self::runs::render_runs;
 use self::stats::{
     GpuStats, gpu_stats, nanos_to_seconds, recorded_text, render_gpu_stats, stats_labels,
@@ -634,9 +633,13 @@ mod tests {
         assert!(text.contains("09:30"), "the local clock's axis: {text}");
         let expanded = draw_runs(Some(view.clone()), 2, 0, true).join("\n");
         assert!(expanded.contains("--preview-method auto"), "{expanded}");
-        // The cursor on a run that is not the opened one: its figures, and
-        // the history being read.
-        let other = draw_runs(Some(view), 2, 1, false).join("\n");
+        // The opened run wherever the list has moved it; the cursor's run,
+        // its history being read, while none is opened.
+        let moved = draw_runs(Some(view.clone()), 2, 1, false).join("\n");
+        assert!(moved.contains("PID 42 │"), "{moved}");
+        let mut unopened = view;
+        unopened.opened = None;
+        let other = draw_runs(Some(unopened), 2, 1, false).join("\n");
         assert!(other.contains("PID 41"), "{other}");
         assert!(other.contains("reading this run"), "{other}");
     }

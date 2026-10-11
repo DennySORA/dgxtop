@@ -106,10 +106,21 @@ const COLUMNS: [Column; 12] = [
     },
 ];
 
-/// The run under the cursor, the cursor clamped to the list.
-pub(crate) fn cursor_run(view: &ProcessHistoryView, scroll: u16) -> Option<&RunRowView> {
+/// The run under the cursor: the session's selected run where the list
+/// holds it (a run that starts later moves it down the list), else the
+/// `scroll`th, clamped to the list.
+fn cursor_run(view: &ProcessHistoryView, scroll: u16) -> Option<&RunRowView> {
+    view.runs.get(cursor_index(view, scroll)?)
+}
+
+/// The position of [`cursor_run`].
+fn cursor_index(view: &ProcessHistoryView, scroll: u16) -> Option<usize> {
     let last = view.runs.len().checked_sub(1)?;
-    view.runs.get(usize::from(scroll).min(last))
+    let selected = view
+        .opened
+        .as_ref()
+        .and_then(|opened| view.runs.iter().position(|run| run.key == opened.info.key));
+    Some(selected.unwrap_or_else(|| usize::from(scroll).min(last)))
 }
 
 /// The list or the opened run, under the tab's title row the caller drew.
@@ -157,7 +168,7 @@ fn render_list(
     context: &DisplayContext,
     output: &mut Output,
 ) {
-    let cursor = usize::from(context.scroll).min(view.runs.len().saturating_sub(1));
+    let cursor = cursor_index(view, context.scroll).unwrap_or(0);
     let rows: Vec<Vec<TableCell>> = view
         .runs
         .iter()

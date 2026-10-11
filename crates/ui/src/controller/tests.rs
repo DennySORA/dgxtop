@@ -485,6 +485,27 @@ fn history_process_pages_navigate_and_select_the_run() {
     );
 }
 
+/// A run that starts later moves the selected one down the list: the
+/// cursor stays on the selected run, so Enter opens it (D-77).
+#[test]
+fn the_cursor_follows_the_selected_run_when_the_list_moves() {
+    let mut harness = Harness::new(ViewKind::History);
+    harness.keys(&[key('4'), key('j')]);
+    let training = test_fixtures::process_history_view().runs[1].key.clone();
+    assert_eq!(harness.last_session().2, Some(training.clone()));
+    // A newer run arrives at the top: the selected run is third now.
+    let runs = std::sync::Arc::make_mut(harness.model.modules.process_history.as_mut().unwrap());
+    let mut newer = runs.runs[1].clone();
+    newer.key.pid = dgxtop_core::identity::Pid::new(77).unwrap();
+    runs.runs.insert(0, newer);
+    harness.keys(&[code(KeyCode::Enter), key('k')]);
+    assert_eq!(
+        harness.last_session().2.unwrap().pid.get(),
+        42,
+        "up from the selected run, not from the row the cursor had"
+    );
+}
+
 /// `w`/`W` step the window on the Overview History and the bar size on an
 /// opened run (D-77); the session's filter keeps both.
 #[test]

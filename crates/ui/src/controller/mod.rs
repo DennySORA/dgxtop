@@ -804,7 +804,16 @@ impl Controller {
             return;
         };
         let last = saturate_u16(runs.runs.len().saturating_sub(1));
-        let cursor = self.scroll.get(&history).copied().unwrap_or(0).min(last);
+        // The selection the session has or is about to have: a run that
+        // starts later moves it down the list.
+        let selected = self
+            .drafts
+            .current(context.model, context.now)
+            .and_then(|fields| fields.selected_process);
+        let scroll = self.scroll.get(&history).copied().unwrap_or(0);
+        let cursor = selected
+            .and_then(|key| runs.runs.iter().position(|run| run.key == key))
+            .map_or(scroll.min(last), saturate_u16);
         let moved = match action {
             KeyAction::HistoryOpen => {
                 self.tabs
@@ -817,7 +826,7 @@ impl Controller {
         };
         self.scroll.insert(history, moved);
         self.bump();
-        if let Some(run) = crate::modules::cursor_run(runs, moved) {
+        if let Some(run) = runs.runs.get(usize::from(moved)) {
             let key = run.key.clone();
             self.update_fields(context, |fields| fields.selected_process = Some(key));
         }

@@ -7,7 +7,6 @@ mod cpu;
 mod disk;
 mod gpu;
 mod history;
-pub(crate) use history::cursor_run;
 mod memory;
 mod network;
 mod process_memory;
