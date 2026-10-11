@@ -111,8 +111,8 @@ pub(crate) struct ArchiveQueue {
 
 fn row_span(row: &ArchiveRow) -> (u64, u64) {
     match row {
-        ArchiveRow::GaugeBucket { bucket, end_ns, .. } => (bucket.start_ns, *end_ns),
-        ArchiveRow::CounterBucket { bucket, end_ns, .. } => (bucket.start_ns, *end_ns),
+        ArchiveRow::GaugeBucket { bucket, .. } => (bucket.start_ns, bucket.end_ns),
+        ArchiveRow::CounterBucket { bucket, .. } => (bucket.start_ns, bucket.end_ns),
         ArchiveRow::Bridge { bridge, .. } => (bridge.start_ns, bridge.end_ns),
         ArchiveRow::Gap(gap) => (gap.start_boot_ns, gap.end_boot_ns),
     }
@@ -307,19 +307,15 @@ fn ensure_segment(segment: &SegmentMeta, clock: &WallClock, collected: &mut Jour
 fn collect_row(queued: QueuedRow, clock: &WallClock, collected: &mut JournalRows) {
     collected.bytes = collected.bytes.saturating_add(queued.bytes);
     match queued.row {
-        ArchiveRow::GaugeBucket {
-            segment,
-            bucket,
-            end_ns: end,
-        } => {
+        ArchiveRow::GaugeBucket { segment, bucket } => {
             ensure_segment(&segment, clock, collected);
             let covered = bucket.covered_ns > 0;
             collected.buckets.push(ArchivedBucket {
                 segment_id: segment.uuid.to_string(),
                 start_boot_ns: bucket.start_ns,
-                end_boot_ns: end,
+                end_boot_ns: bucket.end_ns,
                 start_utc: utc_text(clock, bucket.start_ns),
-                end_utc: utc_text(clock, end),
+                end_utc: utc_text(clock, bucket.end_ns),
                 covered_ns: bucket.covered_ns,
                 weighted_sum: covered.then_some(bucket.weighted_sum),
                 minimum: covered.then_some(bucket.minimum),
@@ -334,19 +330,15 @@ fn collect_row(queued: QueuedRow, clock: &WallClock, collected: &mut JournalRows
                 reason_code: None,
             });
         }
-        ArchiveRow::CounterBucket {
-            segment,
-            bucket,
-            end_ns: end,
-        } => {
+        ArchiveRow::CounterBucket { segment, bucket } => {
             ensure_segment(&segment, clock, collected);
             let exact = bucket.total.integral();
             collected.buckets.push(ArchivedBucket {
                 segment_id: segment.uuid.to_string(),
                 start_boot_ns: bucket.start_ns,
-                end_boot_ns: end,
+                end_boot_ns: bucket.end_ns,
                 start_utc: utc_text(clock, bucket.start_ns),
-                end_utc: utc_text(clock, end),
+                end_utc: utc_text(clock, bucket.end_ns),
                 covered_ns: bucket.covered_ns,
                 weighted_sum: None,
                 minimum: None,
@@ -421,12 +413,11 @@ mod tests {
     }
 
     fn bucket_row(segment: &Arc<SegmentMeta>, minute: u64) -> ArchiveRow {
-        let mut bucket = GaugeBucket::empty(minute * BUCKET_NS, 0);
+        let mut bucket = GaugeBucket::empty(minute * BUCKET_NS, (minute + 1) * BUCKET_NS, 0);
         bucket.add_step(50.0, BUCKET_NS);
         ArchiveRow::GaugeBucket {
             segment: Arc::clone(segment),
             bucket,
-            end_ns: (minute + 1) * BUCKET_NS,
         }
     }
 

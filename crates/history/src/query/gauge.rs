@@ -225,7 +225,7 @@ fn accumulate_buckets(
             break;
         }
         guard.charge(1)?;
-        if inputs.grid.end_of(bucket.start_ns) <= to_ns {
+        if bucket.end_ns <= to_ns {
             accumulator.add_bucket(bucket, inputs);
         }
     }

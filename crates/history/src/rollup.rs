@@ -29,10 +29,11 @@ pub(crate) fn gauge_buckets<'r>(
         let mut cursor = start;
         while cursor < end {
             let bucket_start = grid.floor(cursor);
-            let piece_end = end.min(grid.end_of(bucket_start));
+            let bucket_end = grid.end_of(bucket_start);
+            let piece_end = end.min(bucket_end);
             buckets
                 .entry((bucket_start, step.segment))
-                .or_insert_with(|| GaugeBucket::empty(bucket_start, step.segment))
+                .or_insert_with(|| GaugeBucket::empty(bucket_start, bucket_end, step.segment))
                 .add_step(value, piece_end - cursor);
             cursor = piece_end;
         }
@@ -44,7 +45,9 @@ pub(crate) fn gauge_buckets<'r>(
         let bucket_start = grid.floor(sample.time_ns);
         let bucket = buckets
             .entry((bucket_start, sample.segment))
-            .or_insert_with(|| GaugeBucket::empty(bucket_start, sample.segment));
+            .or_insert_with(|| {
+                GaugeBucket::empty(bucket_start, grid.end_of(bucket_start), sample.segment)
+            });
         bucket.sample_count = bucket.sample_count.saturating_add(1);
     }
     buckets.into_values().collect()
@@ -74,7 +77,9 @@ pub(crate) fn counter_rollup<'r>(
         if bucket_start == grid.floor(interval.end_ns.saturating_sub(1)) {
             buckets
                 .entry((bucket_start, interval.segment))
-                .or_insert_with(|| CounterBucket::empty(bucket_start, interval.segment))
+                .or_insert_with(|| {
+                    CounterBucket::empty(bucket_start, grid.end_of(bucket_start), interval.segment)
+                })
                 .add_interval(interval);
         } else {
             bridges.push(*interval);
@@ -143,6 +148,42 @@ mod tests {
         assert_eq!((buckets[2].start_ns, buckets[2].segment), (60 * SECOND, 1));
         assert_eq!(buckets[2].covered_ns, 10 * SECOND);
         assert_eq!(buckets[2].sample_count, 1);
+    }
+
+    /// A boot 37 s into a UTC minute: the head minute ends at boot 23 s,
+    /// and every bucket carries the end its grid gives it, so a pin or
+    /// a seek by end never reads a neighbour's time as its own.
+    #[test]
+    fn buckets_carry_the_end_of_their_minute_on_the_grid() {
+        use crate::records::TimeSpan;
+
+        let grid = MinuteGrid::on_utc_minutes(0, 37 * i128::from(SECOND));
+        let buckets = gauge_buckets(
+            vec![step(0.0, 90.0, 1.0, 0)].into_iter(),
+            std::iter::empty(),
+            (0, 90 * SECOND),
+            grid,
+        );
+        let spans: Vec<(u64, u64)> = buckets
+            .iter()
+            .map(|bucket| (bucket.start_ns, TimeSpan::end_ns(bucket)))
+            .collect();
+        assert_eq!(
+            spans,
+            vec![
+                (0, 23 * SECOND),
+                (23 * SECOND, 83 * SECOND),
+                (83 * SECOND, 143 * SECOND)
+            ]
+        );
+        let interval = CounterSample {
+            start_ns: SECOND,
+            end_ns: 2 * SECOND,
+            delta: Scalar::from_u64(1),
+            segment: 0,
+        };
+        let rollup = counter_rollup([interval].iter(), (0, 23 * SECOND), grid);
+        assert_eq!(TimeSpan::end_ns(&rollup.buckets[0]), 23 * SECOND);
     }
 
     #[test]

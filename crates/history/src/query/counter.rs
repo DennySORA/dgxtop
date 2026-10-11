@@ -140,7 +140,7 @@ fn count_buckets(
             break;
         }
         guard.charge(1)?;
-        if bucket.start_ns >= point_start && inputs.grid.end_of(bucket.start_ns) <= point_end {
+        if bucket.start_ns >= point_start && bucket.end_ns <= point_end {
             accumulator.add_bucket(bucket, inputs);
         } else {
             accumulator.saw_partial = true;

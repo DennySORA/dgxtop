@@ -98,6 +98,7 @@ impl HistoryState {
     }
 
     /// The boot's minutes, once known.
+    #[cfg(test)]
     pub(crate) fn minute_grid(&self) -> Option<MinuteGrid> {
         self.grid
     }

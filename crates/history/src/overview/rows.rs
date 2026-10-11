@@ -71,14 +71,10 @@ struct OverviewRow<'r> {
 impl<'r> OverviewRow<'r> {
     fn of(row: &'r ArchiveRow) -> Option<Self> {
         let (segment, start_ns, end_ns, bucket) = match row {
-            ArchiveRow::GaugeBucket {
-                segment,
-                bucket,
-                end_ns,
-            } => (
+            ArchiveRow::GaugeBucket { segment, bucket } => (
                 segment,
                 bucket.start_ns,
-                *end_ns,
+                bucket.end_ns,
                 OverviewBucket::gauge(
                     0,
                     bucket.covered_ns,
@@ -87,14 +83,10 @@ impl<'r> OverviewRow<'r> {
                     bucket.sample_count,
                 ),
             ),
-            ArchiveRow::CounterBucket {
-                segment,
-                bucket,
-                end_ns,
-            } => (
+            ArchiveRow::CounterBucket { segment, bucket } => (
                 segment,
                 bucket.start_ns,
-                *end_ns,
+                bucket.end_ns,
                 OverviewBucket::counter(
                     0,
                     bucket.covered_ns,
@@ -173,7 +165,7 @@ mod tests {
     }
 
     fn gauge_row(metric: &str, unit: CanonicalUnit, covered: u64) -> ArchiveRow {
-        let mut bucket = GaugeBucket::empty(BUCKET_NS, 0);
+        let mut bucket = GaugeBucket::empty(BUCKET_NS, 2 * BUCKET_NS, 0);
         if covered > 0 {
             bucket.add_step(40.0, covered);
         }
@@ -181,7 +173,6 @@ mod tests {
         ArchiveRow::GaugeBucket {
             segment: segment(metric, unit),
             bucket,
-            end_ns: 2 * BUCKET_NS,
         }
     }
 
@@ -245,12 +236,11 @@ mod tests {
         clock.observe(0, boot_utc);
         let grid = crate::grid::MinuteGrid::on_utc_minutes(0, boot_utc);
         let row = |start_ns: u64| {
-            let mut bucket = GaugeBucket::empty(start_ns, 0);
+            let mut bucket = GaugeBucket::empty(start_ns, grid.end_of(start_ns), 0);
             bucket.add_step(40.0, grid.end_of(start_ns) - start_ns);
             ArchiveRow::GaugeBucket {
                 segment: segment(ids::GPU_TEMPERATURE, CanonicalUnit::DegC),
                 bucket,
-                end_ns: grid.end_of(start_ns),
             }
         };
         let starts = [0, grid.phase_ns(), grid.phase_ns() + BUCKET_NS];
@@ -266,7 +256,7 @@ mod tests {
 
     #[test]
     fn a_counter_minute_keeps_its_exact_total() {
-        let mut bucket = CounterBucket::empty(0, 0);
+        let mut bucket = CounterBucket::empty(0, BUCKET_NS, 0);
         bucket.add_interval(&crate::records::CounterSample {
             start_ns: 0,
             end_ns: BUCKET_NS / 2,
@@ -276,7 +266,6 @@ mod tests {
         let row = ArchiveRow::CounterBucket {
             segment: segment(ids::GPU_POWER_DRAW, CanonicalUnit::Watts),
             bucket,
-            end_ns: BUCKET_NS,
         };
         let minutes = overview_minutes(&[row], &clock()).placed;
         assert_eq!(

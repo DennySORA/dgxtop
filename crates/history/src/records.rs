@@ -66,6 +66,8 @@ impl TimeSpan for CounterSample {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct GaugeBucket {
     pub start_ns: u64,
+    /// Where its minute ends on the grid (a boot's head minute is shorter).
+    pub end_ns: u64,
     pub covered_ns: u64,
     /// `sum(value x covered_ns)` in value-nanoseconds.
     pub weighted_sum: f64,
@@ -76,9 +78,10 @@ pub(crate) struct GaugeBucket {
 }
 
 impl GaugeBucket {
-    pub(crate) const fn empty(start_ns: u64, segment: u32) -> Self {
+    pub(crate) const fn empty(start_ns: u64, end_ns: u64, segment: u32) -> Self {
         Self {
             start_ns,
+            end_ns,
             covered_ns: 0,
             weighted_sum: 0.0,
             minimum: f64::INFINITY,
@@ -103,10 +106,8 @@ impl TimeSpan for GaugeBucket {
         self.start_ns
     }
 
-    /// At most a minute after the start: a boot's head minute ends earlier
-    /// (its grid knows where), which only widens a pin by a neighbour.
     fn end_ns(&self) -> u64 {
-        self.start_ns.saturating_add(BUCKET_NS)
+        self.end_ns
     }
 }
 
@@ -181,6 +182,8 @@ impl CounterTotal {
 pub(crate) struct CounterBucket {
     pub total: CounterTotal,
     pub start_ns: u64,
+    /// Where its minute ends on the grid (a boot's head minute is shorter).
+    pub end_ns: u64,
     /// Summed length of the counted intervals (they never overlap).
     pub covered_ns: u64,
     pub segment: u32,
@@ -188,10 +191,11 @@ pub(crate) struct CounterBucket {
 }
 
 impl CounterBucket {
-    pub(crate) fn empty(start_ns: u64, segment: u32) -> Self {
+    pub(crate) fn empty(start_ns: u64, end_ns: u64, segment: u32) -> Self {
         Self {
             total: CounterTotal::default(),
             start_ns,
+            end_ns,
             covered_ns: 0,
             segment,
             interval_count: 0,
@@ -212,10 +216,8 @@ impl TimeSpan for CounterBucket {
         self.start_ns
     }
 
-    /// At most a minute after the start: a boot's head minute ends earlier
-    /// (its grid knows where), which only widens a pin by a neighbour.
     fn end_ns(&self) -> u64 {
-        self.start_ns.saturating_add(BUCKET_NS)
+        self.end_ns
     }
 }
 
@@ -257,7 +259,7 @@ mod tests {
 
     #[test]
     fn gauge_bucket_tracks_extremes() {
-        let mut bucket = GaugeBucket::empty(0, 0);
+        let mut bucket = GaugeBucket::empty(0, BUCKET_NS, 0);
         bucket.add_step(10.0, 2);
         bucket.add_step(-4.0, 1);
         assert_eq!(bucket.covered_ns, 3);

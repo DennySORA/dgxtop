@@ -73,21 +73,12 @@ impl HistoryIndex {
         };
         let now_boot_ns = clock.now_boot_ns();
         let offset_ns = clock.now_utc_ns().saturating_sub(i128::from(now_boot_ns));
-        let (minutes, grid) = {
-            let state = self.read();
-            (
-                state.provisional_minutes(&key, now_boot_ns),
-                state.minute_grid(),
-            )
-        };
-        let Some(grid) = grid else {
-            return Vec::new();
-        };
+        let minutes = self.read().provisional_minutes(&key, now_boot_ns);
         minutes
             .into_iter()
             .filter(|minute| minute.covered_ns > 0)
             .filter_map(|minute| {
-                let end_utc_ns = i128::from(grid.end_of(minute.start_ns)).saturating_add(offset_ns);
+                let end_utc_ns = i128::from(minute.end_ns).saturating_add(offset_ns);
                 let start = i64::try_from(utc_minute_ending_near(end_utc_ns)).ok()?;
                 Some(OverviewBucket::gauge(
                     start,

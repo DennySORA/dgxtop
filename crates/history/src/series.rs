@@ -347,28 +347,25 @@ impl Series {
         report: &mut HistoryReport,
     ) -> Vec<(u64, u64)> {
         let mut lost = Vec::new();
-        let grid = self.grid.unwrap_or_default();
         for bucket in finalization.gauge_buckets {
             if self.gauge.buckets.try_push(bucket).is_err() {
                 report.gauge_drops.record(DropReason::Capacity);
-                lost.push((bucket.start_ns, grid.end_of(bucket.start_ns)));
+                lost.push((bucket.start_ns, bucket.end_ns));
             } else if let Some(segment) = self.segments.get(bucket.segment) {
                 report.archive_rows.push(ArchiveRow::GaugeBucket {
                     segment: segment.clone(),
                     bucket,
-                    end_ns: grid.end_of(bucket.start_ns),
                 });
             }
         }
         for bucket in finalization.counter.buckets {
             if self.counter.buckets.try_push(bucket).is_err() {
                 report.interval_drops.record(DropReason::Capacity);
-                lost.push((bucket.start_ns, grid.end_of(bucket.start_ns)));
+                lost.push((bucket.start_ns, bucket.end_ns));
             } else if let Some(segment) = self.segments.get(bucket.segment) {
                 report.archive_rows.push(ArchiveRow::CounterBucket {
                     segment: segment.clone(),
                     bucket,
-                    end_ns: grid.end_of(bucket.start_ns),
                 });
             }
         }
@@ -570,14 +567,16 @@ impl Series {
     fn rollup_candidates(&self) -> [Option<(u64, u64)>; 3] {
         // Rollups exist only once the grid is known.
         let grid = self.grid.unwrap_or_default();
-        let gauge =
-            self.gauge.buckets.oldest_chunk().and_then(|chunk| {
-                Some((chunk.first()?.start_ns, grid.end_of(chunk.last()?.start_ns)))
-            });
-        let counter =
-            self.counter.buckets.oldest_chunk().and_then(|chunk| {
-                Some((chunk.first()?.start_ns, grid.end_of(chunk.last()?.start_ns)))
-            });
+        let gauge = self
+            .gauge
+            .buckets
+            .oldest_chunk()
+            .and_then(|chunk| Some((chunk.first()?.start_ns, chunk.last()?.end_ns)));
+        let counter = self
+            .counter
+            .buckets
+            .oldest_chunk()
+            .and_then(|chunk| Some((chunk.first()?.start_ns, chunk.last()?.end_ns)));
         let bridges = self
             .counter
             .bridges
