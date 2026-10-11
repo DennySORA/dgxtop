@@ -146,7 +146,7 @@ Totals: PASS 12, FAIL 0, NOT_RUN 24, BLOCKED 4 (of 40).
 | [AT37](#at37) | R37 Release gate separate from hardware evidence | BLOCKED | `gate-test` | Hardware suites are ignored in normal CI and no platform is claimed validated; CI, release and DGX Spark evidence do not exist yet |
 | [AT38](#at38) | R38 Bounded cardinality, query and NSS cost | PASS | `gate-test` | Point, scan and byte caps; two history workers; numeric UIDs; Busy under memory shortage; bounded pinning |
 | [AT39](#at39) | R39 Layered errors and safe shutdown | NOT_RUN | `gate-test` | Read failures stay local, Manager fail-stop sends nothing, bounded restore and 3 s shutdown, stuck storage never locks the loop; the end-to-end part is opt-in and was not run |
-| [AT40](#at40) | R40 Concrete performance evidence and full specification validation | NOT_RUN | `spec-package-validation`, `spec-copy-verification`, `gate-scripts` | Spec copy verified (CRC, bytes, MANIFEST) and this report is machine-checked; the spec's browser HTML checks were not run |
+| [AT40](#at40) | R40 Concrete performance evidence and full specification validation | NOT_RUN | `spec-package-validation`, `spec-copy-verification`, `gate-scripts` | Spec copy verified (CRC, bytes, MANIFEST) and this report is machine-checked; the spec's browser HTML checks were not run, and since D-59 they run only from the delivered archive |
 
 ## Details
 
@@ -758,12 +758,12 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 ### AT40 — R40 Concrete performance evidence and full specification validation
 
-**Status: NOT_RUN.** Evidence: `spec-package-validation`, `spec-copy-verification`, `gate-scripts`. Not complete: the spec package's browser-based HTML checks need Chromium and a Python package that are not installed here.
+**Status: NOT_RUN.** Evidence: `spec-package-validation`, `spec-copy-verification`, `gate-scripts`. Not complete: the spec package's browser-based HTML checks need Chromium and a Python package that are not installed here. Since D-59 the HTML edition and the package's validator are left out of the copy, so these checks run from the delivered archive.
 
 | Clause | Tests | Note |
 |---|---|---|
 | S1 all 40 items have a task/AT/evidence status | `scripts/test_check_validation.py::CheckValidationTests::test_missing_duplicate_and_orphan_ids_are_rejected` | This report; `scripts/check_validation.py` enforces it in CI |
-| S2 ZIP CRC, hashes, links, schema and HTML complete | `scripts/test_verify_spec_copy.py::VerifySpecCopyTests::test_an_identical_copy_passes` | Browser HTML checks NOT_RUN |
+| S2 ZIP CRC, hashes, links, schema and HTML complete | `scripts/test_verify_spec_copy.py::VerifySpecCopyTests::test_an_identical_copy_passes`, `scripts/test_verify_spec_copy.py::VerifySpecCopyTests::test_the_repository_copy_matches_its_manifest_except_the_left_out_files` | Browser HTML checks NOT_RUN; they run from the delivered archive (D-59) |
 | F1 missing/empty file, orphan id, wrong hash or untested PASS refused | `scripts/test_check_validation.py::CheckValidationTests::test_wrong_hash_wrong_exit_and_missing_logs_are_rejected`, `scripts/test_check_validation.py::CheckValidationTests::test_pass_needs_every_cited_test_to_have_passed` |  |
 | F2 spec and software acceptance kept apart |  | This report keeps them apart |
 
@@ -881,6 +881,8 @@ Micro benchmarks that measure no budgeted metric report a note instead:
    - The spec's Python tests ran before this session's changes, and the spec copy has not
      changed since (`spec-copy-verification`). Re-running them needs the pinned `jsonschema`,
      which is not installed.
+   - The copy leaves out the package's agent instructions, HTML edition, validator and
+     reference models (D-59); the HTML and package checks run from the delivered archive.
    - The delivered archive is kept in history, not in the tree (D-58). To rerun
      `spec-copy-verification`, extract it with
      `git show 0a348c0:dgxtop-spec-v2.zip > target/dgxtop-spec-v2.zip`, then pass that path to
