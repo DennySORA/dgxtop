@@ -33,7 +33,7 @@ use crate::sqlite::{
     CapacityPolicy, CapacityView, ConnectionProfile, DatabaseSpec, FaultKind, FreeSpaceProbe,
     SchemaKind, StepError, StorageFootprint, TxError, Unusable, VersionGate, WriteClass, describe,
     ensure_sqlite_version, fault_kind, immediate_transaction, is_rfc3339_utc, open_database,
-    pages_and_backlog, utc_cutoff,
+    pages_and_backlog, path_problem, utc_cutoff,
 };
 
 /// Pages one new intent may touch: table leaf, three index leaves, page 1
@@ -106,17 +106,13 @@ impl fmt::Debug for SqliteAuditRepository {
 }
 
 fn validate_path(path: &Path) -> Result<(), AuditOpenError> {
-    let reason = if !path.is_absolute() {
-        "must be absolute"
-    } else if path.file_name().is_none() {
-        "must name a file"
-    } else {
-        return Ok(());
-    };
-    Err(AuditOpenError::InvalidPath {
-        path: path.display().to_string(),
-        reason: reason.to_owned(),
-    })
+    match path_problem(path) {
+        Some(reason) => Err(AuditOpenError::InvalidPath {
+            path: path.display().to_string(),
+            reason: reason.to_owned(),
+        }),
+        None => Ok(()),
+    }
 }
 
 fn unusable_failure(unusable: &Unusable) -> AuditFailure {

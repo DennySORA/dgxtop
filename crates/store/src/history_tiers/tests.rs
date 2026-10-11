@@ -283,3 +283,17 @@ fn a_database_of_another_format_starts_empty() {
         assert_eq!(store.load().unwrap().len(), usize::from(kept), "{label}");
     }
 }
+
+/// A relative path is refused like the archive's and the audit's: the
+/// store is unusable and says why, and nothing is created anywhere.
+#[test]
+fn a_relative_path_is_refused() {
+    let relative = PathBuf::from(format!(
+        "dgxtop-relative-{}/history_tiers.sqlite3",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let mut store = SqliteHistoryTiers::open(&relative);
+    let error = store.load().unwrap_err().to_string();
+    assert!(error.contains("must be absolute"), "{error}");
+    assert!(!relative.exists());
+}

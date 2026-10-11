@@ -507,3 +507,35 @@ fn a_short_term_file_of_another_format_is_replaced() {
         "nothing kept aside"
     );
 }
+
+/// Relative paths are refused like the archive's and the audit's: the
+/// database is unusable and says why, the short-term file is never
+/// written, and nothing is created anywhere.
+#[test]
+fn relative_paths_are_refused() {
+    let scratch = Scratch::new("relative");
+    let clock = clock();
+    let missing = format!("dgxtop-relative-{}", uuid::Uuid::new_v4().simple());
+    let relative_database = PathBuf::from(&missing).join("process_history.sqlite3");
+    let mut store = ProcessHistoryFiles::open(
+        &relative_database,
+        &scratch.0.join("process_recent.json"),
+        Arc::clone(&clock) as Arc<dyn TimeProvider>,
+    );
+    let error = store.load().unwrap_err().to_string();
+    assert!(error.contains("must be absolute"), "{error}");
+    let relative_recent = PathBuf::from(&missing).join("process_recent.json");
+    let mut store = ProcessHistoryFiles::open(
+        &scratch.0.join("process_history.sqlite3"),
+        &relative_recent,
+        Arc::clone(&clock) as Arc<dyn TimeProvider>,
+    );
+    let recent = RecentHistory {
+        boot_id: boot_id("boot-a"),
+        saved_utc_ns: 0,
+        runs: Vec::new(),
+    };
+    let error = store.save_recent(&recent).unwrap_err().to_string();
+    assert!(error.contains("must be absolute"), "{error}");
+    assert!(!PathBuf::from(&missing).exists(), "nothing is created");
+}

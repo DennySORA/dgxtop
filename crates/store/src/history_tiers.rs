@@ -22,7 +22,7 @@ use std::path::Path;
 use crate::fs::{FileSystemOps, RealFileSystem};
 use crate::sqlite::{
     CapacityPolicy, ConnectionProfile, DatabaseSpec, SchemaKind, VersionGate,
-    ensure_sqlite_version, open_database,
+    ensure_sqlite_version, open_database, path_problem,
 };
 
 const MIB: u64 = 1024 * 1024;
@@ -72,9 +72,13 @@ impl SqliteHistoryTiers {
                 min_free_disk_bytes: MIN_FREE_DISK_BYTES,
             },
         };
-        let (database, recreated) = match open_database(&spec, fs, gate) {
+        let opened = match path_problem(path) {
+            Some(problem) => Err(format!("{}: {problem}", path.display())),
+            None => open_database(&spec, fs, gate).map_err(|unusable| unusable.reason),
+        };
+        let (database, recreated) = match opened {
             Ok(opened) => (Ok(opened.connection), opened.recreated),
-            Err(unusable) => (Err(unusable.reason), None),
+            Err(reason) => (Err(reason), None),
         };
         Self {
             database,

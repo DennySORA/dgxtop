@@ -46,6 +46,6 @@ pub use version::{
 pub(crate) use capacity::{
     CapacityPolicy, CapacityView, PageUsage, Refusal, WriteClass, pages_and_backlog,
 };
-pub(crate) use database::{DatabaseSpec, Unusable, VersionGate, open_database};
+pub(crate) use database::{DatabaseSpec, Unusable, VersionGate, open_database, path_problem};
 pub(crate) use errors::{FaultKind, describe, fault_kind};
 pub(crate) use transaction::{StepError, TxError, immediate_transaction};

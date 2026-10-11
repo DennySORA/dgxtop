@@ -30,7 +30,7 @@ use rusqlite::Connection;
 use crate::fs::{FileSystemOps, RealFileSystem};
 use crate::sqlite::{
     CapacityPolicy, ConnectionProfile, DatabaseSpec, SchemaKind, VersionGate,
-    ensure_sqlite_version, open_database,
+    ensure_sqlite_version, open_database, path_problem,
 };
 
 const MIB: u64 = 1024 * 1024;
@@ -49,7 +49,8 @@ const RETENTION_EVERY_NS: u64 = 3_600 * 1_000_000_000;
 pub struct ProcessHistoryFiles {
     database: Result<Connection, String>,
     recreated: Option<String>,
-    recent_path: PathBuf,
+    /// The short-term file, or why its path cannot be used.
+    recent_path: Result<PathBuf, String>,
     fs: Box<dyn FileSystemOps>,
     clock: Arc<dyn TimeProvider>,
     last_retention_boot_ns: Option<u64>,
@@ -99,14 +100,22 @@ impl ProcessHistoryFiles {
                 min_free_disk_bytes: MIN_FREE_DISK_BYTES,
             },
         };
-        let (database, recreated) = match open_database(&spec, fs.as_ref(), gate) {
+        let opened = match path_problem(database_path) {
+            Some(problem) => Err(format!("{}: {problem}", database_path.display())),
+            None => open_database(&spec, fs.as_ref(), gate).map_err(|unusable| unusable.reason),
+        };
+        let (database, recreated) = match opened {
             Ok(opened) => (Ok(opened.connection), opened.recreated),
-            Err(unusable) => (Err(unusable.reason), None),
+            Err(reason) => (Err(reason), None),
+        };
+        let recent_path = match path_problem(recent_path) {
+            Some(problem) => Err(format!("{}: {problem}", recent_path.display())),
+            None => Ok(recent_path.to_path_buf()),
         };
         Self {
             database,
             recreated,
-            recent_path: recent_path.to_path_buf(),
+            recent_path,
             fs,
             clock,
             last_retention_boot_ns: None,
@@ -124,6 +133,12 @@ impl ProcessHistoryFiles {
         self.database.as_mut().map_err(|reason| {
             InfraError::Unavailable(format!("process history database: {reason}"))
         })
+    }
+
+    fn recent_path(&self) -> Result<&Path, InfraError> {
+        self.recent_path
+            .as_deref()
+            .map_err(|reason| InfraError::Unavailable(format!("process history file: {reason}")))
     }
 
     #[cfg(test)]
@@ -153,7 +168,10 @@ impl ProcessHistoryStore for ProcessHistoryFiles {
         self.maybe_retain()?;
         let (runs, buckets) = database::load(self.connection()?)?;
         // A short-term file that cannot be read only loses the last minutes.
-        let recent = recent::read(self.fs.as_ref(), &self.recent_path).ok();
+        let recent = self
+            .recent_path()
+            .and_then(|path| recent::read(self.fs.as_ref(), path))
+            .ok();
         Ok(ProcessHistoryLoad {
             runs,
             buckets,
@@ -167,7 +185,7 @@ impl ProcessHistoryStore for ProcessHistoryFiles {
     }
 
     fn save_recent(&mut self, recent: &RecentHistory) -> Result<(), InfraError> {
-        recent::write(self.fs.as_ref(), &self.recent_path, recent)
+        recent::write(self.fs.as_ref(), self.recent_path()?, recent)
     }
 
     fn read_run(&mut self, key: &ProcessKey) -> Result<Vec<RunBucketRow>, InfraError> {

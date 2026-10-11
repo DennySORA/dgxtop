@@ -91,6 +91,19 @@ impl OpenFailure {
     }
 }
 
+/// Why `path` cannot hold a database or a file of the store: it must be
+/// absolute (never relative to wherever dgxtop was started) and name a
+/// file. `None` when it can.
+pub(crate) fn path_problem(path: &Path) -> Option<&'static str> {
+    if !path.is_absolute() {
+        Some("must be absolute")
+    } else if path.file_name().is_none() {
+        Some("must name a file")
+    } else {
+        None
+    }
+}
+
 pub(crate) fn open_database(
     spec: &DatabaseSpec<'_>,
     fs: &dyn FileSystemOps,

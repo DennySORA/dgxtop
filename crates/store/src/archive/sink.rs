@@ -27,7 +27,7 @@ use crate::sqlite::{
     CapacityPolicy, CapacityView, ConnectionProfile, DatabaseSpec, FaultKind, FreeSpaceProbe,
     PageUsage, Refusal, SchemaKind, StorageFootprint, TxError, Unusable, VersionGate, WriteClass,
     describe, ensure_sqlite_version, fault_kind, immediate_transaction, open_database,
-    pages_and_backlog, utc_cutoff,
+    pages_and_backlog, path_problem, utc_cutoff,
 };
 
 /// Automatic retention runs at most every ten minutes (boot clock).
@@ -112,17 +112,13 @@ impl fmt::Debug for SqliteArchive {
 }
 
 fn validate_path(path: &Path) -> Result<(), ArchiveOpenError> {
-    let reason = if !path.is_absolute() {
-        "must be absolute"
-    } else if path.file_name().is_none() {
-        "must name a file"
-    } else {
-        return Ok(());
-    };
-    Err(ArchiveOpenError::InvalidPath {
-        path: path.display().to_string(),
-        reason: reason.to_owned(),
-    })
+    match path_problem(path) {
+        Some(reason) => Err(ArchiveOpenError::InvalidPath {
+            path: path.display().to_string(),
+            reason: reason.to_owned(),
+        }),
+        None => Ok(()),
+    }
 }
 
 /// Splits rows into transactions of at most `max_rows` rows and about
