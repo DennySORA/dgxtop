@@ -878,3 +878,30 @@ fn rows_a_busy_store_refused_go_with_the_next_journal() {
         .collect();
     assert_eq!(minutes, (0..8).collect::<Vec<i64>>());
 }
+
+/// A whole archived page (20 000 minutes) is never compressed under one
+/// hold of the lock, so a feed from the state's commit path or a reader
+/// waits for a day's chunk at most; every minute still goes in once.
+#[test]
+fn an_archived_page_is_compressed_a_chunk_at_a_time() {
+    let earlier = i64::from(ARCHIVE_PAGE_MINUTES) + 500;
+    let mut disk = Disk {
+        archive: (0..earlier).map(minute).collect(),
+        ..Disk::default()
+    };
+    let run = Run::start(&mut disk, MIDNIGHT + earlier * MINUTE);
+    let most = run.tiers.most_archived_under_one_lock();
+    assert!(most > 0, "the archive was compressed");
+    assert!(
+        most <= ARCHIVE_CHUNK_MINUTES,
+        "{most} minutes under one lock"
+    );
+    let days = run.tiers.bars(
+        &power(),
+        Tier::OneDay,
+        (MIDNIGHT - 24 * HOUR, MIDNIGHT + 30 * 24 * HOUR),
+        &[],
+    );
+    let held: u64 = days.bars.iter().map(|bar| bar.covered_ns).sum();
+    assert_eq!(held, (earlier * MINUTE).unsigned_abs(), "every minute once");
+}

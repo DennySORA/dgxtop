@@ -49,6 +49,10 @@ use self::book::{Eviction, TierBook, TierMinute};
 
 /// Archived minutes one read returns at most (two weeks of one series).
 const ARCHIVE_PAGE_MINUTES: u32 = 20_000;
+/// Archived minutes compressed under one hold of the lock (a day): feeds
+/// from the state's commit path and readers wait for a chunk at most,
+/// never for a whole page.
+const ARCHIVE_CHUNK_MINUTES: usize = 1_440;
 /// The archive is pruned at most this often (boot clock).
 const PRUNE_EVERY_NS: u64 = 600 * NANOS_PER_SECOND;
 
@@ -73,6 +77,26 @@ impl fmt::Debug for OverviewTiers {
 struct Inner {
     book: TierBook,
     link: Option<StoreLink>,
+    /// The most archived minutes compressed under one hold of the lock.
+    #[cfg(test)]
+    most_archived_under_one_lock: usize,
+}
+
+impl Inner {
+    fn new(book: TierBook) -> Self {
+        Self {
+            book,
+            link: None,
+            #[cfg(test)]
+            most_archived_under_one_lock: 0,
+        }
+    }
+}
+
+/// What is left after an archived page went into the sizes.
+struct PageRead {
+    /// Where the next page starts, when more follow.
+    next_from_utc_ns: Option<i64>,
 }
 
 /// Where the startup of a kept history stands.
@@ -163,6 +187,30 @@ impl StoreLink {
         }
     }
 
+    /// One chunk of an archived page of the series being read into its
+    /// sizes (the first one of its first page goes on from what was
+    /// stored); `false` when it is no longer read.
+    fn add_archived(
+        &mut self,
+        book: &mut TierBook,
+        series: &SeriesInEveryBoot,
+        minutes: &[OverviewBucket],
+    ) -> bool {
+        let Phase::Backfilling {
+            reading: Some((read, first_page)),
+            ..
+        } = &mut self.phase
+        else {
+            return false;
+        };
+        if read != series || self.let_go.contains(series) {
+            return false;
+        }
+        book.add_archived(series, minutes, *first_page);
+        *first_page = false;
+        true
+    }
+
     /// Takes the series being read, with whether its first page is still
     /// to come, when the answer is about it.
     fn take_reading(&mut self, series: &SeriesInEveryBoot) -> Option<(SeriesInEveryBoot, bool)> {
@@ -205,10 +253,7 @@ impl Default for OverviewTiers {
 impl OverviewTiers {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(Inner {
-                book: TierBook::new(),
-                link: None,
-            })),
+            inner: Arc::new(Mutex::new(Inner::new(TierBook::new()))),
         }
     }
 
@@ -234,7 +279,9 @@ impl OverviewTiers {
         run_start_utc_ns: i64,
     ) {
         let mut inner = self.lock();
-        let Inner { book, link: slot } = &mut *inner;
+        let Inner {
+            book, link: slot, ..
+        } = &mut *inner;
         book.keep_on_disk();
         let mut link = StoreLink {
             port,
@@ -257,45 +304,75 @@ impl OverviewTiers {
 
     /// What a store job did.
     pub fn on_store(&self, completion: HistoryTierCompletion) {
+        match completion {
+            HistoryTierCompletion::Loaded(result) => {
+                self.with_link(|book, link| loaded(book, link, result));
+            }
+            HistoryTierCompletion::Listed(result) => {
+                self.with_link(|book, link| listed(book, link, result));
+            }
+            HistoryTierCompletion::ArchivedRead { read, result } => {
+                let result = result.map(|page| self.compress_archived(&read, &page));
+                self.with_link(|book, link| archived_read(book, link, &read, result));
+            }
+            HistoryTierCompletion::Appended(result) => {
+                self.with_link(|book, link| appended(book, link, result));
+            }
+        }
+    }
+
+    /// Runs `step` under the lock while a store is kept, then lets what
+    /// the budget asks go and hands the store what is due.
+    fn with_link(&self, step: impl FnOnce(&mut TierBook, &mut StoreLink)) {
         let mut inner = self.lock();
-        let Inner { book, link } = &mut *inner;
+        let Inner { book, link, .. } = &mut *inner;
         let Some(link) = link.as_mut() else {
             return;
         };
-        match completion {
-            HistoryTierCompletion::Loaded(result) => loaded(book, link, result),
-            HistoryTierCompletion::Listed(result) => listed(book, link, result),
-            HistoryTierCompletion::ArchivedRead { read, result } => {
-                archived_read(book, link, &read, result);
+        step(book, link);
+        settle(book, link);
+    }
+
+    /// The archived minutes of the series being read into its sizes, a
+    /// chunk under each hold of the lock; stops when the series was let go
+    /// meanwhile.
+    fn compress_archived(&self, read: &ArchivedMinutesRead, page: &ArchivedMinutes) -> PageRead {
+        for chunk in page.minutes.chunks(ARCHIVE_CHUNK_MINUTES) {
+            let mut wanted = false;
+            self.with_link(|book, link| wanted = link.add_archived(book, &read.series, chunk));
+            if !wanted {
+                break;
             }
-            HistoryTierCompletion::Appended(result) => {
-                link.appends_inflight.pop_front();
-                match result {
-                    Ok(usage) => link.give_way_for_store(book, usage),
-                    Err(error) => link.fail(&error),
-                }
+            #[cfg(test)]
+            {
+                let mut inner = self.lock();
+                inner.most_archived_under_one_lock =
+                    inner.most_archived_under_one_lock.max(chunk.len());
             }
         }
-        book.keep_within_budget();
-        link.forget(book.take_evictions());
-        flush(book, link);
+        PageRead {
+            next_from_utc_ns: page
+                .minutes
+                .last()
+                .filter(|_| page.more)
+                .map(|last| last.start_utc_ns.saturating_add(1)),
+        }
     }
 
     /// Finalized minutes, into the sizes; their closed buckets go to the
     /// store.
     pub(crate) fn feed(&self, minutes: Vec<TierMinute>) {
         let mut inner = self.lock();
-        let Inner { book, link } = &mut *inner;
+        let Inner { book, link, .. } = &mut *inner;
         for minute in minutes {
             book.feed(minute);
         }
-        book.keep_within_budget();
         match link.as_mut() {
-            Some(link) => {
-                link.forget(book.take_evictions());
-                flush(book, link);
+            Some(link) => settle(book, link),
+            None => {
+                book.keep_within_budget();
+                drop(book.take_unsent());
             }
-            None => drop(book.take_unsent()),
         }
     }
 
@@ -304,7 +381,7 @@ impl OverviewTiers {
     /// while everything they would lose is written).
     pub(crate) fn take_prunes(&self, now_boot_ns: u64) -> Vec<ArchivePrune> {
         let mut inner = self.lock();
-        let Inner { book, link } = &mut *inner;
+        let Inner { book, link, .. } = &mut *inner;
         let Some(link) = link.as_mut() else {
             return Vec::new();
         };
@@ -360,11 +437,13 @@ impl OverviewTiers {
     #[cfg(test)]
     fn with_cache_budget(budget_bytes: usize) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(Inner {
-                book: TierBook::with_budget(budget_bytes),
-                link: None,
-            })),
+            inner: Arc::new(Mutex::new(Inner::new(TierBook::with_budget(budget_bytes)))),
         }
+    }
+
+    #[cfg(test)]
+    fn most_archived_under_one_lock(&self) -> usize {
+        self.lock().most_archived_under_one_lock
     }
 
     #[cfg(test)]
@@ -429,7 +508,7 @@ fn archived_read(
     book: &mut TierBook,
     link: &mut StoreLink,
     read: &ArchivedMinutesRead,
-    result: Result<ArchivedMinutes, InfraError>,
+    result: Result<PageRead, InfraError>,
 ) {
     let Some((series, first_page)) = link.take_reading(&read.series) else {
         return;
@@ -440,9 +519,9 @@ fn archived_read(
     }
     match result {
         Ok(page) => {
-            book.add_archived(&series, &page.minutes, first_page);
-            if let Some(last) = page.minutes.last().filter(|_| page.more) {
-                let from_utc_ns = last.start_utc_ns.saturating_add(1);
+            // A page without minutes still goes on from what was stored.
+            book.add_archived(&series, &[], first_page);
+            if let Some(from_utc_ns) = page.next_from_utc_ns {
                 read_next_page(book, link, read, series, from_utc_ns);
                 return;
             }
@@ -494,6 +573,22 @@ fn next_backfill(book: &mut TierBook, link: &mut StoreLink) {
     };
     *reading = Some((series, true));
     link.send(book, HistoryTierJob::ReadArchived(read));
+}
+
+fn appended(book: &mut TierBook, link: &mut StoreLink, result: Result<TierStoreUsage, InfraError>) {
+    link.appends_inflight.pop_front();
+    match result {
+        Ok(usage) => link.give_way_for_store(book, usage),
+        Err(error) => link.fail(&error),
+    }
+}
+
+/// After any change: what the cache's budget asks goes, and the store gets
+/// what is due.
+fn settle(book: &mut TierBook, link: &mut StoreLink) {
+    book.keep_within_budget();
+    link.forget(book.take_evictions());
+    flush(book, link);
 }
 
 /// Sends a held startup job, then the closed buckets collected.
