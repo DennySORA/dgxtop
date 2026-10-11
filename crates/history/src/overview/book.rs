@@ -60,7 +60,8 @@ pub(crate) struct TierEntry {
     /// Its archived minutes are in the sizes: the archive may let the ones
     /// the minutes size no longer holds go.
     backfilled: bool,
-    /// Changes when its past changed under a reader's cached bars.
+    /// Changes when its past changed under a reader's cached bars; drawn
+    /// from the book's [`TierBook::epoch`], so no two pasts share one.
     epoch: u64,
     /// End of the latest minute it was given.
     fed_through_utc_ns: i64,
@@ -70,13 +71,13 @@ pub(crate) struct TierEntry {
 }
 
 impl TierEntry {
-    fn new(shift_ns: i64, ready: bool, backfilled: bool) -> Self {
+    fn new(shift_ns: i64, ready: bool, backfilled: bool, epoch: u64) -> Self {
         Self {
             tiers: TieredSeries::new(shift_ns),
             pending: VecDeque::new(),
             ready,
             backfilled,
-            epoch: 0,
+            epoch,
             fed_through_utc_ns: i64::MIN,
             pruned_before_utc_ns: i64::MIN,
             key: None,
@@ -121,6 +122,11 @@ pub(crate) struct TierBook {
     /// Series let go since the last [`TierBook::take_evictions`] (only
     /// while a store is kept).
     evicted: Vec<Eviction>,
+    /// The latest epoch handed out: bumped for every new entry, every
+    /// change of an entry's past and every eviction, so a series that
+    /// comes back (or is gone) never answers with an epoch a reader cached
+    /// for its earlier past.
+    epoch: u64,
 }
 
 impl TierBook {
@@ -133,7 +139,13 @@ impl TierBook {
             unsent: Vec::new(),
             keeps_rows: false,
             evicted: Vec::new(),
+            epoch: 0,
         }
+    }
+
+    fn next_epoch(&mut self) -> u64 {
+        self.epoch = self.epoch.saturating_add(1);
+        self.epoch
     }
 
     /// Buckets follow the local clock `shift_ns` east of UTC. Set before
@@ -211,10 +223,15 @@ impl TierBook {
                 self.evict(&oldest);
             }
         }
+        let epoch = if self.entries.contains_key(series) {
+            self.epoch
+        } else {
+            self.next_epoch()
+        };
         let (shift, ready, backfilled) = (self.shift_ns, !self.waiting, self.new_backfilled);
         self.entries
             .entry(series.clone())
-            .or_insert_with(|| TierEntry::new(shift, ready, backfilled && ready))
+            .or_insert_with(|| TierEntry::new(shift, ready, backfilled && ready, epoch))
     }
 
     /// Lets a series go: its entry, its rows not sent yet and, while a
@@ -223,6 +240,7 @@ impl TierBook {
         let Some(entry) = self.entries.remove(series) else {
             return;
         };
+        self.next_epoch();
         if !self.keeps_rows {
             return;
         }
@@ -315,11 +333,12 @@ impl TierBook {
         if !resumed {
             self.resume(series);
         }
+        let epoch = self.next_epoch();
         let entry = self.entry(series);
         let pending: Vec<OverviewBucket> = entry.pending.drain(..).collect();
         entry.ready = true;
         entry.backfilled = backfilled;
-        entry.epoch = entry.epoch.saturating_add(1);
+        entry.epoch = epoch;
         for minute in &pending {
             self.add(series, minute);
         }
@@ -375,8 +394,10 @@ impl TierBook {
         extra: &[OverviewBucket],
     ) -> OverviewBars {
         let Some(entry) = self.entries.get(series) else {
+            // The latest epoch: one the series' past, if it had one, never
+            // carried.
             return OverviewBars {
-                epoch: 0,
+                epoch: self.epoch,
                 settled_through_utc_ns: i64::MIN,
                 bars: bars_in(&TieredSeries::new(self.shift_ns), tier, window, extra),
                 kept_on_disk: false,

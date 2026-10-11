@@ -293,7 +293,8 @@ impl OverviewRequest {
 #[derive(Debug, Clone, PartialEq)]
 pub struct OverviewBars {
     /// Changes when the series' past changed (the startup compression of
-    /// the archive filled it in), so cached bars must be read again.
+    /// the archive filled it in, or the series was let go or came back),
+    /// so cached bars must be read again.
     pub epoch: u64,
     /// Bars ending by this time never change again (minutes reach the
     /// history in time order).

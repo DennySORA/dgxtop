@@ -241,7 +241,6 @@ fn bars_are_local_clock_buckets_holding_only_what_was_recorded() {
         .collect();
     assert_eq!(shape, vec![(0, 45), (60, 50)], "45 and 60 - 10 gap minutes");
     assert_same(&bars.bars[0], &brute_force(first, first + 45));
-    assert_eq!(bars.epoch, 0);
     assert_eq!(
         bars.settled_through_utc_ns,
         MIDNIGHT + (first + 105) * MINUTE,
@@ -249,6 +248,9 @@ fn bars_are_local_clock_buckets_holding_only_what_was_recorded() {
     );
     let gaps = tiers.bars(&power(), Tier::OneMinute, window, &[]);
     assert_eq!(gaps.bars.len(), 95, "the missing ten minutes are gaps");
+    tiers.feed(vec![live(first + 105)]);
+    let later = tiers.bars(&power(), Tier::OneHour, window, &[]);
+    assert_eq!(later.epoch, bars.epoch, "a live minute keeps the past");
     let unknown = SeriesInEveryBoot::from(&metric_key("gpu:9", "gpu.power.draw", "gpu"));
     assert!(
         tiers
@@ -371,7 +373,10 @@ fn the_archive_is_compressed_at_startup_and_live_minutes_wait() {
         .map(|bar| bar.covered_ns / MINUTE.unsigned_abs())
         .collect();
     assert_eq!(counted, vec![1440, 1440, 1440, 3]);
-    assert_eq!(days.epoch, 1, "the past changed under any cached bar");
+    assert_ne!(
+        days.epoch, waiting.epoch,
+        "the past changed under any cached bar"
+    );
     assert!(disk.tiers.keys().any(|(tier, _)| *tier == Tier::OneDay));
     assert!(
         disk.tiers
@@ -640,4 +645,27 @@ fn a_series_let_go_during_the_startup_is_not_read_back() {
         vec![(gpu_series(0), run_start), (gpu_series(1), run_start)],
         "every minute of earlier runs"
     );
+}
+
+/// A series let go and come back is a new past: every answer about it
+/// carries an epoch it never had before, so a reader's cached bars of the
+/// old one are read again (without a store, and after the startup).
+#[test]
+fn a_series_that_comes_back_has_a_new_epoch() {
+    let tiers = OverviewTiers::new();
+    let window = (MIDNIGHT - 24 * HOUR, MIDNIGHT + 24 * HOUR);
+    let epoch =
+        |tiers: &OverviewTiers| tiers.bars(&gpu_series(0), Tier::OneHour, window, &[]).epoch;
+    tiers.feed(vec![gpu_minute(0, 0)]);
+    let before = epoch(&tiers);
+    for gpu in 1..=MAX_TIER_SERIES {
+        tiers.feed(vec![gpu_minute(gpu, 10)]);
+    }
+    tiers.with_book(|book| assert!(book.entry_of(&gpu_series(0)).is_none()));
+    let gone = epoch(&tiers);
+    assert_ne!(gone, before, "the series let go is not the one cached");
+    tiers.feed(vec![gpu_minute(0, 20)]);
+    let back = epoch(&tiers);
+    assert_ne!(back, before, "the comeback is a new past");
+    assert_ne!(back, gone);
 }
