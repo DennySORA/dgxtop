@@ -68,10 +68,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Built on Ubuntu 22.04 like the release, so the binaries need glibc
+          # 2.35 at most and run on Ubuntu 22.04, Debian 12 and newer.
           - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-24.04
+            runner: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-22.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -85,3 +87,16 @@ jobs:
       - run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Verify version metadata and SQLite gate
         run: ./target/${{ matrix.target }}/release/dgxtop --version --verbose
+      - name: The binary needs glibc 2.35 at most
+        run: |
+          required="$(objdump -p "target/${{ matrix.target }}/release/dgxtop" | grep -o 'GLIBC_[0-9.]*' | sed 's/^GLIBC_//' | sort -uV | tail -n 1)"
+          echo "highest glibc version required: ${required}"
+          test "$(printf '%s\n' "${required}" 2.35 | sort -V | tail -n 1)" = 2.35
+      - name: The release archive installs with install.sh
+        run: |
+          version="$(cargo metadata --format-version 1 --locked --no-deps | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="dgxtop"))')"
+          name="dgxtop-v${version}-${{ matrix.target }}"
+          mkdir -p dist
+          tar -C "target/${{ matrix.target }}/release" -czf "dist/${name}.tar.gz" dgxtop
+          (cd dist && sha256sum "${name}.tar.gz" > SHA256SUMS)
+          ./install.sh --version "v${version}" --base-url "file://${PWD}/dist" --install-dir "${RUNNER_TEMP}/bin"

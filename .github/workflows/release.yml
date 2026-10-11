@@ -1,6 +1,7 @@
 name: Release
 
-# Runs only when a maintainer pushes a version tag; nothing is published automatically otherwise.
+# Runs only when a maintainer pushes a version tag. The release is created as a
+# draft; a maintainer publishes it after checking its assets.
 on:
   push:
     tags:
@@ -48,11 +49,12 @@ jobs:
       matrix:
         include:
           # GNU targets only: musl builds are not produced because NVML is untested
-          # there, and the installer never falls back from GNU to musl.
+          # there, and the installer never falls back from GNU to musl. Ubuntu
+          # 22.04 images keep the required glibc at 2.35 at most.
           - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-24.04
+            runner: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-22.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -68,11 +70,22 @@ jobs:
           grep -qxF "dgxtop ${GITHUB_REF_NAME#v}" version.txt
           grep -qxF "target: ${{ matrix.target }}" version.txt
           grep -qE '^sqlite: [0-9]+(\.[0-9]+)+ \(runtime gate >= 3\.51\.3: ok\)$' version.txt
+      - name: The binary needs glibc 2.35 at most
+        run: |
+          required="$(objdump -p "target/${{ matrix.target }}/release/dgxtop" | grep -o 'GLIBC_[0-9.]*' | sed 's/^GLIBC_//' | sort -uV | tail -n 1)"
+          echo "highest glibc version required: ${required}"
+          test "$(printf '%s\n' "${required}" 2.35 | sort -V | tail -n 1)" = 2.35
       - name: Package
         run: |
           name="dgxtop-${GITHUB_REF_NAME}-${{ matrix.target }}"
           tar -C "target/${{ matrix.target }}/release" -czf "${name}.tar.gz" dgxtop
           sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+      - name: The archive installs with install.sh
+        run: |
+          mkdir -p smoke
+          cp "dgxtop-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz" smoke/
+          (cd smoke && sha256sum dgxtop-*.tar.gz > SHA256SUMS)
+          ./install.sh --version "${GITHUB_REF_NAME}" --base-url "file://${PWD}/smoke" --install-dir "${RUNNER_TEMP}/bin"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist-${{ matrix.target }}
@@ -102,7 +115,8 @@ jobs:
         with:
           draft: true
           body: |
-            Release artifacts for the GNU x86_64 and aarch64 targets.
+            dgxtop for Linux on x86_64 and aarch64 with glibc 2.35 or newer; WSL 2 runs the Linux build.
+            Install: curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
             Hardware validation status, test evidence and known gaps: see docs/validation/VALIDATION.md.
             A platform is only "validated" when that document lists measured evidence for it.
           files: |
