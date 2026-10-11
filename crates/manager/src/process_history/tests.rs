@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 use dgxtop_core::action::Signal;
 use dgxtop_core::canonical::{ProcessRow, ProcessTable};
@@ -7,9 +8,9 @@ use dgxtop_core::process_history::{
     EndCause, ProcessHistoryLoad, RunBucket, RunDetails, RunMetric, Tier,
 };
 use dgxtop_core::process_probe::{
-    ChildUsage, ExitStatus, IoCounters, ProbeLiveness, ProbeReading, ProbeReport,
+    ExitStatus, IoCounters, ProbeLiveness, ProbeReading, ProbeReport,
 };
-use dgxtop_core::testing::boot_id;
+use dgxtop_core::testing::{IdleProbeDeriver, boot_id};
 
 use super::*;
 use crate::test_support::{gpu_process, process_table, test_process_key};
@@ -91,6 +92,11 @@ fn book() -> ProcessHistoryBook {
     ProcessHistoryBook::new(boot_id("boot-test"))
 }
 
+/// Hands `report` to `book` with a deriver that keeps the state as it was.
+fn probe(book: &mut ProcessHistoryBook, report: &ProbeReport, now: Now) {
+    book.on_probe(report, now, &IdleProbeDeriver);
+}
+
 fn end_of(book: &ProcessHistoryBook, pid: i64) -> Option<EndCause> {
     book.run(&key(pid))?.info().end.map(|end| end.cause)
 }
@@ -151,65 +157,51 @@ fn samples_aggregate_the_run_and_minutes_reach_the_journal() {
     assert_eq!(journal.runs.len(), 1, "the run, with its last-seen time");
 }
 
-/// The probe's counters become disk rates of the next samples; its texts
-/// replace the table's short command line once.
+/// Records what the book hands the deriver and gives values that tell
+/// the readings apart: the read time as the disk read rate, the threads as
+/// read, and the read time as the descendants' base.
+#[derive(Debug, Default)]
+struct RecordingDeriver {
+    calls: Mutex<Vec<(ProbeState, u64, Option<u64>)>>,
+}
+
+impl RecordingDeriver {
+    fn calls(&self) -> Vec<(ProbeState, u64, Option<u64>)> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+impl ProbeDeriver for RecordingDeriver {
+    fn derive(
+        &self,
+        previous: &ProbeState,
+        reading: &ProbeReading,
+        read_boot_ns: u64,
+        clk_tck: Option<u64>,
+    ) -> ProbeState {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((*previous, read_boot_ns, clk_tck));
+        #[allow(clippy::cast_precision_loss)]
+        let as_value = |value: u64| value as f64;
+        let mut next = *previous;
+        next.values.disk = [Some(as_value(read_boot_ns / SECOND)), None];
+        next.values.threads = reading.threads.map(as_value);
+        next.bases.child_ticks = Some((read_boot_ns, read_boot_ns));
+        next
+    }
+}
+
+/// The probe's texts replace the table's short command line once, and its
+/// details are read once with them.
 #[test]
-fn probes_give_disk_rates_and_the_full_command() {
+fn probes_give_the_full_command_and_details_once() {
     let mut book = book();
     observe(&mut book, 1, vec![row(9, 10.0, Some(GIB))]);
     let targets = book.probe_targets();
     assert_eq!(targets.len(), 1);
     assert!(targets[0].with_text);
-    let mut first = reading(9, ProbeLiveness::Running, Some((1_000, 0)));
-    first.command = Some("python -m acme_llm.train --epochs 3 --data /srv/acme".to_owned());
-    first.cwd = Some("/home/u/code/acme-llm".to_owned());
-    book.on_probe(&report(1, Some(0), vec![first]), now(1));
-    book.on_probe(
-        &report(
-            3,
-            Some(0),
-            vec![reading(9, ProbeLiveness::Running, Some((5_000, 2_000)))],
-        ),
-        now(3),
-    );
-    let run = book.run(&key(9)).unwrap();
-    assert_eq!(run.probed().disk, [Some(2_000.0), Some(1_000.0)]);
-    assert_eq!(run.info().cwd, "/home/u/code/acme-llm");
-    assert!(run.info().command.ends_with("--data /srv/acme"));
-    assert!(!book.probe_targets()[0].with_text, "texts are read once");
-    observe(&mut book, 4, vec![row(9, 10.0, Some(GIB))]);
-    let recent: Vec<&RunBucket> = book
-        .run(&key(9))
-        .unwrap()
-        .series()
-        .buckets(Tier::Recent)
-        .collect();
-    assert_eq!(
-        recent.last().unwrap().value(RunMetric::DiskRead).mean(),
-        Some(2_000.0)
-    );
-}
-
-/// The probe's threads, swap, open files and descendants become samples
-/// (D-77): the descendants' CPU from their ticks since the last reading;
-/// its details are read once with the text.
-#[test]
-fn probes_give_threads_swap_files_and_descendants() {
-    let mut book = book();
-    observe(&mut book, 1, vec![row(9, 10.0, Some(GIB))]);
-    let probed = |second: u64, ticks: u64, details: Option<RunDetails>| {
-        let mut probed = reading(9, ProbeLiveness::Running, None);
-        probed.threads = Some(24);
-        probed.swap_bytes = Some(4096);
-        probed.open_files = Some(31);
-        probed.children = Some(ChildUsage {
-            processes: 4,
-            cpu_ticks: ticks,
-            rss_bytes: Some(3 * GIB),
-        });
-        probed.details = details;
-        report(second, None, vec![probed])
-    };
     let details = RunDetails {
         parent_pid: Some(7),
         parent_name: "torchrun".to_owned(),
@@ -217,31 +209,47 @@ fn probes_give_threads_swap_files_and_descendants() {
         cgroup: "/user.slice".to_owned(),
         nice: Some(0),
     };
-    book.on_probe(&probed(1, 1_000, Some(details.clone())), now(1));
-    assert_eq!(
-        book.run(&key(9)).unwrap().probed().children_cpu,
-        None,
-        "a rate needs two readings"
-    );
-    // 300 ticks in 2 s at 100 a second: one and a half cores.
-    book.on_probe(&probed(3, 1_300, None), now(3));
+    let mut first = reading(9, ProbeLiveness::Running, Some((1_000, 0)));
+    first.command = Some("python -m acme_llm.train --epochs 3 --data /srv/acme".to_owned());
+    first.cwd = Some("/home/u/code/acme-llm".to_owned());
+    first.details = Some(details.clone());
+    probe(&mut book, &report(1, Some(0), vec![first]), now(1));
+    let mut later = reading(9, ProbeLiveness::Running, None);
+    later.command = Some("other".to_owned());
+    probe(&mut book, &report(3, Some(0), vec![later]), now(3));
     let run = book.run(&key(9)).unwrap();
-    let values = run.probed();
-    assert_eq!(values.children_cpu, Some(150.0));
-    assert_eq!(values.children, Some(4.0));
-    #[allow(clippy::cast_precision_loss)]
-    let held = (3 * GIB) as f64;
-    assert_eq!(values.children_memory, Some(held));
-    assert_eq!(
-        (values.threads, values.swap, values.open_files),
-        (Some(24.0), Some(4096.0), Some(31.0))
-    );
+    assert_eq!(run.info().cwd, "/home/u/code/acme-llm");
+    assert!(run.info().command.ends_with("--data /srv/acme"));
     assert_eq!(run.info().details, details);
-    // A descendant that left the tree unreaped takes its time along: no
-    // rate for that reading.
-    book.on_probe(&probed(4, 900, None), now(4));
-    assert_eq!(book.run(&key(9)).unwrap().probed().children_cpu, None);
-    observe(&mut book, 5, vec![row(9, 10.0, Some(GIB))]);
+    assert!(!book.probe_targets()[0].with_text, "texts are read once");
+}
+
+/// The book hands the deriver each running reading with the state the
+/// last reading left, the probe's read time and the table's clock ticks
+/// (D-79), and the next samples take the values it gives.
+#[test]
+fn the_derived_values_become_the_next_samples() {
+    let deriver = RecordingDeriver::default();
+    let mut book = book();
+    observe(&mut book, 1, vec![row(9, 10.0, Some(GIB))]);
+    let mut probed = reading(9, ProbeLiveness::Running, None);
+    probed.threads = Some(24);
+    book.on_probe(&report(2, None, vec![probed.clone()]), now(2), &deriver);
+    book.on_probe(&report(3, None, vec![probed]), now(3), &deriver);
+    let calls = deriver.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0], (ProbeState::default(), 2 * SECOND, Some(100)));
+    let (second_previous, second_read, _) = calls[1];
+    assert_eq!(second_read, 3 * SECOND);
+    assert_eq!(
+        second_previous.bases.child_ticks,
+        Some((2 * SECOND, 2 * SECOND)),
+        "the state the first reading left"
+    );
+    let values = book.run(&key(9)).unwrap().probed();
+    assert_eq!(values.disk, [Some(3.0), None]);
+    assert_eq!(values.threads, Some(24.0));
+    observe(&mut book, 4, vec![row(9, 10.0, Some(GIB))]);
     let bucket = *book
         .run(&key(9))
         .unwrap()
@@ -249,15 +257,26 @@ fn probes_give_threads_swap_files_and_descendants() {
         .buckets(Tier::Recent)
         .last()
         .unwrap();
+    assert_eq!(bucket.value(RunMetric::DiskRead).mean(), Some(3.0));
     assert_eq!(bucket.value(RunMetric::Threads).mean(), Some(24.0));
-    assert_eq!(bucket.value(RunMetric::Children).mean(), Some(4.0));
-    assert_eq!(bucket.value(RunMetric::OpenFiles).mean(), Some(31.0));
-    assert_eq!(bucket.value(RunMetric::ChildrenCpu).count, 0);
-    // A list that could not be read: the descendants are unknown.
-    let mut unknown = reading(9, ProbeLiveness::Running, None);
-    unknown.children = None;
-    book.on_probe(&report(6, None, vec![unknown]), now(6));
-    assert_eq!(book.run(&key(9)).unwrap().probed().children, None);
+    assert_eq!(bucket.value(RunMetric::DiskWrite).count, 0);
+}
+
+/// A reading of a process that no longer runs ends its run and is not
+/// derived.
+#[test]
+fn readings_of_ended_processes_are_not_derived() {
+    let deriver = RecordingDeriver::default();
+    let mut book = book();
+    observe(&mut book, 1, vec![row(9, 10.0, Some(GIB))]);
+    book.on_probe(
+        &report(2, None, vec![reading(9, ProbeLiveness::Gone, None)]),
+        now(2),
+        &deriver,
+    );
+    assert!(deriver.calls().is_empty());
+    assert_eq!(end_of(&book, 9), Some(EndCause::NotVisible));
+    assert_eq!(book.run(&key(9)).unwrap().probed(), ProbedValues::default());
 }
 
 /// A run the table stops listing ends as its probe says: dgxtop's own
@@ -270,7 +289,7 @@ fn runs_end_with_the_cause_the_probe_shows() {
         1,
         (1..=5).map(|pid| row(pid, 10.0, Some(GIB))).collect(),
     );
-    book.on_probe(&report(1, Some(4), Vec::new()), now(1));
+    probe(&mut book, &report(1, Some(4), Vec::new()), now(1));
     book.note_signal(&key(1), Signal::Sigterm, now(1));
     observe(&mut book, 2, Vec::new());
     assert_eq!(
@@ -278,7 +297,8 @@ fn runs_end_with_the_cause_the_probe_shows() {
         5,
         "the runs the table lost are probed"
     );
-    book.on_probe(
+    probe(
+        &mut book,
         &report(
             2,
             Some(4),
@@ -303,7 +323,8 @@ fn runs_end_with_the_cause_the_probe_shows() {
     assert_eq!(end_of(&book, 3), Some(EndCause::Exit(2)));
     assert_eq!(end_of(&book, 4), Some(EndCause::NotVisible));
     assert_eq!(end_of(&book, 5), None, "not probed yet");
-    book.on_probe(
+    probe(
+        &mut book,
         &report(3, Some(5), vec![reading(5, ProbeLiveness::Gone, None)]),
         now(3),
     );
@@ -336,7 +357,8 @@ fn the_probe_decides_whether_a_listed_run_ended() {
         1,
         vec![row(1, 10.0, Some(GIB)), row(2, 10.0, Some(GIB))],
     );
-    book.on_probe(
+    probe(
+        &mut book,
         &report(
             1,
             None,
@@ -350,7 +372,8 @@ fn the_probe_decides_whether_a_listed_run_ended() {
     assert_eq!(end_of(&book, 1), Some(EndCause::NotVisible));
     assert_eq!(end_of(&book, 2), Some(EndCause::NotVisible));
     observe(&mut book, 2, vec![row(3, 10.0, Some(GIB))]);
-    book.on_probe(
+    probe(
+        &mut book,
         &report(2, None, vec![reading(3, ProbeLiveness::Running, None)]),
         now(2),
     );
@@ -387,7 +410,8 @@ fn a_signal_long_before_the_end_is_not_its_cause() {
     observe(&mut book, 1, vec![row(1, 10.0, Some(GIB))]);
     book.note_signal(&key(1), Signal::Sigterm, now(1));
     observe(&mut book, 100, Vec::new());
-    book.on_probe(
+    probe(
+        &mut book,
         &report(100, None, vec![reading(1, ProbeLiveness::Gone, None)]),
         now(100),
     );
@@ -433,7 +457,8 @@ fn restored_runs_resume_or_end_by_what_happened_meanwhile() {
         "the short-term file's buckets resume"
     );
     observe(&mut book, 51, vec![row(1, 10.0, Some(GIB))]);
-    book.on_probe(
+    probe(
+        &mut book,
         &report(51, None, vec![reading(2, ProbeLiveness::Gone, None)]),
         now(51),
     );
@@ -534,7 +559,8 @@ fn a_restored_run_listed_in_cut_tables_keeps_running() {
                 host_network: [None, None],
             },
         );
-        book.on_probe(
+        probe(
+            &mut book,
             &report(second, None, vec![reading(1, ProbeLiveness::Running, None)]),
             now(second),
         );
@@ -594,7 +620,8 @@ fn a_probe_ends_a_run_even_when_tables_are_cut() {
             host_network: [None, None],
         },
     );
-    book.on_probe(
+    probe(
+        &mut book,
         &report(2, None, vec![reading(1, ProbeLiveness::Gone, None)]),
         now(2),
     );

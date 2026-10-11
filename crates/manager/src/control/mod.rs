@@ -204,6 +204,7 @@ impl ControlCore {
         let process_history = ProcessHistoryService::new(
             ProcessHistoryPorts {
                 probe: ports.process_probe,
+                probe_deriver: ports.probe_deriver,
                 store: ports.process_history,
             },
             (setup.boot_id.clone(), setup.facts.utc_offset_s),

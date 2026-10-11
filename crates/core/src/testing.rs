@@ -16,7 +16,8 @@ use crate::metric::{NativeUnit, Scalar};
 use crate::observation::{
     BatchStatus, IPC_PROTOCOL_VERSION, Observation, ObservationBatch, Provenance,
 };
-use crate::ports::{Dispatch, DispatchError, LogLevel, Logger};
+use crate::ports::{Dispatch, DispatchError, LogLevel, Logger, ProbeDeriver};
+use crate::process_probe::{ProbeReading, ProbeState};
 use crate::quality::{Quality, ReadStatus, SampleKind};
 
 /// Manually advanced clock. UTC can be stepped independently of boot time.
@@ -162,6 +163,23 @@ impl Logger for MemoryLogger {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push((level, target, message.to_owned()));
+    }
+}
+
+/// Probe deriver of a setup without a live probe: every reading leaves the
+/// state as it was.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IdleProbeDeriver;
+
+impl ProbeDeriver for IdleProbeDeriver {
+    fn derive(
+        &self,
+        previous: &ProbeState,
+        _reading: &ProbeReading,
+        _read_boot_ns: u64,
+        _clk_tck: Option<u64>,
+    ) -> ProbeState {
+        *previous
     }
 }
 

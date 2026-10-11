@@ -24,6 +24,7 @@ use dgxtop::audit_unavailable::UnavailableAudit;
 use dgxtop::control_ops::{run_action_op, run_audit_op};
 use dgxtop::startup::{real_filesystem, value_origins};
 use dgxtop::version::BuildInfo;
+use dgxtop_collectors::process::ProcessProbeDeriver;
 use dgxtop_collectors::registry::default_collectors;
 use dgxtop_core::action::{
     ActionError, ActionHandle, ActionOp, AuditOp, CapabilityContext, DurableReceipt,
@@ -319,6 +320,7 @@ impl RefComposition {
             audit: Box::new(audit),
             actions: Box::new(actions),
             process_probe: None,
+            probe_deriver: Arc::new(ProcessProbeDeriver),
             process_history: None,
             logger: Arc::clone(&logger) as Arc<dyn Logger>,
             diagnostics: diagnostics.clone(),
