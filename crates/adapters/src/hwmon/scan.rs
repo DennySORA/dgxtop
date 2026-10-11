@@ -114,8 +114,9 @@ fn is_thermal_zone_mirror(metadata: &DeviceMetadata) -> bool {
 #[derive(Debug, Default)]
 pub(crate) struct HwmonScanner {
     cache: BTreeMap<String, DeviceMetadata>,
-    /// Leave the thermal zones' mirrors to the thermal adapter (D-81).
-    skip_zone_mirrors: bool,
+    /// Read the thermal zones' mirrors too; otherwise they are left to the
+    /// thermal adapter (D-81).
+    hwmon_reads_thermal_zones: bool,
 }
 
 impl Scanner for HwmonScanner {
@@ -157,9 +158,9 @@ impl Scanner for HwmonScanner {
 }
 
 impl HwmonScanner {
-    pub(crate) fn new(skip_zone_mirrors: bool) -> Self {
+    pub(crate) fn new(hwmon_reads_thermal_zones: bool) -> Self {
         Self {
-            skip_zone_mirrors,
+            hwmon_reads_thermal_zones,
             ..Self::default()
         }
     }
@@ -183,7 +184,7 @@ impl HwmonScanner {
             Err(error) if is_missing(&error) => return DeviceScan::Vanished,
             Err(_) => return DeviceScan::Failed,
         };
-        let skip_zone_mirrors = self.skip_zone_mirrors;
+        let skip_zone_mirrors = !self.hwmon_reads_thermal_zones;
         match self.cached_metadata(files, &instance) {
             Ok(metadata) if skip_zone_mirrors && is_thermal_zone_mirror(metadata) => {
                 return DeviceScan::ThermalZoneMirror { instance };
@@ -594,6 +595,16 @@ fn parse_channels(attributes: &[String]) -> Vec<ChannelFiles> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The scanner's own default leaves the mirrors to the thermal
+    /// adapter, as the adapter options do.
+    #[test]
+    fn the_scanner_default_agrees_with_the_adapter_options() {
+        assert_eq!(
+            HwmonScanner::default().hwmon_reads_thermal_zones,
+            crate::registry::AdapterOptions::default().hwmon_reads_thermal_zones
+        );
+    }
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|name| (*name).to_owned()).collect()

@@ -21,9 +21,12 @@
 //! program only when it is a script file. Names are cleaned of control
 //! characters and kept to [`MAX_NAME_CHARS`] characters.
 
+use std::fmt::Display;
 use std::path::{Component, Path};
 
 use dgxtop_core::text::sanitize_command_name;
+
+use crate::common::SystemFiles;
 
 /// Longest display name, in characters.
 pub(crate) const MAX_NAME_CHARS: usize = 24;
@@ -129,6 +132,18 @@ pub(crate) enum Named {
     Inherit {
         fallback: String,
     },
+}
+
+/// The arguments of process `pid`'s command line; `None` when it cannot
+/// be read (the process is gone or another user's).
+pub(crate) fn read_argv(files: &dyn SystemFiles, pid: impl Display) -> Option<Vec<String>> {
+    let text = files.read_to_string(&format!("/proc/{pid}/cmdline")).ok()?;
+    Some(
+        text.split('\0')
+            .filter(|word| !word.is_empty())
+            .map(str::to_owned)
+            .collect(),
+    )
 }
 
 /// The command line as shown (D-73): the arguments joined by spaces, cleaned

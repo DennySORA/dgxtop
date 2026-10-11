@@ -328,9 +328,6 @@ pub struct ProcessRow {
     pub command: String,
     pub uid: Option<u32>,
     pub state: Option<char>,
-    /// The parent's PID; `None` when unread.
-    pub ppid: Option<i32>,
-    pub threads: Option<u64>,
     /// `None` during warmup (first sample of a ProcessKey) or when unreadable.
     pub cpu_percent: Option<f64>,
     pub rss_bytes: Option<u64>,
@@ -394,14 +391,21 @@ pub struct SelectionMemo {
 pub struct ProcessBase {
     pub ticks: u64,
     pub sample_boot_ns: u64,
-    /// A GPU process's descendants' CPU ticks, and when they were read
-    /// (boot ns); `None` for the others.
+    /// A GPU process's descendants' CPU time as last read; `None` for the
+    /// others.
     #[serde(default)]
-    pub descendant_ticks: Option<(u64, u64)>,
+    pub descendant_ticks: Option<DescendantTicks>,
+}
+
+/// The CPU ticks of a process's descendants and when they were read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DescendantTicks {
+    pub ticks: u64,
+    pub read_boot_ns: u64,
 }
 
 /// Bounded collector state. It becomes the next delta base only after the
-/// Store acknowledges the commit that carried it (`next_state`).
+/// state acknowledges the commit that carried it (`next_state`).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct CollectorState {
     pub revision: u64,

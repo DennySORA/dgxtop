@@ -567,8 +567,6 @@ impl ActionStack {
             command: String::new(),
             uid,
             state: Some('S'),
-            ppid: None,
-            threads: None,
             descendants: None,
             cpu_percent: None,
             rss_bytes: None,

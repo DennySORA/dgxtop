@@ -18,6 +18,7 @@ use dgxtop_core::identity::{
 use dgxtop_core::metric::{NativeUnit, ids};
 use dgxtop_core::observation::Isolation;
 use dgxtop_core::ports::TelemetryPort;
+use dgxtop_core::process_stat::ProcessStat;
 use dgxtop_core::quality::{Namespace, Quality, RawKind, ReadStatus, SampleKind};
 use dgxtop_core::testing::adapter_id;
 use support::*;
@@ -102,16 +103,16 @@ fn base_fixture() -> ReplayFixture {
     );
     soc.sample_kind = SampleKind::Simulated;
     soc.quality = Quality::Usable;
-    let mut rss = fixture_source(
-        "procfs:process:rss",
+    let mut ticks = fixture_source(
+        "procfs:process:cpu.ticks",
         "host",
-        ids::PROCESS_RSS,
+        ids::PROCESS_CPU_TICKS,
         "process",
-        "bytes",
-        RawKind::Gauge,
+        "ticks",
+        RawKind::Counter,
         "procfs.process",
     );
-    rss.rows = true;
+    ticks.rows = true;
     let mut soc_timeout =
         FixtureSample::status(SourceId::new("thermal:t:soc").unwrap(), ReadStatus::Timeout);
     soc_timeout.reasons.push("SYNTHETIC_TIMEOUT".to_owned());
@@ -123,24 +124,24 @@ fn base_fixture() -> ReplayFixture {
         sampling_ms: 1000,
         simulated_latency_us: 0,
         entities: Vec::new(),
-        sources: vec![temperature, counter, soc, rss],
+        sources: vec![temperature, counter, soc, ticks],
         cycles: vec![
             vec![
                 sample("hwmon:t:temp1", FixtureValue::F64(68000.0)),
                 sample("procfs:t:user", FixtureValue::U64(100)),
                 sample("thermal:t:soc", FixtureValue::F64(42000.0)),
-                row("procfs:process:rss", 1_048_576),
+                row("procfs:process:cpu.ticks", 100),
             ],
             vec![
                 sample("hwmon:t:temp1", FixtureValue::F64(69000.0)),
                 sample("procfs:t:user", FixtureValue::U64(110)),
                 soc_timeout,
-                row("procfs:process:rss", 2_097_152),
+                row("procfs:process:cpu.ticks", 200),
             ],
             vec![
                 sample("hwmon:t:temp1", FixtureValue::F64(0.0)),
                 sample("procfs:t:user", FixtureValue::U64(120)),
-                row("procfs:process:rss", 3_145_728),
+                row("procfs:process:cpu.ticks", 300),
             ],
         ],
         faults: Vec::new(),
@@ -292,8 +293,6 @@ fn reference_fixture_is_byte_identical_and_matches_the_ref_workload() {
         ids::GPU_TEMPERATURE,
         ids::GPU_ENERGY_TOTAL,
         ids::PROCESS_CPU_TICKS,
-        ids::PROCESS_RSS,
-        ids::PROCESS_UID,
         ids::PROCESS_GPU_MEMORY,
         ids::PROCESS_GPU_UTILIZATION,
     ] {
@@ -315,12 +314,20 @@ fn reference_fixture_is_byte_identical_and_matches_the_ref_workload() {
         "missing samples"
     );
     assert!(
-        fixture.cycles[0].len() < fixture.sources.len() - 19 + 256 * 3 + 1024 * 2,
+        fixture.cycles[0].len() < fixture.sources.len() - 17 + 256 + 1024 * 2,
         "some samples are absent"
     );
-    let processes: BTreeSet<&str> = samples
+    // One sample per process, its stat as tags, like the live adapter (D-86).
+    let process_samples: Vec<&&FixtureSample> = samples
         .iter()
-        .filter(|sample| sample.source_id.as_str() == "procfs:process:rss")
+        .filter(|sample| sample.source_id.as_str() == "procfs:process:cpu.ticks")
+        .collect();
+    assert!(process_samples.iter().all(|sample| {
+        let stat = ProcessStat::from_reason_codes(&sample.reasons);
+        stat.rss_bytes.is_some() && stat.uid.is_some() && stat.ppid.is_some()
+    }));
+    let processes: BTreeSet<&str> = process_samples
+        .iter()
         .filter_map(|sample| sample.entity_id.as_ref().map(EntityId::as_str))
         .collect();
     assert_eq!(processes.len(), 256);
@@ -374,6 +381,24 @@ fn validation_rejects_live_sample_kinds() {
                 .err()
                 .unwrap();
         assert_eq!(error.violation_code(), Some("LIVE_SAMPLE_KIND"));
+    }
+}
+
+/// A process sample may carry its stat as tags (D-86), exactly as the
+/// encoder writes them; any other lower-case reason is rejected.
+#[test]
+fn validation_accepts_process_stat_tags_only_as_encoded() {
+    let mut fixture = base_fixture();
+    fixture.cycles[0][3].reasons = ProcessStat {
+        rss_bytes: Some(4096),
+        uid: Some(1000),
+        ..ProcessStat::default()
+    }
+    .reason_codes();
+    fixture.validate().unwrap();
+    for reason in ["proc.rss:-1", "proc.rss:007", "lower_case"] {
+        fixture.cycles[0][3].reasons = vec![reason.to_owned()];
+        assert_eq!(violation_of(&fixture), "SAMPLE_REASON", "{reason}");
     }
 }
 
@@ -489,7 +514,9 @@ fn records_are_labelled_replay_and_stamped_with_the_current_clock() {
     assert_eq!(temperature.sample_kind, SampleKind::Replay);
     assert!(temperature.metric.is_some());
     assert!(
-        source(&catalog, "procfs:process:rss").metric.is_none(),
+        source(&catalog, "procfs:process:cpu.ticks")
+            .metric
+            .is_none(),
         "rows have no single key"
     );
 

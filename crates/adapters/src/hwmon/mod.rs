@@ -62,7 +62,7 @@ impl HwmonAdapter {
                 host_id,
                 files,
                 &options,
-                HwmonScanner::new(options.thermal_reads_zones),
+                HwmonScanner::new(options.hwmon_reads_thermal_zones),
             ),
         }
     }

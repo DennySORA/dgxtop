@@ -14,8 +14,10 @@
 //!   and samples intermittently carry `SENSOR_FAULT` (quality invalid) or
 //!   `ALARM` (a real high reading, quality kept).
 //! * Every candidate intermittently misses samples (absent or `timeout`).
-//! * Processes use row sources (`procfs.process`: ticks/rss/uid) and
-//!   GPU-process links use `nvml.process` rows (memory/utilization).
+//! * Processes use one row source (`procfs.process`: the CPU ticks) and,
+//!   like the live adapter, one sample per process carrying the rest of
+//!   its `stat` as [`ProcessStat`] tags (D-79, D-86); GPU-process links use
+//!   `nvml.process` rows (memory/utilization).
 //! * `adapter_hosts` is the number of replay slices the composition root
 //!   should create (`ReplayAdapter` `slice = (index, adapter_hosts)`).
 
@@ -27,6 +29,7 @@ use dgxtop_core::identity::{
 };
 use dgxtop_core::metric::{NativeUnit, ids, native};
 use dgxtop_core::observation::{Attribute, EntityKind};
+use dgxtop_core::process_stat::ProcessStat;
 use dgxtop_core::quality::{Quality, RawKind, ReadStatus, SampleKind};
 
 use super::fixture::{
@@ -121,7 +124,7 @@ const BASENAMES: [&str; 8] = [
     "tritonserver",
     "bench",
 ];
-const UIDS: [u64; 4] = [1000, 1001, 1002, 0];
+const UIDS: [u32; 4] = [1000, 1001, 1002, 0];
 const KIB: u64 = 1024;
 const MIB: u64 = 1024 * KIB;
 const GIB: u64 = 1024 * MIB;
@@ -170,6 +173,9 @@ fn index(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
 
+/// Catalog sources of the process rows: the CPU ticks only (D-86).
+const PROCESS_ROW_SOURCES: usize = 1;
+
 /// Clamped profile.
 #[derive(Debug, Clone)]
 struct Plan {
@@ -194,7 +200,7 @@ impl Plan {
     fn from_profile(profile: &RefProfile) -> Self {
         let gpus = bounded(profile.gpus, 1, 64);
         let max_candidates = bounded(profile.max_candidates_per_series, 1, 4);
-        let row_sources = 3 + 2 * gpus;
+        let row_sources = PROCESS_ROW_SOURCES + 2 * gpus;
         let source_room = MAX_SOURCES - row_sources;
         let series = bounded(profile.series, 1, source_room);
         // `profile.sources` counts every catalog source, row sources included
@@ -206,14 +212,14 @@ impl Plan {
         let mut processes = bounded(profile.processes, 0, 16_384);
         let mut links = bounded(profile.process_gpu_links, 0, processes * gpus);
         let room = MAX_SAMPLES_PER_CYCLE - sources;
-        while processes * 3 + links * 2 > room {
+        while processes + links * 2 > room {
             if links > 0 {
                 links = links.saturating_sub(links / 8 + 1);
             } else {
                 processes = processes.saturating_sub(processes / 8 + 1);
             }
         }
-        let per_cycle = (sources + processes * 3 + links * 2).max(1);
+        let per_cycle = (sources + processes + links * 2).max(1);
         let cycles = bounded(profile.cycles, 1, super::fixture::MAX_CYCLES)
             .min(MAX_TOTAL_SAMPLES / per_cycle)
             .max(1);
@@ -1056,7 +1062,7 @@ struct ProcessSpec {
     entity: EntityId,
     pid: u64,
     basename: &'static str,
-    uid: u64,
+    uid: u32,
 }
 
 /// One synthetic GPU-process link.
@@ -1070,8 +1076,6 @@ struct LinkSpec {
 #[derive(Debug, Clone)]
 struct RowSources {
     ticks: SourceId,
-    rss: SourceId,
-    uid: SourceId,
     gpu_memory: Vec<SourceId>,
     gpu_utilization: Vec<SourceId>,
 }
@@ -1199,26 +1203,12 @@ impl Generator {
             native::TICKS,
             RawKind::Counter,
         )?;
-        let rss = procfs(
-            "procfs:process:rss",
-            ids::PROCESS_RSS,
-            native::BYTES,
-            RawKind::Gauge,
-        )?;
-        let uid = procfs(
-            "procfs:process:uid",
-            ids::PROCESS_UID,
-            native::COUNT,
-            RawKind::Static,
-        )?;
         let mut row_ids = RowSources {
             ticks: ticks.source_id.clone(),
-            rss: rss.source_id.clone(),
-            uid: uid.source_id.clone(),
             gpu_memory: Vec::new(),
             gpu_utilization: Vec::new(),
         };
-        let mut sources = vec![ticks, rss, uid];
+        let mut sources = vec![ticks];
         for uuid in &self.uuids {
             let entity = EntityId::new(format!("gpu:{uuid}")).ok()?;
             let scope = format!("gpu:{uuid}");
@@ -1549,16 +1539,19 @@ impl Generator {
                 0,
                 32 * MIB,
             ));
-            for (source_id, value) in [
-                (&rows.ticks, ticks[position]),
-                (&rows.rss, rss),
-                (&rows.uid, process.uid),
-            ] {
-                let mut sample = FixtureSample::value(source_id.clone(), FixtureValue::U64(value));
-                sample.entity_id = Some(process.entity.clone());
-                sample.channel = Some(process.basename.to_owned());
-                samples.push(sample);
-            }
+            let stat = ProcessStat {
+                rss_bytes: Some(rss),
+                uid: Some(process.uid),
+                ppid: Some(1),
+                state: Some('S'),
+                reaped_ticks: Some(0),
+            };
+            let mut sample =
+                FixtureSample::value(rows.ticks.clone(), FixtureValue::U64(ticks[position]));
+            sample.entity_id = Some(process.entity.clone());
+            sample.channel = Some(process.basename.to_owned());
+            sample.reasons = stat.reason_codes();
+            samples.push(sample);
         }
     }
 
@@ -1753,8 +1746,8 @@ mod tests {
         profile.cycles = 1_000_000;
         let plan = Plan::from_profile(&profile);
         assert!(plan.sources <= plan.series * plan.max_candidates);
-        assert!(plan.sources + 3 + 2 * plan.gpus <= MAX_SOURCES);
-        let per_cycle = plan.sources + plan.processes * 3 + plan.links * 2;
+        assert!(plan.sources + PROCESS_ROW_SOURCES + 2 * plan.gpus <= MAX_SOURCES);
+        let per_cycle = plan.sources + plan.processes + plan.links * 2;
         assert!(per_cycle <= MAX_SAMPLES_PER_CYCLE);
         assert!(per_cycle * plan.cycles <= MAX_TOTAL_SAMPLES);
     }
@@ -1763,8 +1756,8 @@ mod tests {
     fn reference_plan_matches_scenarios_numbers() {
         let plan = Plan::from_profile(&RefProfile::reference());
         assert_eq!(plan.series, 512);
-        // 2048 catalog sources: key sources plus 3 procfs and 2 x 8 GPU rows.
-        assert_eq!(plan.sources + 3 + 2 * plan.gpus, 2048);
+        // 2048 catalog sources: key sources plus 1 procfs and 2 x 8 GPU rows.
+        assert_eq!(plan.sources + PROCESS_ROW_SOURCES + 2 * plan.gpus, 2048);
         assert_eq!(plan.processes, 256);
         assert_eq!(plan.links, 1024);
         assert_eq!(
@@ -1777,7 +1770,7 @@ mod tests {
     fn overload_plan_fits_sample_budget() {
         let plan = Plan::from_profile(&RefProfile::overload());
         assert_eq!(plan.series, 4096);
-        assert_eq!(plan.sources, 8192 - 3 - 16);
+        assert_eq!(plan.sources, 8192 - PROCESS_ROW_SOURCES - 16);
         assert_eq!(plan.processes, 4096);
         assert_eq!(plan.links, 16_384);
     }

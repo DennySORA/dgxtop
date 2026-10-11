@@ -278,8 +278,6 @@ pub fn gpu_process(pid: i64, name: &str, held: &[(&str, Option<u64>)]) -> Proces
         command: String::new(),
         uid: Some(1000),
         state: Some('R'),
-        ppid: None,
-        threads: None,
         descendants: None,
         cpu_percent: None,
         rss_bytes: None,

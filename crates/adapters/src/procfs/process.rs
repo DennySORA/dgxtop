@@ -3,8 +3,8 @@
 //! per ProcessKey (D-79): `process.cpu.ticks` (utime + stime from one
 //! read: a lossless decode of two same-unit counters) carrying the rest of
 //! the `stat` as [`ProcessStat`] tags: RSS (pages × page size, bytes), the
-//! owner of `/proc/<pid>` (read once per process), parent, state, threads
-//! and the reaped children's ticks.
+//! owner of `/proc/<pid>` (read once per process), parent, state and the
+//! reaped children's ticks.
 //!
 //! Convention for the process collector: the process's display name
 //! ([`command`](super::command), D-65) and its command line (D-73) travel
@@ -19,12 +19,12 @@ use dgxtop_core::identity::{EntityId, Pid, PidNamespace, ProcessKey, Scope};
 use dgxtop_core::metric::{ids, native};
 use dgxtop_core::naming::{self, entity, groups};
 use dgxtop_core::observation::{Observation, ReadPlan, SourceDescriptor};
-use dgxtop_core::process_stat::ProcessStat;
+use dgxtop_core::process_stat::{self, ProcessStat};
 use dgxtop_core::quality::{RawKind, ReadStatus};
 use dgxtop_core::text::sanitize_command_name;
 
 use super::catalog::{CatalogConfig, KeyContext, SourceSpec, descriptor_for};
-use super::command::{Named, command_text, name_process, needs_command_line};
+use super::command::{Named, command_text, name_process, needs_command_line, read_argv};
 use super::locator::DRIVER;
 use super::mechanics::{ReadSnapshot, invariant, io_failure, joined_error_code};
 use super::parse::{Field, PidStat, parse_pid_stat};
@@ -91,7 +91,7 @@ impl ProcessNames {
             .collect();
         let kept: HashSet<(i32, u64)> = processes.iter().map(SeenProcess::cache_key).collect();
         self.by_process.retain(|key, _| kept.contains(key));
-        let by_pid: HashMap<i64, &Named> = processes
+        let by_pid: HashMap<i32, &Named> = processes
             .iter()
             .zip(&named)
             .map(|(process, (named, _))| (process.stat.pid, named))
@@ -137,15 +137,7 @@ impl ProcessNames {
 /// working folder say when `comm` says too little) and its command line as
 /// shown (D-73), read once per process.
 fn derive_name(files: &dyn SystemFiles, pid: Pid, comm: &str) -> (Named, String) {
-    let argv: Vec<String> = files
-        .read_to_string(&format!("/proc/{pid}/cmdline"))
-        .map(|text| {
-            text.split('\0')
-                .filter(|word| !word.is_empty())
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
+    let argv = read_argv(files, pid).unwrap_or_default();
     let command = command_text(&argv, MAX_COMMAND_BYTES);
     if !needs_command_line(comm) {
         return (Named::Name(sanitize_command_name(comm)), command);
@@ -281,7 +273,7 @@ fn read_process(scan: &ProcessScan<'_>, owners: &ProcessOwners, pid: Pid) -> Pro
         Ok(text) => text,
         Err(error) => return failed_scan(&error),
     };
-    let Some(stat) = parse_pid_stat(&text).filter(|stat| stat.pid == i64::from(pid.get())) else {
+    let Some(stat) = parse_pid_stat(&text).filter(|stat| stat.pid == pid.get()) else {
         return ProcessOutcome::Unparsable;
     };
     let uid = match owners.get((pid.get(), stat.start_time_ticks)) {
@@ -327,11 +319,7 @@ impl SeenProcess {
     /// `stat` and the owner as tags, the name and command line (D-73) in
     /// the channel.
     fn record(&self, scan: &ProcessScan<'_>, name: &str, command: &str) -> Option<Observation> {
-        let channel = if command.is_empty() {
-            name.to_owned()
-        } else {
-            format!("{name}{}{command}", naming::PROCESS_COMMAND_SEPARATOR)
-        };
+        let channel = naming::process_channel(name, command);
         let descriptor = self.identity.descriptor(scan, &channel)?;
         let mut record =
             u64_outcome_record(scan.plan, &descriptor, cpu_ticks(&self.stat), self.window)?;
@@ -347,8 +335,7 @@ impl SeenProcess {
             uid: self.uid.as_ref().ok().copied(),
             ppid: self.stat.ppid,
             state: self.stat.state,
-            threads: self.stat.num_threads,
-            reaped_ticks: Some(reaped_ticks(&self.stat)),
+            reaped_ticks: reaped_ticks(&self.stat),
         };
         record.reason_codes.extend(stat.reason_codes());
         Some(record)
@@ -438,23 +425,24 @@ fn cpu_ticks(stat: &PidStat) -> Result<u64, DerivationFailure> {
     }
 }
 
-/// The reaped children's time; a column the kernel lacks counts as zero,
-/// as a kernel without it has spent none there.
-fn reaped_ticks(stat: &PidStat) -> u64 {
-    let ticks = |field: Field<u64>| match field {
-        Field::Value(value) => value,
-        Field::Absent | Field::Invalid => 0,
-    };
-    ticks(stat.cutime).saturating_add(ticks(stat.cstime))
+/// The reaped children's time (`cutime + cstime`); `None` when either
+/// column is missing or unparsable, so it is left out, never sent as zero.
+fn reaped_ticks(stat: &PidStat) -> Option<u64> {
+    match (stat.cutime, stat.cstime) {
+        (Field::Value(user), Field::Value(system)) => Some(user.saturating_add(system)),
+        _ => None,
+    }
 }
 
 /// Resident pages × page size, without overflow and never guessed; the
 /// error is the reason code the record carries instead.
 fn rss_bytes(stat: &PidStat, page_size: Option<u64>) -> Result<u64, &'static str> {
-    let page_size = page_size.ok_or("PAGE_SIZE_UNKNOWN")?;
+    let page_size = page_size.ok_or(process_stat::PAGE_SIZE_UNKNOWN)?;
     match stat.rss_pages {
-        Field::Value(pages) => pages.checked_mul(page_size).ok_or("RSS_BYTES_OVERFLOW"),
-        Field::Absent => Err("RSS_FIELD_ABSENT"),
-        Field::Invalid => Err("RSS_PARSE_ERROR"),
+        Field::Value(pages) => pages
+            .checked_mul(page_size)
+            .ok_or(process_stat::RSS_BYTES_OVERFLOW),
+        Field::Absent => Err(process_stat::RSS_FIELD_ABSENT),
+        Field::Invalid => Err(process_stat::RSS_PARSE_ERROR),
     }
 }

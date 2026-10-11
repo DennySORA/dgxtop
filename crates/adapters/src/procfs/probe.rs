@@ -21,7 +21,7 @@ use dgxtop_core::process_probe::{
 };
 use dgxtop_core::text::sanitize_display;
 
-use super::command::command_text;
+use super::command::{command_text, read_argv};
 use super::host::PID_NAMESPACE_PATH;
 use super::mechanics::namespace_link;
 use super::parse::{PidStat, parse_pid_stat};
@@ -106,10 +106,7 @@ impl ProcfsProcessProbe {
 
     /// Its parent, program, control group and niceness.
     fn details_of(&self, key: &ProcessKey, stat: &PidStat) -> RunDetails {
-        let parent_pid = stat
-            .ppid
-            .and_then(|ppid| i32::try_from(ppid).ok())
-            .filter(|ppid| *ppid > 0);
+        let parent_pid = stat.ppid.filter(|ppid| *ppid > 0);
         let parent_name = parent_pid
             .and_then(|ppid| {
                 self.files
@@ -146,20 +143,12 @@ impl ProcfsProcessProbe {
             .read_to_string(&format!("/proc/{}/stat", key.pid))
             .ok()?;
         parse_pid_stat(&text).filter(|stat| {
-            stat.pid == i64::from(key.pid.get()) && stat.start_time_ticks == key.start_time_ticks
+            stat.pid == key.pid.get() && stat.start_time_ticks == key.start_time_ticks
         })
     }
 
     fn command_of(&self, key: &ProcessKey) -> Option<String> {
-        let text = self
-            .files
-            .read_to_string(&format!("/proc/{}/cmdline", key.pid))
-            .ok()?;
-        let argv: Vec<String> = text
-            .split('\0')
-            .filter(|word| !word.is_empty())
-            .map(str::to_owned)
-            .collect();
+        let argv = read_argv(self.files.as_ref(), key.pid)?;
         let command = command_text(&argv, MAX_PROBE_TEXT_BYTES);
         (!command.is_empty()).then_some(command)
     }

@@ -188,7 +188,7 @@ fn movement(previous: u64, current: u64, modulus: Option<u64>) -> Result<(u64, b
     }
 }
 
-/// Exact interval for the store's window totals; `None` when the canonical
+/// Exact interval for the history's window totals; `None` when the canonical
 /// amount is not representable (reported by the caller).
 pub fn interval(
     key: MetricKey,

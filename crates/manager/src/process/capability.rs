@@ -328,8 +328,6 @@ mod tests {
             command: String::new(),
             uid: Some(0),
             state: None,
-            ppid: None,
-            threads: None,
             descendants: None,
             cpu_percent: None,
             rss_bytes: None,

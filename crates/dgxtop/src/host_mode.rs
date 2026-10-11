@@ -65,7 +65,7 @@ fn prepare(cli: &Cli) -> Result<Prepared, String> {
         )
     } else {
         let options = AdapterOptions {
-            thermal_reads_zones: !cli.hwmon_reads_thermal_zones,
+            hwmon_reads_thermal_zones: cli.hwmon_reads_thermal_zones,
             ..AdapterOptions::default()
         };
         build_live_adapter(adapter_name, Arc::clone(&clock), host_id, options)

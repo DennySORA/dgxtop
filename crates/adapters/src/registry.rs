@@ -30,10 +30,10 @@ pub struct AdapterOptions {
     pub max_sources: u32,
     /// Upserts per discovery page and records per read page (1..=256).
     pub page_size: usize,
-    /// The thermal adapter runs too and reads every thermal zone, so hwmon
-    /// leaves the zones' hwmon mirrors to it (D-81); without it hwmon reads
-    /// them.
-    pub thermal_reads_zones: bool,
+    /// hwmon reads the thermal zones' hwmon mirrors itself because the
+    /// thermal adapter is not running; by default the thermal adapter reads
+    /// every zone and hwmon leaves the mirrors to it (D-81).
+    pub hwmon_reads_thermal_zones: bool,
 }
 
 impl Default for AdapterOptions {
@@ -42,7 +42,7 @@ impl Default for AdapterOptions {
             unsupported_probe_ms: 60_000,
             max_sources: MAX_SOURCE_LIMIT,
             page_size: MAX_CATALOG_PAGE,
-            thermal_reads_zones: true,
+            hwmon_reads_thermal_zones: false,
         }
     }
 }

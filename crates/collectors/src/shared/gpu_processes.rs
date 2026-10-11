@@ -1,4 +1,5 @@
-//! NVML per-process records grouped per GPU.
+//! NVML per-process records grouped per GPU, shared by the process table
+//! (its GPU links) and the GPU collector (each GPU's process sum).
 //!
 //! Adapter convention: key `gpupid:<UUID>:<PID>` with scope `gpu:<UUID>`,
 //! metrics `process.gpu.memory_allocated` (bytes; `unsupported` when the
@@ -18,6 +19,8 @@ use dgxtop_core::metric::ids;
 use dgxtop_core::naming::entity;
 
 use crate::shared::context::{Record, Session};
+use crate::shared::output::Subject;
+use crate::shared::reasons;
 
 /// Process metrics NVML reports per `(GPU, PID)`.
 pub(crate) const PROCESS_GPU_METRICS: [&str; 2] =
@@ -52,9 +55,21 @@ pub(crate) struct GpuProcesses<'a> {
     pub incomplete: bool,
 }
 
-/// Groups the process records of every GPU. Records whose entity is not a
-/// `gpupid:<UUID>:<PID>` spelling are returned separately.
-pub(crate) fn group_by_gpu<'a>(
+/// Groups the process records of every GPU. A record whose entity is not
+/// a `gpupid:<UUID>:<PID>` spelling is reported as a failure and left out.
+pub(crate) fn group_by_gpu<'a>(session: &mut Session<'a>) -> BTreeMap<EntityId, GpuProcesses<'a>> {
+    let (groups, invalid) = group_valid(session);
+    for record in invalid {
+        session.failure(
+            reasons::INVALID_ENTITY,
+            &format!("not a gpupid entity: {}", record.key().entity_id),
+            Subject::source(record.source_id()),
+        );
+    }
+    groups
+}
+
+fn group_valid<'a>(
     session: &Session<'a>,
 ) -> (BTreeMap<EntityId, GpuProcesses<'a>>, Vec<Record<'a>>) {
     let mut invalid = Vec::new();

@@ -262,7 +262,7 @@ fn without_the_thermal_adapter_hwmon_reads_the_zone_mirrors() {
     sysfs.write(&format!("{acpitz}/temp1_input"), "70001\n");
     let clock = clock();
     let options = AdapterOptions {
-        thermal_reads_zones: false,
+        hwmon_reads_thermal_zones: true,
         ..AdapterOptions::default()
     };
     let mut hwmon = HwmonAdapter::new(time(&clock), host(), sysfs.files(), options);

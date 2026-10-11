@@ -15,7 +15,7 @@ use dgxtop_core::identity::{BootId, ProcessKey};
 use dgxtop_core::metric::ids;
 use dgxtop_core::observation::{BatchStatus, Observation, PAGE_CONTINUES};
 use dgxtop_core::ports::TelemetryPort;
-use dgxtop_core::process_stat::ProcessStat;
+use dgxtop_core::process_stat::{self, ProcessStat};
 use dgxtop_core::quality::{Quality, ReadStatus};
 use dgxtop_core::testing::{FakeClock, boot_id, host_id};
 use support::*;
@@ -61,17 +61,13 @@ fn by_pid(records: &[Observation], pid: u32) -> &Observation {
 }
 
 fn stat_of(record: &Observation) -> ProcessStat {
-    ProcessStat::from_reason_codes(&record.reason_codes).unwrap_or_else(|| panic!("no stat tags"))
+    ProcessStat::from_reason_codes(&record.reason_codes)
 }
 
 /// The display name before the command line in a record's channel.
 fn name_of(record: &Observation) -> String {
-    record
-        .provenance
-        .channel
-        .split(dgxtop_core::naming::PROCESS_COMMAND_SEPARATOR)
-        .next()
-        .unwrap_or_default()
+    dgxtop_core::naming::split_process_channel(&record.provenance.channel)
+        .0
         .to_owned()
 }
 
@@ -123,7 +119,6 @@ fn process_records_carry_identity_basename_and_values() {
             uid: Some(owner),
             ppid: Some(1),
             state: Some('S'),
-            threads: Some(1),
             reaped_ticks: Some(0),
         }
     );
@@ -175,10 +170,10 @@ fn owners_are_read_once_per_process() {
     );
 }
 
-/// Parent, threads and the reaped children's time come from the same
+/// Parent, state and the reaped children's time come from the same
 /// `stat` read.
 #[test]
-fn a_record_carries_parent_threads_and_reaped_time() {
+fn a_record_carries_parent_state_and_reaped_time() {
     let tree = FakeTree::new("process-tree-fields");
     write_namespaces(&tree);
     tree.write(
@@ -192,8 +187,26 @@ fn a_record_carries_parent_threads_and_reaped_time() {
     let stat = stat_of(record);
     assert_eq!(stat.ppid, Some(4));
     assert_eq!(stat.state, Some('R'));
-    assert_eq!(stat.threads, Some(12));
     assert_eq!(stat.reaped_ticks, Some(12), "cutime + cstime");
+}
+
+/// A reaped children's time the kernel line does not hold as a number is
+/// left out of the tags, never sent as zero.
+#[test]
+fn an_unparsable_reaped_time_is_left_out_not_zero() {
+    let tree = FakeTree::new("process-reaped-unparsable");
+    write_namespaces(&tree);
+    tree.write(
+        "/proc/9/stat",
+        "9 (trainer) R 4 9 9 0 -1 4194560 100 0 0 0 30 20 x 5 20 0 12 0 900 1234567 64 18446744073709551615 1 1 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0\n",
+    );
+    let mut adapter = adapter(&tree, 256);
+    let records = records(&read_all(&mut adapter, ADAPTER, "process", 1));
+    let record = by_pid(&records, 9);
+    assert_eq!(u64_value(record), 50, "the ticks stay");
+    let stat = stat_of(record);
+    assert_eq!(stat.reaped_ticks, None);
+    assert_eq!(stat.ppid, Some(4));
 }
 
 #[test]
@@ -378,7 +391,7 @@ fn overflowing_values_become_error_records() {
     assert!(
         ticks
             .reason_codes
-            .contains(&"RSS_BYTES_OVERFLOW".to_owned())
+            .contains(&process_stat::RSS_BYTES_OVERFLOW.to_owned())
     );
     let stat = stat_of(ticks);
     assert_eq!(stat.rss_bytes, None, "an overflow is no value");
@@ -406,7 +419,7 @@ fn unknown_page_size_is_unsupported_not_zero() {
     assert!(
         record
             .reason_codes
-            .contains(&"PAGE_SIZE_UNKNOWN".to_owned())
+            .contains(&process_stat::PAGE_SIZE_UNKNOWN.to_owned())
     );
 }
 

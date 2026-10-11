@@ -11,7 +11,7 @@
 //! | procfs | `cpu` | 1 s | `cpu.time.*` (ticks, counter; entity `cpu`, scope `host` for the aggregate line and entity `cpu.core.N`, scope `core:N` per logical CPU; guest fields are NOT emitted because they are already inside user/nice), `cpu.load.{1m,5m,15m}` and `cpu.tasks.{running,total}` (count; entity `host`, scope `host`), `cpu.frequency.current` (kHz, gauge, per core: `cpuinfo_avg_freq` where the kernel offers it, else `scaling_cur_freq`, D-67) |
 //! | procfs | `memory` | 1 s | `memory.{total,available,buffers,cached,swap_total}`, `memory.free`, `memory.swap_free` (KiB; entity `memory`, scope `system`) |
 //! | procfs | `disk` | 1 s | `disk.{reads.completed,sectors.read,read.time,writes.completed,sectors.written,write.time}` (count / sectors_512 / milliseconds counters; entity `blockdev:MAJ:MIN`, scope `device` or `partition`) |
-//! | procfs | `process` | 1 s, paged | `process.cpu.ticks` (ticks counter) and `process.rss` (bytes) per `ProcessKey` entity (`process:NS:PID:START`, scope `process`) |
+//! | procfs | `process` | 1 s, paged | one `process.cpu.ticks` record (ticks counter) per `ProcessKey` entity (`process:NS:PID:START`, scope `process`), the rest of its `stat` and its owner as `proc.*` tags ([`crate::process_stat`], D-86) |
 //! | hwmon | `fast` | 1 s | temperatures (mdegC), power (uW), fans (count) mapped by profile: `cpu.temperature.package`/`core`, `cpu.power.package`, `cpu.power.cluster`, `cpu.power.platform`, else `sensor.*` (diagnostics); thermal-zone mirrors (`acpitz`) are left to `thermal` (D-81) |
 //! | thermal | `fast` | 1 s | zone temperatures (mdegC): `cpu.temperature.package` only when the profile proves the package, `soc.temperature` for SoC zones, GB10's `acpitz` zones by ACPI path (`cpu.temperature.cluster` scopes `cluster:0e`…`cluster:1p`, `soc.temperature`, D-68), else `sensor.temperature` |
 //! | powercap | `fast` | 1 s | `cpu.energy.package` / `cpu.energy.platform` (uJ counters with declared modulus), else `sensor.energy` |
@@ -25,12 +25,31 @@ use crate::identity::{AdapterId, CollectorId, EntityId, IdentityError, Scope};
 
 /// Adapter ids.
 /// Between a process's display name and its command line in the channel of
-/// its procfs record (D-73; a replay's `process.uid` record): the channel is
-/// the only string a record carries.
+/// its procfs record (D-73): the channel is the only string a record
+/// carries.
 pub const PROCESS_COMMAND_SEPARATOR: char = '\u{1f}';
 /// Longest the channel of a record may be (observation schema), so the
 /// longest a process's name and command line together may be.
 pub const MAX_CHANNEL_BYTES: usize = 256;
+
+/// The channel of a process's procfs record (D-73): its display name, then
+/// its command line after [`PROCESS_COMMAND_SEPARATOR`] when it has one.
+pub fn process_channel(name: &str, command: &str) -> String {
+    if command.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{name}{PROCESS_COMMAND_SEPARATOR}{command}")
+    }
+}
+
+/// The display name and the command line of a process record's channel,
+/// as [`process_channel`] joined them; the command line is empty when the
+/// channel has none.
+pub fn split_process_channel(channel: &str) -> (&str, &str) {
+    channel
+        .split_once(PROCESS_COMMAND_SEPARATOR)
+        .unwrap_or((channel, ""))
+}
 
 pub mod adapters {
     pub const PROCFS: &str = "procfs";
@@ -443,6 +462,17 @@ pub fn collector_id(name: &str) -> Result<CollectorId, IdentityError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_process_channel_splits_back_into_name_and_command() {
+        let channel = process_channel("acme_llm.train", "python -m acme_llm.train --lr 3e-4");
+        assert_eq!(
+            split_process_channel(&channel),
+            ("acme_llm.train", "python -m acme_llm.train --lr 3e-4")
+        );
+        assert_eq!(process_channel("systemd", ""), "systemd");
+        assert_eq!(split_process_channel("systemd"), ("systemd", ""));
+    }
 
     #[test]
     fn routing_covers_every_collector() {
