@@ -1,17 +1,18 @@
-//! History meso benchmark: the real hot store's bounded history with a
+//! History meso benchmark: the real hot store's history with a
 //! realistic-shape 24 h preload of 512 series (`perf::history_load`), then
 //!
 //! * append: one 1 s commit of every series (gauges + exact counter
 //!   intervals that bridge minute boundaries) followed by the per-second
 //!   maintenance the Manager requests, back to back;
-//! * queries: two concurrent clients (`history_workers = 2`) issuing the
-//!   HistoryService's mix — mean/min/max at the 160-column resolution over
-//!   5m/1h/6h/12h/24h windows plus window statistics, exact totals for rate
-//!   series — while a writer keeps committing at the live 1 Hz cadence.
+//! * reads: two concurrent clients (`history_workers = 2`) issuing the
+//!   HistoryService's mix through `OverviewReader::read` (D-82, D-90): the
+//!   160 bars of a chart in every bar size from 1 m to 24 h, and the
+//!   1/6/12/24 h window statistics, over the Overview series, while a
+//!   writer keeps committing at the live 1 Hz cadence.
 //!
-//! Budget mapping: query latency (submit → result of ≤ 2000 points) is
-//! `history_p95_ms` of `bench/budgets.json`. Append and maintenance have no
-//! budget entry of their own and are reported as raw stage timings.
+//! Budget mapping: read latency (submit → answer) is `history_p95_ms` of
+//! `bench/budgets.json`. Append and maintenance have no budget entry of
+//! their own and are reported as raw stage timings.
 
 #[path = "../common/mod.rs"]
 mod common;
@@ -27,40 +28,40 @@ use dgxtop::live_store::LiveStore;
 use dgxtop::perf::evidence::EvidenceWriter;
 use dgxtop::perf::history_load::{
     HistoryFeeder, HistorySeries, PreloadReport, PreloadShape, history_series, synthetic_keys,
+    synthetic_utc_ns,
 };
 use dgxtop::perf::latency::{LatencySummary, duration_us, summarize_us};
 use dgxtop::perf::report::{BenchMode, RunRecord};
 use dgxtop_core::budget::ByteLedger;
 use dgxtop_core::clock::{NANOS_PER_SECOND, TimeProvider, ms_to_ns};
 use dgxtop_core::config::Config;
-use dgxtop_core::history::{HISTORY_SCHEMA_VERSION, HistoryQuery, HistoryStat};
+use dgxtop_core::history::{SeriesInEveryBoot, coverage_ratio};
 use dgxtop_core::identity::{BootId, HostId};
-use dgxtop_core::ports::{CancelFlag, HistoryReader, StoreWriter};
+use dgxtop_core::overview_history::{OverviewAnswer, OverviewRequest, is_overview_series};
+use dgxtop_core::ports::{CancelFlag, OverviewReader, StoreWriter};
+use dgxtop_core::process_history::{BarSize, Tier};
 use dgxtop_core::quality::Namespace;
 use dgxtop_history::HistoryIndex;
 use dgxtop_state::StateWriter;
 use serde::Serialize;
 use serde_json::json;
-use uuid::Uuid;
 
 const BENCH: &str = "history";
 const RUNS: usize = 3;
 const QUERY_CLIENTS: usize = 2;
-/// Display columns of the REF terminal: the HistoryService's points target.
-const POINTS_TARGET: u64 = 160;
-const WINDOWS: [(&str, u64); 5] = [
-    ("5m", 300),
-    ("1h", 3_600),
-    ("6h", 21_600),
-    ("12h", 43_200),
-    ("24h", 86_400),
-];
+/// Display columns of the REF terminal: the bars one chart asks for.
+const BARS_TARGET: i64 = 160;
+/// The window statistics' spans (the GPU statistics' last 1/6/12/24 h).
+const STAT_SPANS_S: [u64; 4] = [3_600, 21_600, 43_200, 86_400];
+/// Of every this many reads, one asks for window statistics (the charts
+/// read more often than the slowly changing statistics).
+const READS_PER_STATS: usize = 4;
 /// Boot time at which the preload ends (24 h of history fit before it).
 const PRELOAD_END_NS: u64 = 48 * 3_600 * NANOS_PER_SECOND;
 
-/// Each client issues one query per interval (far above the
+/// Each client issues one read per interval (far above the
 /// HistoryService's rate, so every run collects enough samples while the
-/// writer's commits overlap the queries).
+/// writer's commits overlap the reads).
 const QUERY_INTERVAL: Duration = Duration::from_millis(10);
 
 struct Sizes {
@@ -81,9 +82,10 @@ const fn sizes(mode: BenchMode) -> Sizes {
     }
 }
 
-/// Continuous boot clock: `offset + real time since creation`. Continuity
-/// matters because queries check deadlines and cap open steps at "now";
-/// it only jumps forward ([`BenchClock::rebase`]) while no query runs.
+/// Continuous boot clock: `offset + real time since creation`, on the UTC
+/// timeline the preload paired. Continuity matters because reads check
+/// deadlines and merge the minutes not finalized yet up to "now"; it only
+/// jumps forward ([`BenchClock::rebase`]) while no read runs.
 struct BenchClock {
     boot_id: BootId,
     origin: Instant,
@@ -123,61 +125,65 @@ impl TimeProvider for BenchClock {
     }
 
     fn now_utc_ns(&self) -> i128 {
-        1_700_000_000_000_000_000 + i128::from(self.now_boot_ns())
+        synthetic_utc_ns(self.now_boot_ns())
     }
 }
 
-/// One query of the HistoryService mix.
+/// One read of the HistoryService mix.
 struct PlannedQuery {
     window: &'static str,
     purpose: &'static str,
-    query: HistoryQuery,
+    request: OverviewRequest,
 }
 
-fn planned_query(index: usize, series: &[HistorySeries], now_ns: u64) -> PlannedQuery {
+/// The bar sizes a chart can show.
+fn bar_sizes() -> Vec<BarSize> {
+    BarSize::ALL
+        .into_iter()
+        .filter(|bar| bar.tier().is_some())
+        .collect()
+}
+
+fn planned_query(index: usize, series: &[HistorySeries], at_utc_ns: i64) -> PlannedQuery {
     let target = &series[(index * 7) % series.len()];
-    let (window, span_s) = WINDOWS[index % WINDOWS.len()];
-    let span_ms = span_s * 1000;
-    let (purpose, stat, resolution_ms, max_points) = match (index / WINDOWS.len()) % 4 {
-        0 => (
-            "main_mean",
-            HistoryStat::Mean,
-            span_ms.div_ceil(POINTS_TARGET),
-            POINTS_TARGET + 1,
-        ),
-        1 => (
-            "main_min",
-            HistoryStat::Min,
-            span_ms.div_ceil(POINTS_TARGET),
-            POINTS_TARGET + 1,
-        ),
-        2 => (
-            "main_max",
-            HistoryStat::Max,
-            span_ms.div_ceil(POINTS_TARGET),
-            POINTS_TARGET + 1,
-        ),
-        _ if target.rate => ("window_total", HistoryStat::Total, span_ms, 2),
-        _ => ("window_mean", HistoryStat::Mean, span_ms, 2),
-    };
+    let key = SeriesInEveryBoot::from(&target.key);
+    if index % READS_PER_STATS == READS_PER_STATS - 1 {
+        return PlannedQuery {
+            window: "1h/6h/12h/24h",
+            purpose: "windows",
+            request: OverviewRequest::Windows {
+                series: key,
+                spans_ns: STAT_SPANS_S
+                    .iter()
+                    .map(|seconds| seconds * NANOS_PER_SECOND)
+                    .collect(),
+                at_utc_ns,
+            },
+        };
+    }
+    let sizes = bar_sizes();
+    let bar = sizes[(index / READS_PER_STATS) % sizes.len()];
+    let tier = bar.tier().unwrap_or(Tier::OneMinute);
+    let step = i64::try_from(tier.step_ns()).unwrap_or(i64::MAX);
+    let end = tier.align(at_utc_ns, 0).saturating_add(step);
     PlannedQuery {
-        window,
-        purpose,
-        query: HistoryQuery {
-            schema_version: HISTORY_SCHEMA_VERSION,
-            request_id: Uuid::new_v4(),
-            key: target.key.clone(),
-            start_boot_ns: now_ns.saturating_sub(span_ms * 1_000_000),
-            end_boot_ns: now_ns,
-            resolution_ms: u32::try_from(resolution_ms.max(100)).unwrap_or(86_400_000),
-            stat,
-            max_points: u32::try_from(max_points).unwrap_or(2),
-            source_filter: None,
+        window: bar.token(),
+        purpose: "bars",
+        request: OverviewRequest::Bars {
+            series: key,
+            tier,
+            from_utc_ns: end.saturating_sub(BARS_TARGET.saturating_mul(step)),
+            end_utc_ns: end,
+            at_utc_ns,
         },
     }
 }
 
-/// Outcome of one query.
+fn utc_now(clock: &BenchClock) -> i64 {
+    i64::try_from(clock.now_utc_ns()).unwrap_or(i64::MAX)
+}
+
+/// Outcome of one read.
 struct QuerySample {
     latency_us: u64,
     window: &'static str,
@@ -213,7 +219,6 @@ fn run() -> BenchResult<PathBuf> {
     let (mut writer, _snapshots, history) = LiveStore::new(
         &config.store,
         &config.sampling,
-        &config.runtime,
         ledger.clone(),
         Namespace::Live,
         false,
@@ -223,7 +228,18 @@ fn run() -> BenchResult<PathBuf> {
     let (mut feeder, preload, preload_seconds) =
         preload_history(&config, spec.seed, &clock, &mut writer)?;
     let ledger_after_preload = ledger.snapshot();
-    let coverage_probe = probe_day_coverage(&history, feeder.series(), &clock);
+    let charted: Vec<HistorySeries> = feeder
+        .series()
+        .iter()
+        .filter(|series| {
+            is_overview_series(series.key.metric_id.as_str(), series.key.entity_id.as_str())
+        })
+        .cloned()
+        .collect();
+    if charted.is_empty() {
+        return Err("the preload holds no Overview series to read".into());
+    }
+    let coverage_probe = probe_day_coverage(&history, &charted, &clock);
     let mut evidence = common::open_evidence(&paths)?;
     let mut runs = Vec::new();
     let mut run_details = Vec::new();
@@ -241,8 +257,11 @@ fn run() -> BenchResult<PathBuf> {
         query_under_writes(
             &mut feeder,
             &mut writer,
-            &history,
-            &clock,
+            Reads {
+                history: &history,
+                series: &charted,
+                clock: &clock,
+            },
             &config,
             sizes.query_phase,
             &mut samples,
@@ -266,7 +285,7 @@ fn run() -> BenchResult<PathBuf> {
         runs.push(record);
     }
     let mut extra_blockers = vec![
-        "meso benchmark: measures history queries/appends only; other REF metrics are not measured here".to_owned(),
+        "meso benchmark: measures history reads/appends only; other REF metrics are not measured here".to_owned(),
     ];
     if preload.rejected > 0 {
         extra_blockers.push(format!(
@@ -296,7 +315,7 @@ fn run() -> BenchResult<PathBuf> {
         }),
         extra_blockers,
         notes: vec![
-            "history_p95_ms is measured over every query of the run (failed queries included, counted under errors)".to_owned(),
+            "history_p95_ms is measured over every Overview read of the run (failed reads included, counted under errors)".to_owned(),
             "bulk history is committed at a 60 s cadence (same rollups/bridges/segments as 1 s sampling), the newest 300 s at 1 s".to_owned(),
         ],
     };
@@ -319,8 +338,9 @@ fn preload_history(
     Ok((feeder, report, started.elapsed().as_secs_f64()))
 }
 
-/// Mean coverage of a 24 h window over the first gauge series (proves the
-/// preload is a full day of aggregates, not a few minutes).
+/// Coverage of a 24 h window over the first Overview gauge series
+/// (proves the preload is a full day in the Overview's sizes, not a few
+/// minutes).
 fn probe_day_coverage(
     history: &HistoryIndex,
     series: &[HistorySeries],
@@ -329,25 +349,20 @@ fn probe_day_coverage(
     let Some(gauge) = series.iter().find(|series| !series.rate) else {
         return json!(null);
     };
-    let now = clock.now_boot_ns();
-    let query = HistoryQuery {
-        schema_version: HISTORY_SCHEMA_VERSION,
-        request_id: Uuid::new_v4(),
-        key: gauge.key.clone(),
-        start_boot_ns: now.saturating_sub(86_400 * NANOS_PER_SECOND),
-        end_boot_ns: now,
-        resolution_ms: 540_000,
-        stat: HistoryStat::Mean,
-        max_points: 161,
-        source_filter: None,
+    let span_ns = 86_400 * NANOS_PER_SECOND;
+    let request = OverviewRequest::Windows {
+        series: SeriesInEveryBoot::from(&gauge.key),
+        spans_ns: vec![span_ns],
+        at_utc_ns: utc_now(clock),
     };
-    match history.query(&query, u64::MAX, &CancelFlag::new(), clock) {
-        Ok(result) => json!({
+    match history.read(&request, u64::MAX, &CancelFlag::new(), clock) {
+        Ok(OverviewAnswer::Windows(windows)) => json!({
             "series": gauge.key.series_selector(),
-            "coverage_ratio": result.coverage_ratio,
-            "points": result.points.len(),
-            "truncated": result.truncated,
+            "coverage_ratio": windows
+                .first()
+                .map_or(0.0, |window| coverage_ratio(window.covered_ns, span_ns)),
         }),
+        Ok(OverviewAnswer::Bars(_)) => json!({"error": "asked for windows, got bars"}),
         Err(error) => json!({"error": error.message}),
     }
 }
@@ -374,19 +389,27 @@ fn append_back_to_back(
     at
 }
 
-/// Two paced query clients run the mix for `phase` while a writer commits
+/// What the read clients read: the history, the series they ask for and
+/// the clock their reads are timed by.
+#[derive(Clone, Copy)]
+struct Reads<'a> {
+    history: &'a HistoryIndex,
+    series: &'a [HistorySeries],
+    clock: &'a BenchClock,
+}
+
+/// Two paced read clients run the mix for `phase` while a writer commits
 /// once per second.
 fn query_under_writes(
     feeder: &mut HistoryFeeder,
     writer: &mut StateWriter,
-    history: &HistoryIndex,
-    clock: &BenchClock,
+    reads: Reads<'_>,
     config: &Config,
     phase: Duration,
     samples: &mut RunSamples,
 ) {
     let finished = AtomicBool::new(false);
-    let series = feeder.series().to_vec();
+    let clock = reads.clock;
     let deadline_ns = ms_to_ns(u64::from(config.runtime.history_deadline_ms));
     let started = Instant::now();
     let phase_end = started + phase;
@@ -394,10 +417,9 @@ fn query_under_writes(
         let writer_thread = scope.spawn(|| paced_writer(feeder, writer, clock, &finished));
         let clients: Vec<_> = (0..QUERY_CLIENTS)
             .map(|client| {
-                let series = &series;
                 scope.spawn(move || {
                     paced_client(client, phase_end, |index| {
-                        run_query(history, series, clock, deadline_ns, index)
+                        run_query(reads, deadline_ns, index)
                     })
                 })
             })
@@ -414,7 +436,7 @@ fn query_under_writes(
     samples.paced_appends = appends;
 }
 
-/// Issues query `client, client + CLIENTS, ...` every [`QUERY_INTERVAL`]
+/// Issues read `client, client + CLIENTS, ...` every [`QUERY_INTERVAL`]
 /// until `phase_end`.
 fn paced_client(
     client: usize,
@@ -458,20 +480,18 @@ fn paced_writer(
     appends
 }
 
-fn run_query(
-    history: &HistoryIndex,
-    series: &[HistorySeries],
-    clock: &BenchClock,
-    deadline_ns: u64,
-    index: usize,
-) -> QuerySample {
-    let planned = planned_query(index, series, clock.now_boot_ns());
+fn run_query(reads: Reads<'_>, deadline_ns: u64, index: usize) -> QuerySample {
+    let clock = reads.clock;
+    let planned = planned_query(index, reads.series, utc_now(clock));
     let started = Instant::now();
     let deadline = clock.now_boot_ns().saturating_add(deadline_ns);
-    let result = history.query(&planned.query, deadline, &CancelFlag::new(), clock);
+    let result = reads
+        .history
+        .read(&planned.request, deadline, &CancelFlag::new(), clock);
     let latency_us = duration_us(started.elapsed());
     let (points, error) = match result {
-        Ok(result) => (result.points.len(), None),
+        Ok(OverviewAnswer::Bars(bars)) => (bars.bars.len(), None),
+        Ok(OverviewAnswer::Windows(windows)) => (windows.len(), None),
         Err(error) => (0, Some(format!("{:?}", error.code))),
     };
     QuerySample {
@@ -559,11 +579,11 @@ fn write_run_evidence(
         .collect();
     common::write_samples(
         evidence,
-        &format!("run{index}/history_query_us.json"),
+        &format!("run{index}/history_read_us.json"),
         &RawSamples {
-            stream: "history_query",
+            stream: "history_read",
             unit: "us",
-            definition: "HistoryReader::query submit -> result (<= 2000 points), 2 concurrent clients, 1 Hz writer",
+            definition: "OverviewReader::read submit -> answer (160 bars of one size, or the 1/6/12/24 h windows), 2 concurrent clients, 1 Hz writer",
             samples: &latencies,
         },
     )?;

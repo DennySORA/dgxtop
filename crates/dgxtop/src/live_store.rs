@@ -5,7 +5,7 @@
 //! workers. Only this composition root knows both concrete crates.
 
 use dgxtop_core::budget::ByteLedger;
-use dgxtop_core::config::{RuntimeConfig, SamplingConfig, StoreConfig};
+use dgxtop_core::config::{SamplingConfig, StoreConfig};
 use dgxtop_core::quality::Namespace;
 use dgxtop_history::{History, HistoryIndex};
 use dgxtop_state::{LiveState, SharedSnapshot, StateWriter};
@@ -30,13 +30,12 @@ impl LiveStore {
     pub fn new(
         store: &StoreConfig,
         sampling: &SamplingConfig,
-        runtime: &RuntimeConfig,
         ledger: ByteLedger,
         namespace: Namespace,
         archive_enabled: bool,
     ) -> Self {
         let (recorder, history) =
-            History::new(store, sampling, runtime, &ledger, archive_enabled).into_parts();
+            History::new(store, sampling, &ledger, archive_enabled).into_parts();
         let (writer, snapshots) = LiveState::new(
             store,
             sampling,

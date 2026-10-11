@@ -225,7 +225,6 @@ impl SnapshotWorld {
         let (writer, snapshots, _history) = LiveStore::new(
             &config.store,
             &config.sampling,
-            &config.runtime,
             ByteLedger::for_memory_limit_mib(u64::from(config.store.memory_limit_mib)),
             Namespace::Replay,
             false,

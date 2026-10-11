@@ -11,7 +11,6 @@ use dgxtop_core::budget::{ByteLedger, Partition, PartitionLimits};
 use dgxtop_core::canonical::{
     AckStatus, ArchiveState, CollectorState, CounterBase, GapRecord, ProcessTable,
 };
-use dgxtop_core::history::HistoryStat;
 use dgxtop_core::identity::CollectorId;
 use dgxtop_core::metric::{CanonicalUnit, Scalar};
 use dgxtop_core::ports::{SnapshotReader, StoreWriter};
@@ -19,24 +18,19 @@ use dgxtop_core::quality::{Namespace, SampleKind};
 use dgxtop_core::testing::{UTC_ON_A_WHOLE_MINUTE_NS, boot_id, metric_key, source_id};
 use dgxtop_core::wire::{format_fixed_width, parse_fixed_width};
 use support::{
-    Harness, MINUTE, SECOND, conflict, gauge, interval, raw_input, rx_key, temperature_key,
-    value_f64,
+    EVERYTHING_NS, Harness, MINUTE, SECOND, archived_total, conflict, gauge, interval, raw_input,
+    rx_key, temperature_key,
 };
 
-fn raw_point_count(harness: &Harness, key: &dgxtop_core::identity::MetricKey, end: u64) -> usize {
+/// Samples the history holds of `key` up to `end`.
+fn held_samples(harness: &Harness, key: &dgxtop_core::identity::MetricKey, end: u64) -> u32 {
     harness.clock.set_boot_ns(end);
-    harness
-        .query(key, (0, end), 0, HistoryStat::Raw, 2000)
-        .unwrap_or_else(|error| panic!("raw query failed: {error}"))
-        .points
-        .iter()
-        .filter(|point| point.value.is_some())
-        .count()
+    harness.window(key, EVERYTHING_NS).samples
 }
 
 #[test]
 fn at05_commit_applies_samples_history_and_state_atomically() {
-    let mut harness = Harness::new();
+    let mut harness = Harness::archived(support::config());
     let key = rx_key("netif:ns:2");
     let mut batch = harness.batch(
         vec![gauge(&key, 100.0, 3 * SECOND)],
@@ -57,7 +51,7 @@ fn at05_commit_applies_samples_history_and_state_atomically() {
     assert_eq!(ack.status, AckStatus::Committed);
     assert_eq!(ack.committed_revision, 1);
     assert_eq!(ack.state_revision, 1);
-    assert_eq!(ack.archive, ArchiveState::Disabled);
+    assert_eq!(ack.archive, ArchiveState::Pending);
 
     let snapshot = harness.snapshots.latest();
     assert_eq!(snapshot.revision, 1);
@@ -73,22 +67,14 @@ fn at05_commit_applies_samples_history_and_state_atomically() {
     assert_eq!(state.revision, 1);
     assert_eq!(state.counters[&source_id("network:eth0:rx")].value, 1300);
 
-    let history = harness.history.clone();
+    assert_eq!(snapshot.health.series, 1);
+    let journal = harness.archive_through(2 * MINUTE);
     assert_eq!(
-        dgxtop_core::ports::HistoryReader::series(&history),
-        vec![key.clone()]
+        journal.revision, 1,
+        "the history holds the commit's revision"
     );
-    harness.clock.set_boot_ns(4 * SECOND);
-    let total = harness
-        .query(&key, (0, 10 * SECOND), 0, HistoryStat::Total, 100)
-        .unwrap();
-    assert_eq!(total.snapshot_revision, 1);
-    let delta: Vec<u64> = total
-        .points
-        .iter()
-        .filter_map(|point| point.value.and_then(Scalar::as_u64))
-        .collect();
-    assert_eq!(delta, vec![300]);
+    assert!(journal.segments.iter().all(|segment| segment.key == key));
+    assert_eq!(archived_total(&journal), 300);
 }
 
 #[test]
@@ -97,7 +83,7 @@ fn at05_stale_epoch_rejects_the_whole_batch_and_changes_nothing() {
     let key = temperature_key("gpu:0");
     harness.commit(vec![gauge(&key, 50.0, SECOND)], vec![], SECOND);
     let before = harness.snapshots.latest();
-    let history_before = raw_point_count(&harness, &key, 10 * SECOND);
+    let history_before = held_samples(&harness, &key, 10 * SECOND);
 
     // Batch computed for epoch 1 while the Manager already moved to epoch 2.
     let batch = harness.batch(vec![gauge(&key, 99.0, 2 * SECOND)], vec![]);
@@ -120,7 +106,7 @@ fn at05_stale_epoch_rejects_the_whole_batch_and_changes_nothing() {
         Arc::ptr_eq(&before, &after),
         "no new revision was published"
     );
-    assert_eq!(raw_point_count(&harness, &key, 10 * SECOND), history_before);
+    assert_eq!(held_samples(&harness, &key, 10 * SECOND), history_before);
     assert_eq!(after.collector_state(&harness.collector).0, 1);
     assert_eq!(harness.snapshots.counters().rejected_batches_total, 2);
 
@@ -149,7 +135,7 @@ fn at05_stale_base_rejects_the_whole_batch() {
     let ack = harness.commit_batch(batch, 2 * SECOND);
     assert_eq!(ack.status, AckStatus::RejectedStaleBase);
     assert!(Arc::ptr_eq(&before, &harness.snapshots.latest()));
-    assert_eq!(raw_point_count(&harness, &key, 10 * SECOND), 1);
+    assert_eq!(held_samples(&harness, &key, 10 * SECOND), 1);
 
     // Guard and batch disagreeing about the base is stale as well.
     let batch = harness.batch(vec![gauge(&key, 70.0, 2 * SECOND)], vec![]);
@@ -170,7 +156,7 @@ fn at05_stale_base_rejects_the_whole_batch() {
 
 #[test]
 fn at05_duplicate_batch_returns_the_original_ack_without_duplicate_history() {
-    let mut harness = Harness::new();
+    let mut harness = Harness::archived(support::config());
     let key = rx_key("netif:ns:2");
     let batch = harness.batch(
         vec![gauge(&key, 100.0, 3 * SECOND)],
@@ -185,13 +171,16 @@ fn at05_duplicate_batch_returns_the_original_ack_without_duplicate_history() {
     assert_eq!(duplicate.state_revision, original.state_revision);
     assert!(duplicate.status.is_committed());
     assert_eq!(harness.snapshots.latest().revision, 1);
-    assert_eq!(raw_point_count(&harness, &key, 10 * SECOND), 1);
-    harness.clock.set_boot_ns(5 * SECOND);
-    let total = harness
-        .query(&key, (0, 10 * SECOND), 10_000, HistoryStat::Total, 10)
-        .unwrap();
+    let journal = harness.archive_through(2 * MINUTE);
+    let samples: u32 = journal
+        .buckets
+        .iter()
+        .filter(|bucket| bucket.counter_delta.is_none())
+        .map(|bucket| bucket.sample_count)
+        .sum();
+    assert_eq!(samples, 1, "the value is not stored twice");
     assert_eq!(
-        support::value_u64(&total.points[0]),
+        archived_total(&journal),
         300,
         "the interval is not counted twice"
     );
@@ -266,7 +255,7 @@ fn at05_invalid_namespace_unit_and_unknown_metrics_reject_the_whole_batch() {
         );
     }
     assert_eq!(harness.snapshots.latest().revision, 0);
-    assert!(dgxtop_core::ports::HistoryReader::series(&harness.history).is_empty());
+    assert_eq!(held_samples(&harness, &key, SECOND), 0);
     assert_eq!(
         harness.commit(vec![good], vec![], SECOND).status,
         AckStatus::Committed
@@ -295,8 +284,9 @@ fn at05_replay_store_rejects_live_values() {
         harness.commit(vec![replayed], vec![], SECOND).status,
         AckStatus::Committed
     );
-    assert!(
-        dgxtop_core::ports::HistoryReader::series(&harness.history).is_empty(),
+    assert_eq!(
+        held_samples(&harness, &key, 2 * SECOND),
+        0,
         "replay values never enter history"
     );
 }
@@ -313,7 +303,7 @@ fn at05_capacity_rejection_leaves_no_partial_state() {
     assert_eq!(ack.status, AckStatus::RejectedCapacity);
     assert!(ack.reason.unwrap().contains("hot_state"));
     assert_eq!(harness.snapshots.latest().revision, 0);
-    assert!(dgxtop_core::ports::HistoryReader::series(&harness.history).is_empty());
+    assert_eq!(held_samples(&harness, &temperature_key("gpu:0"), SECOND), 0);
     assert_eq!(ledger.used(Partition::RawHistory), 0);
     assert_eq!(ledger.used(Partition::HotState), hot_state_before);
     let small = harness.commit(
@@ -371,17 +361,9 @@ fn missing_values_never_refresh_last_good() {
     assert_eq!(last_good.sample_boot_ns, SECOND);
     // The conflict cut the step and left a visible gap with its reason.
     harness.clock.set_boot_ns(10 * SECOND);
-    let result = harness
-        .query(&key, (0, 10 * SECOND), 0, HistoryStat::Mean, 100)
-        .unwrap();
-    assert_eq!(result.covered_ns, SECOND);
-    let gap = result
-        .points
-        .iter()
-        .find(|point| point.start_boot_ns == 2 * SECOND)
-        .unwrap();
-    assert!(gap.value.is_none());
-    assert_eq!(gap.reason.as_deref(), Some("source_conflict"));
+    let held = harness.window(&key, EVERYTHING_NS);
+    assert_eq!(held.covered_ns, SECOND);
+    assert_eq!(held.mean(), Some(61.0));
     assert!(
         snapshot
             .recent_gaps
@@ -434,10 +416,11 @@ fn at06_archive_disabled_does_not_affect_the_hot_store() {
     let reserve_before = harness.ledger.used(Partition::Reserve);
     harness.maintain(200 * SECOND);
     assert!(harness.writer.take_archive_journal(1 << 20).is_none());
-    let result = harness
-        .query(&key, (0, 200 * SECOND), 60_000, HistoryStat::Mean, 100)
-        .unwrap();
-    assert!(result.coverage_ratio > 0.99);
+    assert_eq!(
+        harness.window(&key, EVERYTHING_NS).covered_ns,
+        200 * SECOND,
+        "the history keeps every second"
+    );
     assert_eq!(
         harness.ledger.used(Partition::Reserve),
         reserve_before,
@@ -554,7 +537,7 @@ fn at06_archive_enabled_gets_finished_rows_and_at27_keys_sort_numerically() {
 
 #[test]
 fn recorded_gaps_are_visible_and_invalid_gaps_are_counted() {
-    let mut harness = Harness::new();
+    let mut harness = Harness::archived(support::config());
     let key = temperature_key("gpu:0");
     harness.commit(vec![gauge(&key, 50.0, SECOND)], vec![], SECOND);
     harness.writer.record_gap(GapRecord {
@@ -582,20 +565,18 @@ fn recorded_gaps_are_visible_and_invalid_gaps_are_counted() {
     assert_eq!(harness.snapshots.counters().invalid_gaps_total, 1);
     assert_eq!(snapshot.recent_gaps.len(), 1);
     harness.clock.set_boot_ns(MINUTE);
-    let result = harness
-        .query(&key, (4 * SECOND, 9 * SECOND), 1000, HistoryStat::Mean, 100)
-        .unwrap();
+    assert_eq!(harness.window(&key, EVERYTHING_NS).mean(), Some(50.0));
+    let journal = harness.archive_through(2 * MINUTE);
+    let archived: Vec<(u64, u64, &str)> = journal
+        .gaps
+        .iter()
+        .map(|gap| (gap.start_boot_ns, gap.end_boot_ns, gap.reason.as_str()))
+        .collect();
     assert!(
-        result
-            .points
-            .iter()
-            .any(|point| point.reason.as_deref() == Some("timeout"))
+        archived.contains(&(5 * SECOND, 8 * SECOND, "timeout")),
+        "{archived:?}"
     );
-    assert_eq!(result.snapshot_revision, 2);
-    let mean = harness
-        .query(&key, (SECOND, 2 * SECOND), 0, HistoryStat::Mean, 10)
-        .unwrap();
-    assert_eq!(value_f64(&mean.points[0]), 50.0);
+    assert!(archived.iter().all(|(.., reason)| *reason != "bad"));
 }
 
 #[test]

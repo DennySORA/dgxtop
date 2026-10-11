@@ -1,24 +1,38 @@
-//! AT07 (real-time history, exact counters, coverage) and AT27 (window
-//! exactness, cross-minute bridges, boundary gaps).
+//! AT07 (real-time history, exact counters, coverage) and AT27 (exact
+//! minutes, cross-minute bridges), observed where the history hands them
+//! on (D-90): the Overview's reads for gauges and the archive's finished
+//! minutes and bridges for exact counter totals.
 
 #[path = "store_hot_support.rs"]
 mod support;
 
-use dgxtop_core::history::{HistoryMethod, HistoryStat};
-use dgxtop_core::metric::Scalar;
-use dgxtop_core::ports::SnapshotReader;
+use dgxtop_core::ports::ArchivedBucket;
+use dgxtop_core::process_history::Tier;
 use dgxtop_core::testing::UTC_ON_A_WHOLE_MINUTE_NS;
 use support::{
-    Harness, MILLI, MINUTE, SECOND, assert_well_formed, config, gauge, gauge_from, interval,
-    rx_key, temperature_key, value_f64, value_u64, with_boot,
+    EVERYTHING_NS, Harness, MILLI, MINUTE, SECOND, archived_total, config, gauge, gauge_from,
+    interval, rx_key, temperature_key,
 };
 
-/// One cell spanning any test window: `resolution_ms` of a whole day.
-const ONE_CELL_MS: u32 = 86_400_000;
+/// The counter minutes of a journal as `(start s, end s, total)`.
+fn counter_minutes(buckets: &[ArchivedBucket]) -> Vec<(u64, u64, u128)> {
+    buckets
+        .iter()
+        .filter_map(|bucket| {
+            bucket.counter_delta.map(|total| {
+                (
+                    bucket.start_boot_ns / SECOND,
+                    bucket.end_boot_ns / SECOND,
+                    total,
+                )
+            })
+        })
+        .collect()
+}
 
 #[test]
 fn at07_counter_interval_total_is_exact() {
-    let mut harness = Harness::new();
+    let mut harness = Harness::archived(config());
     let key = rx_key("netif:ns:2");
     // 1000 -> 1300 bytes over 3 s: the collector derived 100 B/s and the
     // exact 300 byte interval.
@@ -28,65 +42,50 @@ fn at07_counter_interval_total_is_exact() {
         3 * SECOND,
     );
     assert!(ack.status.is_committed());
-    harness.clock.set_boot_ns(4 * SECOND);
-    let total = harness
-        .query(&key, (0, 10 * SECOND), ONE_CELL_MS, HistoryStat::Total, 10)
-        .unwrap();
-    assert_well_formed(&total);
-    assert_eq!(total.points.len(), 1);
-    assert_eq!(value_u64(&total.points[0]), 300);
-    assert_eq!(total.points[0].method, HistoryMethod::CounterDelta);
-    assert_eq!(total.covered_ns, 3 * SECOND);
-    assert_eq!(total.coverage_ratio, 0.3);
-    let native = harness
-        .query(&key, (0, 10 * SECOND), 0, HistoryStat::Total, 10)
-        .unwrap();
-    assert_eq!(
-        (native.points[0].start_boot_ns, native.points[0].end_boot_ns),
-        (0, 3 * SECOND)
-    );
-    assert_eq!(native.points[0].value, Some(Scalar::from_u64(300)));
-    let rate = harness
-        .query(&key, (3 * SECOND, 4 * SECOND), 0, HistoryStat::Mean, 10)
-        .unwrap();
-    assert_eq!(value_f64(&rate.points[0]), 100.0);
+    let journal = harness.archive_through(2 * MINUTE);
+    let counted: Vec<&ArchivedBucket> = journal
+        .buckets
+        .iter()
+        .filter(|bucket| bucket.counter_delta.is_some())
+        .collect();
+    assert_eq!(counted.len(), 1);
+    assert_eq!(counted[0].counter_delta, Some(300));
+    assert_eq!(counted[0].covered_ns, 3 * SECOND);
+    assert_eq!(archived_total(&journal), 300);
+    let rate = harness.window(&key, EVERYTHING_NS);
+    assert_eq!(rate.mean(), Some(100.0));
 }
 
 #[test]
 fn at07_changing_the_sampling_interval_keeps_old_totals() {
-    let mut harness = Harness::new();
+    let mut harness = Harness::archived(config());
     let key = rx_key("netif:ns:2");
-    for second in 1..=10u64 {
+    for second in 1..=60u64 {
         harness.commit(
             vec![gauge(&key, 100.0, second * SECOND)],
             vec![interval(&key, (second - 1) * SECOND, second * SECOND, 100)],
             second * SECOND,
         );
     }
-    let before = harness
-        .query(&key, (0, 10 * SECOND), ONE_CELL_MS, HistoryStat::Total, 10)
-        .unwrap();
-    assert_eq!(value_u64(&before.points[0]), 1000);
+    let before = harness.archive_through(MINUTE + 30 * SECOND);
+    assert_eq!(counter_minutes(&before.buckets), vec![(0, 60, 6000)]);
     let mut slower = config().sampling;
     slower.interval_ms = 5000;
     harness.writer.set_sampling(&slower);
-    for (start, end) in [(10, 15), (15, 20)] {
+    for start in (120..180u64).step_by(5) {
         harness.commit(
-            vec![gauge(&key, 100.0, end * SECOND)],
-            vec![interval(&key, start * SECOND, end * SECOND, 500)],
-            end * SECOND,
+            vec![gauge(&key, 100.0, (start + 5) * SECOND)],
+            vec![interval(&key, start * SECOND, (start + 5) * SECOND, 500)],
+            (start + 5) * SECOND,
         );
     }
-    let after = harness
-        .query(&key, (0, 10 * SECOND), ONE_CELL_MS, HistoryStat::Total, 10)
-        .unwrap();
-    assert_eq!(after.points, before.points);
-    assert_eq!(after.covered_ns, before.covered_ns);
-    let all = harness
-        .query(&key, (0, 20 * SECOND), ONE_CELL_MS, HistoryStat::Total, 10)
-        .unwrap();
-    assert_eq!(value_u64(&all.points[0]), 2000);
-    assert_eq!(all.coverage_ratio, 1.0);
+    let after = harness.archive_through(3 * MINUTE + 30 * SECOND);
+    assert_eq!(
+        counter_minutes(&after.buckets),
+        vec![(120, 180, 6000)],
+        "the finished minute is never written again"
+    );
+    assert_eq!(archived_total(&before) + archived_total(&after), 12_000);
 }
 
 #[test]
@@ -105,56 +104,21 @@ fn at07_coverage_is_exact_and_gaps_are_never_zero_filled() {
         );
     }
     harness.clock.set_boot_ns(30 * SECOND);
-    let native = harness
-        .query(&key, (0, 20 * SECOND), 0, HistoryStat::Mean, 100)
-        .unwrap();
-    assert_well_formed(&native);
     // Steps of 1 s, the last one held until its stale deadline (3 s).
-    assert_eq!(native.covered_ns, 12 * SECOND);
-    assert_eq!(native.coverage_ratio, 0.6);
-    let gap = native.points.last().unwrap();
-    assert_eq!(
-        (gap.start_boot_ns, gap.end_boot_ns),
-        (12 * SECOND, 20 * SECOND)
-    );
-    assert!(gap.value.is_none());
-    assert_eq!(gap.method, HistoryMethod::Gap);
-    assert_eq!(gap.reason.as_deref(), Some("stale"));
-
-    let one = harness
-        .query(&key, (0, 20 * SECOND), 20_000, HistoryStat::Mean, 10)
-        .unwrap();
+    let held = harness.window(&key, EVERYTHING_NS);
+    assert_eq!(held.covered_ns, 12 * SECOND);
     let expected = ((50..=58).sum::<u32>() as f64 + 59.0 * 3.0) / 12.0;
-    assert_eq!(one.points.len(), 1);
-    assert!((value_f64(&one.points[0]) - expected).abs() < 1e-12);
-    assert_eq!(one.points[0].covered_ns, 12 * SECOND);
-    let min = harness
-        .query(&key, (0, 20 * SECOND), 20_000, HistoryStat::Min, 10)
-        .unwrap();
+    assert!((held.mean().unwrap() - expected).abs() < 1e-12);
+    assert_eq!(held.minimum, 50.0, "missing time is not a zero");
+    assert_eq!(held.maximum, 59.0);
+    let bars = harness.bars(&key, Tier::OneMinute, (0, MINUTE));
+    assert_eq!(bars.len(), 1);
     assert_eq!(
-        value_f64(&min.points[0]),
-        50.0,
-        "missing time is not a zero"
+        bars[0].covered_ns,
+        12 * SECOND,
+        "the minute's bar holds only the time it has"
     );
-    let per_second = harness
-        .query(&key, (0, 20 * SECOND), 1000, HistoryStat::Max, 100)
-        .unwrap();
-    assert_well_formed(&per_second);
-    assert_eq!(
-        per_second
-            .points
-            .iter()
-            .filter(|point| point.value.is_some())
-            .count(),
-        12
-    );
-    assert!(
-        per_second
-            .points
-            .iter()
-            .filter_map(|point| point.value)
-            .all(|value| value.to_f64_lossy() >= 50.0)
-    );
+    assert!((bars[0].mean().unwrap() - expected).abs() < 1e-12);
 }
 
 #[test]
@@ -163,10 +127,7 @@ fn at07_open_step_is_not_extended_into_the_future() {
     let key = temperature_key("gpu:0");
     harness.commit(vec![gauge(&key, 70.0, 10 * SECOND)], vec![], 10 * SECOND);
     harness.clock.set_boot_ns(11 * SECOND);
-    let result = harness
-        .query(&key, (0, 20 * SECOND), 0, HistoryStat::Mean, 10)
-        .unwrap();
-    assert_eq!(result.covered_ns, SECOND);
+    assert_eq!(harness.window(&key, EVERYTHING_NS).covered_ns, SECOND);
 }
 
 #[test]
@@ -193,100 +154,23 @@ fn at07_two_hour_gap_does_not_leak_into_the_last_hour() {
     }
     let now = resume + 300 * SECOND;
     harness.maintain(now);
-    for resolution in [1000, 60_000, ONE_CELL_MS] {
-        let last_hour = harness
-            .query(
-                &key,
-                (now - 60 * MINUTE, now),
-                resolution,
-                HistoryStat::Max,
-                2000,
-            )
-            .unwrap();
-        assert_well_formed(&last_hour);
-        assert_eq!(
-            last_hour.covered_ns,
-            300 * SECOND,
-            "resolution {resolution}"
-        );
-        assert!(
-            last_hour
-                .points
-                .iter()
-                .filter_map(|point| point.value)
-                .all(|value| value.to_f64_lossy() == 40.0)
-        );
-    }
-    let mean = harness
-        .query(
-            &key,
-            (now - 60 * MINUTE, now),
-            ONE_CELL_MS,
-            HistoryStat::Mean,
-            10,
-        )
-        .unwrap();
-    let value = mean.points.iter().find_map(|point| point.value).unwrap();
-    assert_eq!(value.to_f64_lossy(), 40.0);
-    // The old samples are still answered from minute rollups.
-    let old = harness
-        .query(
-            &key,
-            (start, start + 10 * MINUTE),
-            60_000,
-            HistoryStat::Mean,
-            100,
-        )
-        .unwrap();
-    assert_eq!(old.covered_ns, 10 * MINUTE);
-    assert!(
-        old.points
-            .iter()
-            .all(|point| point.method == HistoryMethod::TimeWeightedStep)
-    );
-}
-
-#[test]
-fn at07_other_boots_are_separate_series_and_unknown_boots_are_empty() {
-    let mut harness = Harness::new();
-    let key_a = temperature_key("gpu:0");
-    let key_b = with_boot(&key_a, "boot-b");
-    for second in 0..10u64 {
-        harness.commit(
-            vec![
-                gauge(&key_a, 10.0, second * SECOND),
-                gauge(&key_b, 20.0, second * SECOND),
-            ],
-            vec![],
-            second * SECOND,
-        );
-    }
-    harness.clock.set_boot_ns(20 * SECOND);
-    let other = harness
-        .query(&key_b, (0, 20 * SECOND), ONE_CELL_MS, HistoryStat::Mean, 10)
-        .unwrap();
-    assert_eq!(value_f64(&other.points[0]), 20.0);
-    let unknown = harness
-        .query(
-            &with_boot(&key_a, "boot-c"),
-            (0, 20 * SECOND),
-            ONE_CELL_MS,
-            HistoryStat::Mean,
-            10,
-        )
-        .unwrap();
-    assert!(unknown.points.is_empty());
-    assert_eq!(unknown.covered_ns, 0);
-    assert_eq!(unknown.coverage_ratio, 0.0);
-    assert_eq!(
-        unknown.snapshot_revision,
-        harness.snapshots.latest().revision
-    );
+    let last_hour = harness.window(&key, 60 * MINUTE);
+    assert_eq!(last_hour.covered_ns, 300 * SECOND);
+    assert_eq!((last_hour.minimum, last_hour.maximum), (40.0, 40.0));
+    assert_eq!(last_hour.mean(), Some(40.0));
+    let minutes = harness.bars(&key, Tier::OneMinute, (now - 60 * MINUTE, now));
+    assert_eq!(minutes.len(), 5, "only the minutes since the gap");
+    assert!(minutes.iter().all(|bar| bar.maximum == 40.0));
+    // The old samples are still answered from their finished minutes.
+    let old = harness.bars(&key, Tier::OneMinute, (start, start + 11 * MINUTE));
+    let old_covered: u64 = old.iter().map(|bar| bar.covered_ns).sum();
+    assert_eq!(old_covered, 10 * MINUTE + 2 * SECOND);
+    assert!(old.iter().all(|bar| bar.mean() == Some(90.0)));
 }
 
 #[test]
 fn at07_generation_changes_cut_segments_and_utc_steps_are_discontinuities() {
-    let mut harness = Harness::new();
+    let mut harness = Harness::archived(config());
     let key = temperature_key("gpu:0");
     for second in 0..10u64 {
         let generation = if second < 5 { 1 } else { 2 };
@@ -308,14 +192,25 @@ fn at07_generation_changes_cut_segments_and_utc_steps_are_discontinuities() {
             );
         }
     }
-    harness.clock.set_boot_ns(20 * SECOND);
-    let result = harness
-        .query(&key, (0, 20 * SECOND), 0, HistoryStat::Mean, 100)
-        .unwrap();
-    assert_eq!(result.source_changes, vec![5 * SECOND]);
-    assert_eq!(result.clock_discontinuities, vec![5 * SECOND]);
+    let journal = harness.archive_through(2 * MINUTE);
+    let generations: Vec<u32> = journal
+        .segments
+        .iter()
+        .map(|segment| segment.source_generation)
+        .collect();
     assert_eq!(
-        result.covered_ns,
+        generations,
+        vec![1, 2],
+        "the generation change cuts a segment"
+    );
+    let minute: Vec<&ArchivedBucket> = journal
+        .buckets
+        .iter()
+        .filter(|bucket| bucket.start_boot_ns == 0)
+        .collect();
+    assert_eq!(minute.len(), 2, "one row of the minute per segment");
+    assert_eq!(
+        minute.iter().map(|bucket| bucket.covered_ns).sum::<u64>(),
         12 * SECOND,
         "the UTC step does not change boot-time coverage"
     );
@@ -326,7 +221,7 @@ fn at07_generation_changes_cut_segments_and_utc_steps_are_discontinuities() {
 fn bridged_counters(count: u64) -> (Harness, dgxtop_core::identity::MetricKey) {
     let mut settings = config();
     settings.store.raw_history_seconds = 30;
-    let mut harness = Harness::with_config(settings);
+    let mut harness = Harness::archived(settings);
     let key = rx_key("netif:ns:2");
     for k in 0..count {
         let start = k * SECOND + 500 * MILLI;
@@ -342,100 +237,37 @@ fn bridged_counters(count: u64) -> (Harness, dgxtop_core::identity::MetricKey) {
 
 #[test]
 fn at27_cross_minute_interval_is_a_bridge_counted_exactly_once() {
-    let (mut harness, key) = bridged_counters(120);
-    let expected: u64 = (1..=120).sum();
-    let window = (500 * MILLI, 120 * SECOND + 500 * MILLI);
-    let raw_total = harness
-        .query(&key, window, ONE_CELL_MS, HistoryStat::Total, 10)
-        .unwrap();
-    assert_eq!(value_u64(&raw_total.points[0]), expected);
-    assert_eq!(raw_total.covered_ns, 120 * SECOND);
-
-    harness.maintain(300 * SECOND);
-    let raw = harness
-        .query(&key, (0, 180 * SECOND), 0, HistoryStat::Raw, 100)
-        .unwrap();
+    let (mut harness, _key) = bridged_counters(120);
+    let journal = harness.archive_through(300 * SECOND);
+    // Minutes hold only intervals inside them; the intervals crossing a
+    // minute boundary are bridges, counted in no minute, never split.
     assert_eq!(
-        raw.points[0].reason.as_deref(),
-        Some("raw_history_expired"),
-        "raw intervals were evicted"
+        counter_minutes(&journal.buckets),
+        vec![(0, 60, (1..=59).sum()), (60, 120, (61..=119).sum())]
     );
-    let rollup_total = harness
-        .query(&key, (0, 180 * SECOND), ONE_CELL_MS, HistoryStat::Total, 10)
-        .unwrap();
-    assert_well_formed(&rollup_total);
+    let bridges: Vec<(u64, u128)> = journal
+        .bridges
+        .iter()
+        .map(|bridge| (bridge.start_boot_ns, bridge.delta))
+        .collect();
     assert_eq!(
-        value_u64(&rollup_total.points[0]),
-        expected,
+        bridges,
+        vec![
+            (59 * SECOND + 500 * MILLI, 60),
+            (119 * SECOND + 500 * MILLI, 120)
+        ]
+    );
+    assert_eq!(
+        archived_total(&journal),
+        (1..=120).sum::<u128>(),
         "buckets plus bridges, each interval once"
     );
-    assert_eq!(rollup_total.points[0].method, HistoryMethod::BucketExact);
-    assert_eq!(rollup_total.covered_ns, 120 * SECOND);
-
-    let per_minute = harness
-        .query(&key, (0, 180 * SECOND), 60_000, HistoryStat::Total, 10)
-        .unwrap();
-    assert_well_formed(&per_minute);
-    let values: Vec<Option<u64>> = per_minute
-        .points
-        .iter()
-        .map(|point| point.value.and_then(Scalar::as_u64))
-        .collect();
-    // Minute points hold only intervals inside them; the two bridges cross
-    // minute boundaries and are counted in none of them, never split.
-    assert_eq!(
-        values,
-        vec![Some((1..=59).sum()), Some((61..=119).sum()), None]
-    );
-    assert_eq!(per_minute.covered_ns, 118 * SECOND);
-}
-
-#[test]
-fn at27_boundary_without_raw_is_a_boundary_gap_never_proportional() {
-    let (mut harness, key) = bridged_counters(120);
-    harness.maintain(300 * SECOND);
-    let result = harness
-        .query(
-            &key,
-            (30 * SECOND, 180 * SECOND),
-            ONE_CELL_MS,
-            HistoryStat::Total,
-            10,
-        )
-        .unwrap();
-    assert_well_formed(&result);
-    let boundary = &result.points[0];
-    assert_eq!(boundary.method, HistoryMethod::BoundaryGap);
-    assert!(boundary.value.is_none());
-    assert_eq!(
-        (boundary.start_boot_ns, boundary.end_boot_ns),
-        (30 * SECOND, 59 * SECOND + 500 * MILLI)
-    );
-    let data = &result.points[1];
-    // Bridge across 60 s (60) + whole minute 60..120 s + bridge across 120 s (120).
-    assert_eq!(value_u64(data), 60 + (61..=119).sum::<u64>() + 120);
-    assert_eq!(result.covered_ns, 61 * SECOND);
-    assert!(result.coverage_ratio < 1.0);
-
-    // While raw data still exists the same edge is exact.
-    let (fresh, fresh_key) = bridged_counters(120);
-    let exact = fresh
-        .query(
-            &fresh_key,
-            (30 * SECOND + 500 * MILLI, 120 * SECOND + 500 * MILLI),
-            ONE_CELL_MS,
-            HistoryStat::Total,
-            10,
-        )
-        .unwrap();
-    assert_eq!(value_u64(&exact.points[0]), (31..=120).sum::<u64>());
 }
 
 /// D-82: a boot 37 s into a UTC minute cuts its minutes at boot 23 s,
 /// 83 s, 143 s… (whole UTC minutes), the first 23 s being a head minute.
-/// Queries over the rollups stay exact: whole buckets and bridges each
-/// count once, a minute point holds only the intervals inside it, and a
-/// window edge without raw data is a boundary gap up to the next boundary.
+/// The finished minutes stay exact: each holds only the intervals inside
+/// it, the intervals across a boundary are bridges, each counted once.
 #[test]
 fn at27_minutes_on_whole_utc_minutes_keep_every_window_exact() {
     let mut settings = config();
@@ -444,7 +276,7 @@ fn at27_minutes_on_whole_utc_minutes_keep_every_window_exact() {
         settings,
         dgxtop_core::budget::ByteLedger::for_memory_limit_mib(256),
         dgxtop_core::quality::Namespace::Live,
-        false,
+        true,
     );
     let key = rx_key("netif:ns:2");
     for k in 0..200u64 {
@@ -461,77 +293,48 @@ fn at27_minutes_on_whole_utc_minutes_keep_every_window_exact() {
         250 * SECOND,
         UTC_ON_A_WHOLE_MINUTE_NS + i128::from(37 * SECOND + 250 * SECOND),
     );
-    harness.maintain(400 * SECOND);
-
-    let whole = harness
-        .query(&key, (0, 400 * SECOND), ONE_CELL_MS, HistoryStat::Total, 10)
-        .unwrap();
-    assert_well_formed(&whole);
-    assert_eq!(value_u64(&whole.points[0]), (1..=200).sum::<u64>());
-    assert_eq!(whole.points[0].method, HistoryMethod::BucketExact);
-
-    let per_minute = harness
-        .query(&key, (0, 203 * SECOND), 60_000, HistoryStat::Total, 10)
-        .unwrap();
-    assert_well_formed(&per_minute);
-    let spans: Vec<(u64, u64, Option<u64>)> = per_minute
-        .points
-        .iter()
-        .map(|point| {
-            (
-                point.start_boot_ns / SECOND,
-                point.end_boot_ns / SECOND,
-                point.value.and_then(Scalar::as_u64),
-            )
-        })
-        .collect();
-    // The bridges across 23 s, 83 s and 143 s are in no minute point.
+    let journal = harness.archive_through(400 * SECOND);
     assert_eq!(
-        spans,
+        counter_minutes(&journal.buckets),
         vec![
-            (0, 23, Some((1..=22).sum())),
-            (23, 83, Some((24..=82).sum())),
-            (83, 143, Some((84..=142).sum())),
-            (143, 203, Some((144..=200).sum())),
+            (0, 23, (1..=22).sum()),
+            (23, 83, (24..=82).sum()),
+            (83, 143, (84..=142).sum()),
+            (143, 203, (144..=200).sum()),
         ]
     );
-
-    let edge = harness
-        .query(
-            &key,
-            (50 * SECOND, 203 * SECOND),
-            ONE_CELL_MS,
-            HistoryStat::Total,
-            10,
-        )
-        .unwrap();
-    assert_well_formed(&edge);
-    let boundary = &edge.points[0];
-    assert_eq!(boundary.method, HistoryMethod::BoundaryGap);
-    assert_eq!(
-        (boundary.start_boot_ns, boundary.end_boot_ns),
-        (50 * SECOND, 82 * SECOND + 500 * MILLI),
-        "up to the bridge across the boundary, never split"
-    );
-    assert_eq!(value_u64(&edge.points[1]), (83..=200).sum::<u64>());
-
-    let means = harness
-        .query(&key, (0, 203 * SECOND), 60_000, HistoryStat::Max, 10)
-        .unwrap();
-    let maxima: Vec<(u64, f64)> = means
-        .points
+    let bridges: Vec<u128> = journal.bridges.iter().map(|bridge| bridge.delta).collect();
+    assert_eq!(bridges, vec![23, 83, 143]);
+    assert_eq!(archived_total(&journal), (1..=200).sum::<u128>());
+    let maxima: Vec<(u64, f64)> = journal
+        .buckets
         .iter()
-        .map(|point| (point.start_boot_ns / SECOND, value_f64(point)))
+        .filter_map(|bucket| Some((bucket.start_boot_ns / SECOND, bucket.maximum?)))
         .collect();
+    // The last value (at 200.5 s) holds until its stale deadline, 203.5 s.
     assert_eq!(
         maxima,
-        vec![(0, 22.0), (23, 82.0), (83, 142.0), (143, 200.0)]
+        vec![
+            (0, 22.0),
+            (23, 82.0),
+            (83, 142.0),
+            (143, 200.0),
+            (203, 200.0)
+        ]
+    );
+    assert!(
+        journal
+            .buckets
+            .iter()
+            .filter(|bucket| bucket.start_boot_ns > 0)
+            .all(|bucket| bucket.start_utc.ends_with(":00.000000000Z")),
+        "minutes after the head minute start on whole UTC minutes"
     );
 }
 
 #[test]
 fn at27_interval_ending_on_a_minute_boundary_is_counted_in_the_total() {
-    let mut harness = Harness::new();
+    let mut harness = Harness::archived(config());
     let key = rx_key("netif:ns:2");
     let first = 58 * SECOND + 581 * MILLI;
     let boundary = MINUTE;
@@ -546,15 +349,11 @@ fn at27_interval_ending_on_a_minute_boundary_is_counted_in_the_total() {
         vec![interval(&key, boundary, last, 0)],
         last,
     );
-    let result = harness
-        .query(&key, (first, last), ONE_CELL_MS, HistoryStat::Total, 10)
-        .unwrap();
-    assert_well_formed(&result);
-    let data = result
-        .points
-        .iter()
-        .find(|point| point.value.is_some())
-        .unwrap_or_else(|| panic!("no data point in {result:?}"));
-    assert_eq!(value_u64(data), 1);
-    assert_eq!(result.covered_ns, last - first);
+    let journal = harness.archive_through(3 * MINUTE);
+    assert_eq!(
+        counter_minutes(&journal.buckets),
+        vec![(0, 60, 1), (60, 120, 0)]
+    );
+    assert!(journal.bridges.is_empty());
+    assert_eq!(archived_total(&journal), 1);
 }

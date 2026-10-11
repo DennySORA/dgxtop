@@ -511,7 +511,6 @@ impl Wiring {
         let (writer, snapshots, history_index) = crate::live_store::LiveStore::new(
             &effective.store,
             &effective.sampling,
-            &effective.runtime,
             self.ledger.clone(),
             self.namespace,
             effective.store.archive_enabled && sqlite_ok,

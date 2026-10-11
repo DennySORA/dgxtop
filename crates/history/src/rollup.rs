@@ -1,10 +1,11 @@
 //! Minute rollups derived from raw history.
 //!
 //! Buckets are computed once, when the finalization horizon has passed them,
-//! from exactly the same step model the query engine uses on raw data. Counter
-//! intervals fully inside one bucket go into that bucket's exact total;
-//! intervals that cross a bucket boundary become bridges and are never split
-//! proportionally or counted in two buckets.
+//! from exactly the same step model the Overview's minutes not finalized
+//! yet are cut from (`steps`). Counter intervals fully inside one bucket go
+//! into that bucket's exact total; intervals that cross a bucket boundary
+//! become bridges and are never split proportionally or counted in two
+//! buckets.
 
 use std::collections::BTreeMap;
 

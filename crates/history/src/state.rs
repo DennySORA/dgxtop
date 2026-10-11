@@ -1,14 +1,14 @@
 //! All series plus the global gap index; mutated only by the state actor
-//! (under the write lock) and pinned by history queries (under a short read
-//! lock).
+//! (under the write lock) and read by the Overview's reads for the minutes
+//! not finalized yet (under a short read lock).
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
 use dgxtop_core::budget::{ByteLedger, Partition};
 use dgxtop_core::canonical::GapRecord;
 use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::identity::MetricKey;
-use dgxtop_core::metric::{CanonicalUnit, MetricDescriptor};
+use dgxtop_core::metric::CanonicalUnit;
 pub(crate) use dgxtop_core::ports::{CutAppend, GaugeAppend, HistoryAppends, IntervalAppend};
 
 use super::gaps::{GapEntry, GapInsert, GapList, ReasonInterner};
@@ -21,8 +21,6 @@ use super::slots::{SlotHandle, SlotTable};
 
 /// Gap entries kept for keys without a series and host-wide gaps.
 const MAX_GLOBAL_GAPS: usize = 1024;
-/// Clock discontinuities remembered for query results.
-const MAX_DISCONTINUITIES: usize = 256;
 /// Evictions one admission may perform before giving up (bounds lock time).
 const MAX_EVICTIONS_PER_REQUEST: usize = 64;
 /// Segment metadata bytes reserved before a new segment is created.
@@ -55,11 +53,9 @@ fn record_drop(report: &mut HistoryReport, kind: AppendKind, reason: DropReason)
 }
 
 pub(crate) struct HistoryState {
-    pub(super) revision: u64,
     pub(super) slots: SlotTable<Series>,
     pub(super) by_key: BTreeMap<MetricKey, SlotHandle>,
     pub(super) global_gaps: GapList,
-    pub(super) discontinuities: VecDeque<u64>,
     /// The boot's minutes, fixed by the first boot-to-UTC pairing; the one
     /// copy, handed to each series operation that needs it.
     grid: Option<MinuteGrid>,
@@ -71,11 +67,9 @@ pub(crate) struct HistoryState {
 impl HistoryState {
     pub(crate) fn new(settings: HistorySettings, ledger: &ByteLedger) -> Self {
         Self {
-            revision: 0,
             slots: SlotTable::new(),
             by_key: BTreeMap::new(),
             global_gaps: GapList::new(ledger, MAX_GLOBAL_GAPS),
-            discontinuities: VecDeque::new(),
             grid: None,
             reasons: ReasonInterner::new(ledger),
             settings,
@@ -99,6 +93,7 @@ impl HistoryState {
     }
 
     /// The boot's minutes, once known.
+    #[cfg(test)]
     pub(crate) fn minute_grid(&self) -> Option<MinuteGrid> {
         self.grid
     }
@@ -113,11 +108,6 @@ impl HistoryState {
         self.settings.finalize_grace_ns = grace_ns;
     }
 
-    /// Snapshot revision reported by queries; follows every publish.
-    pub(crate) fn set_revision(&mut self, revision: u64) {
-        self.revision = revision;
-    }
-
     /// Records a gap reported from outside the history (Manager or store).
     pub(crate) fn record_external_gap(&mut self, gap: GapRecord) -> HistoryReport {
         let mut report = HistoryReport::default();
@@ -126,25 +116,13 @@ impl HistoryState {
         report
     }
 
+    #[cfg(test)]
     pub(crate) fn series_keys(&self) -> Vec<MetricKey> {
         self.by_key.keys().cloned().collect()
     }
 
-    pub(crate) fn note_discontinuity(&mut self, boot_ns: u64) {
-        if self.discontinuities.len() >= MAX_DISCONTINUITIES {
-            self.discontinuities.pop_front();
-        }
-        self.discontinuities.push_back(boot_ns);
-    }
-
     /// Applies one committed batch and finalizes the touched series.
-    pub(crate) fn apply(
-        &mut self,
-        appends: HistoryAppends,
-        now_ns: u64,
-        revision: u64,
-    ) -> HistoryReport {
-        self.revision = revision;
+    pub(crate) fn apply(&mut self, appends: HistoryAppends, now_ns: u64) -> HistoryReport {
         let mut report = HistoryReport::default();
         let mut touched = BTreeSet::new();
         for append in appends.gauges {
@@ -181,14 +159,7 @@ impl HistoryState {
             record_drop(report, kind, DropReason::Future);
             return None;
         }
-        let handle = self.series_for(
-            &append.key,
-            append.descriptor,
-            append.time_ns,
-            now_ns,
-            kind,
-            report,
-        )?;
+        let handle = self.series_for(&append.key, append.time_ns, now_ns, kind, report)?;
         let admitted = self.slots.get(handle)?.admit_sample(append.time_ns);
         if let Err(reason) = admitted {
             record_drop(report, kind, reason);
@@ -270,14 +241,7 @@ impl HistoryState {
             record_drop(report, kind, DropReason::Future);
             return None;
         }
-        let handle = self.series_for(
-            &append.key,
-            append.descriptor,
-            append.start_ns,
-            now_ns,
-            kind,
-            report,
-        )?;
+        let handle = self.series_for(&append.key, append.start_ns, now_ns, kind, report)?;
         let grid = self.grid;
         let series = self.slots.get_mut(handle)?;
         series.reach_back_to(append.start_ns, grid);
@@ -343,7 +307,6 @@ impl HistoryState {
     fn series_for(
         &mut self,
         key: &MetricKey,
-        descriptor: &'static MetricDescriptor,
         time_ns: u64,
         now_ns: u64,
         kind: AppendKind,
@@ -366,7 +329,6 @@ impl HistoryState {
         }
         let created = Series::new(
             key.clone(),
-            descriptor,
             SeriesOpening {
                 first_time_ns: time_ns,
                 now_ns,
@@ -508,9 +470,8 @@ impl HistoryState {
             .saturating_sub(self.ledger.used(partition))
     }
 
-    /// Evicts the oldest evictable data of `partition` until `bytes` fit.
-    /// Chunks pinned by a running query stay accounted, so eviction may need
-    /// several rounds; it stops after a bounded number of evictions.
+    /// Evicts the oldest evictable data of `partition` until `bytes` fit;
+    /// it stops after a bounded number of evictions (bounds lock time).
     fn ensure_headroom(
         &mut self,
         partition: Partition,
@@ -694,6 +655,7 @@ impl HistoryState {
         report.truncated |= self.slots.values().any(|series| series.capacity_truncated);
     }
 
+    #[cfg(test)]
     pub(crate) fn handle_of(&self, key: &MetricKey) -> Option<SlotHandle> {
         self.by_key.get(key).copied()
     }
@@ -772,7 +734,7 @@ mod tests {
                 gauges: vec![gauge("gpu:a", second, 40.0)],
                 ..HistoryAppends::default()
             };
-            state.apply(appends, second * SECOND, second + 1);
+            state.apply(appends, second * SECOND);
         }
     }
 
@@ -804,7 +766,6 @@ mod tests {
                 ..HistoryAppends::default()
             },
             600 * SECOND,
-            601,
         );
         assert_eq!(late.gauge_drops.late, 1, "older than the raw history");
 
@@ -838,7 +799,7 @@ mod tests {
             ],
             ..HistoryAppends::default()
         };
-        let report = state.apply(appends, 2 * SECOND, 1);
+        let report = state.apply(appends, 2 * SECOND);
         assert_eq!(report.series_count, 2);
         assert_eq!(report.gauge_drops.series_limit, 1);
         assert_eq!(report.new_gaps.len(), 1);
@@ -860,7 +821,6 @@ mod tests {
                 ..HistoryAppends::default()
             },
             200 * SECOND,
-            1,
         );
         assert_eq!(report.gauge_drops.out_of_order, 1);
         assert_eq!(report.gauge_drops.future, 1);
@@ -871,7 +831,6 @@ mod tests {
                 ..HistoryAppends::default()
             },
             400 * SECOND,
-            2,
         );
         assert_eq!(report.gauge_drops.late, 1);
     }
@@ -886,7 +845,6 @@ mod tests {
                 ..HistoryAppends::default()
             },
             2 * SECOND,
-            1,
         );
         let key = metric_key("gpu:a", ids::GPU_TEMPERATURE, "gpu");
         let old_handle = state.handle_of(&key).unwrap();
@@ -901,7 +859,6 @@ mod tests {
                 ..HistoryAppends::default()
             },
             (late + 1) * SECOND,
-            2,
         );
         let new_handle = state
             .handle_of(&metric_key("gpu:b", ids::GPU_TEMPERATURE, "gpu"))

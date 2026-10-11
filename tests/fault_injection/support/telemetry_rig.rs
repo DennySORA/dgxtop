@@ -122,7 +122,6 @@ impl TelemetryRig {
         let (writer, snapshots, history) = LiveStore::new(
             &config.store,
             &config.sampling,
-            &config.runtime,
             ledger.clone(),
             Namespace::Replay,
             false,

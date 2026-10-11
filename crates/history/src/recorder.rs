@@ -120,7 +120,7 @@ impl HistoryIngest for HistoryRecorder {
     ) -> HistoryOutcome {
         self.revision = revision;
         self.now_boot_ns = self.now_boot_ns.max(now_boot_ns);
-        let report = self.writer.apply(appends, now_boot_ns, revision);
+        let report = self.writer.apply(appends, now_boot_ns);
         self.outcome(report)
     }
 
@@ -142,7 +142,6 @@ impl HistoryIngest for HistoryRecorder {
 
     fn set_revision(&mut self, revision: u64) {
         self.revision = revision;
-        self.writer.set_revision(revision);
     }
 
     fn set_finalize_grace(&mut self, grace_ns: u64) {
@@ -158,9 +157,7 @@ impl HistoryIngest for HistoryRecorder {
             self.writer
                 .set_minute_grid(MinuteGrid::on_utc_minutes(boot_ns, utc_ns));
         }
-        if let Some(discontinuity) = self.clock.observe(boot_ns, utc_ns) {
-            self.writer.note_discontinuity(discontinuity);
-        }
+        self.clock.observe(boot_ns, utc_ns);
     }
 
     fn take_archive_journal(&mut self, max_bytes: u64) -> Option<ArchiveJournal> {
@@ -210,13 +207,7 @@ mod tests {
     fn history(archive_enabled: bool) -> (History, ByteLedger) {
         let config = Config::defaults().unwrap();
         let ledger = ByteLedger::for_memory_limit_mib(64);
-        let history = History::new(
-            &config.store,
-            &config.sampling,
-            &config.runtime,
-            &ledger,
-            archive_enabled,
-        );
+        let history = History::new(&config.store, &config.sampling, &ledger, archive_enabled);
         (history, ledger)
     }
 
@@ -508,22 +499,5 @@ mod tests {
             Some(metric_key("gpu:0", ids::GPU_TEMPERATURE, "gpu"))
         );
         assert_eq!(outcome.gaps_added, 1);
-    }
-
-    #[test]
-    fn a_wall_clock_step_is_a_discontinuity() {
-        let (mut history, _ledger) = history(false);
-        history.recorder.observe_wall_clock(SECOND, UTC_AT_BOOT);
-        history
-            .recorder
-            .observe_wall_clock(2 * SECOND, UTC_AT_BOOT - 3600 * i128::from(SECOND));
-        let discontinuities: Vec<u64> = history
-            .index
-            .read()
-            .discontinuities
-            .iter()
-            .copied()
-            .collect();
-        assert_eq!(discontinuities, vec![2 * SECOND]);
     }
 }

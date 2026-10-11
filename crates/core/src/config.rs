@@ -3,8 +3,8 @@
 //!
 //! Every field is required and unknown keys are rejected, except the
 //! retired keys ([`RETIRED_KEYS`]) an earlier version wrote: those are
-//! accepted with any value, ignored and never written back (D-88). The
-//! source of the
+//! accepted with any value, ignored and never written back (D-88, D-90).
+//! The source of the
 //! defaults is `spec/dgxtop-v2/examples/config.default.json`, embedded
 //! verbatim: the REF workload's configuration ([`Config::reference`]). The
 //! built-in defaults are that document with the owner's decisions applied
@@ -49,14 +49,45 @@ pub const BUILTIN_MODULES: [&str; 10] = [
     "actions",
 ];
 
-/// Configuration keys an earlier version wrote that this one ignores (D-88).
-pub const RETIRED_KEYS: [&str; 1] = ["store.raw_candidate_seconds"];
+/// A configuration key an earlier version wrote that this one ignores,
+/// with the decision that retired it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetiredConfigKey {
+    pub path: &'static str,
+    pub decision: &'static str,
+}
+
+/// Configuration keys an earlier version wrote that this one ignores.
+pub const RETIRED_KEYS: [RetiredConfigKey; 3] = [
+    // Nothing retains raw candidates since D-84.
+    RetiredConfigKey {
+        path: "store.raw_candidate_seconds",
+        decision: "D-88",
+    },
+    // The bounded query engine they capped is removed.
+    RetiredConfigKey {
+        path: "store.max_query_scan_records",
+        decision: "D-90",
+    },
+    RetiredConfigKey {
+        path: "runtime.max_history_result_bytes",
+        decision: "D-90",
+    },
+];
+
+/// The decision that retired `path`, if it is a retired key.
+pub fn retired_by(path: &str) -> Option<&'static str> {
+    RETIRED_KEYS
+        .iter()
+        .find(|retired| retired.path == path)
+        .map(|retired| retired.decision)
+}
 
 /// Removes the retired keys ([`RETIRED_KEYS`]) from a configuration
 /// document, so it compares with what this version writes (D-88).
 pub fn remove_retired_keys(document: &mut serde_json::Value) {
-    for path in RETIRED_KEYS {
-        let Some((section, key)) = path.split_once('.') else {
+    for retired in RETIRED_KEYS {
+        let Some((section, key)) = retired.path.split_once('.') else {
             continue;
         };
         if let Some(section) = document
@@ -166,7 +197,9 @@ pub struct StoreConfig {
     pub audit_limit_mib: u32,
     pub max_processes: u32,
     pub max_process_gpu_links: u32,
-    pub max_query_scan_records: u32,
+    /// Retired (D-90): the query engine it bounded is removed.
+    #[serde(default, rename = "max_query_scan_records", skip_serializing)]
+    retired_max_query_scan_records: RetiredKey,
 }
 
 impl StoreConfig {
@@ -278,7 +311,9 @@ pub struct RuntimeConfig {
     pub result_cache_entries: u32,
     pub result_cache_ttl_ms: u32,
     pub max_projection_bytes: u32,
-    pub max_history_result_bytes: u32,
+    /// Retired (D-90): the query engine whose results it bounded is removed.
+    #[serde(default, rename = "max_history_result_bytes", skip_serializing)]
+    retired_max_history_result_bytes: RetiredKey,
     pub adaptive_enabled: bool,
     pub pressure_samples: u32,
     pub recovery_ms: u32,
@@ -346,11 +381,18 @@ impl Config {
     /// The retired keys ([`RETIRED_KEYS`]) the parsed document carried:
     /// ignored now and left out when the configuration is saved (D-88).
     pub fn retired_keys_present(&self) -> Vec<&'static str> {
-        let mut present = Vec::new();
-        if self.store.retired_raw_candidate_seconds.present {
-            present.push(RETIRED_KEYS[0]);
-        }
-        present
+        // In the order of `RETIRED_KEYS`.
+        let slots = [
+            self.store.retired_raw_candidate_seconds,
+            self.store.retired_max_query_scan_records,
+            self.runtime.retired_max_history_result_bytes,
+        ];
+        RETIRED_KEYS
+            .iter()
+            .zip(slots)
+            .filter(|(_, slot)| slot.present)
+            .map(|(retired, _)| retired.path)
+            .collect()
     }
 
     /// Pretty JSON with a trailing newline (persisted form).
@@ -566,11 +608,6 @@ impl Config {
             "store.max_process_gpu_links",
             "must be 1..=16384",
         );
-        check(
-            range(store.max_query_scan_records, 1000, 200_000),
-            "store.max_query_scan_records",
-            "must be 1000..=200000",
-        );
 
         let actions = &self.actions;
         check(
@@ -748,11 +785,6 @@ impl Config {
             "must be 65536..=1048576",
         );
         check(
-            range(runtime.max_history_result_bytes, 65_536, 4_194_304),
-            "runtime.max_history_result_bytes",
-            "must be 65536..=4194304",
-        );
-        check(
             runtime.adaptive_enabled,
             "runtime.adaptive_enabled",
             "is a fixed constant (true)",
@@ -807,13 +839,6 @@ impl Config {
             presentation_need <= limits.limit(Partition::Presentation),
             "runtime.max_projection_bytes",
             "max_sessions x (pending + active) projections must fit the presentation partition",
-        );
-        let history_need =
-            u64::from(runtime.history_workers) * u64::from(runtime.max_history_result_bytes);
-        check(
-            history_need <= limits.limit(Partition::HistoryQuery),
-            "runtime.max_history_result_bytes",
-            "running history results must fit the history_query partition",
         );
 
         if issues.is_empty() {
@@ -1239,10 +1264,10 @@ mod tests {
 
     #[test]
     fn query_and_worker_defaults_match_the_runtime_limits() {
-        // AT38 / RUNTIME.md §5: <= 2000 points and 4 MiB per result, 2
-        // history workers; at most 2 compute workers by default.
+        // AT38 / RUNTIME.md §5: <= 2000 bars a chart, 2 history workers;
+        // at most 2 compute workers by default.
         let defaults = Config::defaults().unwrap();
-        assert_eq!(defaults.runtime.max_history_result_bytes, 4 * 1024 * 1024);
+        assert_eq!(defaults.store.max_history_points, 2000);
         assert_eq!(defaults.runtime.history_workers, 2);
         assert_eq!(defaults.runtime.compute_workers, 2);
     }
@@ -1269,10 +1294,17 @@ mod tests {
         assert!(DEFAULT_CONFIG_JSON.contains("\"raw_candidate_seconds\""));
         assert_eq!(
             reference.retired_keys_present(),
-            vec!["store.raw_candidate_seconds"]
+            vec![
+                "store.raw_candidate_seconds",
+                "store.max_query_scan_records",
+                "runtime.max_history_result_bytes"
+            ]
         );
         let text = reference.to_pretty_json().unwrap();
-        assert!(!text.contains("raw_candidate_seconds"), "{text}");
+        for retired in RETIRED_KEYS {
+            let key = retired.path.split_once('.').unwrap().1;
+            assert!(!text.contains(key), "{key} written: {text}");
+        }
         let saved = Config::from_json(&text).unwrap();
         assert!(saved.retired_keys_present().is_empty());
         assert_eq!(saved, reference, "the retired key changes nothing");
@@ -1283,10 +1315,15 @@ mod tests {
             serde_json::json!(601),
             serde_json::json!("60"),
         ] {
-            value["store"]["raw_candidate_seconds"] = retired;
+            value["store"]["raw_candidate_seconds"] = retired.clone();
+            value["store"]["max_query_scan_records"] = retired.clone();
+            value["runtime"]["max_history_result_bytes"] = retired;
             let parsed = Config::from_json(&value.to_string()).unwrap();
             assert_eq!(parsed, reference);
         }
+        assert_eq!(retired_by("runtime.max_history_result_bytes"), Some("D-90"));
+        assert_eq!(retired_by("store.raw_candidate_seconds"), Some("D-88"));
+        assert_eq!(retired_by("store.max_history_points"), None);
     }
 
     /// A retired key is accepted only where it was: elsewhere it is an
@@ -1295,6 +1332,12 @@ mod tests {
     fn a_retired_key_outside_its_section_is_rejected() {
         let mut value: serde_json::Value = serde_json::from_str(DEFAULT_CONFIG_JSON).unwrap();
         value["sampling"]["raw_candidate_seconds"] = serde_json::json!(60);
+        assert!(matches!(
+            Config::from_json(&value.to_string()),
+            Err(ConfigError::Parse { .. })
+        ));
+        let mut value: serde_json::Value = serde_json::from_str(DEFAULT_CONFIG_JSON).unwrap();
+        value["store"]["max_history_result_bytes"] = serde_json::json!(65_536);
         assert!(matches!(
             Config::from_json(&value.to_string()),
             Err(ConfigError::Parse { .. })

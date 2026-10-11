@@ -408,7 +408,6 @@ mod tests {
             },
             unit: CanonicalUnit::DegC,
             started_ns: 0,
-            opens_series: true,
         })
     }
 

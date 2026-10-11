@@ -1,5 +1,6 @@
-//! Realistic-shape canonical history for history-query benchmarks
-//! (`PERFORMANCE.md` §2: "preload a real-shape 24 h aggregate, then measure").
+//! Realistic-shape canonical history for the history benchmark
+//! (`PERFORMANCE.md` §2: "preload a real-shape 24 h aggregate, then measure"),
+//! read back through the Overview's sizes (D-82, D-90).
 //!
 //! The shape: up to 24 h of minute rollups, the newest 300 s at full
 //! resolution, exact counter intervals crossing every minute boundary
@@ -8,8 +9,8 @@
 //!
 //! Bulk history is committed at a 60 s cadence (one commit per minute
 //! bucket, phase 30 s so each counter interval crosses a minute boundary);
-//! the rollups, bridges and segments a query scans are the same as with
-//! 1 s sampling, only the per-bucket sample count differs. The tail is
+//! the minute rollups, bridges and segments are the same as with 1 s
+//! sampling, only the per-bucket sample count differs. The tail is
 //! committed at 1 s like live data. Values are deterministic functions of
 //! the seed, series and time, and every value carries the reason code
 //! [`PRELOAD_REASON`]: it is synthetic workload, never hardware evidence.
@@ -38,7 +39,7 @@ const MINUTE_NS: u64 = 60 * NANOS_PER_SECOND;
 /// UTC of boot 0 on the synthetic timeline: a whole minute, so the
 /// history's minutes (cut on whole UTC minutes once it is paired, D-82)
 /// are whole minutes of the boot clock, as the shape above assumes.
-const SYNTHETIC_UTC_AT_BOOT_NS: i128 = dgxtop_core::testing::UTC_ON_A_WHOLE_MINUTE_NS;
+pub const SYNTHETIC_UTC_AT_BOOT_NS: i128 = dgxtop_core::testing::UTC_ON_A_WHOLE_MINUTE_NS;
 const DAY_SECONDS: u64 = 86_400;
 const OUTAGE_NS: u64 = 10 * MINUTE_NS;
 /// One series in this many has an outage, another one a source change.
@@ -72,6 +73,13 @@ impl HistorySeries {
             key,
         })
     }
+}
+
+/// UTC of `boot_ns` on the synthetic timeline the preload pairs the
+/// boot clock with: what a reader's clock must say for its reads to land
+/// on the preloaded minutes.
+pub fn synthetic_utc_ns(boot_ns: u64) -> i128 {
+    SYNTHETIC_UTC_AT_BOOT_NS.saturating_add(i128::from(boot_ns))
 }
 
 /// History-eligible series among `keys` (deduplicated, sorted, at most `limit`).
@@ -487,32 +495,41 @@ mod tests {
     use dgxtop_core::budget::ByteLedger;
     use dgxtop_core::clock::TimeProvider;
     use dgxtop_core::config::Config;
-    use dgxtop_core::history::{HISTORY_SCHEMA_VERSION, HistoryQuery, HistoryStat};
-    use dgxtop_core::ports::{CancelFlag, HistoryReader};
+    use dgxtop_core::history::SeriesInEveryBoot;
+    use dgxtop_core::overview_history::{
+        OverviewAnswer, OverviewBucket, OverviewRequest, is_overview_series,
+    };
+    use dgxtop_core::ports::{CancelFlag, OverviewReader};
+    use dgxtop_core::process_history::Tier;
     use dgxtop_core::quality::Namespace;
+    use dgxtop_core::testing::FakeClock;
 
     use crate::live_store::LiveStore;
-    use crate::perf::pipeline::ManualClock;
 
     const HOUR_NS: u64 = 3_600 * NANOS_PER_SECOND;
 
     fn preloaded(series: usize, span_ns: u64) -> (LiveStore, HistoryFeeder, PreloadReport, u64) {
+        let host = HostId::new("h").unwrap();
+        let boot = BootId::new("bench-manual-boot").unwrap();
+        preloaded_keys(synthetic_keys(&host, &boot, series).unwrap(), span_ns)
+    }
+
+    fn preloaded_keys(
+        keys: Vec<MetricKey>,
+        span_ns: u64,
+    ) -> (LiveStore, HistoryFeeder, PreloadReport, u64) {
         let config = Config::defaults().unwrap();
-        let store = LiveStore::new(
+        let mut store = LiveStore::new(
             &config.store,
             &config.sampling,
-            &config.runtime,
             ByteLedger::for_memory_limit_mib(256),
             Namespace::Live,
             false,
         );
-        let host = HostId::new("h").unwrap();
-        let boot = BootId::new("bench-manual-boot").unwrap();
-        let keys = synthetic_keys(&host, &boot, series).unwrap();
+        let count = keys.len();
         let mut feeder =
-            HistoryFeeder::new(history_series(keys, series), 9, &config.sampling).unwrap();
+            HistoryFeeder::new(history_series(keys, count), 9, &config.sampling).unwrap();
         let end = 30 * HOUR_NS;
-        let mut store = store;
         let report = feeder.preload(
             &mut store.writer,
             PreloadShape::reference().with_span(span_ns),
@@ -521,94 +538,120 @@ mod tests {
         (store, feeder, report, end)
     }
 
-    fn query(
+    fn is_overview(series: &HistorySeries) -> bool {
+        is_overview_series(series.key.metric_id.as_str(), series.key.entity_id.as_str())
+    }
+
+    /// A clock at `end` on the timeline the preload paired.
+    fn clock_at(end: u64) -> std::sync::Arc<FakeClock> {
+        let clock = FakeClock::new(end);
+        let utc = i64::try_from(synthetic_utc_ns(end) - clock.now_utc_ns()).unwrap();
+        clock.step_utc_ns(utc);
+        clock
+    }
+
+    fn utc_at(end: u64) -> i64 {
+        i64::try_from(synthetic_utc_ns(end)).unwrap()
+    }
+
+    fn windows(
+        store: &LiveStore,
         key: &MetricKey,
-        start: u64,
+        spans_ns: Vec<u64>,
         end: u64,
-        stat: HistoryStat,
-        resolution_ms: u32,
-    ) -> HistoryQuery {
-        HistoryQuery {
-            schema_version: HISTORY_SCHEMA_VERSION,
-            request_id: Uuid::new_v4(),
-            key: key.clone(),
-            start_boot_ns: start,
-            end_boot_ns: end,
-            resolution_ms,
-            stat,
-            max_points: 161,
-            source_filter: None,
+    ) -> Vec<OverviewBucket> {
+        let request = OverviewRequest::Windows {
+            series: SeriesInEveryBoot::from(key),
+            spans_ns,
+            at_utc_ns: utc_at(end),
+        };
+        match store
+            .history
+            .read(
+                &request,
+                u64::MAX,
+                &CancelFlag::new(),
+                clock_at(end).as_ref(),
+            )
+            .unwrap()
+        {
+            OverviewAnswer::Windows(windows) => windows,
+            OverviewAnswer::Bars(bars) => panic!("asked for windows, got {bars:?}"),
         }
     }
 
     #[test]
-    fn preload_commits_every_batch_and_answers_window_queries() {
-        let (store, feeder, report, end) = preloaded(24, 2 * HOUR_NS);
+    fn preload_commits_every_batch_and_answers_overview_reads() {
+        let (store, feeder, report, end) = preloaded(48, 2 * HOUR_NS);
         assert_eq!(report.rejected, 0, "{:?}", report.first_rejection);
         assert!(report.commits > 300);
         assert!(report.intervals > 0, "rate series carry exact intervals");
         assert_eq!(report.span_seconds(), 2 * 3_600);
-        let clock = ManualClock::new(end).unwrap();
-        let gauge = feeder.series().iter().find(|series| !series.rate).unwrap();
-        let result = store
+        let gauge = feeder
+            .series()
+            .iter()
+            .find(|series| !series.rate && is_overview(series))
+            .unwrap();
+        let held = windows(&store, &gauge.key, vec![2 * HOUR_NS], end);
+        let coverage = held[0].covered_ns as f64 / (2 * HOUR_NS) as f64;
+        assert!(coverage > 0.9, "coverage {coverage}");
+        let rate = feeder
+            .series()
+            .iter()
+            .find(|series| series.rate && is_overview(series))
+            .unwrap();
+        let at = utc_at(end);
+        let request = OverviewRequest::Bars {
+            series: SeriesInEveryBoot::from(&rate.key),
+            tier: Tier::OneMinute,
+            from_utc_ns: at - i64::try_from(HOUR_NS).unwrap(),
+            end_utc_ns: at,
+            at_utc_ns: at,
+        };
+        let answer = store
             .history
-            .query(
-                &query(
-                    &gauge.key,
-                    end - 2 * HOUR_NS,
-                    end,
-                    HistoryStat::Mean,
-                    45_000,
-                ),
+            .read(
+                &request,
                 u64::MAX,
                 &CancelFlag::new(),
-                clock.as_ref() as &dyn TimeProvider,
+                clock_at(end).as_ref(),
             )
             .unwrap();
-        assert!(
-            result.coverage_ratio > 0.9,
-            "coverage {}",
-            result.coverage_ratio
-        );
-        assert!(!result.points.is_empty() && result.points.len() <= 161);
-        let rate = feeder.series().iter().find(|series| series.rate).unwrap();
-        let total = store
-            .history
-            .query(
-                &query(&rate.key, end - HOUR_NS, end, HistoryStat::Total, 3_600_000),
-                u64::MAX,
-                &CancelFlag::new(),
-                clock.as_ref() as &dyn TimeProvider,
-            )
-            .unwrap();
-        assert!(total.points.iter().any(|point| point.value.is_some()));
+        let OverviewAnswer::Bars(bars) = answer else {
+            panic!("asked for bars, got {answer:?}");
+        };
+        assert!(bars.bars.len() >= 55, "{} minute bars", bars.bars.len());
+        assert!(bars.bars.iter().all(|bar| bar.mean().is_some()));
     }
 
     #[test]
     fn outage_series_show_a_gap_and_only_eligible_keys_are_kept() {
-        let (store, feeder, _, end) = preloaded(SPECIAL_EVERY, 2 * HOUR_NS);
+        // Every series an Overview one, so the outage slot is charted too.
+        let host = HostId::new("h").unwrap();
+        let boot = BootId::new("bench-manual-boot").unwrap();
+        let keys = (0..SPECIAL_EVERY)
+            .map(|index| {
+                MetricKey::new(
+                    host.clone(),
+                    boot.clone(),
+                    EntityId::new(format!("gpu:{index:02}")).unwrap(),
+                    MetricId::new("gpu.temperature").unwrap(),
+                    Scope::new("gpu").unwrap(),
+                )
+            })
+            .collect();
+        let (store, feeder, _, end) = preloaded_keys(keys, 2 * HOUR_NS);
         let outage = &feeder.series()[OUTAGE_SLOT];
-        let clock = ManualClock::new(end).unwrap();
-        let result = store
-            .history
-            .query(
-                &query(
-                    &outage.key,
-                    end - 2 * HOUR_NS,
-                    end,
-                    HistoryStat::Mean,
-                    60_000,
-                ),
-                u64::MAX,
-                &CancelFlag::new(),
-                clock.as_ref() as &dyn TimeProvider,
-            )
-            .unwrap();
+        let steady = &feeder.series()[OUTAGE_SLOT + 1];
+        assert!(is_overview(outage));
+        let span = 2 * HOUR_NS;
+        let held = |key: &MetricKey| windows(&store, key, vec![span], end)[0].covered_ns;
+        let outage_coverage = held(&outage.key) as f64 / span as f64;
         assert!(
-            result.coverage_ratio < 0.97,
-            "10 min outage visible: {}",
-            result.coverage_ratio
+            outage_coverage < 0.97,
+            "10 min outage visible: {outage_coverage}"
         );
+        assert!(held(&steady.key) > held(&outage.key));
         let host = HostId::new("h").unwrap();
         let boot = BootId::new("b").unwrap();
         let raw = MetricKey::new(

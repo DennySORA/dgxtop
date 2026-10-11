@@ -27,8 +27,8 @@ pub(crate) struct MinuteGrid {
 
 impl MinuteGrid {
     /// Boundaries on whole minutes of the boot clock: the grid of a boot
-    /// that fell on a whole UTC minute, and the only minutes there are for
-    /// laying out query points before the boot is paired with UTC.
+    /// that fell on a whole UTC minute.
+    #[cfg(test)]
     pub(crate) const BOOT_CLOCK: Self = Self { phase_ns: 0 };
 
     /// The grid whose boundaries fall on whole UTC minutes, given one
@@ -42,6 +42,7 @@ impl MinuteGrid {
     }
 
     /// Boot time of the first whole minute after boot 0.
+    #[cfg(test)]
     pub(crate) const fn phase_ns(&self) -> u64 {
         self.phase_ns
     }
@@ -75,6 +76,7 @@ impl MinuteGrid {
     }
 
     /// Whether `time_ns` is a minute boundary.
+    #[cfg(test)]
     pub(crate) const fn is_boundary(&self, time_ns: u64) -> bool {
         self.floor(time_ns) == time_ns
     }

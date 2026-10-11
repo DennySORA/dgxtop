@@ -59,7 +59,6 @@ impl ShadowHistory {
         let (mut writer, _snapshots, index) = LiveStore::new(
             &config.store,
             &config.sampling,
-            &config.runtime,
             ledger.clone(),
             Namespace::Live,
             false,

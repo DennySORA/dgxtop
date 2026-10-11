@@ -20,7 +20,6 @@ use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::event::{
     ActionEventPayload, CompletionStatus, Event, EventKind, ModuleHealthState,
 };
-use dgxtop_core::history::{HistoryQuery, HistoryResult};
 use dgxtop_core::identity::{
     BootId, EntityId, HostId, ModuleId, PidNamespace, ProcessKey, SessionId, SourceId,
 };
@@ -173,7 +172,11 @@ fn example_config_default() {
     let parsed = Config::from_json(&original.to_string()).unwrap();
     assert_eq!(
         parsed.retired_keys_present(),
-        vec!["store.raw_candidate_seconds"]
+        vec![
+            "store.raw_candidate_seconds",
+            "store.max_query_scan_records",
+            "runtime.max_history_result_bytes"
+        ]
     );
     let reencoded = to_value(&parsed);
     assert_valid("config.schema.json", &reencoded);
@@ -190,18 +193,6 @@ example_round_trip!(
     "event.gap.json",
     "event.schema.json",
     Event
-);
-example_round_trip!(
-    example_history_query,
-    "history-query.json",
-    "history-query.schema.json",
-    HistoryQuery
-);
-example_round_trip!(
-    example_history_result,
-    "history-result.partial.json",
-    "history-result.schema.json",
-    HistoryResult
 );
 example_round_trip!(
     example_ipc_request,

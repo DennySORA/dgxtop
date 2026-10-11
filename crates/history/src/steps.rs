@@ -1,4 +1,5 @@
-//! The time-weighted step model shared by rollup finalization and queries.
+//! The time-weighted step model shared by rollup finalization and the
+//! Overview's minutes not finalized yet.
 //!
 //! A valid sample value `v_i` holds on `[t_i, min(t_next, stale_deadline_i,
 //! limit))`. Missing time is never filled and a stale value is never carried
@@ -36,13 +37,12 @@ pub(crate) struct StepIter<'s, 'a> {
     records: SliceIter<'s, 'a, GaugeSample>,
     pending: Option<GaugeSample>,
     limit_ns: u64,
-    consumed: usize,
 }
 
 impl<'s, 'a> StepIter<'s, 'a> {
     /// Starts at the newest record before `from_ns` (or the carry), so the
     /// step crossing `from_ns` is included. Steps never extend past
-    /// `limit_ns` (the query clock), because the future is not covered.
+    /// `limit_ns` (the reader's clock), because the future is not covered.
     pub(crate) fn covering(raw: RawGauge<'s, 'a>, from_ns: u64, limit_ns: u64) -> Self {
         let bound = from_ns.max(raw.floor_ns);
         let slices = raw.slices;
@@ -59,21 +59,11 @@ impl<'s, 'a> StepIter<'s, 'a> {
             records: slices.iter_from(first_at_bound),
             pending,
             limit_ns,
-            consumed: 0,
         }
-    }
-
-    /// Records read so far (scan accounting).
-    pub(crate) fn consumed(&self) -> usize {
-        self.consumed
     }
 
     fn take_record(&mut self) -> Option<GaugeSample> {
-        let record = self.records.next().copied();
-        if record.is_some() {
-            self.consumed = self.consumed.saturating_add(1);
-        }
-        record
+        self.records.next().copied()
     }
 }
 

@@ -76,7 +76,6 @@ impl ArchivedStore {
         let (writer, snapshots, _history) = LiveStore::new(
             &config.store,
             &config.sampling,
-            &config.runtime,
             ledger.clone(),
             Namespace::Live,
             true,

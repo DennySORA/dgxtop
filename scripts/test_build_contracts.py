@@ -26,18 +26,24 @@ class BuildContractsTest(unittest.TestCase):
         self.assertIn('process_history_enabled', store['properties'])
         self.assertNotIn('process_history_enabled', store['required'])
 
-    def test_retired_store_keys_are_accepted_but_not_required(self):
+    def test_retired_keys_are_accepted_but_not_required(self):
         built = {name: json.loads(text) for name, text in build_contracts.build().items()}
         spec = json.loads((build_contracts.SPEC / 'config.schema.json').read_text())
-        spec_store = spec['properties']['store']
-        for name in built:
-            stores = [node for node in build_contracts.objects(built[name])
-                      if isinstance(node.get('properties'), dict) and 'archive_enabled' in node['properties']]
-            self.assertTrue(stores, name)
-            for store in stores:
-                self.assertIn('raw_candidate_seconds', store['properties'], 'old documents stay valid')
-                self.assertNotIn('raw_candidate_seconds', store['required'])
-                self.assertEqual(set(spec_store['required']) - set(store['required']), {'raw_candidate_seconds'})
+        sections = [
+            ('store', 'archive_enabled', {'raw_candidate_seconds', 'max_query_scan_records'}),
+            ('runtime', 'history_workers', {'max_history_result_bytes'}),
+        ]
+        for section, marker, retired in sections:
+            spec_section = spec['properties'][section]
+            for name in built:
+                nodes = [node for node in build_contracts.objects(built[name])
+                         if isinstance(node.get('properties'), dict) and marker in node['properties']]
+                self.assertTrue(nodes, (name, section))
+                for node in nodes:
+                    for key in retired:
+                        self.assertIn(key, node['properties'], 'old documents stay valid')
+                        self.assertNotIn(key, node['required'])
+                    self.assertEqual(set(spec_section['required']) - set(node['required']), retired)
 
 
 if __name__ == '__main__':

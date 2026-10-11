@@ -241,7 +241,6 @@ impl RefComposition {
         let (writer, snapshots, history_index) = LiveStore::new(
             &config.store,
             &config.sampling,
-            &config.runtime,
             ledger.clone(),
             Namespace::Replay,
             false,

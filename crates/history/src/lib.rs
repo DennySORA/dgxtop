@@ -2,9 +2,10 @@
 //!
 //! The history of dgxtop (D-79): it takes what the state committed, keeps
 //! each series' recent samples and minutes in memory, decides what is
-//! saved and for how long, answers the Manager's history reads, and
-//! follows GPU process runs (D-76). Compression is the compression
-//! component's; the SQLite files are the store's, reached through ports.
+//! saved and for how long, answers the Manager's history reads (through
+//! the Overview's sizes only, D-90), and follows GPU process runs (D-76).
+//! Compression is the compression component's; the SQLite files are the
+//! store's, reached through ports.
 //!
 //! Bounded canonical history (`STORAGE.md` §2–4). Per series (`MetricKey`):
 //! raw gauge steps and exact counter intervals kept apart in fixed-width
@@ -20,9 +21,11 @@
 //!
 //! The state feeds it through the `HistoryIngest` port ([`HistoryRecorder`])
 //! inside each commit, so history never lags the snapshot; the Manager reads
-//! it through `HistoryReader` and `OverviewReader` ([`HistoryIndex`]); the
-//! archive receives the finished rows as `ArchiveJournal`s drained from the
-//! recorder.
+//! it through `OverviewReader` ([`HistoryIndex`]): the bars and window
+//! statistics of the Overview's sizes, with the minutes not finalized yet
+//! cut from the raw steps; the archive receives the finished rows as
+//! `ArchiveJournal`s drained from the recorder. The bounded query engine
+//! over the raw steps and minutes (`HistoryReader`) is removed (D-90).
 //!
 //! The Overview series are also kept in every bar size ([`OverviewTiers`],
 //! D-82), fed by the same finished minutes, kept on disk through the store
@@ -43,9 +46,7 @@ pub(crate) mod grid;
 mod index;
 pub(crate) mod output;
 mod overview;
-pub(crate) mod pin;
 mod process;
-mod query;
 mod recorder;
 pub(crate) mod records;
 pub(crate) mod rollup;
@@ -60,7 +61,7 @@ mod wall_clock;
 use std::sync::{Arc, RwLock};
 
 use dgxtop_core::budget::ByteLedger;
-use dgxtop_core::config::{RuntimeConfig, SamplingConfig, StoreConfig};
+use dgxtop_core::config::{SamplingConfig, StoreConfig};
 use dgxtop_core::sampling::SamplingTiming;
 
 pub use index::HistoryIndex;
@@ -89,7 +90,6 @@ impl History {
     pub fn new(
         store: &StoreConfig,
         sampling: &SamplingConfig,
-        runtime: &RuntimeConfig,
         ledger: &ByteLedger,
         archive_enabled: bool,
     ) -> Self {
@@ -97,12 +97,7 @@ impl History {
         let settings = settings::history_settings(store, &timing, archive_enabled);
         let shared = Arc::new(RwLock::new(HistoryState::new(settings, ledger)));
         let overview = OverviewTiers::new();
-        let index = HistoryIndex::new(
-            Arc::clone(&shared),
-            ledger.clone(),
-            settings::query_limits(store, runtime),
-            overview.clone(),
-        );
+        let index = HistoryIndex::new(Arc::clone(&shared), overview.clone());
         let recorder = HistoryRecorder::new(
             HistoryWriter::new(shared),
             ArchiveQueue::new(ledger),

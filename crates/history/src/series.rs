@@ -14,7 +14,7 @@
 
 use dgxtop_core::budget::{ByteLedger, CapacityError, Partition};
 use dgxtop_core::identity::MetricKey;
-use dgxtop_core::metric::{CanonicalUnit, MetricDescriptor, Scalar};
+use dgxtop_core::metric::{CanonicalUnit, Scalar};
 
 use super::chunk::ChunkLog;
 use super::gaps::GapList;
@@ -92,7 +92,6 @@ pub(crate) struct RollupEviction {
 
 pub(crate) struct Series {
     pub key: MetricKey,
-    pub descriptor: &'static MetricDescriptor,
     pub segments: SegmentTable,
     pub gauge: GaugeTrack,
     pub counter: CounterTrack,
@@ -129,7 +128,6 @@ pub(crate) fn series_overhead_bytes(key: &MetricKey) -> u64 {
 impl Series {
     pub(crate) fn new(
         key: MetricKey,
-        descriptor: &'static MetricDescriptor,
         opening: SeriesOpening,
         grid: Option<MinuteGrid>,
         ledger: &ByteLedger,
@@ -142,7 +140,6 @@ impl Series {
         overhead.try_grow(series_overhead_bytes(&key))?;
         Ok(Self {
             key,
-            descriptor,
             segments: SegmentTable::new(ledger),
             gauge: GaugeTrack {
                 raw: ChunkLog::new(ledger, Partition::RawHistory),
@@ -709,7 +706,7 @@ pub(crate) fn gauge_record(
 mod tests {
     use super::*;
     use dgxtop_core::history::HistoryMethod;
-    use dgxtop_core::metric::{descriptor, ids};
+    use dgxtop_core::metric::ids;
     use dgxtop_core::quality::SampleKind;
     use dgxtop_core::sampling::stale_deadline;
     use dgxtop_core::testing::{metric_key, source_id};
@@ -723,8 +720,7 @@ mod tests {
 
     fn series(ledger: &ByteLedger) -> Series {
         let key = metric_key("cpu.package.0", ids::CPU_TEMPERATURE_PACKAGE, "package:0");
-        let descriptor = descriptor(ids::CPU_TEMPERATURE_PACKAGE).unwrap();
-        Series::new(key, descriptor, AT_BOOT, Some(GRID), ledger).unwrap()
+        Series::new(key, AT_BOOT, Some(GRID), ledger).unwrap()
     }
 
     fn gauge_identity() -> SegmentIdentity {
@@ -835,8 +831,7 @@ mod tests {
     fn capacity_eviction_drops_the_oldest_raw_chunk_before_the_grid_is_known() {
         let ledger = ByteLedger::for_memory_limit_mib(64);
         let key = metric_key("cpu.package.0", ids::CPU_TEMPERATURE_PACKAGE, "package:0");
-        let descriptor = descriptor(ids::CPU_TEMPERATURE_PACKAGE).unwrap();
-        let mut series = Series::new(key, descriptor, AT_BOOT, None, &ledger).unwrap();
+        let mut series = Series::new(key, AT_BOOT, None, &ledger).unwrap();
         for second in 0..200 {
             push_gauge(&mut series, second, 1.0);
         }
@@ -880,10 +875,8 @@ mod tests {
     fn interval_before_the_creation_minute_is_admitted_until_a_minute_is_final() {
         let ledger = ByteLedger::for_memory_limit_mib(64);
         let key = metric_key("netif:ns:2", ids::NET_RX_BPS, "interface");
-        let descriptor = descriptor(ids::NET_RX_BPS).unwrap();
         let mut series = Series::new(
             key,
-            descriptor,
             SeriesOpening {
                 first_time_ns: 60 * SECOND,
                 now_ns: 60 * SECOND,

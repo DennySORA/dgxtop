@@ -35,10 +35,6 @@ pub(crate) struct GapEntry {
 }
 
 impl GapEntry {
-    pub(crate) fn overlaps(&self, start_ns: u64, end_ns: u64) -> bool {
-        self.start_ns < end_ns && self.end_ns > start_ns
-    }
-
     fn mergeable_with(&self, other: &GapEntry, tolerance_ns: u64) -> bool {
         !self.settled
             && self.key == other.key
@@ -147,16 +143,6 @@ impl GapList {
         self.entries.front().map(|entry| entry.start_ns)
     }
 
-    /// Copies of the entries overlapping `[start, end)` that apply to `key`.
-    pub(crate) fn overlapping(&self, key: &MetricKey, start_ns: u64, end_ns: u64) -> Vec<GapEntry> {
-        self.entries
-            .iter()
-            .filter(|entry| entry.overlaps(start_ns, end_ns))
-            .filter(|entry| entry.key.as_ref().is_none_or(|gap_key| gap_key == key))
-            .cloned()
-            .collect()
-    }
-
     /// Bytes the next insertion may have to reserve.
     pub(crate) fn growth_cost(&self) -> u64 {
         self.entries.growth_cost()
@@ -240,13 +226,10 @@ mod tests {
             list.insert(gap(30, 40, "reset", &mut interner), 0),
             GapInsert::Added { .. }
         ));
-        let key = metric_key("e", "gpu.temperature", "gpu");
-        let all = list.overlapping(&key, 0, 100);
+        let all: Vec<&GapEntry> = list.entries.iter().collect();
         assert_eq!(all.len(), 2);
         assert_eq!((all[0].start_ns, all[0].end_ns), (0, 30));
         assert_eq!(&*all[1].reason, "reset");
-        let other_key = metric_key("e", "gpu.power.draw", "gpu");
-        assert!(list.overlapping(&other_key, 0, 100).is_empty());
     }
 
     #[test]
