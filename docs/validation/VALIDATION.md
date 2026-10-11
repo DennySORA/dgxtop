@@ -25,6 +25,9 @@ hardware evidence.
   authorized, so every log records `git_commit: b4b5a8d… (working tree modified)` and every
   binary reports `<commit>-dirty`. A source commit therefore cannot be identified, which on its
   own blocks any acceptance-grade benchmark report.
+- **Rewritten history (D-60):** the logs keep the commit IDs they recorded. In today's
+  history `b4b5a8d` is `9ab52c4` (the same tree less four v1 screenshots), `d662f0a` is
+  `51c9bc5` and `3203771` is `9da9883` (the same trees).
 - **Lock file:** `Cargo.lock` SHA-256 `ebe26984a218038f7892b8eb12d3b607593e86d4460c07da1ce0276f5c1cea74`.
   It is unchanged throughout this work.
 - **Dates:** the spec package validation ran on 2026-10-03 and every other log on 2026-10-09 to 2026-10-10

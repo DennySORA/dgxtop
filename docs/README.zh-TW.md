@@ -186,7 +186,7 @@ just hardware  # 在真實 procfs/sysfs/NVML 上的硬體測試（pidfd 只用�
 
 - [設計說明](https://dennysora.me/zh-hant/projects/tools/dgxtop/)：架構與背後的想法（[English](https://dennysora.me/en/projects/tools/dgxtop/)）。
 - [`spec/dgxtop-v2/`](../spec/dgxtop-v2/README.md)：規格。
-- [`docs/design/DECISIONS.md`](design/DECISIONS.md)：實作決策 D-01 到 D-59。
+- [`docs/design/DECISIONS.md`](design/DECISIONS.md)：實作決策 D-01 到 D-60。
 - [`docs/design/history-redesign.md`](design/history-redesign.md)：歷史畫面的設計分析。
 
 ## 授權
