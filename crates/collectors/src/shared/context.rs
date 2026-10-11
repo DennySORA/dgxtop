@@ -34,9 +34,6 @@ use crate::shared::values::ValueContext;
 /// discovery, so `naming::static_period_key` names their period.
 pub(crate) const STATIC_PERIOD_GROUP: &str = "discovery";
 
-/// Metric id prefix of unclassified diagnostic channels.
-pub(crate) const SENSOR_PREFIX: &str = "sensor.";
-
 /// What one collector consumes and retains.
 pub(crate) struct CollectorSpec {
     pub id: &'static str,
@@ -623,8 +620,7 @@ impl<'a> Session<'a> {
     }
 
     /// Publishes an arbitration outcome. Canonical metrics get a value,
-    /// explanation and events; `sensor.*` keys only an explanation
-    /// (diagnostics); raw inputs nothing. Returns the selection.
+    /// explanation and events; raw inputs nothing. Returns the selection.
     pub fn publish(&mut self, outcome: Outcome) -> Option<Selection> {
         let Outcome {
             canonical,
@@ -635,11 +631,9 @@ impl<'a> Session<'a> {
             ..
         } = outcome;
         let metric_id = canonical.key.metric_id.as_str();
-        let diagnostic = metric_id.starts_with(SENSOR_PREFIX);
-        let canonical_metric = !diagnostic
-            && metric::descriptor(metric_id)
-                .is_some_and(|descriptor| descriptor.role == MetricRole::Canonical);
-        if diagnostic || canonical_metric {
+        let canonical_metric = metric::descriptor(metric_id)
+            .is_some_and(|descriptor| descriptor.role == MetricRole::Canonical);
+        if canonical_metric {
             self.output.explanations.push(explanation);
         }
         if canonical_metric && has_namespace_evidence {

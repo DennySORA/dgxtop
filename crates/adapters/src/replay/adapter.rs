@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::identity::{AdapterId, EntityId, HostId, MetricKey, ReadGroup, SourceId};
-use dgxtop_core::metric::{self, Domain, Scalar};
+use dgxtop_core::metric::Scalar;
 use dgxtop_core::naming;
 use dgxtop_core::observation::{
     AdapterHealth, AdapterManifest, Capability, CatalogDelta, DiscoverRequest, EntityRecord,
@@ -683,10 +683,8 @@ impl Builder<'_> {
         read_group: ReadGroup,
         record_key: &MetricKey,
     ) -> SourceDescriptor {
-        // Diagnostics (`sensor.*`) and row sources have no single proven key.
-        let diagnostic = metric::descriptor(source.metric_id.as_str())
-            .is_some_and(|descriptor| descriptor.domain == Domain::Sensor);
-        let metric = (!diagnostic && !source.rows).then(|| record_key.clone());
+        // Row sources have no single proven key.
+        let metric = (!source.rows).then(|| record_key.clone());
         SourceDescriptor {
             source_id: source.source_id.clone(),
             adapter_id: self.adapter_id.clone(),

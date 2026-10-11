@@ -1,7 +1,6 @@
 //! Versioned hwmon profiles: which channels a profile proves to be a CPU
-//! metric, with what origin, quality and rank. Everything a profile does not
-//! prove stays a `sensor.*` diagnostics channel with unknown origin — `temp1`
-//! is not necessarily the CPU.
+//! metric, with what origin, quality and rank. A channel no profile proves
+//! is not catalogued (D-92) — `temp1` is not necessarily the CPU.
 //!
 //! Pure functions over driver facts, so every rule is unit-tested without a
 //! filesystem.
@@ -20,10 +19,6 @@ pub(crate) enum ChannelKind {
     PowerInput,
     /// `powerN_average` (microwatt, averaged by the driver).
     PowerAverage,
-    /// `fanN_input` (RPM).
-    Fan,
-    /// `energyN_input` (microjoule counter).
-    Energy,
 }
 
 impl ChannelKind {
@@ -32,8 +27,6 @@ impl ChannelKind {
         match self {
             Self::Temperature => "temp",
             Self::PowerInput | Self::PowerAverage => "power",
-            Self::Fan => "fan",
-            Self::Energy => "energy",
         }
     }
 
@@ -42,16 +35,6 @@ impl ChannelKind {
         match self {
             Self::PowerAverage => "average",
             _ => "input",
-        }
-    }
-
-    /// Diagnostics metric used when no profile proves the purpose.
-    fn diagnostics_metric(self) -> &'static str {
-        match self {
-            Self::Temperature => ids::SENSOR_TEMPERATURE,
-            Self::PowerInput | Self::PowerAverage => ids::SENSOR_POWER,
-            Self::Fan => ids::SENSOR_FAN,
-            Self::Energy => ids::SENSOR_ENERGY,
         }
     }
 
@@ -78,10 +61,6 @@ pub(crate) const AMD_K10TEMP: ProfileSpec = ProfileSpec {
 };
 pub(crate) const NVIDIA_GB10: ProfileSpec = ProfileSpec {
     id: "nvidia-gb10-hwmon",
-    revision: 1,
-};
-pub(crate) const GENERIC: ProfileSpec = ProfileSpec {
-    id: "hwmon-generic",
     revision: 1,
 };
 
@@ -138,13 +117,13 @@ pub(crate) fn label_is(label: Option<&str>, expected: &str) -> bool {
     label.is_some_and(|text| text.trim().eq_ignore_ascii_case(expected))
 }
 
-/// Classifies one channel of one device.
+/// Classifies one channel of one device; `None` when no profile proves it.
 pub(crate) fn classify(
     host: &HostFacts,
     device: &DeviceFacts<'_>,
     channel: &ChannelFacts<'_>,
-) -> Mapping {
-    let proven = if device.name == "coretemp" {
+) -> Option<Mapping> {
+    if device.name == "coretemp" {
         coretemp(device, channel)
     } else if is_amd_temperature_driver(device.name) && host.amd_devices == 1 {
         amd(device, channel)
@@ -152,8 +131,7 @@ pub(crate) fn classify(
         gb10(device, channel)
     } else {
         None
-    };
-    proven.unwrap_or_else(|| diagnostic(device, channel))
+    }
 }
 
 fn coretemp(device: &DeviceFacts<'_>, channel: &ChannelFacts<'_>) -> Option<Mapping> {
@@ -164,7 +142,7 @@ fn coretemp(device: &DeviceFacts<'_>, channel: &ChannelFacts<'_>) -> Option<Mapp
     let label = channel.label?;
     if package_label(label) == Some(package) {
         return Some(Mapping {
-            target: Target::Proven {
+            target: Target {
                 entity: format!("cpu.package.{package}"),
                 metric: ids::CPU_TEMPERATURE_PACKAGE,
                 scope: format!("package:{package}"),
@@ -178,7 +156,7 @@ fn coretemp(device: &DeviceFacts<'_>, channel: &ChannelFacts<'_>) -> Option<Mapp
     }
     let core = core_label(label)?;
     Some(Mapping {
-        target: Target::Proven {
+        target: Target {
             entity: format!("cpu.package.{package}"),
             metric: ids::CPU_TEMPERATURE_CORE,
             scope: format!("core:{core}"),
@@ -202,7 +180,7 @@ fn amd(device: &DeviceFacts<'_>, channel: &ChannelFacts<'_>) -> Option<Mapping> 
         _ => return None,
     };
     Some(Mapping {
-        target: Target::Proven {
+        target: Target {
             entity: "cpu.package.0".to_owned(),
             metric: ids::CPU_TEMPERATURE_PACKAGE,
             scope: "package:0".to_owned(),
@@ -228,7 +206,7 @@ fn gb10(device: &DeviceFacts<'_>, channel: &ChannelFacts<'_>) -> Option<Mapping>
         return None;
     };
     Some(Mapping {
-        target: Target::Proven {
+        target: Target {
             entity: entity.to_owned(),
             metric,
             scope: scope.to_owned(),
@@ -239,28 +217,6 @@ fn gb10(device: &DeviceFacts<'_>, channel: &ChannelFacts<'_>) -> Option<Mapping>
         profile: NVIDIA_GB10,
         rank: channel.kind.power_rank(),
     })
-}
-
-fn diagnostic(device: &DeviceFacts<'_>, channel: &ChannelFacts<'_>) -> Mapping {
-    // Input and average of one power channel read the same sensor; that much
-    // is proven even when its purpose is not.
-    let origin = channel
-        .kind
-        .is_power()
-        .then(|| power_origin(device, channel));
-    Mapping {
-        target: Target::Diagnostic {
-            metric: channel.kind.diagnostics_metric(),
-        },
-        origin,
-        quality: Quality::Unknown,
-        profile: GENERIC,
-        rank: if channel.kind.is_power() {
-            channel.kind.power_rank()
-        } else {
-            0
-        },
-    }
 }
 
 fn power_origin(device: &DeviceFacts<'_>, channel: &ChannelFacts<'_>) -> String {
@@ -289,29 +245,25 @@ mod tests {
         }
     }
 
-    fn proven_scope(mapping: &Mapping) -> Option<(&str, &str, &str)> {
-        match &mapping.target {
-            Target::Proven {
-                entity,
-                metric,
-                scope,
-            } => Some((entity.as_str(), *metric, scope.as_str())),
-            Target::Diagnostic { .. } => None,
-        }
-    }
-
     #[test]
-    fn coretemp_without_package_label_stays_diagnostic() {
+    fn coretemp_without_package_label_is_not_mapped() {
         let coretemp = device("coretemp");
         let core = classify(&HostFacts::default(), &coretemp, &temp(Some("Core 0")));
-        assert_eq!(
-            core.target,
-            Target::Diagnostic {
-                metric: ids::SENSOR_TEMPERATURE
-            }
-        );
-        assert_eq!(core.origin, None);
-        assert_eq!(core.quality, Quality::Unknown);
+        assert_eq!(core, None);
+    }
+
+    /// An unknown driver's channels (a Wi-Fi PHY, a Super I/O fan
+    /// controller's temperatures) are proven by no profile (D-92).
+    #[test]
+    fn unknown_drivers_are_not_mapped() {
+        let phy = device("acme_phy0");
+        assert_eq!(classify(&HostFacts::default(), &phy, &temp(None)), None);
+        let power = ChannelFacts {
+            kind: ChannelKind::PowerInput,
+            index: 1,
+            label: Some("cpu_p"),
+        };
+        assert_eq!(classify(&HostFacts::default(), &phy, &power), None);
     }
 
     #[test]
@@ -322,7 +274,7 @@ mod tests {
         };
         let mut k10 = device("k10temp");
         k10.has_tdie = true;
-        assert!(proven_scope(&classify(&host, &k10, &temp(Some("Tdie")))).is_none());
+        assert_eq!(classify(&host, &k10, &temp(Some("Tdie"))), None);
     }
 
     #[test]

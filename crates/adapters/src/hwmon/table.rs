@@ -54,10 +54,8 @@ pub(crate) struct SourceDraft {
     pub source_id: SourceId,
     pub device_key: String,
     pub entity_id: EntityId,
-    /// Key of emitted records: the proven key or a `sensor.*` diagnostics key.
+    /// Key of emitted records, proven by a profile.
     pub record_key: MetricKey,
-    /// Whether a profile proves the purpose (`descriptor.metric = Some`).
-    pub proven: bool,
     pub origin: OriginIdentity,
     pub driver: String,
     pub device_path: String,
@@ -341,14 +339,8 @@ impl SourceTable {
         for draft in drafts {
             unique.entry(draft.source_id.clone()).or_insert(draft);
         }
+        // Truncation keeps the lowest source ids.
         let mut ordered: Vec<SourceDraft> = unique.into_values().collect();
-        // Profile-proven sources are kept before diagnostics when truncating.
-        ordered.sort_by(|left, right| {
-            right
-                .proven
-                .cmp(&left.proven)
-                .then_with(|| left.source_id.cmp(&right.source_id))
-        });
         let truncated = ordered.len() > self.max_sources;
         ordered.truncate(self.max_sources);
         let mut previous = std::mem::take(&mut self.sources);
@@ -384,7 +376,7 @@ impl SourceTable {
         generation: u32,
         support: SourceSupport,
     ) -> SourceEntry {
-        let metric = draft.proven.then(|| draft.record_key.clone());
+        let metric = Some(draft.record_key.clone());
         SourceEntry {
             descriptor: SourceDescriptor {
                 source_id: draft.source_id,

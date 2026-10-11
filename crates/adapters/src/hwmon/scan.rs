@@ -1,6 +1,7 @@
 //! hwmon enumeration: `/sys/class/hwmon/hwmonN` devices, their value
-//! channels (`temp*_input`, `power*_input`, `power*_average`, `fan*_input`,
-//! `energy*_input`) with fault/alarm companions, and profile classification.
+//! channels (`temp*_input`, `power*_input`, `power*_average`) with
+//! fault/alarm companions, and profile classification. Channels no profile
+//! proves, fans and energy counters are not catalogued (D-92).
 //!
 //! Static metadata (`name`, `device` link, `update_interval`, `*_label`) is
 //! read once per enumeration instance (canonical hwmon path) and cached until
@@ -13,10 +14,9 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
-use dgxtop_core::identity::{EntityId, ProfileId};
+use dgxtop_core::identity::ProfileId;
 use dgxtop_core::metric::{NativeUnit, native};
 use dgxtop_core::naming;
-use dgxtop_core::observation::EntityKind;
 use dgxtop_core::quality::RawKind;
 
 use super::engine::{ScanContext, Scanner, codes};
@@ -27,8 +27,8 @@ use super::profile::{
 };
 use super::reader::{AlarmPath, ReadSpec, ValueFormat, reasons};
 use super::sysfs::{
-    attribute, canonical, canonical_link, device_key, disambiguate, is_missing, list_names,
-    numbered, read_label, read_optional,
+    canonical, canonical_link, device_key, disambiguate, is_missing, list_names, numbered,
+    read_label, read_optional,
 };
 use super::table::{EntityDraft, ScanOutput, ScannedDevice, SourceDraft};
 use crate::common::{SystemFiles, reason_of};
@@ -49,7 +49,7 @@ struct ChannelFiles {
 }
 
 impl ChannelFiles {
-    /// `temp1`, `power2`: the label/fault/alarm prefix and diagnostics channel id.
+    /// `temp1`, `power2`: the label/fault/alarm prefix.
     fn base(&self) -> String {
         format!("{}{}", self.kind.prefix(), self.index)
     }
@@ -114,9 +114,6 @@ fn is_thermal_zone_mirror(metadata: &DeviceMetadata) -> bool {
 #[derive(Debug, Default)]
 pub(crate) struct HwmonScanner {
     cache: BTreeMap<String, DeviceMetadata>,
-    /// Read the thermal zones' mirrors too; otherwise they are left to the
-    /// thermal adapter (D-81).
-    hwmon_reads_thermal_zones: bool,
 }
 
 impl Scanner for HwmonScanner {
@@ -158,11 +155,8 @@ impl Scanner for HwmonScanner {
 }
 
 impl HwmonScanner {
-    pub(crate) fn new(hwmon_reads_thermal_zones: bool) -> Self {
-        Self {
-            hwmon_reads_thermal_zones,
-            ..Self::default()
-        }
+    pub(crate) fn new() -> Self {
+        Self::default()
     }
 
     fn invalidate(&mut self, device_keys: &BTreeSet<String>) {
@@ -184,9 +178,8 @@ impl HwmonScanner {
             Err(error) if is_missing(&error) => return DeviceScan::Vanished,
             Err(_) => return DeviceScan::Failed,
         };
-        let skip_zone_mirrors = !self.hwmon_reads_thermal_zones;
         match self.cached_metadata(files, &instance) {
-            Ok(metadata) if skip_zone_mirrors && is_thermal_zone_mirror(metadata) => {
+            Ok(metadata) if is_thermal_zone_mirror(metadata) => {
                 return DeviceScan::ThermalZoneMirror { instance };
             }
             Ok(_) => {}
@@ -374,7 +367,7 @@ impl DeviceDrafts<'_> {
         };
         for channel in &self.device.channels {
             let label = label_of(self.metadata, channel);
-            let mapping = classify(
+            let Some(mapping) = classify(
                 self.host,
                 &facts,
                 &ChannelFacts {
@@ -382,7 +375,9 @@ impl DeviceDrafts<'_> {
                     index: channel.index,
                     label,
                 },
-            );
+            ) else {
+                continue;
+            };
             match self.source_draft(channel, label, &mapping) {
                 Some((source, entity)) => {
                     output.sources.push(source);
@@ -401,25 +396,14 @@ impl DeviceDrafts<'_> {
     ) -> Option<(SourceDraft, Option<EntityDraft>)> {
         let source_id =
             naming::source_id(ADAPTER, self.device_key, &channel.source_channel()).ok()?;
-        let resolved = resolve(
-            self.context,
-            mapping,
-            ADAPTER,
-            self.device_key,
-            &channel.base(),
-        )?;
-        let entity_draft = if resolved.proven {
-            resolved.shared_entity.clone()
-        } else {
-            Some(self.sensor_entity(&resolved.entity_id, channel, label))
-        };
+        let resolved = resolve(self.context, mapping)?;
+        let entity_draft = resolved.shared_entity.clone();
         let (unit, raw_kind, format) = channel_units(channel.kind);
         let source = SourceDraft {
             source_id,
             device_key: self.device_key.to_owned(),
             entity_id: resolved.entity_id,
             record_key: resolved.record_key,
-            proven: resolved.proven,
             origin: resolved.origin,
             driver: self.metadata.name.clone(),
             device_path: self.device.instance.clone(),
@@ -458,35 +442,6 @@ impl DeviceDrafts<'_> {
             gate_path: None,
         }
     }
-
-    fn sensor_entity(
-        &self,
-        entity_id: &EntityId,
-        channel: &ChannelFiles,
-        label: Option<&str>,
-    ) -> EntityDraft {
-        let base = channel.base();
-        let mut attributes = vec![
-            attribute("driver", &self.metadata.name),
-            attribute("channel", &base),
-            attribute(naming::attributes::DEVICE, &self.device.instance),
-        ];
-        if let Some(label) = label {
-            attributes.push(attribute("label", label));
-        }
-        EntityDraft {
-            entity_id: entity_id.clone(),
-            kind: EntityKind::Sensor,
-            parent_id: None,
-            display_name: match label {
-                Some(label) => format!("{} {label}", self.metadata.name),
-                None => format!("{} {base}", self.metadata.name),
-            },
-            attributes,
-            device_key: Some(self.device_key.to_owned()),
-            owned: true,
-        }
-    }
 }
 
 /// Native unit, raw kind and value format of a channel kind.
@@ -500,13 +455,6 @@ fn channel_units(kind: ChannelKind) -> (&'static str, RawKind, ValueFormat) {
         ChannelKind::PowerInput | ChannelKind::PowerAverage => {
             (native::MICRO_WATT, RawKind::Gauge, ValueFormat::SignedGauge)
         }
-        // RPM is reported as a plain count (catalog unit of `sensor.fan`).
-        ChannelKind::Fan => (native::COUNT, RawKind::Gauge, ValueFormat::SignedGauge),
-        ChannelKind::Energy => (
-            native::MICRO_JOULE,
-            RawKind::Counter,
-            ValueFormat::UnsignedCounter,
-        ),
     }
 }
 
@@ -550,7 +498,7 @@ fn parse_channels(attributes: &[String]) -> Vec<ChannelFiles> {
         let Some((prefix, index, suffix)) = split_attribute(name) else {
             continue;
         };
-        if !matches!(prefix, "temp" | "power" | "fan" | "energy") {
+        if !matches!(prefix, "temp" | "power") {
             continue;
         }
         let group = grouped.entry((prefix.to_owned(), index)).or_default();
@@ -570,12 +518,10 @@ fn parse_channels(attributes: &[String]) -> Vec<ChannelFiles> {
     for ((prefix, index), group) in grouped {
         let kinds: &[(bool, ChannelKind)] = match prefix.as_str() {
             "temp" => &[(group.input, ChannelKind::Temperature)],
-            "power" => &[
+            _ => &[
                 (group.input, ChannelKind::PowerInput),
                 (group.average, ChannelKind::PowerAverage),
             ],
-            "fan" => &[(group.input, ChannelKind::Fan)],
-            _ => &[(group.input, ChannelKind::Energy)],
         };
         for (present, kind) in kinds {
             if *present {
@@ -595,16 +541,6 @@ fn parse_channels(attributes: &[String]) -> Vec<ChannelFiles> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The scanner's own default leaves the mirrors to the thermal
-    /// adapter, as the adapter options do.
-    #[test]
-    fn the_scanner_default_agrees_with_the_adapter_options() {
-        assert_eq!(
-            HwmonScanner::default().hwmon_reads_thermal_zones,
-            crate::registry::AdapterOptions::default().hwmon_reads_thermal_zones
-        );
-    }
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|name| (*name).to_owned()).collect()
@@ -643,22 +579,21 @@ mod tests {
             .iter()
             .map(|channel| (channel.kind, channel.index))
             .collect();
+        // Fans and energy counters are not read (D-92).
         assert_eq!(
             kinds,
             vec![
-                (ChannelKind::Energy, 1),
-                (ChannelKind::Fan, 2),
                 (ChannelKind::PowerInput, 1),
                 (ChannelKind::PowerAverage, 1),
                 (ChannelKind::Temperature, 1),
             ]
         );
-        let temp = &channels[4];
+        let temp = &channels[2];
         assert!(temp.has_label && temp.has_fault);
         assert_eq!(temp.alarms.len(), 2);
-        assert_eq!(channels[3].source_channel(), "power1_average");
-        assert_eq!(channels[3].attribute(), "power1_average");
-        assert_eq!(channels[2].source_channel(), "power1");
+        assert_eq!(channels[1].source_channel(), "power1_average");
+        assert_eq!(channels[1].attribute(), "power1_average");
+        assert_eq!(channels[0].source_channel(), "power1");
         assert_eq!(temp.attribute(), "temp1_input");
     }
 

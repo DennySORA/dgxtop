@@ -13,6 +13,8 @@ use dgxtop_core::naming::{self, entity};
 use dgxtop_core::observation::EntityKind;
 use dgxtop_core::quality::RawKind;
 
+use crate::hwmon::mapping::Mapping;
+
 use super::profile::{classify, control_type, parent_zone};
 use crate::common::{SystemFiles, parse_u64, reason_of};
 use crate::hwmon::engine::{ScanContext, Scanner, codes};
@@ -88,12 +90,17 @@ impl Scanner for PowercapScanner {
             if !metadata.has_energy {
                 continue;
             }
+            // Subdomains, MMIO duplicates and unknown names are not
+            // catalogued (D-92).
+            let Some(mapping) = classify(&zone.directory, &metadata.name) else {
+                continue;
+            };
             let key = device_key(&zone.directory, None);
             output.devices.push(ScannedDevice {
                 device_key: key.clone(),
                 instance: zone.instance.clone(),
             });
-            match zone_drafts(context, zone, metadata, &key) {
+            match zone_drafts(context, &mapping, zone, metadata, &key) {
                 Some((source, entities)) => {
                     output.sources.push(source);
                     output.entities.extend(entities);
@@ -162,36 +169,20 @@ fn read_zone_metadata(files: &dyn SystemFiles, instance: &str) -> io::Result<Zon
 /// Source and entity drafts of one zone.
 fn zone_drafts(
     context: &ScanContext<'_>,
+    mapping: &Mapping,
     zone: &FoundZone,
     metadata: &ZoneMetadata,
     key: &str,
 ) -> Option<(SourceDraft, Vec<EntityDraft>)> {
-    let mapping = classify(&zone.directory, &metadata.name);
-    let resolved = resolve(context, &mapping, ADAPTER, key, CHANNEL)?;
+    let resolved = resolve(context, mapping)?;
     let domain_id = entity::power_domain(key).ok()?;
     let mut entities = vec![domain_entity(zone, metadata, key, &domain_id)];
-    if resolved.proven {
-        entities.extend(resolved.shared_entity.clone());
-    } else {
-        entities.push(EntityDraft {
-            entity_id: resolved.entity_id.clone(),
-            kind: EntityKind::Sensor,
-            parent_id: Some(domain_id),
-            display_name: format!("{} energy", metadata.name),
-            attributes: vec![
-                attribute("name", &metadata.name),
-                attribute("channel", CHANNEL),
-            ],
-            device_key: Some(key.to_owned()),
-            owned: true,
-        });
-    }
+    entities.extend(resolved.shared_entity.clone());
     let source = SourceDraft {
         source_id: naming::source_id(ADAPTER, key, CHANNEL).ok()?,
         device_key: key.to_owned(),
         entity_id: resolved.entity_id,
         record_key: resolved.record_key,
-        proven: resolved.proven,
         origin: resolved.origin,
         driver: control_type(&zone.directory).to_owned(),
         device_path: zone.instance.clone(),

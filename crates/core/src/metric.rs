@@ -693,7 +693,6 @@ pub enum Domain {
     Filesystem,
     Network,
     Process,
-    Sensor,
 }
 
 /// Catalog entry for one metric id.
@@ -745,14 +744,6 @@ pub mod ids {
     pub const CPU_POWER_CLUSTER: &str = "cpu.power.cluster";
     pub const CPU_ENERGY_PACKAGE: &str = "cpu.energy.package";
     pub const CPU_ENERGY_PLATFORM: &str = "cpu.energy.platform";
-    /// Unclassified temperature channel: diagnostics only, never CPU package.
-    pub const SENSOR_TEMPERATURE: &str = "sensor.temperature";
-    /// Unclassified power channel: diagnostics only.
-    pub const SENSOR_POWER: &str = "sensor.power";
-    /// Unclassified energy counter: diagnostics only.
-    pub const SENSOR_ENERGY: &str = "sensor.energy";
-    /// Fan tachometer (RPM is a count per minute; kept as diagnostics).
-    pub const SENSOR_FAN: &str = "sensor.fan";
 
     // Memory
     pub const MEMORY_TOTAL: &str = "memory.total";
@@ -1149,34 +1140,6 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         false,
         "platform energy"
     ),
-    descriptor!(
-        ids::SENSOR_TEMPERATURE,
-        DegC,
-        Raw,
-        Gauge,
-        Sensor,
-        false,
-        "sensor temperature"
-    ),
-    descriptor!(
-        ids::SENSOR_POWER,
-        Watts,
-        Raw,
-        Gauge,
-        Sensor,
-        false,
-        "sensor power"
-    ),
-    descriptor!(
-        ids::SENSOR_ENERGY,
-        Joules,
-        Raw,
-        Counter,
-        Sensor,
-        false,
-        "sensor energy"
-    ),
-    descriptor!(ids::SENSOR_FAN, Count, Raw, Gauge, Sensor, false, "fan RPM"),
     descriptor!(
         ids::MEMORY_TOTAL,
         Bytes,

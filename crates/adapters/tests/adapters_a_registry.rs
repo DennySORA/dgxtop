@@ -46,7 +46,6 @@ fn every_live_adapter_can_be_built_with_its_options() {
         unsupported_probe_ms: 30_000,
         max_sources: 300,
         page_size: 64,
-        ..AdapterOptions::default()
     };
     for adapter in LIVE_ADAPTERS {
         let port =

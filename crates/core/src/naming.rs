@@ -12,9 +12,9 @@
 //! | procfs | `memory` | 1 s | `memory.{total,available,buffers,cached,swap_total}`, `memory.swap_free` (KiB; entity `memory`, scope `system`) |
 //! | procfs | `disk` | 1 s | `disk.{reads.completed,sectors.read,read.time,writes.completed,sectors.written,write.time}` (count / sectors_512 / milliseconds counters; entity `blockdev:MAJ:MIN`, scope `device` or `partition`) |
 //! | procfs | `process` | 1 s, paged | one `process.cpu.ticks` record (ticks counter) per `ProcessKey` entity (`process:NS:PID:START`, scope `process`), the rest of its `stat` and its owner as `proc.*` tags ([`crate::process_stat`], D-86) |
-//! | hwmon | `fast` | 1 s | temperatures (mdegC), power (uW), fans (count) mapped by profile: `cpu.temperature.package`/`core`, `cpu.power.package`, `cpu.power.cluster`, `cpu.power.platform`, else `sensor.*` (diagnostics); thermal-zone mirrors (`acpitz`) are left to `thermal` (D-81) |
-//! | thermal | `fast` | 1 s | zone temperatures (mdegC): `cpu.temperature.package` only when the profile proves the package, `soc.temperature` for SoC zones, GB10's `acpitz` zones by ACPI path (`cpu.temperature.cluster` scopes `cluster:0e`…`cluster:1p`, `soc.temperature`, D-68), else `sensor.temperature` |
-//! | powercap | `fast` | 1 s | `cpu.energy.package` / `cpu.energy.platform` (uJ counters with declared modulus), else `sensor.energy` |
+//! | hwmon | `fast` | 1 s | temperatures (mdegC) and power (uW) mapped by profile: `cpu.temperature.package`/`core`, `cpu.power.package`, `cpu.power.cluster`, `cpu.power.platform`; unproven channels, fans and energy counters are not read (D-92); thermal-zone mirrors (`acpitz`) are left to `thermal` (D-81) |
+//! | thermal | `fast` | 1 s | zone temperatures (mdegC): `cpu.temperature.package` only when the profile proves the package, `soc.temperature` for SoC zones, GB10's `acpitz` zones by ACPI path (`cpu.temperature.cluster` scopes `cluster:0e`…`cluster:1p`, `soc.temperature`, D-68); other zones are not read (D-92) |
+//! | powercap | `fast` | 1 s | `cpu.energy.package` / `cpu.energy.platform` (uJ counters with declared modulus); subdomains are not read (D-92) |
 //! | nvml | `fast` | 1 s | GPU utilization/temperature/power/clocks/fan/framebuffer/PCIe/encoder/decoder/process_allocated (entity `gpu:UUID`) |
 //! | nvml | `slow_health` | 5 s | `gpu.energy.total` (mJ counter), ECC, retired pages, `gpu.nvlink.active`, `gpu.power.limit`, `gpu.clock.maximum`, framebuffer total/reserved |
 //! | nvml | `process` | 1 s | `process.gpu.memory_allocated` (bytes) and `process.gpu.utilization` (percent): entity `gpupid:UUID:PID`, scope `gpu:UUID` (the PID is joined to a ProcessKey by the process collector) |
@@ -274,7 +274,6 @@ pub mod entity {
     pub const SCOPE_FILESYSTEM: &str = "filesystem";
     pub const SCOPE_INTERFACE: &str = "interface";
     pub const SCOPE_PROCESS: &str = "process";
-    pub const SCOPE_SENSOR: &str = "sensor";
     /// Scopes of `gpu.temperature.threshold` and `gpu.pcie.link.maximum`.
     pub const SCOPE_SLOWDOWN: &str = "slowdown";
     pub const SCOPE_SHUTDOWN: &str = "shutdown";
@@ -355,7 +354,8 @@ pub mod entity {
         entity(format!("netif:{net_namespace}:{ifindex}"))
     }
 
-    /// Unclassified sensor channel (diagnostics only).
+    /// The metadata entity of one sensor (a thermal zone's type and trip
+    /// points), below the entity it measures.
     pub fn sensor(adapter: &str, device: &str, channel: &str) -> Result<EntityId, IdentityError> {
         entity(format!("sensor:{adapter}:{device}:{channel}"))
     }

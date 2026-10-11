@@ -1118,22 +1118,12 @@ fn host_specs(
                 .map_err(|error| StartError::failure(error.to_string()))?,
             launch: HostLaunch::ChildProcess {
                 program: program.clone(),
-                args: host_args(adapter, &selected),
+                args: vec!["--adapter-host".to_owned(), adapter.to_owned()],
             },
         });
         manifests.push(manifest);
     }
     Ok((specs, manifests))
-}
-
-/// An adapter host's arguments; hwmon reads the thermal zones' mirrors
-/// itself when the thermal adapter is not among the hosts (D-81).
-fn host_args(adapter: &str, selected: &[&str]) -> Vec<String> {
-    let mut args = vec!["--adapter-host".to_owned(), adapter.to_owned()];
-    if adapter == naming::adapters::HWMON && !selected.contains(&naming::adapters::THERMAL) {
-        args.push("--hwmon-reads-thermal-zones".to_owned());
-    }
-    args
 }
 
 fn replay_host(
@@ -1300,25 +1290,6 @@ fn log_recreated(logger: &dyn Logger, database: &Path, reason: Option<&str>) {
 
 #[cfg(test)]
 mod tests {
-    /// hwmon reads the thermal zones' mirrors only when the thermal
-    /// adapter is not among the hosts (D-81).
-    #[test]
-    fn hwmon_reads_the_zones_only_without_the_thermal_host() {
-        use dgxtop_core::naming::adapters::{HWMON, PROCFS, THERMAL};
-        assert_eq!(
-            super::host_args(HWMON, &[PROCFS, HWMON, THERMAL]),
-            vec!["--adapter-host", HWMON]
-        );
-        assert_eq!(
-            super::host_args(HWMON, &[PROCFS, HWMON]),
-            vec!["--adapter-host", HWMON, "--hwmon-reads-thermal-zones"]
-        );
-        assert_eq!(
-            super::host_args(PROCFS, &[PROCFS]),
-            vec!["--adapter-host", PROCFS]
-        );
-    }
-
     use super::*;
 
     /// A recreated database is one info line naming the file and the

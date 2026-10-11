@@ -5,7 +5,8 @@
 //! (D-68) names its `acpitz` zones by ACPI path: on one package with all
 //! four of its CPU cluster zones, those map to `cpu.temperature.cluster`
 //! and its SoC zone to `soc.temperature`. Everything else (acpitz, INT3400,
-//! pch_*, iwlwifi_*, B0D4, TCPU, ...) is diagnostics.
+//! pch_*, iwlwifi_*, B0D4, TCPU, ...) has no mapping and is not catalogued
+//! (D-92).
 
 use dgxtop_core::metric::ids;
 use dgxtop_core::quality::Quality;
@@ -22,10 +23,6 @@ pub(crate) const SOC: ProfileSpec = ProfileSpec {
 };
 pub(crate) const ARM_CPU: ProfileSpec = ProfileSpec {
     id: "thermal-arm-cpu",
-    revision: 1,
-};
-pub(crate) const GENERIC: ProfileSpec = ProfileSpec {
-    id: "thermal-generic",
     revision: 1,
 };
 /// GB10 (DGX Spark) ACPI zones, usable: the firmware names them, no
@@ -95,30 +92,31 @@ fn soc_rank(zone_type: &str) -> Option<u16> {
     }
 }
 
-/// Classifies one zone by its type and, for an ACPI zone, its ACPI path.
+/// Classifies one zone by its type and, for an ACPI zone, its ACPI path;
+/// `None` when no profile proves what the zone measures.
 pub(crate) fn classify(
     host: &ThermalHostFacts,
     zone_type: &str,
     acpi_path: Option<&str>,
-) -> Mapping {
+) -> Option<Mapping> {
     if zone_type == ACPI_ZONE_TYPE
         && host.gb10()
         && let Some(mapping) = acpi_path.and_then(gb10_zone)
     {
-        return mapping;
+        return Some(mapping);
     }
     if zone_type == X86_PKG_TEMP_TYPE && host.single_package() && host.x86_pkg_zones == 1 {
-        return package(
+        return Some(package(
             // Same MSR as coretemp `Package id 0`: the collector treats them as aliases.
             Some("x86_pkg_therm:0".to_owned()),
             Quality::Verified,
             X86_PKG_TEMP,
             1,
-        );
+        ));
     }
     if let Some(rank) = soc_rank(zone_type) {
-        return Mapping {
-            target: Target::Proven {
+        return Some(Mapping {
+            target: Target {
                 entity: "soc".to_owned(),
                 metric: ids::SOC_TEMPERATURE,
                 scope: "soc".to_owned(),
@@ -127,20 +125,10 @@ pub(crate) fn classify(
             quality: Quality::Usable,
             profile: SOC,
             rank,
-        };
+        });
     }
-    if is_arm_cpu_zone(zone_type) && host.single_package() && host.arm_cpu_zones == 1 {
-        return package(None, Quality::Usable, ARM_CPU, 2);
-    }
-    Mapping {
-        target: Target::Diagnostic {
-            metric: ids::SENSOR_TEMPERATURE,
-        },
-        origin: None,
-        quality: Quality::Unknown,
-        profile: GENERIC,
-        rank: 0,
-    }
+    (is_arm_cpu_zone(zone_type) && host.single_package() && host.arm_cpu_zones == 1)
+        .then(|| package(None, Quality::Usable, ARM_CPU, 2))
 }
 
 /// A GB10 zone with a meaning: a CPU cluster or the SoC.
@@ -151,7 +139,7 @@ fn gb10_zone(acpi_path: &str) -> Option<Mapping> {
         None => return None,
     };
     Some(Mapping {
-        target: Target::Proven {
+        target: Target {
             entity: entity.to_owned(),
             metric,
             scope: scope.to_owned(),
@@ -165,7 +153,7 @@ fn gb10_zone(acpi_path: &str) -> Option<Mapping> {
 
 fn package(origin: Option<String>, quality: Quality, profile: ProfileSpec, rank: u16) -> Mapping {
     Mapping {
-        target: Target::Proven {
+        target: Target {
             entity: "cpu.package.0".to_owned(),
             metric: ids::CPU_TEMPERATURE_PACKAGE,
             scope: "package:0".to_owned(),

@@ -733,23 +733,6 @@ fn live_measured_values_of_history_metrics_are_history_eligible() {
 }
 
 #[test]
-fn sensor_channels_never_become_canonical() {
-    let key = metric_key(
-        "sensor:hwmon:acpitz:temp1",
-        ids::SENSOR_TEMPERATURE,
-        "sensor",
-    );
-    let reading = millidegrees(&key, "hwmon", "hwmon:acpitz:temp1", 50000.0).build();
-    let policy = policy();
-    let outcome = run(&key, vec![candidate(&reading, 0)], &policy, None, NOW);
-    assert_eq!(outcome.canonical.value, None);
-    assert_eq!(
-        disposition_of(&outcome, "hwmon:acpitz:temp1"),
-        CandidateDisposition::Rejected(RejectReason::UnprovenPurpose)
-    );
-}
-
-#[test]
 fn catalog_mapping_mismatch_and_unproven_purpose_are_rejected() {
     let reading = millidegrees(&package(), "hwmon", "hwmon:a", 68000.0).build();
     let policy = policy();

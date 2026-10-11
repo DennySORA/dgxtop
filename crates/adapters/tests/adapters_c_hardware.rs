@@ -117,18 +117,13 @@ fn hardware_hwmon_smoke() {
             "{millidegrees} mdegC"
         );
     }
-    for descriptor in catalog
-        .iter()
-        .filter(|descriptor| descriptor.driver != "coretemp")
-    {
-        let profile = descriptor.profile_id.as_str();
-        if profile == "hwmon-generic" {
-            assert!(
-                descriptor.metric.is_none(),
-                "{} must be diagnostics",
-                descriptor.source_id
-            );
-        }
+    // Every catalogued channel is proven by a profile (D-92).
+    for descriptor in &catalog {
+        assert!(
+            descriptor.metric.is_some(),
+            "{} is unproven",
+            descriptor.source_id
+        );
     }
 }
 

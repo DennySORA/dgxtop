@@ -2,8 +2,7 @@
 //! frequency/load/task pass-through, arbitrated temperatures (package, core,
 //! cluster and SoC are distinct keys; GB10's package from its clusters) and
 //! CPU package/platform power from energy counters, hwmon power channels
-//! and the GB10 cluster formula. `sensor.*` channels only ever appear in
-//! explanations.
+//! and the GB10 cluster formula.
 
 mod power;
 mod temperature;
@@ -15,7 +14,7 @@ use dgxtop_core::metric::{Domain, MetricDescriptor, ids};
 use dgxtop_core::naming;
 use dgxtop_core::ports::Collector;
 
-use crate::shared::context::{self, CollectorSpec, Route, SENSOR_PREFIX, Session};
+use crate::shared::context::{self, CollectorSpec, Route, Session};
 use crate::shared::formulas::{self, Selections};
 
 /// Canonical CPU/SoC metrics published straight through arbitration.
@@ -43,8 +42,7 @@ const DERIVED_ONLY: [&str; 5] = [
 ];
 
 fn accepts(metric: &MetricDescriptor) -> bool {
-    matches!(metric.domain, Domain::Cpu | Domain::Soc | Domain::Sensor)
-        && !DERIVED_ONLY.contains(&metric.id)
+    matches!(metric.domain, Domain::Cpu | Domain::Soc) && !DERIVED_ONLY.contains(&metric.id)
 }
 
 /// Energy counters are consumed once per reading; their derived power
@@ -93,7 +91,7 @@ fn collect_cpu(session: &mut Session<'_>) {
     let mut selections = Selections::new();
     formulas::publish_pending(
         session,
-        |metric| PASS_THROUGH.contains(&metric) || metric.starts_with(SENSOR_PREFIX),
+        |metric| PASS_THROUGH.contains(&metric),
         &mut selections,
     );
     temperature::publish(session, &mut selections);
