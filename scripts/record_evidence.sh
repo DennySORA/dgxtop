@@ -45,12 +45,20 @@ status=$?
 } >> "$log"
 
 # Hardware identifiers are not secrets but identify the owner's machine; they
-# are masked before the evidence is hashed and stored.
-sed -i -E \
+# are masked before the evidence is hashed and stored. sed writes a new file
+# because `sed -i` takes a backup suffix on BSD sed (macOS), which swallowed
+# `-E` there. A log that could not be redacted is deleted, never kept.
+redacted="${log}.redacted"
+if ! sed -E \
     -e 's/GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/GPU-<redacted>/g' \
     -e 's/(key: "serial", value: ")[^"]*"/\1<redacted>"/g' \
     -e 's/("serial" *: *")[^"]*"/\1<redacted>"/g' \
-    "$log"
+    "$log" > "$redacted"; then
+    rm -f -- "$log" "$redacted"
+    echo "redaction failed; ${log#"${root}/"} was deleted" >&2
+    exit 1
+fi
+mv -f -- "$redacted" "$log"
 
 echo "evidence=${log#"${root}/"} exit=${status} sha256=$(sha256sum "$log" | cut -d' ' -f1)"
 exit "$status"
