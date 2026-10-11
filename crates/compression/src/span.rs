@@ -7,7 +7,6 @@
 
 use dgxtop_core::tiers::Tier;
 
-use crate::bars::step_of;
 use crate::bucket::Bucket;
 use crate::series::TieredSeries;
 
@@ -23,16 +22,18 @@ pub fn merged_between<B: Bucket>(series: &TieredSeries<B>, (start, end): (i64, i
     while cursor < end {
         let fitting = Tier::ALL.into_iter().rev().find(|tier| {
             tier.align(cursor, shift) == cursor
-                && cursor.saturating_add(step_of(*tier)) <= end
+                && cursor.saturating_add(tier.step_i64()) <= end
                 && series.holds(*tier, cursor)
         });
         let Some(tier) = fitting else {
             let minute = Tier::OneMinute;
-            cursor = minute.align(cursor, shift).saturating_add(step_of(minute));
+            cursor = minute
+                .align(cursor, shift)
+                .saturating_add(minute.step_i64());
             continue;
         };
         take_bucket_at(series, tier, cursor, &mut merged);
-        cursor = cursor.saturating_add(step_of(tier));
+        cursor = cursor.saturating_add(tier.step_i64());
     }
     merged
 }

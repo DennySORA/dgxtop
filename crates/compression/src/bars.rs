@@ -39,7 +39,7 @@ pub fn bars_of<B: Bucket>(
     let window = window_of(series, tier, columns, span);
     Some(Bars {
         bar,
-        step_ns: step_of(tier),
+        step_ns: tier.step_i64(),
         window,
         bars: collect(series, tier, window),
     })
@@ -71,11 +71,7 @@ fn window_of<B: Bucket>(
     columns: i64,
     span: Span,
 ) -> (i64, i64) {
-    let step = step_of(tier);
-    let end = tier
-        .align(span.last, series.shift_ns())
-        .saturating_add(step);
-    (end.saturating_sub(columns.saturating_mul(step)), end)
+    tier.window_ending_at(span.last, series.shift_ns(), columns)
 }
 
 /// The buckets of `tier` that start in the window `[start, end)`, each with
@@ -133,7 +129,7 @@ impl Span {
             // A coarse bucket starts on its boundary, before its samples
             // may: the finest first start not cut off by a trim.
             first = Some(match first {
-                Some(earliest) if start.saturating_add(step_of(tier)) > earliest => earliest,
+                Some(earliest) if start.saturating_add(tier.step_i64()) > earliest => earliest,
                 _ => start,
             });
         }
@@ -142,10 +138,6 @@ impl Span {
             last: last?,
         })
     }
-}
-
-pub(crate) fn step_of(tier: Tier) -> i64 {
-    i64::try_from(tier.step_ns()).unwrap_or(i64::MAX)
 }
 
 #[cfg(test)]

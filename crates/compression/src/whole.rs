@@ -3,7 +3,6 @@
 
 use dgxtop_core::tiers::Tier;
 
-use crate::bars::step_of;
 use crate::bucket::Bucket;
 use crate::series::TieredSeries;
 
@@ -35,7 +34,7 @@ pub fn chart_tier<B: Bucket>(series: &TieredSeries<B>) -> Option<Tier> {
         .find(|(tier, first)| {
             held.iter()
                 .filter(|(coarser, _)| coarser > tier)
-                .all(|(coarser, start)| *first < start.saturating_add(step_of(*coarser)))
+                .all(|(coarser, start)| *first < start.saturating_add(coarser.step_i64()))
         })
         .or_else(|| held.last())
         .map(|(tier, _)| *tier)

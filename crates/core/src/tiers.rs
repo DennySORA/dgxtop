@@ -125,15 +125,29 @@ impl Tier {
         Self::ALL.into_iter().find(|tier| tier.code() == code)
     }
 
+    /// [`Self::step_ns`] as a span of signed UTC time.
+    pub fn step_i64(self) -> i64 {
+        i64::try_from(self.step_ns()).unwrap_or(i64::MAX)
+    }
+
     /// The start of the bucket holding `utc_ns`, its boundaries moved by
     /// `shift_ns` (the local clock's offset, so a day is a local day).
     pub fn align(self, utc_ns: i64, shift_ns: i64) -> i64 {
-        let step = i64::try_from(self.step_ns()).unwrap_or(i64::MAX);
+        let step = self.step_i64();
         utc_ns
             .saturating_add(shift_ns)
             .div_euclid(step)
             .saturating_mul(step)
             .saturating_sub(shift_ns)
+    }
+
+    /// `[start, end)` of `columns` bars of this size ending with the one
+    /// holding `utc_ns`: every chart's window, so the Overview's and the
+    /// Process History's bars share their boundaries (D-79).
+    pub fn window_ending_at(self, utc_ns: i64, shift_ns: i64, columns: i64) -> (i64, i64) {
+        let step = self.step_i64();
+        let end = self.align(utc_ns, shift_ns).saturating_add(step);
+        (end.saturating_sub(columns.saturating_mul(step)), end)
     }
 }
 
@@ -313,6 +327,29 @@ mod tests {
         for bar in BarSize::fixed() {
             assert_eq!(bar.tier().map(Tier::step_ns), bar.step_ns());
         }
+    }
+
+    /// A window ends with the bar holding its time, on the local clock.
+    #[test]
+    fn windows_end_with_the_bar_holding_their_time() {
+        const HOUR: i64 = 3_600 * 1_000_000_000;
+        assert_eq!(Tier::OneHour.step_i64(), HOUR);
+        assert_eq!(
+            Tier::OneHour.window_ending_at(2 * HOUR + 5, 0, 2),
+            (HOUR, 3 * HOUR)
+        );
+        // UTC+8: the day holding 01:00 UTC is 16:00 UTC the day before on.
+        assert_eq!(
+            Tier::OneDay.window_ending_at(HOUR, 8 * HOUR, 1),
+            (-8 * HOUR, 16 * HOUR)
+        );
+        assert_eq!(
+            Tier::OneMinute.window_ending_at(-1, 0, 1),
+            (-60_000_000_000, 0),
+            "before the epoch"
+        );
+        let (start, end) = Tier::OneDay.window_ending_at(0, 0, i64::MAX);
+        assert!(start < 0 && end > 0, "saturates instead of overflowing");
     }
 
     #[test]

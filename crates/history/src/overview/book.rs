@@ -89,7 +89,7 @@ impl TierEntry {
         let waiting = self.pending.back().map_or(i64::MIN, |minute| {
             Tier::OneMinute
                 .align(minute.start_utc_ns, shift_ns)
-                .saturating_add(minute_ns())
+                .saturating_add(Tier::OneMinute.step_i64())
         });
         let held = self.minutes_through_utc_ns().unwrap_or(i64::MIN);
         self.fed_through_utc_ns.max(waiting).max(held)
@@ -97,15 +97,12 @@ impl TierEntry {
 
     /// The end of the latest minute the minutes size holds, if any.
     pub(crate) fn minutes_through_utc_ns(&self) -> Option<i64> {
-        self.tiers
-            .buckets(Tier::OneMinute)
-            .last()
-            .map(|minute| minute.start_utc_ns.saturating_add(minute_ns()))
+        self.tiers.buckets(Tier::OneMinute).last().map(|minute| {
+            minute
+                .start_utc_ns
+                .saturating_add(Tier::OneMinute.step_i64())
+        })
     }
-}
-
-fn minute_ns() -> i64 {
-    i64::try_from(Tier::OneMinute.step_ns()).unwrap_or(i64::MAX)
 }
 
 /// Every Overview series' sizes.
@@ -250,7 +247,7 @@ impl TierBook {
         let start = Tier::OneMinute.align(minute.start_utc_ns, self.shift_ns);
         entry.fed_through_utc_ns = entry
             .fed_through_utc_ns
-            .max(start.saturating_add(minute_ns()));
+            .max(start.saturating_add(Tier::OneMinute.step_i64()));
         self.collect(series, closed);
     }
 

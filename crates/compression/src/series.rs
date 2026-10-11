@@ -98,7 +98,7 @@ impl<B: Bucket> TieredSeries<B> {
                 continue;
             }
             let after = self.kept[level].back().map_or(i64::MIN, |last| {
-                last.start_utc_ns().saturating_add(step(tier))
+                last.start_utc_ns().saturating_add(tier.step_i64())
             });
             let mut groups: Vec<B> = Vec::new();
             for bucket in self.kept[source.level()]
@@ -287,7 +287,7 @@ impl<B: Bucket> TieredSeries<B> {
     fn close_before(&mut self, utc_ns: i64, closed: &mut Vec<(Tier, B)>) {
         for tier in Tier::ALL {
             let over = self.filling[tier.level()].is_some_and(|bucket| {
-                let step = i64::try_from(tier.step_ns()).unwrap_or(i64::MAX);
+                let step = tier.step_i64();
                 utc_ns >= bucket.start_utc_ns().saturating_add(step)
             });
             if over {
@@ -329,10 +329,6 @@ impl<B: Bucket> TieredSeries<B> {
             kept.pop_front();
         }
     }
-}
-
-fn step(tier: Tier) -> i64 {
-    i64::try_from(tier.step_ns()).unwrap_or(i64::MAX)
 }
 
 #[cfg(test)]
