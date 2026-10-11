@@ -7,6 +7,7 @@ mod cpu;
 mod disk;
 mod gpu;
 mod history;
+mod host_status;
 mod memory;
 mod network;
 mod process_memory;

@@ -18,9 +18,10 @@ use super::common::{
     ColumnSpec, ManifestSpec, Output, RowCursor, TableCell, build_manifest, draw_line,
     draw_table_header, draw_table_row, fit_columns, message, no_data, panel, split_columns,
 };
+use super::host_status::{backoff_text, last_success_text};
 use crate::format::{
-    CONFLICT_SYMBOL, NOT_AVAILABLE, clean, fixed, format_age, format_countdown_ms,
-    format_interval_ms, format_scalar, kind_tag, quality_word,
+    CONFLICT_SYMBOL, NOT_AVAILABLE, clean, fixed, format_age, format_interval_ms, format_scalar,
+    kind_tag, quality_word,
 };
 use crate::num::saturate_u16;
 use crate::registry::{
@@ -67,8 +68,6 @@ const HOST_COLUMNS: [ColumnSpec; 10] = [
     ColumnSpec::right("BACKOFF", 7, 35),
     ColumnSpec::left("DETAIL", 10, 30).flexible(),
 ];
-/// Text of a host that is not backing off.
-const NO_BACKOFF: &str = "–";
 const NANOS_PER_MILLI: u64 = 1_000_000;
 
 const INTERVAL_COLUMNS: [ColumnSpec; 5] = [
@@ -582,24 +581,6 @@ fn render_hosts(
     }
 }
 
-/// How long ago the host last read successfully, `never` before its first.
-fn last_success_text(host: &HostStatus, now_boot_ns: u64) -> String {
-    host.last_success_boot_ns.map_or_else(
-        || "never".to_owned(),
-        |success| format_age(now_boot_ns.saturating_sub(success) / NANOS_PER_MILLI),
-    )
-}
-
-/// Time left before a backed-off host is tried again.
-fn backoff_text(host: &HostStatus, now_boot_ns: u64) -> String {
-    host.backoff_until_boot_ns
-        .filter(|until| *until > now_boot_ns)
-        .map_or_else(
-            || NO_BACKOFF.to_owned(),
-            |until| format_countdown_ms((until - now_boot_ns).div_ceil(NANOS_PER_MILLI)),
-        )
-}
-
 fn render_intervals(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -711,42 +692,6 @@ fn render_unclassified(
 mod tests {
     use super::*;
     use crate::test_fixtures;
-
-    fn host(last_success: Option<u64>, backoff_until: Option<u64>) -> HostStatus {
-        HostStatus {
-            last_success_boot_ns: last_success,
-            backoff_until_boot_ns: backoff_until,
-            ..test_fixtures::sources_view().hosts[0].clone()
-        }
-    }
-
-    const SECOND: u64 = 1_000_000_000;
-
-    #[test]
-    fn last_success_is_an_age_or_never() {
-        let now = 100 * SECOND;
-        assert_eq!(last_success_text(&host(None, None), now), "never");
-        assert_eq!(
-            last_success_text(&host(Some(97 * SECOND), None), now),
-            "3s ago"
-        );
-        assert_eq!(last_success_text(&host(Some(now), None), now), "<1s ago");
-        // A success stamped after the frame's clock is not a negative age.
-        assert_eq!(
-            last_success_text(&host(Some(now + SECOND), None), now),
-            "<1s ago"
-        );
-    }
-
-    #[test]
-    fn backoff_counts_down_and_ends() {
-        let now = 100 * SECOND;
-        assert_eq!(backoff_text(&host(None, None), now), NO_BACKOFF);
-        assert_eq!(backoff_text(&host(None, Some(107 * SECOND)), now), "7s");
-        // Part of a second left still shows a second, never 0s.
-        assert_eq!(backoff_text(&host(None, Some(now + 1)), now), "1s");
-        assert_eq!(backoff_text(&host(None, Some(now)), now), NO_BACKOFF);
-    }
 
     /// The host table shows the last success and the backoff, on the
     /// projection's clock moved on by its age; a narrow one gives them up.

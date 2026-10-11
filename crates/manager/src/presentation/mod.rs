@@ -374,9 +374,12 @@ fn build_modules(
     if plan.shows(plan::SETTINGS) {
         modules.settings = Some(Arc::new(settings::build_settings_view(
             &context.settings,
-            context.intervals,
-            context.overload,
-            context.enabled_modules,
+            &settings::SettingsRuntime {
+                intervals: context.intervals,
+                overload: context.overload,
+                enabled_modules: context.enabled_modules,
+                hosts: context.hosts,
+            },
         )));
     }
     if plan.shows(plan::ACTIONS) {

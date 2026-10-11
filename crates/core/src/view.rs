@@ -789,6 +789,9 @@ pub struct SettingsView {
     pub fields: Vec<SettingField>,
     pub modules: Vec<(ModuleId, bool)>,
     pub config_status: PersistenceStatus,
+    /// Each adapter host's health, last success and backoff, for the
+    /// Settings tab's data sources block (D-91).
+    pub hosts: Vec<HostStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -834,34 +834,7 @@ pub(crate) fn sources_view() -> SourcesView {
     SourcesView {
         selected: Some(conflict_metric.key.series_selector()),
         metrics: vec![conflict_metric, selected_metric],
-        hosts: vec![
-            HostStatus {
-                adapter_id: "nvml".into(),
-                state: HostState::Quarantined,
-                generation: 4,
-                pid: None,
-                last_success_boot_ns: None,
-                timeouts_total: 3,
-                consecutive_failures: 3,
-                restarts_total: 2,
-                // 7 s after the projection was generated.
-                backoff_until_boot_ns: Some(12_000_000_000),
-                detail: Some("child not reaped".into()),
-            },
-            HostStatus {
-                adapter_id: "procfs".into(),
-                state: HostState::Healthy,
-                generation: 1,
-                pid: Some(5000),
-                // 3 s before the projection was generated.
-                last_success_boot_ns: Some(2_000_000_000),
-                timeouts_total: 0,
-                consecutive_failures: 0,
-                restarts_total: 0,
-                backoff_until_boot_ns: None,
-                detail: None,
-            },
-        ],
+        hosts: host_statuses(),
         intervals: vec![IntervalView {
             adapter_id: "procfs".into(),
             read_group: "fast".into(),
@@ -878,6 +851,38 @@ pub(crate) fn sources_view() -> SourcesView {
             9,
         )],
     }
+}
+
+/// Two adapter hosts: nvml backing off, procfs healthy.
+pub(crate) fn host_statuses() -> Vec<HostStatus> {
+    vec![
+        HostStatus {
+            adapter_id: "nvml".into(),
+            state: HostState::Quarantined,
+            generation: 4,
+            pid: None,
+            last_success_boot_ns: None,
+            timeouts_total: 3,
+            consecutive_failures: 3,
+            restarts_total: 2,
+            // 7 s after the projection was generated.
+            backoff_until_boot_ns: Some(12_000_000_000),
+            detail: Some("child not reaped".into()),
+        },
+        HostStatus {
+            adapter_id: "procfs".into(),
+            state: HostState::Healthy,
+            generation: 1,
+            pid: Some(5000),
+            // 3 s before the projection was generated.
+            last_success_boot_ns: Some(2_000_000_000),
+            timeouts_total: 0,
+            consecutive_failures: 0,
+            restarts_total: 0,
+            backoff_until_boot_ns: None,
+            detail: None,
+        },
+    ]
 }
 
 pub(crate) fn settings_view() -> SettingsView {
@@ -916,6 +921,7 @@ pub(crate) fn settings_view() -> SettingsView {
             .map(|id| (ModuleId::new(*id).unwrap(), *id != "history"))
             .collect(),
         config_status: PersistenceStatus::healthy(PersistenceKind::Config),
+        hosts: host_statuses(),
     }
 }
 
