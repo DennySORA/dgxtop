@@ -233,11 +233,11 @@ fn a_flush_is_settled_once_its_writes_are_answered() {
     let writes = rig.published.latest().writes;
     assert_eq!((writes.flushes, writes.pending), (1, 2));
     assert!(!writes.settled_after(1));
-    for _ in 0..2 {
-        rig.actor
-            .handle(ProcessHistoryInput::Store(ProcessHistoryCompletion::Saved(
-                Ok(()),
-            )));
+    for answer in [
+        ProcessHistoryCompletion::Appended(Ok(())),
+        ProcessHistoryCompletion::Saved(Ok(())),
+    ] {
+        rig.actor.handle(ProcessHistoryInput::Store(answer));
     }
     assert!(rig.published.latest().writes.settled_after(1));
 }

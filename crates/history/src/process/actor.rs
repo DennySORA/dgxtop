@@ -90,19 +90,19 @@ impl ProcessHistory {
 
     /// Takes one input and publishes what changed.
     pub fn handle(&mut self, input: ProcessHistoryInput) {
-        if !self.started {
-            self.started = true;
-            self.service.start();
-        }
         let now = Now {
             boot_ns: self.clock.now_boot_ns(),
             utc_ns: self.clock.now_utc_ns(),
         };
+        if !self.started {
+            self.started = true;
+            self.service.start(now);
+        }
         // A flush sends everything; nothing is due after it.
         let due = !matches!(input, ProcessHistoryInput::Flush);
         match input {
             ProcessHistoryInput::Table(sample) => self.on_table(&sample, now),
-            ProcessHistoryInput::Tick => self.service.on_sampled_table(),
+            ProcessHistoryInput::Tick => self.service.on_sampled_table(now),
             ProcessHistoryInput::Probe(report) => self.service.on_probe(&report, now),
             ProcessHistoryInput::Store(completion) => self.service.on_completion(completion, now),
             ProcessHistoryInput::Signal { key, signal } => {
