@@ -622,59 +622,6 @@ fn a_restored_run_listed_in_cut_tables_keeps_running() {
     assert!(book.run(&key(1)).unwrap().is_live());
 }
 
-/// Every committed batch hands the book the snapshot's process table; a
-/// table it already sampled adds nothing.
-#[test]
-fn a_table_is_sampled_once() {
-    let mut book = book();
-    let labels = labels();
-    let table = process_table(7, 5 * SECOND, vec![row(1, 10.0, Some(GIB))]);
-    for _ in 0..5 {
-        book.observe(
-            &table,
-            &SampleInputs {
-                now: now(5),
-                clk_tck: Some(100),
-                gpu_labels: &labels,
-                host_network: [None, None],
-            },
-        );
-    }
-    let bucket = book
-        .run(&key(1))
-        .unwrap()
-        .series()
-        .buckets(Tier::Recent)
-        .next()
-        .copied()
-        .unwrap();
-    assert_eq!(bucket.value(RunMetric::Cpu).count, 1);
-}
-
-/// The commits after a cycle's first hand over the same table: the book
-/// says so before anyone builds its inputs, and a new cycle or read time is
-/// a new table.
-#[test]
-fn a_sampled_table_is_known_before_its_inputs_are_built() {
-    let mut book = book();
-    let sampled = process_table(7, 5 * SECOND, vec![row(1, 10.0, Some(GIB))]);
-    assert!(!book.has_sampled(&sampled), "nothing sampled yet");
-    let labels = labels();
-    book.observe(
-        &sampled,
-        &SampleInputs {
-            now: now(5),
-            clk_tck: Some(100),
-            gpu_labels: &labels,
-            host_network: [None, None],
-        },
-    );
-    assert!(book.has_sampled(&sampled));
-    assert!(book.has_sampled(&process_table(7, 5 * SECOND, Vec::new())));
-    assert!(!book.has_sampled(&process_table(8, 5 * SECOND, Vec::new())));
-    assert!(!book.has_sampled(&process_table(7, 6 * SECOND, Vec::new())));
-}
-
 /// On a busy host every table is cut short, so the table never says a run
 /// is gone; the probe, which reads the process itself, does.
 #[test]
@@ -733,7 +680,29 @@ fn the_rows_descendants_become_the_samples() {
     );
 }
 
-const BUCKET_BYTES_FOR_TEST: usize = std::mem::size_of::<dgxtop_core::process_history::RunBucket>();
+/// The ended runs' buckets keep within `bytes`.
+fn with_series_budget(mut book: ProcessHistoryBook, bytes: usize) -> ProcessHistoryBook {
+    book.series_budget_bytes = bytes;
+    book
+}
+
+/// What one of the runs below holds once ended.
+fn ended_run_bytes(pids: &[i64]) -> usize {
+    let mut book = book();
+    for second in 0..130 {
+        observe(
+            &mut book,
+            second,
+            pids.iter().map(|pid| row(*pid, 1.0, Some(GIB))).collect(),
+        );
+    }
+    probe(
+        &mut book,
+        &report(200, None, vec![reading(pids[0], ProbeLiveness::Gone, None)]),
+        now(200),
+    );
+    series_bytes(book.run(&key(pids[0])).unwrap().series())
+}
 
 /// A run's whole-life figures follow every sample as its buckets close,
 /// equal the compression's merge of what it holds, and stay when an ended
@@ -741,8 +710,8 @@ const BUCKET_BYTES_FOR_TEST: usize = std::mem::size_of::<dgxtop_core::process_hi
 #[test]
 fn whole_figures_follow_the_samples_and_outlive_the_buckets() {
     // A budget the 33 runs' buckets overflow: the first ended gives way.
-    let mut book = book().with_series_budget(32 * 40 * BUCKET_BYTES_FOR_TEST);
     let pids: Vec<i64> = (1..=33).collect();
+    let mut book = with_series_budget(book(), 32 * ended_run_bytes(&pids) + 1);
     for second in 0..130 {
         #[allow(clippy::cast_precision_loss)]
         let cpu = (second % 7) as f64 * 10.0;

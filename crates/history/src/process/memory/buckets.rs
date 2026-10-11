@@ -37,14 +37,6 @@ pub(crate) struct Held {
 }
 
 impl Held {
-    /// Time-weighted mean over the time covered.
-    #[cfg(test)]
-    pub(crate) fn mean(&self) -> Option<f64> {
-        #[allow(clippy::cast_precision_loss)]
-        let covered = self.covered_ns as f64;
-        (self.covered_ns > 0).then(|| self.integral / covered)
-    }
-
     fn absorb(&mut self, other: Self) {
         self.integral += other.integral;
         self.covered_ns = self.covered_ns.saturating_add(other.covered_ns);
@@ -233,6 +225,16 @@ impl TimeBuckets {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the tests read of a stretch.
+    impl Held {
+        /// Time-weighted mean over the time covered.
+        pub(crate) fn mean(&self) -> Option<f64> {
+            #[allow(clippy::cast_precision_loss)]
+            let covered = self.covered_ns as f64;
+            (self.covered_ns > 0).then(|| self.integral / covered)
+        }
+    }
 
     const SECOND: u64 = NANOS_PER_SECOND;
     const GIB: u64 = 1 << 30;

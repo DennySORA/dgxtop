@@ -92,12 +92,6 @@ impl Backlog {
         !self.forget.is_empty() || self.keep_runs.is_some()
     }
 
-    /// Bytes its buckets hold.
-    #[cfg(test)]
-    pub(crate) fn bucket_bytes(&self) -> usize {
-        self.bucket_bytes
-    }
-
     fn bound(&mut self) {
         while self.bucket_bytes > self.budget_bytes {
             let Some(oldest) = self.buckets.pop_front() else {
@@ -123,6 +117,13 @@ mod tests {
     use dgxtop_core::testing::test_process_key;
 
     use super::*;
+
+    impl Backlog {
+        /// Bytes its buckets hold.
+        fn bucket_bytes(&self) -> usize {
+            self.bucket_bytes
+        }
+    }
 
     fn run(pid: i64, last_seen_utc_ns: i64) -> RunInfo {
         RunInfo {

@@ -44,15 +44,16 @@ use self::ending::{EndEvidence, end_cause};
 use crate::process::Now;
 
 const NANOS_PER_SECOND: u64 = 1_000_000_000;
-/// What one held bucket costs.
-const BUCKET_BYTES: usize = std::mem::size_of::<dgxtop_core::process_history::RunBucket>();
 /// A live run the table stops listing ends after this long even when no
 /// probe answers.
 const MISSING_GRACE_NS: u64 = 10 * NANOS_PER_SECOND;
 /// Bytes the ended runs' buckets may hold in memory (D-79: a byte budget,
 /// the oldest ended go first); the others keep their figures and read their
 /// buckets from the long-term store when opened. Live runs are always held:
-/// at most 64, each at most one size's TIER_BUCKETS a size.
+/// at most [`MAX_LIVE_RUNS`], each at most [`TIER_BUCKETS`] buckets of
+/// each size.
+///
+/// [`TIER_BUCKETS`]: dgxtop_core::tiers::TIER_BUCKETS
 pub(crate) const ENDED_SERIES_BUDGET_BYTES: usize = 48 * 1024 * 1024;
 
 /// Where the long-term store's read of a run's buckets is.
@@ -161,9 +162,6 @@ pub(crate) struct ProcessHistoryBook {
     runs: BTreeMap<ProcessKey, Run>,
     signals: BTreeMap<ProcessKey, (Signal, u64)>,
     oom_kills: Option<u64>,
-    /// The table sampled last (cycle, read time): every committed batch
-    /// hands over the snapshot's table, sampled once.
-    last_table: Option<(u64, u64)>,
     /// The local clock's offset, nanoseconds east: where buckets begin.
     shift_ns: i64,
     journal: ProcessHistoryJournal,
@@ -184,20 +182,12 @@ impl ProcessHistoryBook {
             runs: BTreeMap::new(),
             signals: BTreeMap::new(),
             oom_kills: None,
-            last_table: None,
             shift_ns: 0,
             journal: ProcessHistoryJournal::default(),
             reading: BTreeMap::new(),
             revision: 0,
             series_budget_bytes: ENDED_SERIES_BUDGET_BYTES,
         }
-    }
-
-    /// The ended runs' buckets keep within `bytes` (tests).
-    #[cfg(test)]
-    pub(crate) fn with_series_budget(mut self, bytes: usize) -> Self {
-        self.series_budget_bytes = bytes;
-        self
     }
 
     /// Moves whenever what a run shows may have changed.
@@ -225,10 +215,6 @@ impl ProcessHistoryBook {
     /// process not yet followed; notes the live runs the table no longer
     /// lists and ends the ones gone for longer than the grace.
     pub(crate) fn observe(&mut self, table: &ProcessTable, inputs: &SampleInputs<'_>) {
-        if self.has_sampled(table) {
-            return;
-        }
-        self.last_table = Some(table_identity(table));
         self.revision += 1;
         let utc_ns = utc_of(inputs.now);
         let mut listed = BTreeSet::new();
@@ -257,12 +243,6 @@ impl ProcessHistoryBook {
             self.note_missing(&listed, inputs.now);
         }
         self.bound();
-    }
-
-    /// Whether `table` is the one sampled last, so observing it would add
-    /// nothing.
-    pub(crate) fn has_sampled(&self, table: &ProcessTable) -> bool {
-        self.last_table == Some(table_identity(table))
     }
 
     /// The live runs to probe this cycle: first the ones the table lost.
@@ -634,7 +614,7 @@ impl ProcessHistoryBook {
     /// Keeps the ended runs' buckets within the byte budget: `keep` (the
     /// run being opened) and then the ones that ended last.
     fn limit_series(&mut self, keep: Option<&ProcessKey>) {
-        let bytes_of = |run: &Run| run.series.len().saturating_mul(BUCKET_BYTES);
+        let bytes_of = |run: &Run| series_bytes(&run.series);
         let mut used = keep.and_then(|key| self.runs.get(key)).map_or(0, &bytes_of);
         let mut ended: Vec<(i64, ProcessKey, usize)> = self
             .runs
@@ -656,13 +636,16 @@ impl ProcessHistoryBook {
     }
 }
 
-fn utc_of(now: Now) -> i64 {
-    i64::try_from(now.utc_ns).unwrap_or(i64::MAX)
+/// What a series' buckets cost in memory, the room its sizes hold
+/// included.
+fn series_bytes(series: &RunSeries) -> usize {
+    series
+        .allocated_buckets()
+        .saturating_mul(std::mem::size_of::<RunBucket>())
 }
 
-/// What tells one sampled table from the next: its cycle and read time.
-fn table_identity(table: &ProcessTable) -> (u64, u64) {
-    (table.cycle_id, table.read_finished_boot_ns)
+fn utc_of(now: Now) -> i64 {
+    i64::try_from(now.utc_ns).unwrap_or(i64::MAX)
 }
 
 fn new_run(row: &ProcessRow, inputs: &SampleInputs<'_>, (utc_ns, shift_ns): (i64, i64)) -> Run {

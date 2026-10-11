@@ -2,8 +2,51 @@ use dgxtop_core::canonical::{ProcessRow, ProcessTable};
 use dgxtop_core::identity::{EntityId, ProcessKey};
 use dgxtop_core::testing::{gpu_process, process_table, test_process_key};
 
+use super::buckets::Held;
 use super::tracking::preferred_color;
 use super::*;
+
+/// What the tests read of a tracked process.
+impl TrackedProcess<'_> {
+    /// Bytes it holds now on the GPUs `include` accepts.
+    pub(crate) fn bytes_on(&self, include: impl Fn(&EntityId) -> bool) -> u64 {
+        self.current
+            .iter()
+            .filter(|(gpu, _)| include(gpu))
+            .fold(0, |sum, (_, bytes)| sum.saturating_add(*bytes))
+    }
+}
+
+/// What the tests read of the record.
+impl ProcessMemoryBook {
+    /// The color of `key` while it is tracked.
+    pub(crate) fn slot_of(&self, key: &ProcessKey) -> Option<u8> {
+        self.tracking.color_of(key)
+    }
+
+    /// The GPUs `key` held memory on in its record.
+    pub(crate) fn gpus_of(&self, key: &ProcessKey) -> Vec<&EntityId> {
+        self.processes
+            .get(key)
+            .map(|record| record.gpus.keys().collect())
+            .unwrap_or_default()
+    }
+
+    /// What `key` held on `gpu` over `[start, end)` (boot clock): its mean
+    /// over the time it was listed, that time and its peak.
+    pub(crate) fn held_on(
+        &self,
+        key: &ProcessKey,
+        gpu: &EntityId,
+        (start, end): (u64, u64),
+    ) -> Held {
+        self.processes
+            .get(key)
+            .and_then(|record| record.gpus.get(gpu))
+            .map(|series| series.held(start, end))
+            .unwrap_or_default()
+    }
+}
 
 const SECOND: u64 = NANOS_PER_SECOND;
 const GIB: u64 = 1 << 30;
@@ -63,12 +106,6 @@ fn a_value_holds_until_the_next_table_and_at_most_three_periods() {
     assert_eq!(held.covered_ns, 4 * SECOND, "1 s, then 3 s of the 8 s gap");
     assert!(close(held.mean(), gib(4.0)));
     assert_eq!(held.peak, Some(4 * GIB));
-    // The same table handed again by another domain's commit adds nothing.
-    book.record(&table(
-        3,
-        10,
-        vec![row(9, "python", &[(GPU_A, Some(4 * GIB))])],
-    ));
     book.record(&table(
         4,
         11,

@@ -28,8 +28,6 @@ use dgxtop_core::clock::{NANOS_PER_SECOND, ms_to_ns};
 use dgxtop_core::identity::{EntityId, ProcessKey};
 use dgxtop_core::process_model::MemoryPart;
 
-#[cfg(test)]
-use self::buckets::Held;
 use self::buckets::TimeBuckets;
 use self::tracking::{Listed as TrackedListed, Tracking};
 
@@ -53,15 +51,6 @@ pub(crate) struct TrackedProcess<'a> {
 }
 
 impl TrackedProcess<'_> {
-    /// Bytes it holds now on the GPUs `include` accepts.
-    #[cfg(test)]
-    pub(crate) fn bytes_on(&self, include: impl Fn(&EntityId) -> bool) -> u64 {
-        self.current
-            .iter()
-            .filter(|(gpu, _)| include(gpu))
-            .fold(0, |sum, (_, bytes)| sum.saturating_add(*bytes))
-    }
-
     pub(crate) fn is_listed(&self) -> bool {
         !self.current.is_empty()
     }
@@ -91,8 +80,6 @@ pub(crate) struct ProcessMemoryBook {
     /// When process lists were recorded.
     listing: TimeBuckets,
     pending: Option<Pending>,
-    /// Cycle and read time of the newest table recorded.
-    last_table: Option<(u64, u64)>,
     hold_ns: u64,
     /// Moves with every table recorded.
     revision: u64,
@@ -106,7 +93,6 @@ impl ProcessMemoryBook {
             processes: BTreeMap::new(),
             listing: TimeBuckets::default(),
             pending: None,
-            last_table: None,
             hold_ns: hold_ns(interval_ms),
             revision: 0,
         }
@@ -122,15 +108,13 @@ impl ProcessMemoryBook {
         self.revision
     }
 
-    /// Records a committed process table once (a commit of another domain
-    /// hands the same table again).
+    /// Records a committed process table (the actor hands each one once);
+    /// one without a read time is none.
     pub(crate) fn record(&mut self, table: &ProcessTable) {
         let now = table.read_finished_boot_ns;
-        let stamp = (table.cycle_id, now);
-        if now == 0 || self.last_table == Some(stamp) {
+        if now == 0 {
             return;
         }
-        self.last_table = Some(stamp);
         self.revision += 1;
         self.close_pending(now);
         let listed: Vec<Listed<'_>> = table.rows.iter().filter_map(Listed::of).collect();
@@ -201,12 +185,6 @@ impl ProcessMemoryBook {
         self.pending = Some(Pending { at_ns, held });
     }
 
-    /// The color of `key` while it is tracked.
-    #[cfg(test)]
-    pub(crate) fn slot_of(&self, key: &ProcessKey) -> Option<u8> {
-        self.tracking.color_of(key)
-    }
-
     /// Every tracked process, in color order.
     pub(crate) fn tracked(&self) -> Vec<TrackedProcess<'_>> {
         let mut tracked: Vec<TrackedProcess<'_>> = self
@@ -230,31 +208,6 @@ impl ProcessMemoryBook {
                 .then_with(|| left.key.cmp(right.key))
         });
         tracked
-    }
-
-    /// The GPUs `key` held memory on in its record.
-    #[cfg(test)]
-    pub(crate) fn gpus_of(&self, key: &ProcessKey) -> Vec<&EntityId> {
-        self.processes
-            .get(key)
-            .map(|record| record.gpus.keys().collect())
-            .unwrap_or_default()
-    }
-
-    /// What `key` held on `gpu` over `[start, end)` (boot clock): its mean
-    /// over the time it was listed, that time and its peak.
-    #[cfg(test)]
-    pub(crate) fn held_on(
-        &self,
-        key: &ProcessKey,
-        gpu: &EntityId,
-        (start, end): (u64, u64),
-    ) -> Held {
-        self.processes
-            .get(key)
-            .and_then(|record| record.gpus.get(gpu))
-            .map(|series| series.held(start, end))
-            .unwrap_or_default()
     }
 
     /// `key`'s part of a chart of the GPUs `include` accepts, in each of

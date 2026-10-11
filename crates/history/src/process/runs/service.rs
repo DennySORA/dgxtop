@@ -42,7 +42,8 @@ const WRITE_DEADLINE_NS: u64 = 60 * NANOS_PER_SECOND;
 const LOG_TARGET: &str = "history.process";
 
 /// The ports of the process history; the probe and the stores may be
-/// absent (no probe in a replay, no stores with the archive off).
+/// absent (no probe in a replay, no stores with the process history off
+/// disk, D-80).
 pub(crate) struct ServicePorts {
     pub(crate) probe: Option<Box<dyn Dispatch<ProcessProbeJob>>>,
     /// Makes the values of the probe's readings (D-79).
@@ -171,14 +172,6 @@ impl ProcessHistoryService {
     pub(crate) fn on_table(&mut self, table: &ProcessTable, inputs: &SampleInputs<'_>) {
         self.book.observe(table, inputs);
         self.dispatch_probe(inputs.now);
-    }
-
-    /// Whether `table` was sampled already: every committed batch hands
-    /// over the snapshot's table, so only the first commit of a cycle
-    /// brings a new one and the caller can skip building its inputs.
-    #[cfg(test)]
-    pub(crate) fn has_sampled(&self, table: &ProcessTable) -> bool {
-        self.book.has_sampled(table)
     }
 
     /// A commit without a new table still lets a finished probe be followed
@@ -594,24 +587,18 @@ mod tests {
         assert_eq!(rig.probe.take().len(), 1);
     }
 
-    /// A commit that brings the table already sampled skips the sample but
-    /// still follows a finished probe with the next, as a new table would.
+    /// A commit without a new table still follows a finished probe with
+    /// the next, as a new table would.
     #[test]
-    fn a_sampled_table_still_lets_the_next_probe_leave() {
+    fn a_commit_without_a_table_still_lets_the_next_probe_leave() {
         let mut rig = rig();
         observe(&mut rig, 1);
         assert_eq!(rig.probe.take().len(), 1);
-        let same = process_table(1, SECOND, Vec::new());
-        assert!(rig.service.has_sampled(&same));
         rig.service.on_sampled_table(now(1));
         assert!(rig.probe.take().is_empty(), "the first probe is in flight");
         rig.service.on_probe(&ProbeReport::default(), now(1));
         rig.service.on_sampled_table(now(1));
         assert_eq!(rig.probe.take().len(), 1);
-        assert!(
-            !rig.service
-                .has_sampled(&process_table(2, 2 * SECOND, Vec::new()))
-        );
     }
 
     /// A full store queue keeps the journal for the next turn.

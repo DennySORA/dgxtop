@@ -275,6 +275,12 @@ impl<B: Bucket> TieredSeries<B> {
                 .count()
     }
 
+    /// Buckets the kept sizes have room for: what they cost in memory,
+    /// spare capacity included, beside the series itself.
+    pub fn allocated_buckets(&self) -> usize {
+        self.kept.iter().map(VecDeque::capacity).sum()
+    }
+
     /// Drops every bucket (a series listed with its figures only).
     pub fn clear(&mut self) {
         *self = Self::new(self.shift_ns);
@@ -631,6 +637,12 @@ mod tests {
         let kept = tallies(&series, Tier::Recent);
         assert_eq!(kept.len(), Tier::Recent.capacity());
         assert_eq!(kept[0].0, 5, "the first one gave way");
+        assert!(
+            series.allocated_buckets() >= Tier::Recent.capacity(),
+            "the room held counts, spare capacity included"
+        );
+        series.clear();
+        assert_eq!(series.allocated_buckets(), 0, "cleared, the room goes too");
     }
 
     fn minute_tally(minute: i64, samples: u32) -> Tally {

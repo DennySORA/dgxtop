@@ -114,6 +114,33 @@ fn tables_become_runs_and_colors_in_the_published_model() {
     assert_eq!(model.tracked[0].current.len(), 1);
 }
 
+/// The same table handed again (a cycle's later commits carry the
+/// snapshot's table) is taken once by the runs and the memory record: it
+/// counts as a commit without a table, so a finished probe is still
+/// followed by the next.
+#[test]
+fn a_table_handed_again_is_taken_once() {
+    let mut rig = rig();
+    table(&mut rig, 1, vec![row(9, 4 * GIB)]);
+    assert_eq!(rig.probe.take().len(), 1);
+    let revision = rig.published.latest().revision;
+    rig.actor
+        .handle(ProcessHistoryInput::Probe(ProbeReport::default()));
+    let after_probe = rig.published.latest().revision;
+    assert!(after_probe > revision);
+    for _ in 0..3 {
+        table(&mut rig, 1, vec![row(9, 4 * GIB)]);
+    }
+    let model = rig.published.latest();
+    assert_eq!(model.revision, after_probe, "nothing new to show");
+    assert_eq!(model.runs[0].whole.value(RunMetric::Cpu).count, 1);
+    assert_eq!(rig.probe.take().len(), 1, "the next probe left");
+    table(&mut rig, 2, vec![row(9, 4 * GIB)]);
+    let model = rig.published.latest();
+    assert_eq!(model.runs[0].whole.value(RunMetric::Cpu).count, 2);
+    assert!(model.revision > after_probe);
+}
+
 /// A tick changes nothing shown, so nothing is published again.
 #[test]
 fn an_input_that_changes_nothing_publishes_nothing() {
