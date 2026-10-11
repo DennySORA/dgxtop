@@ -560,11 +560,11 @@ pub(crate) mod test_adapter {
     use std::time::Duration;
 
     use dgxtop_core::observation::{
-        AdapterHealth, AdapterManifest, AdapterOperation, CatalogDelta, DiscoverRequest, Isolation,
+        AdapterManifest, AdapterOperation, CatalogDelta, DiscoverRequest, Isolation,
         ObservationBatch, ReadPlan,
     };
     use dgxtop_core::ports::TelemetryPort;
-    use dgxtop_core::quality::{Availability, Namespace};
+    use dgxtop_core::quality::Namespace;
     use dgxtop_core::testing::{ObservationBuilder, adapter_id, metric_key};
 
     use super::{BatchStatus, IPC_PROTOCOL_VERSION};
@@ -711,13 +711,6 @@ pub(crate) mod test_adapter {
                 ReadBehavior::Panic => panic!("fake adapter read panic"),
             }
             batch_for(plan, f64::from(count))
-        }
-
-        fn health(&self) -> AdapterHealth {
-            AdapterHealth {
-                availability: Availability::Available,
-                detail: None,
-            }
         }
 
         fn shutdown(&mut self) {

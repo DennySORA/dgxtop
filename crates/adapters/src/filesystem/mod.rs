@@ -18,8 +18,8 @@ use dgxtop_core::identity::{EntityId, HostId, ProfileId, Scope};
 use dgxtop_core::metric::{ids, native};
 use dgxtop_core::naming::{adapters, attributes, entity, groups};
 use dgxtop_core::observation::{
-    AdapterHealth, AdapterManifest, Attribute, Capability, CatalogDelta, DiscoverRequest,
-    EntityKind, Observation, ObservationBatch, ReadPlan, SourceDescriptor,
+    AdapterManifest, Attribute, Capability, CatalogDelta, DiscoverRequest, EntityKind, Observation,
+    ObservationBatch, ReadPlan, SourceDescriptor,
 };
 use dgxtop_core::ports::TelemetryPort;
 use dgxtop_core::quality::{Availability, RawKind, ReadStatus, Support};
@@ -134,7 +134,6 @@ pub struct FilesystemAdapter {
     mount_namespace: Option<String>,
     read_gate: ReprobeGate,
     pagers: GroupPagers,
-    health: AdapterHealth,
     shut_down: bool,
 }
 
@@ -180,10 +179,6 @@ impl FilesystemAdapter {
             mount_namespace: None,
             read_gate: ReprobeGate::new(options.unsupported_probe_ms),
             pagers: GroupPagers::default(),
-            health: AdapterHealth {
-                availability: Availability::Unavailable,
-                detail: Some("NOT_DISCOVERED".to_owned()),
-            },
             shut_down: false,
             options,
         }
@@ -217,12 +212,7 @@ impl FilesystemAdapter {
                 Availability::Unavailable
             }
         };
-        let delta = builder.finish(request, availability);
-        self.health = AdapterHealth {
-            availability,
-            detail: delta.error_code.clone(),
-        };
-        delta
+        builder.finish(request, availability)
     }
 
     fn read_capacity(
@@ -629,18 +619,10 @@ impl TelemetryPort for FilesystemAdapter {
         self.read_capacity(plan, &target, now_boot_ns)
     }
 
-    fn health(&self) -> AdapterHealth {
-        self.health.clone()
-    }
-
     fn shutdown(&mut self) {
         self.shut_down = true;
         self.pagers.clear();
         self.book.clear_pending();
-        self.health = AdapterHealth {
-            availability: Availability::Unavailable,
-            detail: Some("SHUT_DOWN".to_owned()),
-        };
     }
 }
 

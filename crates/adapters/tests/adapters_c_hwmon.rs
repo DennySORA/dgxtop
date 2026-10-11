@@ -766,7 +766,6 @@ fn missing_hwmon_class_is_unavailable_and_empty() {
     let sysfs = FakeSysfs::new("hwmon-missing");
     let clock = clock();
     let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
-    assert_eq!(hwmon.health().availability, Availability::Unavailable);
     let (_, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     assert!(sources(&pages).is_empty());
     assert_eq!(pages[0].availability, Some(Availability::Unavailable));
@@ -992,7 +991,6 @@ fn invalid_requests_fail_without_records() {
         Vec::new(),
     ));
     assert_eq!(after.error_code.as_deref(), Some("ADAPTER_SHUT_DOWN"));
-    assert_eq!(hwmon.health().availability, Availability::Unavailable);
 }
 
 #[test]

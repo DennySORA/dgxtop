@@ -610,20 +610,6 @@ impl SourceTable {
         }
     }
 
-    /// Human-readable health summary (bounded, no paths).
-    pub(crate) fn summary(&self) -> String {
-        let unsupported = self
-            .sources
-            .values()
-            .filter(|entry| matches!(entry.support, SourceSupport::Unsupported { .. }))
-            .count();
-        let devices = self.devices.values().filter(|state| state.present).count();
-        format!(
-            "{devices} devices, {} sources, {unsupported} unsupported",
-            self.sources.len()
-        )
-    }
-
     /// Current catalog for publication.
     pub(crate) fn content(&self, error_code: Option<String>) -> CatalogContent {
         CatalogContent {

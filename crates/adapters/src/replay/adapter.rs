@@ -31,7 +31,7 @@ use dgxtop_core::identity::{AdapterId, EntityId, HostId, MetricKey, ReadGroup, S
 use dgxtop_core::metric::{self, Domain, Scalar};
 use dgxtop_core::naming;
 use dgxtop_core::observation::{
-    AdapterHealth, AdapterManifest, Capability, CatalogDelta, DiscoverRequest, EntityRecord,
+    AdapterManifest, Capability, CatalogDelta, DiscoverRequest, EntityRecord,
     MAX_RECORDS_PER_BATCH, Observation, ObservationBatch, ReadPlan, SourceDescriptor, split_page,
 };
 use dgxtop_core::ports::TelemetryPort;
@@ -124,7 +124,6 @@ struct FaultEffects {
 pub struct ReplayAdapter {
     manifest: AdapterManifest,
     clock: Arc<dyn TimeProvider>,
-    namespace_label: String,
     seed: u64,
     sampling_ms: u32,
     latency: Duration,
@@ -187,7 +186,6 @@ impl ReplayAdapter {
             manifest: manifest(&adapter_id, false),
             publisher: CatalogPublisher::new(adapter_id, MAX_RECORDS_PER_BATCH),
             clock,
-            namespace_label: fixture.namespace_label.clone(),
             seed: fixture.seed,
             sampling_ms: fixture.sampling_ms,
             latency: Duration::from_micros(u64::from(fixture.simulated_latency_us)),
@@ -552,24 +550,6 @@ impl TelemetryPort for ReplayAdapter {
         self.pager
             .store(plan.cycle_id, group, records, started, finished);
         self.serve_page(plan, group, 0)
-    }
-
-    fn health(&self) -> AdapterHealth {
-        if self.shut_down {
-            return AdapterHealth {
-                availability: Availability::Unavailable,
-                detail: Some("shut down".to_owned()),
-            };
-        }
-        AdapterHealth {
-            availability: Availability::Available,
-            detail: Some(format!(
-                "replay {}: {} sources, {} cycles",
-                self.namespace_label,
-                self.source_count(),
-                self.cycles.len()
-            )),
-        }
     }
 
     fn shutdown(&mut self) {

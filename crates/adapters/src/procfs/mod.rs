@@ -28,8 +28,7 @@ use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::identity::{HostId, PidNamespace, ProfileId};
 use dgxtop_core::naming::{adapters, groups};
 use dgxtop_core::observation::{
-    AdapterHealth, AdapterManifest, Capability, CatalogDelta, DiscoverRequest, ObservationBatch,
-    ReadPlan,
+    AdapterManifest, Capability, CatalogDelta, DiscoverRequest, ObservationBatch, ReadPlan,
 };
 use dgxtop_core::ports::TelemetryPort;
 use dgxtop_core::quality::{Availability, Support};
@@ -83,7 +82,6 @@ pub struct ProcfsAdapter {
     read_gate: ReprobeGate,
     pagers: GroupPagers,
     process_memo: ProcessMemo,
-    health: AdapterHealth,
     shut_down: bool,
 }
 
@@ -133,7 +131,6 @@ impl ProcfsAdapter {
             read_gate: ReprobeGate::new(options.unsupported_probe_ms),
             pagers: GroupPagers::default(),
             process_memo: ProcessMemo::default(),
-            health: not_discovered_health(),
             shut_down: false,
             options,
         }
@@ -183,12 +180,7 @@ impl ProcfsAdapter {
         disk::discover(&mut builder, &keys, &**files, disk_scopes);
         builder.capability(process_capability(namespace_known));
         let availability = availability_of(cpu_result.as_ref().err());
-        let delta = builder.finish(request, availability);
-        self.health = AdapterHealth {
-            availability,
-            detail: delta.error_code.clone(),
-        };
-        delta
+        builder.finish(request, availability)
     }
 
     fn read_catalogued(
@@ -274,13 +266,6 @@ impl ProcfsAdapter {
     }
 }
 
-fn not_discovered_health() -> AdapterHealth {
-    AdapterHealth {
-        availability: Availability::Unavailable,
-        detail: Some("NOT_DISCOVERED".to_owned()),
-    }
-}
-
 /// Availability from the essential enumeration file's read outcome.
 pub(crate) fn availability_of(error: Option<&io::Error>) -> Availability {
     match error.map(read_status_of) {
@@ -342,17 +327,9 @@ impl TelemetryPort for ProcfsAdapter {
         }
     }
 
-    fn health(&self) -> AdapterHealth {
-        self.health.clone()
-    }
-
     fn shutdown(&mut self) {
         self.shut_down = true;
         self.pagers.clear();
         self.book.clear_pending();
-        self.health = AdapterHealth {
-            availability: Availability::Unavailable,
-            detail: Some("SHUT_DOWN".to_owned()),
-        };
     }
 }

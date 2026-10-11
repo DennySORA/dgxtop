@@ -13,7 +13,6 @@ use dgxtop_adapters::registry::AdapterOptions;
 use dgxtop_core::identity::OriginRelation;
 use dgxtop_core::metric::ids;
 use dgxtop_core::observation::EntityKind;
-use dgxtop_core::ports::TelemetryPort;
 use dgxtop_core::quality::{Availability, Namespace, Quality, RawKind, ReadStatus, Support};
 use support::*;
 
@@ -200,10 +199,6 @@ fn permission_denied_energy_is_reported_never_zero() {
         assert!(reading.value.is_none(), "permission denied never becomes 0");
         assert_eq!(reading.reason_codes, vec!["PERMISSION_DENIED".to_owned()]);
     }
-    assert_eq!(
-        adapter.health().availability,
-        Availability::PermissionDenied
-    );
 }
 
 #[test]

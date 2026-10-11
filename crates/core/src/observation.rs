@@ -616,13 +616,6 @@ pub enum ShutdownTag {
     ShutdownAck,
 }
 
-/// Health reported by an adapter implementation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AdapterHealth {
-    pub availability: Availability,
-    pub detail: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

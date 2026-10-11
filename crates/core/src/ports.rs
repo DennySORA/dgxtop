@@ -48,7 +48,7 @@ use crate::identity::{
     AdapterId, CollectorId, EntityId, MetricKey, ProcessKey, SessionId, SourceId,
 };
 use crate::observation::{
-    AdapterHealth, AdapterManifest, CatalogDelta, DiscoverRequest, ObservationBatch, ReadPlan,
+    AdapterManifest, CatalogDelta, DiscoverRequest, ObservationBatch, ReadPlan,
 };
 use crate::overview_history::{
     ArchivePrune, ArchivedMinutes, ArchivedMinutesRead, ArchivedSeriesList, OverviewAnswer,
@@ -67,7 +67,6 @@ pub trait TelemetryPort: Send {
     fn manifest(&self) -> &AdapterManifest;
     fn discover(&mut self, request: &DiscoverRequest) -> CatalogDelta;
     fn read(&mut self, plan: &ReadPlan) -> ObservationBatch;
-    fn health(&self) -> AdapterHealth;
     fn shutdown(&mut self);
 }
 

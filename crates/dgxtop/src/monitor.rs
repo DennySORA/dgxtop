@@ -1168,9 +1168,8 @@ fn replay_host(
             None,
         ) {
             Ok(adapter) => Box::new(adapter.with_in_process(true)),
-            Err(error) => Box::new(crate::replay_unavailable::UnavailableReplay::new(
+            Err(_) => Box::new(crate::replay_unavailable::UnavailableReplay::new(
                 factory_adapter.clone(),
-                error.to_string(),
             )),
         }
     });

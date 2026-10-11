@@ -31,14 +31,14 @@ use dgxtop_core::budget::{ByteLedger, MIB, Partition, QueueGate};
 use dgxtop_core::clock::{TimeProvider, ms_to_ns};
 use dgxtop_core::errors::InfraError;
 use dgxtop_core::observation::{
-    AdapterHealth, AdapterManifest, AdapterOperation, BatchStatus, CatalogDelta, DiscoverRequest,
-    HelloTag, HostHello, IPC_PROTOCOL_VERSION, Isolation, ObservationBatch, ReadPlan,
+    AdapterManifest, AdapterOperation, BatchStatus, CatalogDelta, DiscoverRequest, HelloTag,
+    HostHello, IPC_PROTOCOL_VERSION, Isolation, ObservationBatch, ReadPlan,
 };
 use dgxtop_core::ports::{
     AdapterFailure, AdapterFailureKind, AdapterJob, Dispatch, DispatchError, IngestionCompletion,
     IngressBatch, TelemetryPort,
 };
-use dgxtop_core::quality::{Availability, Namespace};
+use dgxtop_core::quality::Namespace;
 use dgxtop_core::testing::{MemoryLogger, ObservationBuilder, adapter_id, metric_key, read_group};
 use dgxtop_core::view::{HostState, HostStatus};
 use dgxtop_runtime::clock::BootClock;
@@ -253,13 +253,6 @@ impl TelemetryPort for ChildAdapter {
             }
         }
         child_batch(plan, f64::from(count))
-    }
-
-    fn health(&self) -> AdapterHealth {
-        AdapterHealth {
-            availability: Availability::Available,
-            detail: None,
-        }
     }
 
     fn shutdown(&mut self) {}

@@ -264,7 +264,6 @@ fn missing_namespace_or_class_directory_is_unavailable() {
             .unwrap()
             .starts_with("SYSFS_NET_UNREADABLE")
     );
-    assert_eq!(adapter.health().availability, Availability::Unavailable);
 }
 
 #[test]
@@ -282,7 +281,6 @@ fn manifest_and_guards() {
     let wrong = adapter.read(&read_plan(ADAPTER, "capacity", 1, 0, Vec::new()));
     assert_eq!(wrong.error_code.as_deref(), Some("UNKNOWN_READ_GROUP"));
     adapter.shutdown();
-    assert_eq!(adapter.health().availability, Availability::Unavailable);
     let after = adapter.read(&read_plan(ADAPTER, "fast", 2, 0, Vec::new()));
     assert_eq!(after.status, BatchStatus::Failed);
 }

@@ -46,8 +46,8 @@ use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::identity::{EntityId, HostId, IdentityError, ProfileId, SourceId};
 use dgxtop_core::naming;
 use dgxtop_core::observation::{
-    AdapterHealth, AdapterManifest, CatalogDelta, DiscoverRequest, MAX_RECORDS_PER_BATCH,
-    Observation, ObservationBatch, ReadPlan, split_page,
+    AdapterManifest, CatalogDelta, DiscoverRequest, MAX_RECORDS_PER_BATCH, Observation,
+    ObservationBatch, ReadPlan, split_page,
 };
 use dgxtop_core::ports::TelemetryPort;
 use dgxtop_core::quality::Availability;
@@ -500,20 +500,6 @@ impl TelemetryPort for NvmlAdapter {
         self.page_batch(plan, group, page, None)
     }
 
-    fn health(&self) -> AdapterHealth {
-        if self.backend.is_some() && !self.inventory.is_empty() {
-            return AdapterHealth {
-                availability: Availability::Available,
-                detail: None,
-            };
-        }
-        let (availability, reason) = self.unavailable_reason();
-        AdapterHealth {
-            availability,
-            detail: Some(reason),
-        }
-    }
-
     fn shutdown(&mut self) {
         self.backend = None;
         self.connection = Connection::ShutDown;
@@ -587,10 +573,9 @@ mod tests {
                 reinit_interval_ms: 1,
             },
         );
-        assert_eq!(adapter.health().availability, Availability::Unavailable);
         assert_eq!(
-            adapter.health().detail.as_deref(),
-            Some("NVML_NOT_INITIALIZED")
+            adapter.unavailable_reason(),
+            (Availability::Unavailable, "NVML_NOT_INITIALIZED".to_owned())
         );
     }
 }

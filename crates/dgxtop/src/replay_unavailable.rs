@@ -4,7 +4,7 @@
 use dgxtop_adapters::common::RecordFactory;
 use dgxtop_core::identity::AdapterId;
 use dgxtop_core::observation::{
-    AdapterHealth, AdapterManifest, CatalogDelta, DiscoverRequest, ObservationBatch, ReadPlan,
+    AdapterManifest, CatalogDelta, DiscoverRequest, ObservationBatch, ReadPlan,
 };
 use dgxtop_core::ports::TelemetryPort;
 use dgxtop_core::quality::Availability;
@@ -13,14 +13,12 @@ use dgxtop_core::quality::Availability;
 #[derive(Debug, Clone)]
 pub struct UnavailableReplay {
     manifest: AdapterManifest,
-    reason: String,
 }
 
 impl UnavailableReplay {
-    pub fn new(adapter_id: AdapterId, reason: String) -> Self {
+    pub fn new(adapter_id: AdapterId) -> Self {
         Self {
             manifest: dgxtop_adapters::replay::manifest(&adapter_id, true),
-            reason: dgxtop_core::text::sanitize_message(&reason),
         }
     }
 }
@@ -48,13 +46,6 @@ impl TelemetryPort for UnavailableReplay {
             plan.deadline_boot_ns.saturating_sub(1),
             "REPLAY_FIXTURE_UNAVAILABLE",
         )
-    }
-
-    fn health(&self) -> AdapterHealth {
-        AdapterHealth {
-            availability: Availability::Unavailable,
-            detail: Some(self.reason.clone()),
-        }
     }
 
     fn shutdown(&mut self) {}

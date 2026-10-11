@@ -15,8 +15,8 @@ use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::identity::{HostId, ProfileId};
 use dgxtop_core::naming::{adapters, groups};
 use dgxtop_core::observation::{
-    AdapterHealth, AdapterManifest, Capability, CatalogDelta, DiscoverRequest, Observation,
-    ObservationBatch, ReadPlan, SourceDescriptor,
+    AdapterManifest, Capability, CatalogDelta, DiscoverRequest, Observation, ObservationBatch,
+    ReadPlan, SourceDescriptor,
 };
 use dgxtop_core::ports::TelemetryPort;
 use dgxtop_core::quality::{Availability, Support};
@@ -72,7 +72,6 @@ pub struct NetworkAdapter {
     net_namespace: Option<String>,
     read_gate: ReprobeGate,
     pagers: GroupPagers,
-    health: AdapterHealth,
     shut_down: bool,
 }
 
@@ -99,10 +98,6 @@ impl NetworkAdapter {
             net_namespace: None,
             read_gate: ReprobeGate::new(options.unsupported_probe_ms),
             pagers: GroupPagers::default(),
-            health: AdapterHealth {
-                availability: Availability::Unavailable,
-                detail: Some("NOT_DISCOVERED".to_owned()),
-            },
             shut_down: false,
             options,
         }
@@ -144,12 +139,7 @@ impl NetworkAdapter {
             }
         };
         builder.capability(statistics_capability(availability));
-        let delta = builder.finish(request, availability);
-        self.health = AdapterHealth {
-            availability,
-            detail: delta.error_code.clone(),
-        };
-        delta
+        builder.finish(request, availability)
     }
 
     fn read_fast(
@@ -308,17 +298,9 @@ impl TelemetryPort for NetworkAdapter {
         self.read_fast(plan, &target, now_boot_ns)
     }
 
-    fn health(&self) -> AdapterHealth {
-        self.health.clone()
-    }
-
     fn shutdown(&mut self) {
         self.shut_down = true;
         self.pagers.clear();
         self.book.clear_pending();
-        self.health = AdapterHealth {
-            availability: Availability::Unavailable,
-            detail: Some("SHUT_DOWN".to_owned()),
-        };
     }
 }
