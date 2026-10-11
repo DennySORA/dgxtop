@@ -396,8 +396,11 @@ fn small_budget_is_respected_and_announced() {
     assert!(model.modules.cpu.as_ref().unwrap().cores.len() < 256);
 }
 
+/// The HistoryService asks one bar per plot column (D-50), so the
+/// projection shares its view as it is, however many bars it holds; only
+/// the byte budget may shrink it.
 #[test]
-fn history_is_shared_when_small_and_downsampled_to_the_chart_width() {
+fn history_is_shared_as_the_service_built_it() {
     let mut fixture = Fixture::new();
     fixture.session.view = ViewKind::History;
     fixture.viewport = (100, 30);
@@ -421,10 +424,7 @@ fn history_is_shared_when_small_and_downsampled_to_the_chart_width() {
     });
     let large = build_view_model_measured(&fixture.context()).0;
     let history = large.modules.history.as_ref().unwrap();
-    // Each chart is downsampled to the columns it is drawn in: the width
-    // without the panel border (D-46).
-    assert!(history.charts[0].display_downsampled);
-    assert!(history.charts[0].points.len() <= 98);
-    assert!(!history.charts[1].display_downsampled);
-    assert_eq!(fixture.history.charts[0].points.len(), 2000);
+    assert!(Arc::ptr_eq(history, &fixture.history));
+    assert!(!history.charts[0].display_downsampled);
+    assert_eq!(history.charts[0].points.len(), 2000);
 }

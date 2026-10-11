@@ -326,9 +326,8 @@ fn build_modules(
         )));
     }
     if plan.shows(plan::HISTORY) {
-        let charts = history::history_for_display(&context.history, layout.history_chart_points());
         modules.history = Some(process_parts::with_process_parts(
-            charts,
+            Arc::clone(&context.history),
             &process_parts::ProcessHistoryInputs {
                 tracked: &inputs.processes.tracked,
                 memory: context.process_memory,
