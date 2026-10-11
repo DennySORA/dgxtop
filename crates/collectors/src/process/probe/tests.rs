@@ -1,3 +1,4 @@
+use dgxtop_core::clock::NANOS_PER_SECOND;
 use dgxtop_core::identity::{Pid, PidNamespace, ProcessKey};
 use dgxtop_core::process_probe::{IoCounters, ProbeLiveness, ProbeReading};
 use dgxtop_core::testing::{boot_id, host_id};
@@ -61,13 +62,15 @@ fn a_counter_that_went_back_gives_no_rate() {
 }
 
 /// Unreadable counters clear the rates and their base; a reading at the
-/// same instant as its base keeps the rates it had.
+/// same instant as its base has no rate either: the previous rates spoke
+/// of the interval before it.
 #[test]
-fn unreadable_counters_clear_and_a_zero_interval_keeps_the_rates() {
+fn unreadable_counters_and_a_zero_interval_clear_the_rates() {
     let first = derive(&ProbeState::default(), &running(Some((1_000, 0))), 1);
     let rated = derive(&first, &running(Some((3_000, 1_000))), 2);
+    assert_eq!(rated.values.disk, [Some(2_000.0), Some(1_000.0)]);
     let same_instant = derive(&rated, &running(Some((9_000, 9_000))), 2);
-    assert_eq!(same_instant.values.disk, [Some(2_000.0), Some(1_000.0)]);
+    assert_eq!(same_instant.values.disk, [None, None]);
     let unreadable = derive(&same_instant, &running(None), 3);
     assert_eq!(unreadable.values.disk, [None, None]);
     assert_eq!(unreadable.bases.io, None);

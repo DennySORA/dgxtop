@@ -8,9 +8,10 @@
 //! [`dgxtop_core::process_probe::ProbedValues`] and the bases the next
 //! rates count from.
 
-use dgxtop_core::clock::NANOS_PER_SECOND;
 use dgxtop_core::ports::ProbeDeriver;
 use dgxtop_core::process_probe::{IoCounters, ProbeReading, ProbeState};
+
+use crate::shared::counter;
 
 /// Derives the probed values of a running process's reading from the
 /// previous reading's state.
@@ -40,26 +41,24 @@ fn as_count(value: u64) -> f64 {
 
 /// The disk rates since the previous reading; a counter that went back
 /// (another process behind a reused key cannot, but a kernel may reset)
-/// gives no rate.
+/// or no time since it gives no rate.
 fn take_io(state: &mut ProbeState, io: Option<IoCounters>, read_boot_ns: u64) {
     let Some(io) = io else {
         state.bases.io = None;
         state.values.disk = [None, None];
         return;
     };
-    if let Some((before, at)) = state.bases.io {
+    state.values.disk = state.bases.io.map_or([None, None], |(before, at)| {
         let elapsed = read_boot_ns.saturating_sub(at);
-        if elapsed > 0 {
-            let rate = |now: u64, then: u64| {
-                now.checked_sub(then)
-                    .map(|bytes| as_count(bytes) * as_count(NANOS_PER_SECOND) / as_count(elapsed))
-            };
-            state.values.disk = [
-                rate(io.read_bytes, before.read_bytes),
-                rate(io.write_bytes, before.write_bytes),
-            ];
-        }
-    }
+        let rate = |now: u64, then: u64| {
+            now.checked_sub(then)
+                .and_then(|bytes| counter::rate_of(as_count(bytes), elapsed))
+        };
+        [
+            rate(io.read_bytes, before.read_bytes),
+            rate(io.write_bytes, before.write_bytes),
+        ]
+    });
     state.bases.io = Some((io, read_boot_ns));
 }
 
