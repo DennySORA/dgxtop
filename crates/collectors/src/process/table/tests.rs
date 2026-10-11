@@ -685,3 +685,172 @@ fn bases_stay_bounded_under_heavy_process_churn() {
         previous = Some(batch);
     }
 }
+
+// ----- descendants ----------------------------------------------------------
+
+/// A compact record of `pid` under `parent` with its own and reaped ticks
+/// and RSS bytes.
+fn child(pid: i32, parent: i64, ticks: u64, reaped: u64, rss: Option<u64>, at: u64) -> Observation {
+    let stat = ProcessStat {
+        rss_bytes: rss,
+        uid: Some(1000),
+        ppid: Some(parent),
+        state: Some('S'),
+        threads: Some(1),
+        reaped_ticks: Some(reaped),
+    };
+    compact(pid, 1, ticks, stat, at)
+}
+
+/// A training process (42) on a GPU with two dataloader workers, one with
+/// a helper of its own, beside an unrelated process (60).
+fn training(at: u64, worker_ticks: u64) -> Vec<Observation> {
+    vec![
+        child(1, 0, 9_999, 0, Some(1), at),
+        child(42, 1, 500, 40, Some(4096), at),
+        child(50, 42, worker_ticks, 0, Some(1_000 * 4096), at),
+        child(51, 42, 200, 5, Some(2_000 * 4096), at),
+        child(52, 51, 7, 0, Some(10 * 4096), at),
+        child(60, 1, 77, 0, Some(5 * 4096), at),
+    ]
+}
+
+fn on_gpu(pid: i32, at: u64) -> Vec<Observation> {
+    vec![gpu_memory(
+        "GPU-a",
+        pid,
+        reasons::GPU_USAGE_COMPUTE,
+        1 << 30,
+        at,
+    )]
+}
+
+/// Collects `first` at 1 s and `second` at 3 s under `limits`; returns
+/// both batches.
+fn descendants_cycles(
+    first: Vec<Observation>,
+    second: Vec<Observation>,
+    limits: CollectionLimits,
+) -> (CollectionBatch, CollectionBatch) {
+    let collector = ProcessCollector::new().unwrap();
+    let warmup = collect(
+        &collector,
+        &plan(first, on_gpu(42, SECOND), SECOND + 1)
+            .limits(limits)
+            .build(),
+    );
+    let next = collect(
+        &collector,
+        &plan(second, on_gpu(42, 3 * SECOND), 3 * SECOND + 1)
+            .limits(limits)
+            .after(&warmup)
+            .cycle(2)
+            .build(),
+    );
+    (warmup, next)
+}
+
+/// The descendants at any depth, their CPU time with what reaped ones
+/// left, and their memory (D-77) are counted from every scanned process,
+/// also those the bounded table drops (D-79).
+#[test]
+fn descendants_count_before_the_table_is_bounded() {
+    let (first, second) = descendants_cycles(
+        training(SECOND, 120),
+        training(3 * SECOND, 420),
+        table_limits(1, 8),
+    );
+    let table = second.process_table.as_ref().unwrap();
+    assert!(table.truncated);
+    let kept: Vec<i32> = table.rows.iter().map(|row| row.key.pid.get()).collect();
+    assert_eq!(kept, vec![42], "the workers are not kept");
+    let warm = row(&first, 42).descendants.unwrap();
+    assert_eq!(warm.processes, 3);
+    assert_eq!(warm.rss_bytes, Some(3_010 * 4096));
+    assert_eq!(warm.cpu_percent, None, "a rate needs two tables");
+    // 300 ticks in 2 s at 100 a second: one and a half cores.
+    let measured = row(&second, 42).descendants.unwrap();
+    assert_eq!(measured.cpu_percent, Some(150.0));
+    assert_eq!(measured.processes, 3);
+    let base = second
+        .next_state
+        .processes
+        .iter()
+        .find(|(key, _)| key.pid.get() == 42)
+        .map(|(_, base)| base.descendant_ticks);
+    assert_eq!(base, Some(Some((40 + 420 + 205 + 7, 3 * SECOND))));
+}
+
+/// Only GPU processes are followed: the others carry no descendants.
+#[test]
+fn only_gpu_processes_carry_descendants() {
+    let (_, second) =
+        descendants_cycles(training(SECOND, 120), training(3 * SECOND, 420), limits());
+    assert!(row(&second, 42).descendants.is_some());
+    assert_eq!(row(&second, 1).descendants, None);
+    assert_eq!(row(&second, 51).descendants, None);
+}
+
+/// A descendant that left the tree unreaped takes its time along: no rate
+/// for that table, and the next counts from it.
+#[test]
+fn a_descendant_that_left_gives_no_rate() {
+    let mut gone = training(3 * SECOND, 120);
+    gone.retain(|record| record.provenance.channel.as_ref() != "worker-51");
+    let (_, second) = descendants_cycles(training(SECOND, 120), gone, limits());
+    let descendants = row(&second, 42).descendants.unwrap();
+    assert_eq!(descendants.cpu_percent, None);
+    assert_eq!(descendants.processes, 1, "52 left with its parent 51");
+}
+
+/// An unknown memory makes the descendants' unknown, never a smaller sum.
+#[test]
+fn an_unknown_memory_is_no_descendants_memory() {
+    let mut unknown = training(SECOND, 120);
+    unknown[2] = child(50, 42, 120, 0, None, SECOND);
+    let (first, _) = descendants_cycles(unknown, training(3 * SECOND, 420), limits());
+    let descendants = row(&first, 42).descendants.unwrap();
+    assert_eq!(descendants.rss_bytes, None);
+    assert_eq!(descendants.processes, 3);
+}
+
+/// Without clock ticks per second the descendants' CPU has no rate.
+#[test]
+fn descendants_cpu_needs_the_clock_ticks() {
+    let usage = DescendantUsage {
+        processes: 4,
+        cpu_ticks: 100,
+        rss_bytes: None,
+    };
+    let before = Some((0, SECOND));
+    let now = (100, 2 * SECOND);
+    assert_eq!(
+        descendants_of(usage, before, now, Some(100)).cpu_percent,
+        Some(100.0)
+    );
+    assert_eq!(descendants_of(usage, before, now, None).cpu_percent, None);
+    assert_eq!(
+        descendants_of(usage, before, now, Some(0)).cpu_percent,
+        None
+    );
+    assert_eq!(
+        descendants_of(usage, Some((0, 2 * SECOND)), now, Some(100)).cpu_percent,
+        None,
+        "no time passed"
+    );
+    assert_eq!(descendants_of(usage, before, now, None).processes, 4);
+}
+
+/// A replay's records name no parents: no tree, no descendants.
+#[test]
+fn a_replay_has_no_descendants() {
+    let mut procfs = legacy_host(42, 1, 0, 1, SECOND);
+    procfs.extend(legacy_host(50, 1, 0, 1, SECOND));
+    let collector = ProcessCollector::new().unwrap();
+    let batch = collect(
+        &collector,
+        &plan(procfs, on_gpu(42, SECOND), SECOND + 1).build(),
+    );
+    assert!(!row(&batch, 42).gpu.is_empty());
+    assert_eq!(row(&batch, 42).descendants, None);
+}

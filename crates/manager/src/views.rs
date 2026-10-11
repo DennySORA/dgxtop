@@ -480,6 +480,7 @@ mod tests {
                     state: None,
                     ppid: None,
                     threads: None,
+                    descendants: None,
                     cpu_percent: None,
                     rss_bytes: None,
                     missing_reason: None,

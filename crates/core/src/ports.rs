@@ -363,14 +363,12 @@ pub trait ProcessProbe: Send {
 /// what the last reading of the same process left; the result is the
 /// state the next reading starts from.
 pub trait ProbeDeriver: Send + Sync {
-    /// `read_boot_ns` is when the probe read `reading`; `clk_tck` the
-    /// clock ticks per second the descendants' CPU is counted in.
+    /// `read_boot_ns` is when the probe read `reading`.
     fn derive(
         &self,
         previous: &ProbeState,
         reading: &ProbeReading,
         read_boot_ns: u64,
-        clk_tck: Option<u64>,
     ) -> ProbeState;
 }
 

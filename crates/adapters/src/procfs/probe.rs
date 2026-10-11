@@ -1,12 +1,10 @@
 //! The process probe (D-76, D-77): what the process history follows of the
 //! few GPU processes it tracks, read from `/proc/<pid>/{stat,io,status,fd}`,
 //! once per process `/proc/<pid>/{cmdline,cwd,exe,cgroup}` and the parent's
-//! `comm`, the process tree ([`tree`]) for their descendants, and
-//! `/proc/vmstat`. Read-only, like every telemetry adapter; a PID whose
-//! start time no longer matches the key is another process and reads as
-//! gone.
-
-mod tree;
+//! `comm`, and `/proc/vmstat`. It never scans `/proc`: the process table
+//! sums the descendants from the scan it makes anyway (D-79). Read-only,
+//! like every telemetry adapter; a PID whose start time no longer matches
+//! the key is another process and reads as gone.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -21,7 +19,6 @@ use dgxtop_core::process_probe::{
 };
 use dgxtop_core::text::sanitize_display;
 
-use self::tree::ProcessTree;
 use super::command::command_text;
 use super::host::PID_NAMESPACE_PATH;
 use super::mechanics::namespace_link;
@@ -39,23 +36,16 @@ const UNIFIED_CGROUP: &str = "0::";
 pub struct ProcfsProcessProbe {
     files: Arc<dyn SystemFiles>,
     clock: Arc<dyn TimeProvider>,
-    /// Bytes of a memory page, to count the descendants' resident memory.
-    page_size: Option<u64>,
     /// Ours, read on the first probe; a key of another namespace is not
     /// a process this probe can see.
     namespace: Option<Option<PidNamespace>>,
 }
 
 impl ProcfsProcessProbe {
-    pub fn new(
-        files: Arc<dyn SystemFiles>,
-        clock: Arc<dyn TimeProvider>,
-        page_size: Option<u64>,
-    ) -> Self {
+    pub fn new(files: Arc<dyn SystemFiles>, clock: Arc<dyn TimeProvider>) -> Self {
         Self {
             files,
             clock,
-            page_size,
             namespace: None,
         }
     }
@@ -70,12 +60,7 @@ impl ProcfsProcessProbe {
             .as_ref()
     }
 
-    fn read(
-        &self,
-        target: &ProbeTarget,
-        visible: bool,
-        tree: Option<&ProcessTree>,
-    ) -> ProbeReading {
+    fn read(&self, target: &ProbeTarget, visible: bool) -> ProbeReading {
         let key = &target.key;
         if !visible {
             return ProbeReading::gone(key.clone());
@@ -115,7 +100,6 @@ impl ProcfsProcessProbe {
             .read_dir(&format!("/proc/{pid}/fd"))
             .ok()
             .map(|entries| u64::try_from(entries.len()).unwrap_or(u64::MAX));
-        reading.children = tree.map(|tree| tree.usage_of(stat.pid, self.page_size));
         reading
     }
 
@@ -193,14 +177,9 @@ impl ProcessProbe for ProcfsProcessProbe {
         let own = self.own_namespace().cloned();
         let targets = &targets[..targets.len().min(MAX_PROBED_PROCESSES)];
         let visible = |target: &ProbeTarget| own.as_ref() == Some(&target.key.pid_namespace);
-        let tree = targets
-            .iter()
-            .any(visible)
-            .then(|| ProcessTree::scan(&*self.files))
-            .flatten();
         let readings = targets
             .iter()
-            .map(|target| self.read(target, visible(target), tree.as_ref()))
+            .map(|target| self.read(target, visible(target)))
             .collect();
         ProbeReport {
             readings,

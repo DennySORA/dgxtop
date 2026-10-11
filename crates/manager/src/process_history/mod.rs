@@ -5,9 +5,9 @@
 //! Each cycle it adds a sample to each live run (a [`RunSeries`] of the
 //! compression, D-79) and asks the
 //! process probe about the live runs: their command line, working folder
-//! and details once, their IO counters, threads, swap, open files and
-//! descendants each cycle (D-77), which a [`ProbeDeriver`] turns into the
-//! samples' values (D-79), and, for a run the table no longer lists,
+//! and details once, their IO counters, threads, swap and open files each
+//! cycle (D-77), which a [`ProbeDeriver`] turns into the samples' values
+//! (D-79), and, for a run the table no longer lists,
 //! whether it ended and how ([`ending`]). Closed buckets and changed
 //! runs leave through [`ProcessHistoryBook::take_journal`] for the
 //! long-term store; the short-term file takes [`ProcessHistoryBook::recent`].
@@ -109,8 +109,6 @@ pub struct ProcessHistoryBook {
     /// The table sampled last (cycle, read time): every committed batch
     /// hands over the snapshot's table, sampled once.
     last_table: Option<(u64, u64)>,
-    /// Clock ticks per second, from the samples, for the descendants' CPU.
-    clk_tck: Option<u64>,
     /// The local clock's offset, nanoseconds east: where buckets begin.
     shift_ns: i64,
     journal: ProcessHistoryJournal,
@@ -126,7 +124,6 @@ impl ProcessHistoryBook {
             signals: BTreeMap::new(),
             oom_kills: None,
             last_table: None,
-            clk_tck: None,
             shift_ns: 0,
             journal: ProcessHistoryJournal::default(),
             reading: BTreeSet::new(),
@@ -158,9 +155,6 @@ impl ProcessHistoryBook {
             return;
         }
         self.last_table = Some(identity);
-        if inputs.clk_tck.is_some() {
-            self.clk_tck = inputs.clk_tck;
-        }
         let utc_ns = utc_of(inputs.now);
         let mut listed = BTreeSet::new();
         for row in &table.rows {
@@ -369,7 +363,6 @@ impl ProcessHistoryBook {
         deriver: &dyn ProbeDeriver,
     ) {
         let signal = self.signal_of(&reading.key, now);
-        let clk_tck = self.clk_tck;
         let Some(run) = self.runs.get_mut(&reading.key) else {
             return;
         };
@@ -378,7 +371,7 @@ impl ProcessHistoryBook {
         };
         if reading.liveness == ProbeLiveness::Running {
             take_text(&mut run.info, live, reading, &mut run.changed);
-            live.probe = deriver.derive(&live.probe, reading, read_boot_ns, clk_tck);
+            live.probe = deriver.derive(&live.probe, reading, read_boot_ns);
             return;
         }
         // The probe read the process itself after the table did: gone is
@@ -573,7 +566,8 @@ fn restored_run(mut info: RunInfo, (boot_id, shift_ns): (&BootId, i64), now: Now
     }
 }
 
-/// Adds `row`'s sample to `run` and updates what it says of the run.
+/// Adds `row`'s sample to `run` and updates what it says of the run; the
+/// descendants come with the row (D-79).
 fn sample_run(
     run: &mut Run,
     row: &ProcessRow,
@@ -625,9 +619,12 @@ fn sample_run(
     sample[RunMetric::HostNetworkReceive.index()] = inputs.host_network[0];
     sample[RunMetric::HostNetworkTransmit.index()] = inputs.host_network[1];
     sample[RunMetric::Threads.index()] = probed.threads;
-    sample[RunMetric::Children.index()] = probed.children;
-    sample[RunMetric::ChildrenCpu.index()] = probed.children_cpu;
-    sample[RunMetric::ChildrenMemory.index()] = probed.children_memory;
+    #[allow(clippy::cast_precision_loss)]
+    if let Some(descendants) = row.descendants {
+        sample[RunMetric::Children.index()] = Some(descendants.processes as f64);
+        sample[RunMetric::ChildrenCpu.index()] = descendants.cpu_percent;
+        sample[RunMetric::ChildrenMemory.index()] = descendants.rss_bytes.map(|bytes| bytes as f64);
+    }
     sample[RunMetric::Swap.index()] = probed.swap;
     sample[RunMetric::OpenFiles.index()] = probed.open_files;
     run.series.add(utc_ns, &sample)

@@ -331,8 +331,26 @@ pub struct ProcessRow {
     pub rss_bytes: Option<u64>,
     pub missing_reason: Option<String>,
     pub gpu: Vec<ProcessGpuLink>,
+    /// What a GPU process's descendants use (D-77, D-79); `None` for the
+    /// other processes and where the parents are unknown.
+    pub descendants: Option<ProcessDescendants>,
     pub sample_kind: SampleKind,
     pub read_finished_boot_ns: u64,
+}
+
+/// What a process's descendants, at any depth, use: counted from every
+/// process the table scanned, also those it does not keep.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ProcessDescendants {
+    /// Descendants running now.
+    pub processes: u64,
+    /// CPU since the last table, percent of one core, of the descendants
+    /// running now and of those reaped meanwhile; `None` on the first
+    /// table and when one left the tree unreaped.
+    pub cpu_percent: Option<f64>,
+    /// Resident memory of the descendants running now; `None` when one's
+    /// is unknown.
+    pub rss_bytes: Option<u64>,
 }
 
 /// Bounded live process table.
@@ -371,6 +389,10 @@ pub struct SelectionMemo {
 pub struct ProcessBase {
     pub ticks: u64,
     pub sample_boot_ns: u64,
+    /// A GPU process's descendants' CPU ticks, and when they were read
+    /// (boot ns); `None` for the others.
+    #[serde(default)]
+    pub descendant_ticks: Option<(u64, u64)>,
 }
 
 /// Bounded collector state. It becomes the next delta base only after the

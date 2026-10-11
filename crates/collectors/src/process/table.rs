@@ -10,15 +10,17 @@
 //! host resources are never repeated or multiplied per GPU, compute and
 //! graphics entries of one PID on one GPU merge into one link, and a PID is
 //! only linked to the process instance that already existed when the GPU
-//! list was read (PID-reuse guard). The table is bounded with a stable
-//! priority; process metrics never become history series.
+//! list was read (PID-reuse guard). Each GPU process's descendants are
+//! summed from the tree of every scanned process ([`ProcessTree`]) before
+//! the table is bounded with a stable priority; process metrics never
+//! become history series.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use dgxtop_core::canonical::{
-    CollectionBatch, CollectionPlan, CounterBase, GpuUsageKind, ProcessBase, ProcessGpuLink,
-    ProcessRow, ProcessTable, RejectReason,
+    CollectionBatch, CollectionPlan, CounterBase, GpuUsageKind, ProcessBase, ProcessDescendants,
+    ProcessGpuLink, ProcessRow, ProcessTable, RejectReason,
 };
 use dgxtop_core::clock::NANOS_PER_SECOND;
 use dgxtop_core::identity::{AdapterId, CollectorId, EntityId, IdentityError, ProcessKey};
@@ -33,6 +35,7 @@ use dgxtop_core::quality::SampleKind;
 use dgxtop_core::text::{sanitize_command_name, sanitize_display};
 
 use crate::process::gpu_processes::{self, PidRecords};
+use crate::process::tree::{DescendantUsage, ProcessTree, TreeNode};
 use crate::shared::arbitration::{self, check_namespace};
 use crate::shared::context::{self, CollectorSpec, Record, Route, Session};
 use crate::shared::counter::{self, CounterReading};
@@ -93,6 +96,11 @@ fn collect_processes(session: &mut Session<'_>) {
     }
     let clk_tck = clk_tck(session);
     let samples = host_samples(session);
+    let tree = ProcessTree::of(
+        samples
+            .iter()
+            .filter_map(|(key, sample)| tree_node(key, sample)),
+    );
     let mut rows: Vec<ProcessRow> = Vec::with_capacity(samples.len());
     for (key, sample) in &samples {
         let (row, base) = host_row(session, key, sample, clk_tck);
@@ -102,6 +110,7 @@ fn collect_processes(session: &mut Session<'_>) {
         rows.push(row);
     }
     attach_gpu_links(session, &mut rows, clk_tck);
+    attach_descendants(session, &mut rows, &tree, clk_tck);
     rows.sort_by(priority);
     prune_bases(session, &rows);
     let table = bounded_table(session, rows);
@@ -264,6 +273,7 @@ fn host_row(
         rss_bytes,
         missing_reason: cpu_reason.or(rss_reason).map(str::to_owned),
         gpu: Vec::new(),
+        descendants: None,
         sample_kind: named.map_or(SampleKind::Measured, |record| {
             record.observation.sample_kind
         }),
@@ -342,6 +352,7 @@ fn cpu_percent(
     let base = Some(ProcessBase {
         ticks,
         sample_boot_ns: reading.sample_boot_ns,
+        descendant_ticks: None,
     });
     let delta = match step.outcome {
         Ok(delta) => delta,
@@ -398,6 +409,74 @@ fn uid_of(session: &Session<'_>, record: Record<'_>) -> Option<u32> {
     arbitration::check_admission(&candidate, record.key(), session.policy()).ok()?;
     let value = record.observation.value.and_then(Scalar::as_u64)?;
     u32::try_from(value).ok()
+}
+
+// ----- descendants ----------------------------------------------------------
+
+/// A process of the tree, from its compact record; a replay's records name
+/// no parent and make no tree.
+fn tree_node(key: &ProcessKey, sample: &HostSample<'_>) -> Option<(i64, TreeNode)> {
+    let stat = sample.stat()?;
+    let own_ticks = sample
+        .ticks
+        .and_then(|record| record.observation.value)
+        .and_then(Scalar::as_u64)
+        .unwrap_or(0);
+    let node = TreeNode {
+        parent: stat.ppid?,
+        own_ticks,
+        reaped_ticks: stat.reaped_ticks.unwrap_or(0),
+        rss_bytes: stat.rss_bytes,
+    };
+    Some((i64::from(key.pid.get()), node))
+}
+
+/// What each GPU process's descendants use, their CPU since the last
+/// table counted from the base its row keeps (D-77, D-79). Only GPU
+/// processes: the process history follows no other.
+fn attach_descendants(
+    session: &mut Session<'_>,
+    rows: &mut [ProcessRow],
+    tree: &ProcessTree,
+    clk_tck: Option<u64>,
+) {
+    for row in rows.iter_mut().filter(|row| !row.gpu.is_empty()) {
+        let Some(usage) = tree.usage_of(i64::from(row.key.pid.get())) else {
+            continue;
+        };
+        let now = (usage.cpu_ticks, row.read_finished_boot_ns);
+        let before = session
+            .committed_process(&row.key)
+            .and_then(|base| base.descendant_ticks);
+        row.descendants = Some(descendants_of(usage, before, now, clk_tck));
+        if let Some(base) = session.next_processes_mut().get_mut(&row.key) {
+            base.descendant_ticks = Some(now);
+        }
+    }
+}
+
+/// The descendants' count and memory as read, and their CPU since
+/// `before` as percent of one core. Their time drops when one leaves the
+/// tree unreaped (a daemon, an orphan): that table gives no rate, and the
+/// next one counts from it.
+fn descendants_of(
+    usage: DescendantUsage,
+    before: Option<(u64, u64)>,
+    (ticks, at): (u64, u64),
+    clk_tck: Option<u64>,
+) -> ProcessDescendants {
+    #[allow(clippy::cast_precision_loss)]
+    let cpu_percent = before.and_then(|(before_ticks, before_at)| {
+        let spent = ticks.checked_sub(before_ticks)?;
+        let elapsed = at.checked_sub(before_at).filter(|elapsed| *elapsed > 0)?;
+        let per_second = clk_tck.filter(|ticks| *ticks > 0)?;
+        Some(spent as f64 * 100.0 * NANOS_PER_SECOND as f64 / per_second as f64 / elapsed as f64)
+    });
+    ProcessDescendants {
+        processes: usage.processes,
+        cpu_percent,
+        rss_bytes: usage.rss_bytes,
+    }
 }
 
 // ----- GPU links ------------------------------------------------------------

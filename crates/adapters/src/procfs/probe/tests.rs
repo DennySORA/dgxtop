@@ -1,23 +1,24 @@
 use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use dgxtop_core::identity::{Pid, PidNamespace};
 use dgxtop_core::testing::{FakeClock, boot_id, host_id};
-
-use dgxtop_core::process_probe::ChildUsage;
 
 use super::*;
 use crate::common::EntryName;
 
 const NAMESPACE: &str = "pid:[4026531836]";
 
-/// `/proc` as a map: files by path and the targets of links.
+/// `/proc` as a map: files by path and the targets of links; it notes
+/// every folder listed.
 #[derive(Default)]
 struct MapFiles {
     files: HashMap<String, String>,
     links: HashMap<String, PathBuf>,
     dirs: HashMap<String, Vec<EntryName>>,
+    listed: Mutex<Vec<String>>,
 }
 
 impl MapFiles {
@@ -63,6 +64,10 @@ impl SystemFiles for MapFiles {
     }
 
     fn read_dir(&self, path: &str) -> io::Result<Vec<EntryName>> {
+        self.listed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(path.to_owned());
         self.dirs
             .get(path)
             .map(|entries| {
@@ -117,13 +122,8 @@ fn stat_of(pid: i32, parent: i32, fields: &[(usize, i64)]) -> String {
     format!("{pid} (worker) {}", line.join(" "))
 }
 
-const UTIME: usize = 11;
-const STIME: usize = 12;
-const CUTIME: usize = 13;
-const CSTIME: usize = 14;
 const NICE: usize = 16;
 const THREADS: usize = 17;
-const RSS: usize = 21;
 
 fn key(pid: i32, start: u64) -> ProcessKey {
     ProcessKey {
@@ -136,7 +136,7 @@ fn key(pid: i32, start: u64) -> ProcessKey {
 }
 
 fn probe(files: MapFiles, targets: &[ProbeTarget]) -> ProbeReport {
-    let mut probe = ProcfsProcessProbe::new(Arc::new(files), FakeClock::new(5_000), Some(4096));
+    let mut probe = ProcfsProcessProbe::new(Arc::new(files), FakeClock::new(5_000));
     probe.probe(targets)
 }
 
@@ -268,78 +268,40 @@ fn texts_are_cleaned_and_bounded_and_targets_capped() {
     assert_eq!(report.readings.len(), MAX_PROBED_PROCESSES);
 }
 
-/// A training process with two dataloader workers, one of them with a
-/// helper of its own: the descendants at any depth, their CPU time with
-/// what reaped ones left, and their memory; its threads, swap and files.
+/// Its threads, swap and open files, from its own files only: the probe
+/// never lists `/proc`, the table sums the descendants (D-79).
 #[test]
-fn a_running_process_reports_its_descendants_threads_swap_and_files() {
-    let files = MapFiles::with_namespace()
-        .dir("/proc", &["1", "42", "50", "51", "52", "60", "self"], true)
-        .file(
-            "/proc/42/stat",
-            &stat_of(
-                42,
-                1,
-                &[(UTIME, 500), (CUTIME, 30), (CSTIME, 10), (THREADS, 24)],
-            ),
-        )
-        .file("/proc/1/stat", &stat_of(1, 0, &[(UTIME, 9_999)]))
-        .file(
-            "/proc/50/stat",
-            &stat_of(50, 42, &[(UTIME, 100), (STIME, 20), (RSS, 1_000)]),
-        )
-        .file(
-            "/proc/51/stat",
-            &stat_of(51, 42, &[(UTIME, 200), (CUTIME, 5), (RSS, 2_000)]),
-        )
-        .file("/proc/52/stat", &stat_of(52, 51, &[(UTIME, 7), (RSS, 10)]))
-        .file("/proc/60/stat", &stat_of(60, 1, &[(UTIME, 77), (RSS, 5)]))
-        .file("/proc/42/status", "Name:\tpython3\nVmSwap:\t    2048 kB\n")
-        .dir("/proc/42/fd", &["0", "1", "2", "3"], false);
-    let target = ProbeTarget {
-        key: key(42, 900),
-        with_text: false,
-    };
-    let reading = &probe(files, &[target]).readings[0];
+fn a_running_process_reports_its_threads_swap_and_files() {
+    let files = Arc::new(
+        MapFiles::with_namespace()
+            .dir("/proc", &["1", "42", "50", "self"], true)
+            .file("/proc/42/stat", &stat_of(42, 1, &[(THREADS, 24)]))
+            .file("/proc/50/stat", &stat_of(50, 42, &[]))
+            .file("/proc/42/status", "Name:\tpython3\nVmSwap:\t    2048 kB\n")
+            .dir("/proc/42/fd", &["0", "1", "2", "3"], false),
+    );
+    let mut probe = ProcfsProcessProbe::new(
+        Arc::clone(&files) as Arc<dyn SystemFiles>,
+        FakeClock::new(5_000),
+    );
+    let reading = &probe.probe(&[target(42, 900, false)]).readings[0];
     assert_eq!(reading.liveness, ProbeLiveness::Running);
     assert_eq!(reading.threads, Some(24));
     assert_eq!(reading.swap_bytes, Some(2 * 1024 * 1024));
     assert_eq!(reading.open_files, Some(4));
-    assert_eq!(
-        reading.children,
-        Some(ChildUsage {
-            processes: 3,
-            // Its reaped children's 40, then 120, 205 and 7.
-            cpu_ticks: 40 + 120 + 205 + 7,
-            rss_bytes: Some(3_010 * 4096),
-        })
-    );
     assert_eq!(reading.details, None, "details come with the text");
+    let listed = files.listed.lock().unwrap().clone();
+    assert_eq!(listed, vec!["/proc/42/fd".to_owned()], "never /proc");
 }
 
-/// Without a process list its descendants are unknown, never zero; an
-/// unreadable `fd` folder is no count either.
+/// An unreadable `fd` folder or `status` is no count, never zero.
 #[test]
-fn an_unreadable_process_list_is_no_descendants() {
+fn unreadable_counts_are_none() {
     let files = MapFiles::with_namespace().file("/proc/42/stat", &stat_of(42, 1, &[]));
     let reading = &probe(files, &[target(42, 900, false)]).readings[0];
     assert_eq!(reading.liveness, ProbeLiveness::Running);
-    assert_eq!(reading.children, None);
     assert_eq!(reading.open_files, None);
     assert_eq!(reading.swap_bytes, None);
-}
-
-/// A PID reused while `/proc` was read may close a loop; it ends.
-#[test]
-fn a_parent_loop_in_the_tree_ends() {
-    let files = MapFiles::with_namespace()
-        .dir("/proc", &["42", "50", "51"], true)
-        .file("/proc/42/stat", &stat_of(42, 51, &[]))
-        .file("/proc/50/stat", &stat_of(50, 42, &[(UTIME, 1)]))
-        .file("/proc/51/stat", &stat_of(51, 50, &[(UTIME, 2)]));
-    let reading = &probe(files, &[target(42, 900, false)]).readings[0];
-    let children = reading.children.unwrap();
-    assert_eq!((children.processes, children.cpu_ticks), (2, 3));
 }
 
 /// Read with the text: the parent, the program, the control group and

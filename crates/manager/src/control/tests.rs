@@ -193,6 +193,7 @@ fn with_process_table(harness: &Harness, pids: &[i64]) {
             state: Some('S'),
             ppid: None,
             threads: None,
+            descendants: None,
             cpu_percent: Some(1.0),
             rss_bytes: Some(1 << 20),
             missing_reason: None,

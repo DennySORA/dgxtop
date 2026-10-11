@@ -177,7 +177,6 @@ impl ProbeDeriver for IdleProbeDeriver {
         previous: &ProbeState,
         _reading: &ProbeReading,
         _read_boot_ns: u64,
-        _clk_tck: Option<u64>,
     ) -> ProbeState {
         *previous
     }
