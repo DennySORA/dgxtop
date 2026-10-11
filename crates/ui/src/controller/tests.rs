@@ -281,7 +281,7 @@ fn processes_model(
 
 #[test]
 fn in_filter_mode_k_and_q_are_text_while_ctrl_c_quits() {
-    let mut harness = Harness::new(ViewKind::Processes);
+    let mut harness = Harness::new(ViewKind::Overview);
     harness.keys(&[key('/'), shift('K'), key('q'), key('j')]);
     assert_eq!(harness.controller.mode(), ModeKind::Filter);
     assert!(!harness.controller.quit_requested());
@@ -309,7 +309,7 @@ fn q_and_ctrl_c_quit_in_normal_mode() {
 
 #[test]
 fn k_without_a_visible_selection_does_nothing() {
-    let mut harness = Harness::new(ViewKind::Processes);
+    let mut harness = Harness::new(ViewKind::Overview);
     harness.hit_map = HitMap::new(5);
     harness.keys(&[shift('K')]);
     assert!(harness.submitted().is_empty());
@@ -328,7 +328,7 @@ fn k_without_a_visible_selection_does_nothing() {
 
 #[test]
 fn k_builds_prepare_signal_with_the_full_process_key() {
-    let mut harness = Harness::new(ViewKind::Processes);
+    let mut harness = Harness::new(ViewKind::Overview);
     let drawn = harness.hit_map.visible_selected_process().cloned().unwrap();
     harness.keys(&[shift('K')]);
     let submitted = harness.submitted();
@@ -355,7 +355,7 @@ fn k_builds_prepare_signal_with_the_full_process_key() {
 /// and confirmation as K, with SIGKILL; the Manager's policy decides.
 #[test]
 fn f9_builds_prepare_signal_with_sigkill() {
-    let mut harness = Harness::new(ViewKind::Processes);
+    let mut harness = Harness::new(ViewKind::Overview);
     let drawn = harness.hit_map.visible_selected_process().cloned().unwrap();
     harness.keys(&[code(KeyCode::F(9))]);
     let submitted = harness.submitted();
@@ -592,7 +592,7 @@ fn an_opened_run_expands_and_copies_its_command() {
 
 #[test]
 fn y_only_confirms_in_confirm_mode_with_a_token() {
-    let mut harness = Harness::new(ViewKind::Processes);
+    let mut harness = Harness::new(ViewKind::Overview);
     harness.keys(&[key('y'), code(KeyCode::Enter)]);
     assert!(
         harness.submitted().is_empty(),
@@ -618,7 +618,7 @@ fn y_only_confirms_in_confirm_mode_with_a_token() {
 
 #[test]
 fn enter_confirms_and_esc_or_n_cancel() {
-    let mut harness = Harness::new(ViewKind::Processes);
+    let mut harness = Harness::new(ViewKind::Overview);
     harness.activate_confirmation();
     harness.keys(&[code(KeyCode::Enter)]);
     assert!(matches!(
@@ -626,7 +626,7 @@ fn enter_confirms_and_esc_or_n_cancel() {
         CommandBody::ConfirmSignal { .. }
     ));
     for cancel_key in [code(KeyCode::Esc), key('n')] {
-        let mut harness = Harness::new(ViewKind::Processes);
+        let mut harness = Harness::new(ViewKind::Overview);
         harness.activate_confirmation();
         harness.keys(&[cancel_key]);
         let submitted = harness.submitted();
@@ -639,7 +639,7 @@ fn enter_confirms_and_esc_or_n_cancel() {
 
 #[test]
 fn other_keys_are_ignored_while_confirming() {
-    let mut harness = Harness::new(ViewKind::Processes);
+    let mut harness = Harness::new(ViewKind::Overview);
     harness.activate_confirmation();
     harness.keys(&[key('j'), code(KeyCode::Tab), shift('K'), key('s'), key('/')]);
     assert!(harness.submitted().is_empty());
@@ -650,7 +650,7 @@ fn other_keys_are_ignored_while_confirming() {
 
 #[test]
 fn a_token_arriving_while_typing_is_cancelled_not_activated() {
-    let mut harness = Harness::new(ViewKind::Processes);
+    let mut harness = Harness::new(ViewKind::Overview);
     harness.keys(&[shift('K')]);
     let prepare = harness.take().pop().unwrap();
     harness.keys(&[key('/')]);
@@ -669,7 +669,7 @@ fn a_token_arriving_while_typing_is_cancelled_not_activated() {
 
 #[test]
 fn the_token_never_reaches_ui_state_or_debug_output() {
-    let mut harness = Harness::new(ViewKind::Processes);
+    let mut harness = Harness::new(ViewKind::Overview);
     harness.activate_confirmation();
     let secret = token().as_str().to_owned();
     assert!(!format!("{:?}", harness.controller.ui_state(harness.now)).contains(&secret));
@@ -688,7 +688,7 @@ fn the_token_never_reaches_ui_state_or_debug_output() {
 
 #[test]
 fn j_and_k_select_by_process_key_across_a_reordered_projection() {
-    let mut harness = Harness::with_model(processes_model(ViewKind::Processes, 5, 0, 5, 0));
+    let mut harness = Harness::with_model(processes_model(ViewKind::Overview, 5, 0, 5, 0));
     let first_rows: Vec<ProcessKey> = harness
         .model
         .modules
@@ -702,7 +702,7 @@ fn j_and_k_select_by_process_key_across_a_reordered_projection() {
     harness.keys(&[key('j')]);
     assert_eq!(harness.last_session().2, Some(first_rows[1].clone()));
     // The Manager applies the selection and the list is re-sorted.
-    let mut reordered = processes_model(ViewKind::Processes, 5, 0, 5, 0);
+    let mut reordered = processes_model(ViewKind::Overview, 5, 0, 5, 0);
     let processes = Arc::make_mut(reordered.modules.processes.as_mut().unwrap());
     processes.rows.reverse();
     processes.selected = Some(first_rows[1].clone());
@@ -723,7 +723,7 @@ fn j_and_k_select_by_process_key_across_a_reordered_projection() {
 
 #[test]
 fn destructive_commands_are_never_coalesced_and_keep_order() {
-    let mut harness = Harness::new(ViewKind::Processes);
+    let mut harness = Harness::new(ViewKind::Overview);
     harness.keys(&[key('j'), shift('K')]);
     let submitted = harness.submitted();
     assert_eq!(submitted.len(), 2);
@@ -736,7 +736,7 @@ fn destructive_commands_are_never_coalesced_and_keep_order() {
 
 #[test]
 fn a_click_on_a_stale_hitmap_keeps_the_clicked_identity_and_old_revision() {
-    let mut harness = Harness::with_model(processes_model(ViewKind::Processes, 5, 0, 5, 0));
+    let mut harness = Harness::with_model(processes_model(ViewKind::Overview, 5, 0, 5, 0));
     let stale_map = harness.hit_map.clone();
     let clicked = stale_map
         .targets()
@@ -746,7 +746,7 @@ fn a_click_on_a_stale_hitmap_keeps_the_clicked_identity_and_old_revision() {
         .clone();
     // A newer projection (revision 6) reorders the rows, but the user is
     // still looking at the frame of revision 5.
-    let mut newer = processes_model(ViewKind::Processes, 5, 0, 5, 0);
+    let mut newer = processes_model(ViewKind::Overview, 5, 0, 5, 0);
     newer.frame_revision = 6;
     Arc::make_mut(newer.modules.processes.as_mut().unwrap())
         .rows
@@ -834,7 +834,7 @@ fn the_cpu_panel_expands_and_collapses_by_click_or_c_without_a_command() {
 
 #[test]
 fn filter_enter_applies_and_esc_clears() {
-    let mut harness = Harness::new(ViewKind::Processes);
+    let mut harness = Harness::new(ViewKind::Overview);
     harness.keys(&[
         key('/'),
         key('w'),
@@ -852,7 +852,7 @@ fn filter_enter_applies_and_esc_clears() {
 
 #[test]
 fn filter_input_is_bounded_to_256_bytes() {
-    let mut harness = Harness::new(ViewKind::Processes);
+    let mut harness = Harness::new(ViewKind::Overview);
     harness.press(key('/'));
     for _ in 0..300 {
         harness.press(key('x'));
@@ -903,7 +903,7 @@ fn interval_keys_require_the_settings_revision() {
 
 #[test]
 fn results_become_honest_notices() {
-    let mut harness = Harness::new(ViewKind::Processes);
+    let mut harness = Harness::new(ViewKind::Overview);
     harness.activate_confirmation();
     harness.keys(&[key('y')]);
     let confirm = harness.take().pop().unwrap();

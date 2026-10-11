@@ -107,7 +107,7 @@ impl ActionRig {
         let ports = customize(&completions, &mut workers, ports);
         let setup = manager_setup(config, &identity, Vec::new(), Namespace::Live);
         let manager = RunningManager::start(setup, ports, channels);
-        manager.show(ViewKind::Actions);
+        manager.show(ViewKind::Overview);
         Self {
             manager,
             workers,

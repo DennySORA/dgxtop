@@ -487,7 +487,7 @@ fn oversized_frames_are_never_sent_and_the_buffer_stays_bounded() {
 #[test]
 fn input_and_q_still_work_while_output_is_blocked_for_30_seconds() {
     let mut rig = Rig::new(Mode::Blocked, (100, 30));
-    rig.publish_revision(ViewKind::Processes, 1);
+    rig.publish_revision(ViewKind::Overview, 1);
     rig.steps_until(10, |rig| rig.frames() == 1);
     assert!(rig.tui.output.has_pending(), "the first frame is stuck");
     let stuck_peak = rig.tui.stats().peak_output_bytes;
@@ -498,7 +498,7 @@ fn input_and_q_still_work_while_output_is_blocked_for_30_seconds() {
     let mut exit = None;
     for _ in 0..10_000 {
         if !published_newer && rig.time.now() > Duration::from_secs(15) {
-            rig.publish_revision(ViewKind::Processes, 2);
+            rig.publish_revision(ViewKind::Overview, 2);
             published_newer = true;
         }
         if let Some(reason) = rig.tui.step().unwrap() {
@@ -587,7 +587,7 @@ fn a_slow_frame_is_followed_by_a_full_redraw() {
 #[test]
 fn confirmation_tokens_come_from_drained_results() {
     let mut rig = Rig::new(Mode::AcceptAll, (160, 50));
-    rig.publish_revision(ViewKind::Processes, 1);
+    rig.publish_revision(ViewKind::Overview, 1);
     rig.steps_until(20, |rig| rig.frames() == 1);
     rig.script.key('K');
     rig.steps_until(20, |rig| !rig.submitted_bodies().is_empty());

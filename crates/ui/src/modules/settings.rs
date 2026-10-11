@@ -151,7 +151,7 @@ fn persistence_word(state: PersistenceState) -> &'static str {
 }
 
 /// `config healthy · 12 KiB of 1.0 MiB` plus the optional detail.
-pub(crate) fn persistence_text(label: &str, status: &PersistenceStatus) -> String {
+fn persistence_text(label: &str, status: &PersistenceStatus) -> String {
     let mut text = format!("{label} {}", persistence_word(status.state));
     if status.bytes_limit > 0 {
         text.push_str(&format!(

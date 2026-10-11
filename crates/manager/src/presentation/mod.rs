@@ -222,11 +222,7 @@ pub fn build_view_model(context: &PresentationContext<'_>) -> ViewModel {
 /// ([`ViewModel::accounted_bytes`]), so the caller can size its byte permit
 /// without measuring the projection a second time.
 pub fn build_view_model_measured(context: &PresentationContext<'_>) -> (ViewModel, usize) {
-    let plan = ViewPlan::new(
-        context.session.view,
-        context.enabled_modules,
-        context.actions.confirmation.is_some(),
-    );
+    let plan = ViewPlan::new(context.session.view, context.enabled_modules);
     let layout = ViewportLayout::new(context.viewport);
     let reader = MetricReader::new(
         context.snapshot,
@@ -240,8 +236,7 @@ pub fn build_view_model_measured(context: &PresentationContext<'_>) -> (ViewMode
     } else {
         0
     };
-    let visible_process_rows =
-        processes::visible_process_rows(context.session.view, layout.rows, gpu_count);
+    let visible_process_rows = processes::visible_process_rows(layout.rows, gpu_count);
     let inputs = ModuleInputs {
         reader: &reader,
         directory: &directory,
@@ -371,9 +366,10 @@ fn build_modules(
             },
         )));
     }
-    if plan.shows(plan::ACTIONS) {
-        modules.actions = Some(Arc::clone(&context.actions));
-    }
+    // The process actions' state is the session's, not a module's: every
+    // projection carries it, so a pending confirmation is a banner in
+    // every view (D-91, UI.md §2, §6).
+    modules.actions = Some(Arc::clone(&context.actions));
     modules
 }
 

@@ -237,7 +237,10 @@ fn each_view_fills_only_its_visible_topics() {
         let mut fixture = Fixture::new();
         fixture.session.view = view;
         let model = build_view_model(&fixture.context());
-        assert_eq!(filled(&model), visible_modules(view).to_vec(), "{view:?}");
+        // The process actions' state rides on every view (D-91).
+        let mut expected = visible_modules(view).to_vec();
+        expected.push("actions");
+        assert_eq!(filled(&model), expected, "{view:?}");
     }
     let model = build_view_model(&fixture_base.context());
     assert_eq!(model.frame_revision, 3);
@@ -258,7 +261,7 @@ fn each_view_fills_only_its_visible_topics() {
 #[test]
 fn pending_confirmation_is_first_and_carries_action_details_on_any_view() {
     let mut fixture = Fixture::new();
-    fixture.session.view = ViewKind::Processes;
+    fixture.session.view = ViewKind::Overview;
     let mut actions = (*fixture.actions).clone();
     actions.confirmation = Some(confirmation());
     fixture.actions = Arc::new(actions);
@@ -293,27 +296,28 @@ fn reference_load_projection_stays_under_one_mebibyte() {
     let processes = model.modules.processes.as_ref().unwrap();
     assert_eq!(processes.total_rows, 256);
     // Only the estimated window plus overscan is copied, never all rows.
-    let window = super::processes::visible_process_rows(ViewKind::Overview, 50, 8);
+    let window = super::processes::visible_process_rows(50, 8);
     assert!(processes.rows.len() <= window + PROCESS_OVERSCAN_ROWS);
     assert!(processes.rows.len() < 256);
 }
 
 #[test]
-fn processes_view_copies_only_the_window() {
+fn the_process_table_copies_only_the_window() {
     let mut fixture = reference_fixture(4, 256);
-    fixture.session.view = ViewKind::Processes;
+    fixture.session.view = ViewKind::Overview;
     fixture.session.sort = SortKey::Pid;
     fixture.session.ascending = true;
     fixture.viewport = (120, 30);
     fixture.session.selected_process = Some(process_key(256, 1000));
     let model = build_view_model(&fixture.context());
     let processes = model.modules.processes.as_ref().unwrap();
-    let visible = 30 - 7;
+    let visible = super::processes::visible_process_rows(30, 4);
     assert!(processes.rows.len() <= visible + PROCESS_OVERSCAN_ROWS);
     assert_eq!(processes.selected_index, Some(255));
     assert_eq!(processes.rows.last().unwrap().key, process_key(256, 1000));
     assert_eq!(processes.rows[0].gpus[1].gpu_label, "GPU 1");
-    assert!(model.estimated_bytes() < 64 * 1024);
+    let table_bytes = serde_json::to_vec(processes.as_ref()).unwrap().len();
+    assert!(table_bytes < 64 * 1024, "{table_bytes}");
 }
 
 /// The bound replaces writing the JSON only where that changes nothing: a
@@ -324,7 +328,7 @@ fn processes_view_copies_only_the_window() {
 fn the_accounted_size_never_exceeds_the_budget_nor_trims_differently() {
     let views = [
         ViewKind::Overview,
-        ViewKind::Processes,
+        ViewKind::Overview,
         ViewKind::GpuDetail,
         ViewKind::Settings,
     ];

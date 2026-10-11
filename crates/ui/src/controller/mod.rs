@@ -507,11 +507,12 @@ impl Controller {
 
     fn navigate(&mut self, movement: Movement, context: &ControllerContext<'_>) {
         match current_view(context) {
-            ViewKind::Overview | ViewKind::Processes => self.navigate_processes(movement, context),
+            ViewKind::Overview => self.navigate_processes(movement, context),
             ViewKind::GpuDetail => self.navigate_gpu(movement, context),
             ViewKind::Settings => self.navigate_modules(movement, context),
-            // The history view charts fixed series (D-46); nothing to pick.
-            ViewKind::History | ViewKind::Sources | ViewKind::Actions => {}
+            // The history view charts fixed series (D-46); nothing to
+            // pick, and the retired views are never shown (D-91).
+            ViewKind::History | ViewKind::Processes | ViewKind::Sources | ViewKind::Actions => {}
         }
     }
 
@@ -622,10 +623,7 @@ impl Controller {
     }
 
     fn start_filter(&mut self, context: &ControllerContext<'_>) {
-        if !matches!(
-            current_view(context),
-            ViewKind::Overview | ViewKind::Processes
-        ) {
+        if current_view(context) != ViewKind::Overview {
             return;
         }
         let initial = self

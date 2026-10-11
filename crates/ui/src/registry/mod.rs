@@ -322,17 +322,15 @@ impl ModuleRegistry {
     }
 }
 
-/// View → module mapping of the seven logical views (`Overview` is composed
-/// from every overview-slot module instead).
+/// View → module mapping of the detail views. `Overview` is composed from
+/// every overview-slot module instead, and the retired Processes, Sources
+/// and Actions views have none (D-91).
 pub const fn detail_module_id(view: ViewKind) -> Option<&'static str> {
     match view {
-        ViewKind::Overview => None,
         ViewKind::GpuDetail => Some("gpu"),
-        ViewKind::Processes => Some("processes"),
         ViewKind::History => Some("history"),
-        ViewKind::Sources => None,
         ViewKind::Settings => Some("settings"),
-        ViewKind::Actions => Some("actions"),
+        ViewKind::Overview | ViewKind::Processes | ViewKind::Sources | ViewKind::Actions => None,
     }
 }
 

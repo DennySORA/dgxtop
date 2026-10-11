@@ -11,8 +11,8 @@ use dgxtop_core::errors::{ErrorCode, ResultCode};
 use dgxtop_core::identity::{ModuleId, ProcessKey};
 use dgxtop_core::view::BannerLevel;
 
+use crate::format::action_state_label;
 use crate::format::{clean, format_interval_ms};
-use crate::modules::action_state_label;
 
 /// Bound of tracked requests (oldest are forgotten first).
 pub const MAX_PENDING_REQUESTS: usize = 64;

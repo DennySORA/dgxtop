@@ -555,7 +555,7 @@ mod tests {
         CommandEnvelope::new(
             SessionId::new(session).unwrap(),
             CommandBody::UpdateViewSession {
-                view: ViewKind::Processes,
+                view: ViewKind::Overview,
                 selected_entity_id: None,
                 selected_process: None,
                 filter: String::new(),
@@ -622,7 +622,7 @@ mod tests {
         let huge = CommandEnvelope::new(
             SessionId::new("s1").unwrap(),
             CommandBody::UpdateViewSession {
-                view: ViewKind::Processes,
+                view: ViewKind::Overview,
                 selected_entity_id: None,
                 selected_process: None,
                 filter: "x".repeat(300),

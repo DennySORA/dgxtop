@@ -36,7 +36,7 @@ pub const MAX_COMMAND_BYTES: u64 = 64 * 1024;
 pub const MIN_COMMAND_BYTES: u64 = 8 * 1024;
 
 /// The built-in display modules, in registration order.
-pub const BUILTIN_MODULES: [&str; 9] = [
+pub const BUILTIN_MODULES: [&str; 8] = [
     "cpu",
     "gpu",
     "memory",
@@ -45,13 +45,12 @@ pub const BUILTIN_MODULES: [&str; 9] = [
     "processes",
     "history",
     "settings",
-    "actions",
 ];
 
 /// Module ids of removed views a configuration may still enable (the
 /// spec's `config.default.json` does): accepted and ignored, never listed
 /// or toggled (D-91).
-pub const RETIRED_MODULES: [&str; 1] = ["sources"];
+pub const RETIRED_MODULES: [&str; 2] = ["sources", "actions"];
 
 /// Whether `module` may appear in `viewer.enabled_modules`: a built-in or
 /// a retired module (D-91).

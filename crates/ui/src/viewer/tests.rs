@@ -289,9 +289,9 @@ fn chart_under(rendered: &Rendered, bar: usize, rows: usize) -> bool {
 }
 
 #[test]
-fn processes_view_follows_the_reference_columns_and_marks_the_selection() {
-    for size in [(160, 50), (100, 30), (80, 24), (40, 10)] {
-        let rendered = render(&model(ViewKind::Processes), size);
+fn processes_table_follows_the_reference_columns_and_marks_the_selection() {
+    for size in [(160, 50), (100, 30), (80, 24)] {
+        let rendered = render(&model(ViewKind::Overview), size);
         let header = rendered
             .row_with("PID")
             .unwrap_or_else(|| panic!("{size:?}\n{}", rendered.text()));
@@ -303,7 +303,7 @@ fn processes_view_follows_the_reference_columns_and_marks_the_selection() {
         assert!(rendered.contains("4242"), "{size:?}\n{}", rendered.text());
         assert!(rendered.report.hit_map.visible_selected_process().is_some());
     }
-    let wide = render(&model(ViewKind::Processes), (160, 50));
+    let wide = render(&model(ViewKind::Overview), (160, 50));
     for text in [
         "USER",
         "NAME",
@@ -323,7 +323,7 @@ fn processes_view_follows_the_reference_columns_and_marks_the_selection() {
 
 #[test]
 fn processes_window_shows_scroll_position_filters_and_truncation() {
-    let mut model = model(ViewKind::Processes);
+    let mut model = model(ViewKind::Overview);
     let mut processes = test_fixtures::processes_view(40, 360, 412);
     processes.selected = Some(processes.rows[39].key.clone());
     processes.selected_index = Some(399);
@@ -331,7 +331,7 @@ fn processes_window_shows_scroll_position_filters_and_truncation() {
     processes.filter = "work".into();
     processes.gpu_filter = Some((test_fixtures::entity("gpu:GPU-0"), "GPU0".into()));
     model.modules.processes = Some(Arc::new(processes));
-    let rendered = render(&model, (100, 30));
+    let rendered = render(&model, (100, 50));
     assert!(rendered.contains("filter \"work\""), "{}", rendered.text());
     assert!(rendered.contains("GPU GPU0"), "{}", rendered.text());
     assert!(rendered.contains("of 412"), "{}", rendered.text());
@@ -462,30 +462,26 @@ fn settings_view_shows_origins_restart_and_pending() {
     }
 }
 
+/// The retired views (D-91) have no module: a session left on one shows a
+/// note and the offered tabs, never a panic.
 #[test]
-fn actions_view_never_says_terminated() {
-    let rendered = render(&model(ViewKind::Actions), (160, 50));
-    assert!(
-        rendered.contains("signal sent (exit not observed)"),
-        "{}",
-        rendered.text()
-    );
-    assert!(rendered.contains("unknown outcome"), "{}", rendered.text());
-    assert!(rendered.contains("audit healthy"), "{}", rendered.text());
-    assert!(
-        rendered.contains("never retried automatically"),
-        "{}",
-        rendered.text()
-    );
-    assert!(!rendered.text().contains("terminated"));
-    for size in [(100, 30), (80, 24), (40, 10)] {
-        assert!(render(&model(ViewKind::Actions), size).contains("Actions"));
+fn retired_views_render_a_note() {
+    for view in [ViewKind::Processes, ViewKind::Sources, ViewKind::Actions] {
+        for size in [(160, 50), (80, 24), (40, 10)] {
+            let rendered = render(&model(view), size);
+            assert!(
+                rendered.contains("no display module is registered"),
+                "{view:?} {size:?}\n{}",
+                rendered.text()
+            );
+            assert!(rendered.report.module_errors.is_empty());
+        }
     }
 }
 
 #[test]
 fn confirmation_banner_is_visible_and_never_clipped_at_40x10() {
-    let mut model = model(ViewKind::Processes);
+    let mut model = model(ViewKind::Overview);
     model.modules.actions = Some(Arc::new(test_fixtures::actions_view(true)));
     model.banners = vec![Banner {
         level: BannerLevel::Info,
@@ -646,18 +642,14 @@ fn gpu_unavailable_reason_is_shown() {
 
 #[test]
 fn tabs_and_rows_produce_hit_targets_with_the_frame_revision() {
-    let rendered = render(&model(ViewKind::Processes), (160, 50));
+    let rendered = render(&model(ViewKind::Overview), (160, 50));
     let map = &rendered.report.hit_map;
     assert_eq!(map.frame_revision(), 7);
     for tab in crate::views::OFFERED_TABS {
         assert_eq!(map.count(tab.control_id()), 1, "{tab:?}");
     }
-    for hidden in [ViewKind::Sources, ViewKind::Processes] {
-        assert_eq!(
-            map.count(controls::tab(hidden)),
-            0,
-            "{hidden:?} is not offered"
-        );
+    for retired in ["tab.processes", "tab.sources", "tab.actions"] {
+        assert_eq!(map.count(retired), 0, "{retired} is not offered");
     }
     assert_eq!(map.visible_process_rows(), 12);
     let row = map

@@ -666,7 +666,7 @@ fn at10_full_action_path_through_commands_sends_once() {
     with_process_table(&harness, &[4242]);
     let key = target(4242);
     let select = harness
-        .submit(navigation(ViewKind::Processes, Some(key.clone()), ""))
+        .submit(navigation(ViewKind::Overview, Some(key.clone()), ""))
         .unwrap();
     harness.settle();
     assert!(harness.result_for(select).code.is_ok());
@@ -760,7 +760,7 @@ fn at13_absent_or_unselected_targets_are_rejected_and_never_retargeted() {
         ResultCode::from(ErrorCode::ProcessExited)
     );
     harness
-        .submit(navigation(ViewKind::Processes, Some(target(10)), ""))
+        .submit(navigation(ViewKind::Overview, Some(target(10)), ""))
         .unwrap();
     harness.settle();
     harness.results();
@@ -955,11 +955,11 @@ fn a_view_change_gets_a_projection_while_a_cycle_settles() {
     commit(&mut harness, &plans[0], 2);
     assert_eq!(projections(&harness), 0);
     harness
-        .submit(navigation(ViewKind::Processes, None, ""))
+        .submit(navigation(ViewKind::Overview, None, ""))
         .unwrap();
     harness.settle();
     let projection = harness.session.take_projection().expect("prompt frame");
-    assert_eq!(projection.session.view, ViewKind::Processes);
+    assert_eq!(projection.session.view, ViewKind::Overview);
 }
 
 // ----- history -----------------------------------------------------------------
