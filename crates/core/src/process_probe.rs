@@ -133,6 +133,40 @@ pub struct ProbeReport {
     pub read_boot_ns: u64,
 }
 
+/// What the last probe reading of a running process gives its run's
+/// samples; `None` where it could not be read.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ProbedValues {
+    /// Read and written, bytes per second.
+    pub disk: [Option<f64>; 2],
+    pub threads: Option<f64>,
+    pub children: Option<f64>,
+    /// Percent of one core.
+    pub children_cpu: Option<f64>,
+    pub children_memory: Option<f64>,
+    pub swap: Option<f64>,
+    pub open_files: Option<f64>,
+}
+
+/// The counters of the last reading that the next reading's rates count
+/// from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProbeBases {
+    /// The IO counters, and when they were read (boot ns).
+    pub io: Option<(IoCounters, u64)>,
+    /// The descendants' CPU ticks, and when they were read (boot ns).
+    pub child_ticks: Option<(u64, u64)>,
+}
+
+/// What following one process carries from one probe reading to the next
+/// (D-79): the deriver keeps nothing, so the previous state comes in and
+/// the next goes out.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ProbeState {
+    pub values: ProbedValues,
+    pub bases: ProbeBases,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

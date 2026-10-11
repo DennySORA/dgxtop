@@ -45,7 +45,7 @@ use crate::observation::{
 use crate::process_history::{
     ProcessHistoryJournal, ProcessHistoryLoad, RecentHistory, RunBucketRow,
 };
-use crate::process_probe::{ProbeReport, ProbeTarget};
+use crate::process_probe::{ProbeReading, ProbeReport, ProbeState, ProbeTarget};
 use crate::view::{HostStatus, ViewModel};
 
 /// Read-only telemetry adapter. Owns its driver handles; returns native values
@@ -355,6 +355,23 @@ pub trait ProcessActionPort: Send {
 /// line and working folder. Read-only: it never signals.
 pub trait ProcessProbe: Send {
     fn probe(&mut self, targets: &[ProbeTarget]) -> ProbeReport;
+}
+
+/// Turns a probe reading of a running process into the values its run's
+/// samples take (D-79: the process collector's transformation, kept apart
+/// from the process history that follows the runs). Pure: `previous` is
+/// what the last reading of the same process left; the result is the
+/// state the next reading starts from.
+pub trait ProbeDeriver: Send + Sync {
+    /// `read_boot_ns` is when the probe read `reading`; `clk_tck` the
+    /// clock ticks per second the descendants' CPU is counted in.
+    fn derive(
+        &self,
+        previous: &ProbeState,
+        reading: &ProbeReading,
+        read_boot_ns: u64,
+        clk_tck: Option<u64>,
+    ) -> ProbeState;
 }
 
 /// The stores of the process history (D-76): a long-term database of runs
