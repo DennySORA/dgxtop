@@ -20,4 +20,4 @@ mod repository;
 mod retention;
 
 pub use limits::{AuditLimits, AuditOpenError};
-pub use repository::{AuditRetentionReport, SqliteAuditRepository};
+pub use repository::SqliteAuditRepository;

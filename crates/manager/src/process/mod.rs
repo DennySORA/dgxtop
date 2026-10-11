@@ -121,6 +121,7 @@ pub(crate) struct ProcessService {
     audit_backlog: VecDeque<AuditOp>,
     audit_retry_ns: u64,
     audit_outstanding: usize,
+    audit_expiry: audit::AuditExpirySchedule,
     records: ActionRegistry,
     unknown_outcomes: u32,
     shutting_down: bool,
@@ -148,6 +149,7 @@ impl ProcessService {
             audit_backlog: VecDeque::new(),
             audit_retry_ns: 0,
             audit_outstanding: 0,
+            audit_expiry: audit::AuditExpirySchedule::new(config.store.audit_retention_days),
             records: ActionRegistry::default(),
             unknown_outcomes: 0,
             shutting_down: false,
@@ -361,7 +363,11 @@ impl ProcessService {
                     self.note_audit_failure(&failure, now);
                 }
             }
-            AuditCompletion::Recovered { result } => self.on_recovered(result, now, fx),
+            AuditCompletion::Recovered { result } => {
+                self.on_recovered(result, now, fx);
+                self.request_expiry(now);
+            }
+            AuditCompletion::Expired { result } => self.on_expired(result, now),
             AuditCompletion::Status(status) => self.audit_status = Some(status),
             // Lookups are never issued: single-use tokens already make a
             // replayed confirmation harmless.
@@ -487,6 +493,7 @@ impl ProcessService {
 
     pub(crate) fn tick(&mut self, now: Now, fx: &mut Effects) {
         self.retry_audit_backlog(now);
+        self.request_expiry(now);
         if now.boot_ns >= self.next_status_ns {
             self.request_status(now);
             if !self.recovered && !self.recovery_requested {

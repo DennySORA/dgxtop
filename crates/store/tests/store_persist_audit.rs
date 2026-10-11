@@ -1,7 +1,7 @@
 //! Action audit: durable receipts only after COMMIT, idempotency, recovery
 //! of intents without outcome (AT32 audit side), fail-closed capacity, WAL
-//! and busy handling (AT31), retention, schema/version handling and
-//! corruption (STORAGE.md §6–§8).
+//! and busy handling (AT31), expiry on its owner's request (D-96),
+//! schema/version handling and corruption (STORAGE.md §6–§8).
 
 // Test helpers panic on setup failures; the lints target production code.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -508,8 +508,8 @@ fn size_cap_refuses_intents_but_still_records_outcomes() {
             .append_outcome(&fixture.outcome(intent, event, ActionState::Sending))
             .unwrap();
     }
-    // Retention never deletes unexpired rows to make room.
-    let report = audit.run_retention().unwrap();
+    // An expiry never deletes unexpired rows to make room.
+    let report = audit.expire(&fixture.utc_days_ago(30)).unwrap();
     assert_eq!(
         report.deleted_intents + report.deleted_events + report.deleted_attempts,
         0
@@ -568,7 +568,7 @@ fn wal_backlog_pinned_by_a_reader_stops_new_intents_until_released() {
 }
 
 #[test]
-fn retention_deletes_only_rows_older_than_the_retention_window() {
+fn an_expiry_deletes_only_rows_older_than_its_cutoff() {
     let fixture = Fixture::new("retention");
     let mut audit = fixture.open(AuditLimits::default());
     let mut old = fixture.intent(70);
@@ -598,12 +598,11 @@ fn retention_deletes_only_rows_older_than_the_retention_window() {
         occurred_utc: fixture.utc_days_ago(31),
     };
     audit.append_attempt(&old_attempt).unwrap();
-    let report = audit.run_retention().unwrap();
+    let report = audit.expire(&fixture.utc_days_ago(30)).unwrap();
     assert_eq!(report.deleted_events, 1);
     assert_eq!(report.deleted_intents, 1);
     assert_eq!(report.deleted_attempts, 1);
     assert!(report.complete);
-    assert_eq!(report.cutoff_utc, fixture.utc_days_ago(30));
     assert_eq!(audit.lookup(old.request_id).unwrap(), None);
     assert_eq!(audit.lookup(old_attempt.request_id).unwrap(), None);
     assert!(audit.lookup(recent.request_id).unwrap().is_some());
@@ -900,4 +899,29 @@ fn status_never_deletes_rows() {
     fixture.clock.advance_ns(2 * 3600 * 1_000_000_000);
     assert!(audit.status().accepts_writes());
     assert!(audit.lookup(old.request_id).unwrap().is_some());
+}
+
+/// Opening the audit deletes nothing, however old its rows: only an expiry
+/// its owner asks for does (D-96), and only with a valid cutoff.
+#[test]
+fn only_an_expiry_request_deletes_old_rows() {
+    let fixture = Fixture::new("no-own-expiry");
+    let mut audit = fixture.open(AuditLimits::default());
+    let mut old = fixture.intent(81);
+    old.created_utc = fixture.utc_days_ago(40);
+    audit.append_intent(&old).unwrap();
+    drop(audit);
+    fixture.clock.advance_ns(2 * 3600 * 1_000_000_000);
+    let mut audit = fixture.open(AuditLimits::default());
+    assert!(
+        audit.lookup(old.request_id).unwrap().is_some(),
+        "open deletes nothing"
+    );
+    let invalid = audit.expire("thirty days ago").unwrap_err();
+    assert_eq!(invalid.code, ErrorCode::ValidationFailed);
+    assert!(audit.lookup(old.request_id).unwrap().is_some());
+    let report = audit.expire(&fixture.utc_days_ago(30)).unwrap();
+    assert_eq!(report.deleted_intents, 1);
+    assert!(report.complete);
+    assert_eq!(audit.lookup(old.request_id).unwrap(), None);
 }

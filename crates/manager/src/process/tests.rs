@@ -67,10 +67,27 @@ fn bench_with(config: &Config, euid: u32) -> Bench {
     bench.audit_completion(AuditCompletion::Recovered {
         result: Ok(Vec::new()),
     });
+    let expiry = bench.audit.take();
+    assert!(
+        matches!(expiry[..], [AuditOp::Expire { .. }]),
+        "the expiry follows the recovery: {expiry:?}"
+    );
     bench.audit_completion(AuditCompletion::Status(PersistenceStatus::healthy(
         PersistenceKind::Audit,
     )));
     bench
+}
+
+/// The audit expiries the bench's service asked for since the last take.
+fn expiries(audit: &CapturingDispatch<AuditOp>) -> Vec<String> {
+    audit
+        .take()
+        .into_iter()
+        .filter_map(|op| match op {
+            AuditOp::Expire { before_utc } => Some(before_utc),
+            _ => None,
+        })
+        .collect()
 }
 
 fn bench() -> Bench {
@@ -1539,4 +1556,82 @@ fn shutdown_revokes_and_reports_unfinished_work() {
         result_for(&fx, sending_confirm).code,
         ResultCode::from(ErrorCode::UnknownOutcome)
     );
+}
+
+/// The process service decides the audit's age limit (D-96): once recovery
+/// is done it asks to expire what is older than
+/// `store.audit_retention_days`, then again every hour, never sooner.
+#[test]
+fn the_audit_expiry_is_asked_after_recovery_and_then_hourly() {
+    let mut bench = bench();
+    let thirty_days_ago = bench.now.utc_ns - 30 * 86_400 * i128::from(SECOND);
+    bench.tick();
+    assert!(expiries(&bench.audit).is_empty(), "asked once at startup");
+    bench.advance_ms(3_599_000);
+    bench.tick();
+    assert!(expiries(&bench.audit).is_empty(), "not within the hour");
+    bench.advance_ms(1_000);
+    bench.tick();
+    let hourly = expiries(&bench.audit);
+    assert_eq!(
+        hourly,
+        vec![dgxtop_core::clock::format_utc_rfc3339(
+            thirty_days_ago + 3_600 * i128::from(SECOND)
+        )]
+    );
+}
+
+#[test]
+fn the_audit_expiry_waits_for_recovery_and_a_free_worker() {
+    let config = Config::defaults().unwrap();
+    let audit = CapturingDispatch::new();
+    let mut service = ProcessService::new(
+        ProcessPorts {
+            audit: Box::new(audit.clone()),
+            actions: Box::new(CapturingDispatch::<ActionOp>::new()),
+        },
+        identity(EUID),
+        &config,
+        Diagnostics::new(),
+    );
+    let mut now = Now {
+        boot_ns: 1_000 * SECOND,
+        utc_ns: 1_790_000_000_000_000_000,
+    };
+    let mut fx = Effects::default();
+    service.start(now);
+    service.tick(now, &mut fx);
+    assert!(expiries(&audit).is_empty(), "nothing before recovery");
+    audit.set_busy(true);
+    let open = BTreeSet::new();
+    service.on_audit(
+        AuditCompletion::Recovered {
+            result: Ok(Vec::new()),
+        },
+        now,
+        &open,
+        &mut fx,
+    );
+    assert!(expiries(&audit).is_empty());
+    audit.set_busy(false);
+    now.boot_ns += SECOND;
+    service.tick(now, &mut fx);
+    assert_eq!(expiries(&audit).len(), 1, "a busy worker is asked again");
+}
+
+/// A failed expiry asks the audit's status again, so the failure shows,
+/// and leaves recording untouched.
+#[test]
+fn a_failed_audit_expiry_refreshes_the_status() {
+    let mut bench = bench();
+    bench.audit_completion(AuditCompletion::Expired {
+        result: Err(AuditFailure {
+            code: ErrorCode::PersistFailed,
+            message: "locked".into(),
+            commit_uncertain: false,
+        }),
+    });
+    let ops = bench.audit.take();
+    assert!(matches!(ops[..], [AuditOp::Status]), "{ops:?}");
+    assert!(bench.service.availability().is_none());
 }

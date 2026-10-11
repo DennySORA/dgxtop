@@ -1,4 +1,4 @@
-//! Age-based audit retention.
+//! Age-based audit expiry, run when the audit's owner asks (D-96).
 //!
 //! Only rows older than the cutoff are deleted, in small bounded
 //! transactions: events by their own `occurred_utc`, attempts by theirs, and
@@ -15,8 +15,8 @@ use crate::sqlite::{Drained, TxError, drain};
 
 /// Rows deleted per transaction.
 pub(crate) const RETENTION_BATCH_ROWS: i64 = 512;
-/// Transactions per retention run; the next run continues where this one
-/// stopped.
+/// Transactions per expiry request; the next request continues where this
+/// one stopped.
 pub(crate) const RETENTION_MAX_ROUNDS: u32 = 64;
 
 const DELETE_EXPIRED_EVENTS: &str = "DELETE FROM action_events WHERE rowid IN (
@@ -29,7 +29,7 @@ const DELETE_EXPIRED_INTENTS: &str = "DELETE FROM action_intents WHERE rowid IN 
       AND request_id NOT IN (SELECT request_id FROM action_events)
     LIMIT ?2)";
 
-/// Rows removed by one retention run.
+/// Rows removed by one expiry request.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct RetentionCounts {
     pub events: u64,

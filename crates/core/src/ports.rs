@@ -33,8 +33,9 @@ use uuid::Uuid;
 
 use crate::action::{
     ActionAttempt, ActionCompletion, ActionError, ActionHandle, ActionIntent, ActionOutcomeRecord,
-    ActionRecordSummary, AuditCompletion, AuditFailure, CapabilityContext, DurableReceipt,
-    ExitObservation, PersistenceStatus, PreparedProcess, RecoveredIntent, Signal, SignalOutcome,
+    ActionRecordSummary, AuditCompletion, AuditExpiryReport, AuditFailure, CapabilityContext,
+    DurableReceipt, ExitObservation, PersistenceStatus, PreparedProcess, RecoveredIntent, Signal,
+    SignalOutcome,
 };
 use crate::budget::{BytePermit, CapacityError};
 use crate::canonical::{
@@ -359,7 +360,12 @@ pub trait AuditRepository: Send {
         now_boot_ns: u64,
         now_utc: &str,
     ) -> Result<Vec<RecoveredIntent>, AuditFailure>;
+    /// Deletes the rows older than `before_utc` (RFC 3339 UTC), bounded per
+    /// call. The only way rows leave the audit: its owner decides the age
+    /// and when (D-96).
+    fn expire(&mut self, before_utc: &str) -> Result<AuditExpiryReport, AuditFailure>;
     fn lookup(&mut self, request_id: Uuid) -> Result<Option<ActionRecordSummary>, AuditFailure>;
+    /// A read: never deletes or changes a row.
     fn status(&mut self) -> PersistenceStatus;
 }
 

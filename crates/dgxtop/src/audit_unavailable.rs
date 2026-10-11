@@ -3,8 +3,9 @@
 //! intent (SECURITY.md §3).
 
 use dgxtop_core::action::{
-    ActionAttempt, ActionIntent, ActionOutcomeRecord, ActionRecordSummary, AuditFailure,
-    DurableReceipt, PersistenceKind, PersistenceState, PersistenceStatus, RecoveredIntent,
+    ActionAttempt, ActionIntent, ActionOutcomeRecord, ActionRecordSummary, AuditExpiryReport,
+    AuditFailure, DurableReceipt, PersistenceKind, PersistenceState, PersistenceStatus,
+    RecoveredIntent,
 };
 use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::ports::AuditRepository;
@@ -53,6 +54,10 @@ impl AuditRepository for UnavailableAudit {
         Err(self.failure())
     }
 
+    fn expire(&mut self, _before_utc: &str) -> Result<AuditExpiryReport, AuditFailure> {
+        Err(self.failure())
+    }
+
     fn lookup(&mut self, _request_id: Uuid) -> Result<Option<ActionRecordSummary>, AuditFailure> {
         Err(self.failure())
     }
@@ -78,6 +83,7 @@ mod tests {
         let mut audit = UnavailableAudit::new("gate failed");
         assert!(audit.recover_unknown(0, "1970-01-01T00:00:00Z").is_err());
         assert!(audit.lookup(Uuid::nil()).is_err());
+        assert!(audit.expire("1970-01-01T00:00:00Z").is_err());
         assert!(!audit.status().accepts_writes());
     }
 }
