@@ -195,7 +195,7 @@ fn run() -> BenchResult<PathBuf> {
     common::finish(outcome, &spec, &config, environment, &mut evidence, &paths)
 }
 
-/// The replay pipeline committing into a real (replay-namespace) hot store,
+/// The replay pipeline committing into a real (replay-namespace) live state,
 /// with the trends that state fills at commit (D-99), and the history's
 /// process memory record.
 struct SnapshotWorld {
@@ -403,11 +403,8 @@ impl StaticInputs {
                 .then(|| self.first_gpu.clone())
                 .flatten(),
             selected_process: None,
-            filter: if view == ViewKind::History {
-                "1h".to_owned()
-            } else {
-                String::new()
-            },
+            // The history view's bar sizes are its own fields (D-80).
+            filter: String::new(),
             sort: SortKey::GpuMemory,
             ascending: false,
             overview_bar: dgxtop_core::tiers::BarSize::OneMinute,

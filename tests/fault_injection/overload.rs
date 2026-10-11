@@ -34,7 +34,7 @@ use crate::support::manager_rig::{
 use crate::support::probes::{Gate, TempDir, serial, wait_until};
 use crate::support::workers::{
     Completions, WorkerSet, spawn_audit_worker, spawn_config_worker, spawn_history_pool,
-    spawn_store_worker,
+    spawn_state_worker,
 };
 
 const SECOND_NS: u64 = 1_000_000_000;
@@ -82,14 +82,14 @@ impl OverloadRig {
         .into_parts();
         let trends = Arc::new(writer.trends());
         let mut workers = WorkerSet::default();
-        let store = spawn_store_worker(
+        let state = spawn_state_worker(
             writer,
             None,
             Arc::clone(&time),
             completions.clone(),
             u64::from(config.queues.archive_bytes),
         );
-        workers.track(&store);
+        workers.track(&state);
         let config_worker = spawn_config_worker(repository, completions.clone());
         workers.track(&config_worker);
         // The product's fail-closed audit stand-in (SQLite gate failed).
@@ -105,7 +105,7 @@ impl OverloadRig {
             spawn_history_pool(&config, Arc::new(history), Arc::clone(&time), completions);
         workers.track(&history_pool);
         let ports = ManagerPorts {
-            store: Box::new(store),
+            state: Box::new(state),
             config: Box::new(config_worker),
             audit: Box::new(audit),
             history: Box::new(history_pool),

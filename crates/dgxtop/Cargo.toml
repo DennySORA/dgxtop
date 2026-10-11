@@ -43,6 +43,7 @@ uuid.workspace = true
 [dev-dependencies]
 dgxtop-core = { workspace = true, features = ["test-support"] }
 dgxtop-store = { workspace = true, features = ["test-support"] }
+dgxtop-manager = { workspace = true, features = ["test-support"] }
 jsonschema.workspace = true
 nix.workspace = true
 libc.workspace = true

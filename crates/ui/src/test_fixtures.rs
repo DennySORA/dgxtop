@@ -8,9 +8,10 @@ use dgxtop_core::action::{ConfirmationToken, PersistenceKind, PersistenceStatus,
 use dgxtop_core::canonical::GpuUsageKind;
 use dgxtop_core::commands::{SortKey, ViewKind};
 use dgxtop_core::config::{Theme, ValueOrigin};
-use dgxtop_core::identity::{EntityId, ModuleId, ProcessKey, SessionId};
+use dgxtop_core::identity::{ModuleId, ProcessKey, SessionId};
 use dgxtop_core::metric::{CanonicalUnit, Scalar};
 use dgxtop_core::quality::{Quality, SampleKind};
+pub(crate) use dgxtop_core::testing::entity_id as entity;
 pub(crate) use dgxtop_core::testing::metric_key;
 use dgxtop_core::testing::test_process_key;
 use dgxtop_core::view::{
@@ -66,10 +67,6 @@ pub(crate) fn render_text(
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-pub(crate) fn entity(value: &str) -> EntityId {
-    EntityId::new(value).unwrap()
 }
 
 /// The core's test process key, started at tick `start`.

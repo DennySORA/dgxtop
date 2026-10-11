@@ -2,7 +2,7 @@
 //!
 //! Each run starts the full replay composition (`composition`): seven
 //! resident child-process replay hosts serving slices of the seeded REF
-//! fixture with 1 ms simulated API latency, the real collectors, hot store,
+//! fixture with 1 ms simulated API latency, the real collectors, state,
 //! history/config/audit workers and the Manager, plus the real terminal
 //! runner on a headless 160×50 terminal (`frontend`) and a 10 Hz script of
 //! view commands (`script`). After warm-up it measures, over the window:

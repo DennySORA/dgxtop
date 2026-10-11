@@ -1,4 +1,4 @@
-//! Shared builders for the hot store integration tests.
+//! Shared builders for the live state integration tests.
 //!
 //! Every `store_hot_*` test crate includes this file as a module and uses a
 //! different subset of it, hence the crate-wide `dead_code` allowance.
@@ -41,7 +41,7 @@ pub fn config() -> Config {
     Config::defaults().unwrap_or_else(|error| panic!("embedded defaults: {error}"))
 }
 
-/// A hot store plus a fake clock and one collector's commit bookkeeping.
+/// A live state plus a fake clock and one collector's commit bookkeeping.
 pub struct Harness {
     pub writer: StateWriter,
     pub snapshots: SharedSnapshot,

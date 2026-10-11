@@ -1,18 +1,22 @@
 //! Real worker wiring for the scenarios, mirroring the private assembly in
-//! `crates/dgxtop/src/monitor.rs`: the config, audit, action, collector,
-//! history and LiveState workers on the runtime's fixed pools and actors, and
-//! the archive actor the LiveState feeds. The only deviations are test seams:
+//! `crates/dgxtop/src/monitor/`: the config, audit, action, collector,
+//! history and state workers on the runtime's fixed pools and actors, and
+//! the archive actor the state feeds. The only deviations are test seams:
 //! a [`Gate`] in front of storage workers, probes recording what the archive
-//! did, and a recording action port that never signals anything. The audit
-//! and action workers run the production `dgxtop::control_ops` functions.
+//! did, and a recording action port that never signals anything. Every
+//! worker runs the production job functions (`dgxtop::control_ops`,
+//! `dgxtop::collection_ops`, `dgxtop::state_actor`) on the program's queue
+//! sizes (`dgxtop::worker_queues`).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use crossbeam_channel::Sender;
-use dgxtop::control_ops::{run_action_op, run_audit_op};
-use dgxtop::store_actor::run_store_job;
+use dgxtop::collection_ops::run_collection;
+use dgxtop::control_ops::{run_action_op, run_audit_op, run_config_job, run_history_job};
+use dgxtop::state_actor::run_state_job;
+use dgxtop::worker_queues::{ACTION_QUEUE, ARCHIVE_QUEUE, AUDIT_QUEUE, CONFIG_QUEUE, STATE_QUEUE};
 use dgxtop_core::action::{
     ActionError, ActionHandle, ActionOp, AuditOp, CapabilityContext, DurableReceipt,
     ExitObservation, PersistenceStatus, PreparedProcess, Signal, SignalOutcome, VerifiedIdentity,
@@ -24,8 +28,8 @@ use dgxtop_core::errors::InfraError;
 use dgxtop_core::identity::ProcessKey;
 use dgxtop_core::ports::{
     ArchiveJournal, ArchiveReceipt, ArchiveSink, AuditRepository, Collector, ConfigJob,
-    ConfigRepository, ControlCompletion, Dispatch, HistoryJob, IngestionCompletion, OverviewReader,
-    ProcessActionPort, StoreJob,
+    ControlCompletion, Dispatch, HistoryJob, IngestionCompletion, OverviewReader,
+    ProcessActionPort, StateJob,
 };
 use dgxtop_manager::ManagerInboxes;
 use dgxtop_runtime::queues::{PoolHandle, StopReport, spawn_actor, spawn_pool};
@@ -35,14 +39,8 @@ use dgxtop_store::config::FileConfigRepository;
 
 use super::probes::Gate;
 
-/// Bounded wait for a worker to hand a completion over (as in monitor.rs).
+/// Bounded wait for a worker to hand a completion over (as in the monitor).
 const COMPLETION_SEND_TIMEOUT: Duration = Duration::from_secs(1);
-/// Mailbox sizes used by the composition root.
-const CONFIG_MAILBOX: usize = 8;
-const AUDIT_MAILBOX: usize = 64;
-const ACTION_MAILBOX: usize = 16;
-const STORE_MAILBOX: usize = 64;
-const ARCHIVE_MAILBOX: usize = 8;
 
 /// Completion senders shared by every worker; sends are bounded in time.
 #[derive(Clone)]
@@ -114,16 +112,10 @@ pub fn spawn_config_worker(
 ) -> PoolHandle<ConfigJob> {
     spawn_actor(
         "config",
-        CONFIG_MAILBOX,
+        CONFIG_QUEUE,
         repository,
         move |repository: &mut FileConfigRepository, job: ConfigJob| {
-            let ConfigJob::Persist {
-                request_id,
-                expected_revision,
-                candidate,
-            } = job;
-            let result = repository.compare_and_swap(expected_revision, &candidate);
-            completions.control(ControlCompletion::Config { request_id, result });
+            completions.control(run_config_job(repository, job));
         },
     )
     .expect("spawn config worker")
@@ -139,7 +131,7 @@ pub fn spawn_audit_worker(
 ) -> PoolHandle<AuditOp> {
     spawn_actor(
         "audit",
-        AUDIT_MAILBOX,
+        AUDIT_QUEUE,
         repository,
         move |repository: &mut Box<dyn AuditRepository>, op: AuditOp| {
             if matches!(op, AuditOp::AppendIntent(_)) {
@@ -254,7 +246,7 @@ pub fn spawn_action_worker(
 ) -> PoolHandle<ActionOp> {
     spawn_actor(
         "action",
-        ACTION_MAILBOX,
+        ACTION_QUEUE,
         port,
         move |port: &mut RecordingActionPort, op: ActionOp| {
             let completion = run_action_op(port, op, clock.as_ref(), None);
@@ -274,29 +266,7 @@ pub fn spawn_collector_pool(
         usize::try_from(config.runtime.compute_workers).unwrap_or(2),
         usize::try_from(config.queues.collector_jobs).unwrap_or(8),
         Arc::new(move |plan: CollectionPlan| {
-            let collector = registry
-                .iter()
-                .find(|collector| collector.id() == &plan.collector_id)
-                .cloned();
-            let collector_id = plan.collector_id.clone();
-            let batch_id = plan.batch_id;
-            let outcome = collector.map(|collector| {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| collector.collect(&plan)))
-            });
-            let completion = match outcome {
-                Some(Ok(batch)) => IngestionCompletion::Collected(Box::new(batch)),
-                Some(Err(_)) => IngestionCompletion::CollectorFailed {
-                    collector_id,
-                    batch_id,
-                    message: "collector panicked".to_owned(),
-                },
-                None => IngestionCompletion::CollectorFailed {
-                    collector_id,
-                    batch_id,
-                    message: "unknown collector".to_owned(),
-                },
-            };
-            completions.ingestion(completion);
+            completions.ingestion(run_collection(&registry, &plan));
         }),
     )
     .expect("spawn collector pool")
@@ -313,18 +283,7 @@ pub fn spawn_history_pool(
         usize::try_from(config.runtime.history_workers).unwrap_or(1),
         usize::try_from(config.queues.history_requests).unwrap_or(4),
         Arc::new(move |job: HistoryJob| {
-            let result = history.read(
-                &job.request,
-                job.deadline_boot_ns,
-                &job.cancel,
-                clock.as_ref(),
-            );
-            completions.control(ControlCompletion::History {
-                request_id: job.request_id,
-                session_id: job.session_id,
-                session_generation: job.session_generation,
-                result,
-            });
+            completions.control(run_history_job(history.as_ref(), job, clock.as_ref()));
         }),
     )
     .expect("spawn history pool")
@@ -381,7 +340,7 @@ pub fn spawn_archive_worker(
 ) -> PoolHandle<ArchiveJournal> {
     spawn_actor(
         "archive",
-        ARCHIVE_MAILBOX,
+        ARCHIVE_QUEUE,
         archive,
         move |archive: &mut SqliteArchive, journal: ArchiveJournal| {
             gate.pass();
@@ -394,7 +353,7 @@ pub fn spawn_archive_worker(
     .expect("spawn archive worker")
 }
 
-/// The archive side of the HotStore actor: journals go to the archive actor
+/// The archive side of the state actor: journals go to the archive actor
 /// with `try_dispatch`; a refusal (busy archive) is counted, never waited on.
 #[derive(Clone)]
 pub struct ArchiveFeed {
@@ -417,7 +376,7 @@ impl ArchiveFeed {
         self.accepted.load(Ordering::SeqCst)
     }
 
-    /// Journals the busy archive refused (monitor.rs only logs them).
+    /// Journals the busy archive refused (the monitor only logs them).
     pub fn refused(&self) -> u64 {
         self.refused.load(Ordering::SeqCst)
     }
@@ -431,19 +390,19 @@ impl ArchiveFeed {
     }
 }
 
-pub fn spawn_store_worker(
+pub fn spawn_state_worker(
     writer: StateWriter,
     archive: Option<ArchiveFeed>,
     clock: Arc<dyn TimeProvider>,
     completions: Completions,
     archive_bytes: u64,
-) -> PoolHandle<StoreJob> {
+) -> PoolHandle<StateJob> {
     spawn_actor(
-        "hot-store",
-        STORE_MAILBOX,
+        "state",
+        STATE_QUEUE,
         writer,
-        move |writer: &mut StateWriter, job: StoreJob| {
-            if let Some(ack) = run_store_job(writer, job, clock.as_ref()) {
+        move |writer: &mut StateWriter, job: StateJob| {
+            if let Some(ack) = run_state_job(writer, job, clock.as_ref()) {
                 completions.ingestion(IngestionCompletion::Committed(ack));
             }
             if let Some(archive) = &archive
@@ -453,5 +412,5 @@ pub fn spawn_store_worker(
             }
         },
     )
-    .expect("spawn hot-store worker")
+    .expect("spawn the state worker")
 }

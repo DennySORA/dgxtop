@@ -4,7 +4,7 @@
 //! through a `SessionHandle`: the real Manager control thread, the real SQLite
 //! audit repository (WAL, `synchronous=FULL`) and the real pidfd action
 //! adapter in their single-owner worker actors, and the real file config
-//! repository, wired like `crates/dgxtop/src/monitor.rs` wires them.
+//! repository, wired like `crates/dgxtop/src/monitor/` wires them.
 //!
 //! Safety: the only processes that may ever be signalled are children this
 //! suite spawned itself (`sleep 60`), each killed and reaped by a guard on
@@ -13,10 +13,10 @@
 //! state lives in private temporary directories.
 //!
 //! Evidence per scenario: the command results and projected actions view a
-//! frontend sees; the Manager's event log; a journal of control-thread
-//! hand-overs, audit commits, adapter calls and every pidfd system call
-//! (spies that delegate to the real code unchanged); the child's own exit
-//! status; and the audit database read back through the store's public API.
+//! frontend sees; a journal of control-thread hand-overs, audit commits,
+//! adapter calls and every pidfd system call (spies that delegate to the
+//! real code unchanged); the child's own exit status; and the audit
+//! database read back through the store's public API.
 
 // Test helpers may unwrap: a broken fixture must fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

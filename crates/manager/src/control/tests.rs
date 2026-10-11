@@ -26,7 +26,7 @@ use dgxtop_core::observation::{
 };
 use dgxtop_core::ports::{
     AdapterJob, ConfigJob, ControlCompletion, IngestionCompletion, IngressBatch, PersistReceipt,
-    SessionPort, StoreJob,
+    SessionPort, StateJob,
 };
 use dgxtop_core::quality::SampleKind;
 use dgxtop_core::testing::{boot_id, host_id, metric_key};
@@ -281,15 +281,15 @@ fn apply_interval(harness: &mut Harness, interval_ms: u32) {
     assert!(harness.result_for(request).code.is_ok());
 }
 
-/// The sampling configurations the store was told to apply.
+/// The sampling configurations the state was told to apply.
 fn applied_samplings(harness: &Harness) -> Vec<u32> {
     harness
         .ports
-        .store
+        .state
         .take()
         .into_iter()
         .filter_map(|job| match job {
-            StoreJob::ApplySampling(sampling) => Some(sampling.interval_ms),
+            StateJob::ApplySampling(sampling) => Some(sampling.interval_ms),
             _ => None,
         })
         .collect()
@@ -300,21 +300,21 @@ fn applied_samplings(harness: &Harness) -> Vec<u32> {
 #[test]
 fn a_sampling_change_is_sent_to_the_state() {
     let mut harness = ready_harness(HarnessOptions::default());
-    harness.ports.store.take();
+    harness.ports.state.take();
     apply_interval(&mut harness, 2000);
     assert_eq!(applied_samplings(&harness), vec![2000]);
 }
 
-/// A busy store must not lose the change: the state would keep the old
+/// A busy state queue must not lose the change: the state would keep the old
 /// timing for the rest of the run.
 #[test]
 fn a_sampling_change_refused_by_a_busy_store_is_sent_again() {
     let mut harness = ready_harness(HarnessOptions::default());
-    harness.ports.store.take();
-    harness.ports.store.set_busy(true);
+    harness.ports.state.take();
+    harness.ports.state.set_busy(true);
     apply_interval(&mut harness, 2000);
     assert!(applied_samplings(&harness).is_empty());
-    harness.ports.store.set_busy(false);
+    harness.ports.state.set_busy(false);
     harness.ports.clock.advance_ms(1_100);
     harness.settle();
     assert_eq!(applied_samplings(&harness), vec![2000]);
@@ -327,16 +327,16 @@ fn a_sampling_change_refused_by_a_busy_store_is_sent_again() {
 fn at22_host_restart_drops_the_request_records_a_gap_and_rediscovers() {
     let mut harness = ready_harness(HarnessOptions::default());
     let lost = next_read_of(&mut harness, "cpu");
-    harness.ports.store.take();
+    harness.ports.state.take();
     harness.ports.clock.advance_ms(2_000);
     harness.host_up("procfs", 2, Some(6000));
     let gaps: Vec<_> = harness
         .ports
-        .store
+        .state
         .take()
         .into_iter()
         .filter_map(|job| match job {
-            StoreJob::Gap(gap) => Some(gap),
+            StateJob::Gap(gap) => Some(gap),
             _ => None,
         })
         .collect();
@@ -359,7 +359,7 @@ fn at22_host_restart_drops_the_request_records_a_gap_and_rediscovers() {
 #[test]
 fn a_refused_read_dispatch_is_deferred_and_retried() {
     let mut harness = ready_harness(HarnessOptions::default());
-    harness.ports.store.take();
+    harness.ports.state.take();
     harness.ports.adapters.set_busy(true);
     for _ in 0..200 {
         if harness.ports.adapters.refused() > 0 {
@@ -387,10 +387,10 @@ fn a_refused_read_dispatch_is_deferred_and_retried() {
     );
     let gaps = harness
         .ports
-        .store
+        .state
         .take()
         .into_iter()
-        .filter(|job| matches!(job, StoreJob::Gap(_)))
+        .filter(|job| matches!(job, StateJob::Gap(_)))
         .count();
     assert_eq!(gaps, 0, "a short deferral misses no slot");
 }
@@ -441,18 +441,18 @@ fn at05_pages_accumulate_into_one_job_and_state_advances_only_after_the_ack() {
     harness.settle();
     let commits: Vec<_> = harness
         .ports
-        .store
+        .state
         .take()
         .into_iter()
         .filter_map(|job| match job {
-            StoreJob::Commit { guard, .. } => Some(guard),
+            StateJob::Commit { guard, .. } => Some(guard),
             _ => None,
         })
         .collect();
     assert_eq!(commits.len(), 1);
     assert_eq!(commits[0].expected_epoch, 1);
     assert_eq!(commits[0].state_base_revision, 0);
-    // The store adopted next_state; the ack lets the collector run again.
+    // The state adopted next_state; the ack lets the collector run again.
     let cpu = metric_key("cpu", "cpu.utilization.total", "host");
     harness.ports.snapshots.set(committed_snapshot(
         2,
@@ -897,7 +897,7 @@ fn jobs_of_every_collector(harness: &mut Harness) -> Vec<CollectionPlan> {
 fn commit(harness: &mut Harness, plan: &CollectionPlan, revision: u64) {
     harness.ingest(IngestionCompletion::Collected(collected(plan)));
     harness.settle();
-    harness.ports.store.take();
+    harness.ports.state.take();
     harness.ingest(IngestionCompletion::Committed(StoreAck {
         batch_id: plan.batch_id,
         collector_id: plan.collector_id.clone(),

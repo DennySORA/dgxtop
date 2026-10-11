@@ -1,16 +1,15 @@
 //! A real `Manager` on its own control thread, driven only through its
-//! public surface: the `SessionHandle` (commands, results, projections), the
-//! shutdown trigger and the event feed. Ports default to inert capturing
-//! fakes; each scenario swaps in the real workers it exercises.
+//! public surface: the `SessionHandle` (commands, results, projections) and
+//! the shutdown trigger. Ports default to inert capturing fakes; each
+//! scenario swaps in the real workers it exercises.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use dgxtop_core::action::{ActionOp, AuditOp};
 use dgxtop_core::budget::{ByteLedger, Partition, QueueGate};
-use dgxtop_core::canonical::{CollectionPlan, ImmutableSnapshot, ProcessRow, ProcessTable};
+use dgxtop_core::canonical::{ImmutableSnapshot, ProcessRow, ProcessTable};
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::commands::{
     CommandBody, CommandEnvelope, CommandRejection, CommandResult, SortKey, ViewKind,
@@ -18,11 +17,8 @@ use dgxtop_core::commands::{
 use dgxtop_core::config::Config;
 use dgxtop_core::identity::{BootId, HostId, Pid, PidNamespace, ProcessKey};
 use dgxtop_core::observation::AdapterManifest;
-use dgxtop_core::ports::{
-    AdapterJob, ConfigJob, HistoryJob, LoadOrigin, SessionPort, SnapshotReader, StoreJob,
-};
+use dgxtop_core::ports::{LoadOrigin, SessionPort, SnapshotReader};
 use dgxtop_core::quality::{Namespace, SampleKind};
-use dgxtop_core::testing::{CapturingDispatch, MemoryLogger};
 use dgxtop_core::view::ViewModel;
 use dgxtop_manager::presentation::HostFacts;
 use dgxtop_manager::{
@@ -115,32 +111,9 @@ pub fn ingress_gate(config: &Config, ledger: &ByteLedger) -> QueueGate {
     )
 }
 
-/// Ports where nothing happens: no adapters, collectors, store, history,
+/// Ports where nothing happens: no adapters, collectors, state, history,
 /// config, audit or action traffic reaches a real worker.
-pub fn inert_ports(
-    clock: Arc<dyn TimeProvider>,
-    snapshots: Arc<dyn SnapshotReader>,
-    ledger: &ByteLedger,
-    ingress: QueueGate,
-) -> ManagerPorts {
-    ManagerPorts {
-        clock,
-        adapters: Box::new(CapturingDispatch::<AdapterJob>::new()),
-        collectors: Box::new(CapturingDispatch::<CollectionPlan>::new()),
-        collector_registry: Vec::new(),
-        store: Box::new(CapturingDispatch::<StoreJob>::new()),
-        snapshots,
-        trends: Arc::new(dgxtop_core::trends::TrendBook::default()),
-        history: Box::new(CapturingDispatch::<HistoryJob>::new()),
-        config: Box::new(CapturingDispatch::<ConfigJob>::new()),
-        audit: Box::new(CapturingDispatch::<AuditOp>::new()),
-        actions: Box::new(CapturingDispatch::<ActionOp>::new()),
-        process_history: None,
-        logger: Arc::new(MemoryLogger::default()),
-        ledger: ledger.clone(),
-        ingress,
-    }
-}
+pub use dgxtop_manager::testing::inert_ports;
 
 /// Snapshot reader holding a fixed process table. It can be told to fail
 /// its next read, which happens on the Manager's control thread: the way a

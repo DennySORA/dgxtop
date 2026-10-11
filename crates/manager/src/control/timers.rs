@@ -1,6 +1,6 @@
 //! Due timers of one control iteration: session lifecycle, action/config
 //! deadlines, scheduling, collector jobs, history refreshes, overload
-//! sampling, store maintenance and projection frames.
+//! sampling, state maintenance and projection frames.
 
 use dgxtop_core::canonical::{CatalogSnapshot, GapRecord, ImmutableSnapshot};
 use dgxtop_core::clock::ms_to_ns;
@@ -198,7 +198,7 @@ impl ControlCore {
     fn periodic(&mut self, now_ns: u64) {
         if now_ns >= self.timers.next_maintain_ns {
             self.timers.next_maintain_ns = now_ns.saturating_add(MAINTAIN_NS);
-            // Refused for a full store queue: asked again next period.
+            // Refused for a full state queue: asked again next period.
             let _ = self.ingestion.retry_sampling();
             let _ = self.ingestion.request_maintenance();
             // The process history's writes leave on time without commits.

@@ -386,8 +386,8 @@ impl Controller {
             KeyAction::Kill => self.prepare_signal(Signal::Sigkill, context, sink),
             KeyAction::Confirm => self.confirm(context, sink),
             KeyAction::Cancel => self.cancel(context, sink),
-            KeyAction::NextHistoryWindow => self.cycle_history_window(true, context),
-            KeyAction::PreviousHistoryWindow => self.cycle_history_window(false, context),
+            KeyAction::NextHistoryBarSize => self.cycle_history_bar_size(true, context),
+            KeyAction::PreviousHistoryBarSize => self.cycle_history_bar_size(false, context),
             KeyAction::ToggleModule => self.toggle_module(context, sink),
             KeyAction::ToggleCpuDetail => {
                 if let Ok(cpu) = ModuleId::new(CPU_MODULE_ID) {
@@ -611,7 +611,7 @@ impl Controller {
     /// `w`/`W` on the history view: the Overview History's bar size, or on
     /// an opened run the Process History's (D-77, D-78), each its own
     /// session field (D-80).
-    fn cycle_history_window(&mut self, forward: bool, context: &ControllerContext<'_>) {
+    fn cycle_history_bar_size(&mut self, forward: bool, context: &ControllerContext<'_>) {
         let on_run = self.history_page() == 2;
         self.update_fields(context, |fields| {
             if on_run {

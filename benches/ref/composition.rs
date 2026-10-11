@@ -1,6 +1,6 @@
 //! The REF composition: the same components and wiring as the monitor's
-//! composition root (`crates/dgxtop/src/monitor.rs`) in the replay
-//! namespace — HotStore actor, collector pool, history pool, config and
+//! composition root (`crates/dgxtop/src/monitor/`) in the replay
+//! namespace — state actor, collector pool, history pool, config and
 //! audit (SQLite) actors, the adapter supervisor with seven *child-process*
 //! replay hosts (`dgxtop --adapter-host replay-N`, one fixture slice each)
 //! and the Manager on its own thread — minus the terminal.
@@ -22,11 +22,13 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Sender, bounded};
 use dgxtop::audit_unavailable::UnavailableAudit;
-use dgxtop::control_ops::{run_action_op, run_audit_op};
+use dgxtop::collection_ops::{is_collector_panic, run_collection};
+use dgxtop::control_ops::{run_action_op, run_audit_op, run_config_job, run_history_job};
 use dgxtop::live_store::LiveStore;
 use dgxtop::startup::{real_filesystem, value_origins};
-use dgxtop::store_actor::run_store_job;
+use dgxtop::state_actor::run_state_job;
 use dgxtop::version::BuildInfo;
+use dgxtop::worker_queues::{ACTION_QUEUE, AUDIT_QUEUE, CONFIG_QUEUE, STATE_QUEUE};
 use dgxtop_collectors::process::ProcessProbeDeriver;
 use dgxtop_collectors::registry::default_collectors;
 use dgxtop_core::action::{
@@ -43,7 +45,7 @@ use dgxtop_core::overview_history::{OverviewAnswer, OverviewRequest};
 use dgxtop_core::ports::{
     AuditRepository, CancelFlag, Collector, ConfigJob, ConfigRepository, ControlCompletion,
     Dispatch, DispatchError, HistoryJob, IngestionCompletion, LogLevel, Logger, OverviewReader,
-    ProcessActionPort, ProcessHistoryInput, ProcessHistoryReader, ProcessMemoryReader, StoreJob,
+    ProcessActionPort, ProcessHistoryInput, ProcessHistoryReader, ProcessMemoryReader, StateJob,
 };
 use dgxtop_core::quality::Namespace;
 use dgxtop_history::{ProcessHistory, ProcessHistoryPorts, ProcessHistorySettings};
@@ -317,8 +319,8 @@ impl RefComposition {
         )));
         let trends = Arc::new(writer.trends());
         let mut workers: Vec<Box<dyn StopWorker>> = Vec::new();
-        let store = wiring.spawn_store(writer)?;
-        workers.push(Box::new(NamedPool("hot-store", store.clone())));
+        let state = wiring.spawn_state(writer)?;
+        workers.push(Box::new(NamedPool("state", state.clone())));
         let collector_registry = default_collectors();
         let collectors = wiring.spawn_collectors(&config, collector_registry.clone())?;
         workers.push(Box::new(NamedPool("collector", collectors.clone())));
@@ -384,7 +386,7 @@ impl RefComposition {
             adapters: Box::new(supervisor.clone()),
             collectors: Box::new(collectors),
             collector_registry,
-            store: Box::new(store),
+            state: Box::new(state),
             snapshots: Arc::new(snapshots.clone()),
             trends,
             history: Box::new(TimedHistoryDispatch {
@@ -519,20 +521,20 @@ fn replay_hosts(inputs: &CompositionInputs<'_>) -> BenchResult<HostPlan> {
 }
 
 impl Wiring {
-    fn spawn_store(&self, writer: StateWriter) -> BenchResult<PoolHandle<StoreJob>> {
+    fn spawn_state(&self, writer: StateWriter) -> BenchResult<PoolHandle<StateJob>> {
         let clock = Arc::clone(&self.clock);
         let completions = self.completions.clone();
         let probes = Arc::clone(&self.probes);
         spawn_actor(
-            "hot-store",
-            64,
+            "state",
+            STATE_QUEUE,
             writer,
-            move |writer: &mut StateWriter, job: StoreJob| {
+            move |writer: &mut StateWriter, job: StateJob| {
                 let reads = match &job {
-                    StoreJob::Commit { batch, .. } => reads_of(batch),
+                    StateJob::Commit { batch, .. } => reads_of(batch),
                     _ => Vec::new(),
                 };
-                if let Some(ack) = run_store_job(writer, job, clock.as_ref()) {
+                if let Some(ack) = run_state_job(writer, job, clock.as_ref()) {
                     probes.on_commit(&reads, &ack);
                     completions.ingestion(IngestionCompletion::Committed(ack));
                 }
@@ -553,37 +555,13 @@ impl Wiring {
             usize::try_from(config.runtime.compute_workers).unwrap_or(2),
             usize::try_from(config.queues.collector_jobs).unwrap_or(8),
             Arc::new(move |plan: CollectionPlan| {
-                let collector = registry
-                    .iter()
-                    .find(|collector| collector.id() == &plan.collector_id)
-                    .cloned();
-                let collector_id = plan.collector_id.clone();
-                let batch_id = plan.batch_id;
-                let outcome = collector.map(|collector| {
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        collector.collect(&plan)
-                    }))
-                });
-                match outcome {
-                    Some(Ok(batch)) => {
-                        completions.ingestion(IngestionCompletion::Collected(Box::new(batch)))
-                    }
-                    Some(Err(_)) => {
-                        probes
-                            .collector_panics
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        completions.ingestion(IngestionCompletion::CollectorFailed {
-                            collector_id,
-                            batch_id,
-                            message: "collector panicked".to_owned(),
-                        });
-                    }
-                    None => completions.ingestion(IngestionCompletion::CollectorFailed {
-                        collector_id,
-                        batch_id,
-                        message: "unknown collector".to_owned(),
-                    }),
+                let completion = run_collection(&registry, &plan);
+                if is_collector_panic(&completion) {
+                    probes
+                        .collector_panics
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
+                completions.ingestion(completion);
             }),
         )
         .map_err(|error| error.to_string())
@@ -602,19 +580,14 @@ impl Wiring {
             usize::try_from(config.runtime.history_workers).unwrap_or(1),
             usize::try_from(config.queues.history_requests).unwrap_or(4),
             Arc::new(move |job: HistoryJob| {
-                let result = reader.read(
-                    &job.request,
-                    job.deadline_boot_ns,
-                    &job.cancel,
-                    clock.as_ref(),
-                );
-                probes.on_history_result(&job.request_id, &result);
-                completions.control(ControlCompletion::History {
-                    request_id: job.request_id,
-                    session_id: job.session_id,
-                    session_generation: job.session_generation,
-                    result,
-                });
+                let completion = run_history_job(reader.as_ref(), job, clock.as_ref());
+                if let ControlCompletion::History {
+                    request_id, result, ..
+                } = &completion
+                {
+                    probes.on_history_result(request_id, result);
+                }
+                completions.control(completion);
             }),
         )
         .map_err(|error| error.to_string())
@@ -624,16 +597,10 @@ impl Wiring {
         let completions = self.completions.clone();
         spawn_actor(
             "config",
-            8,
+            CONFIG_QUEUE,
             repository,
             move |repository: &mut FileConfigRepository, job: ConfigJob| {
-                let ConfigJob::Persist {
-                    request_id,
-                    expected_revision,
-                    candidate,
-                } = job;
-                let result = repository.compare_and_swap(expected_revision, &candidate);
-                completions.control(ControlCompletion::Config { request_id, result });
+                completions.control(run_config_job(repository, job));
             },
         )
         .map_err(|error| error.to_string())
@@ -661,7 +628,7 @@ impl Wiring {
         let completions = self.completions.clone();
         spawn_actor(
             "audit",
-            64,
+            AUDIT_QUEUE,
             repository,
             move |repository: &mut Box<dyn AuditRepository>, op: AuditOp| {
                 completions.control(ControlCompletion::Audit(run_audit_op(
@@ -678,7 +645,7 @@ impl Wiring {
         let clock = Arc::clone(&self.clock);
         spawn_actor(
             "action",
-            16,
+            ACTION_QUEUE,
             RefusingActions,
             move |port: &mut RefusingActions, op: ActionOp| {
                 completions.control(ControlCompletion::Action(run_action_op(

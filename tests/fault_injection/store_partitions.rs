@@ -1,7 +1,7 @@
 //! AT06 (store partitions and partial persistence faults) and AT31 (SQLite
 //! disk low-water) across component boundaries:
 //!
-//! * the HotStore actor feeding a real `SqliteArchive` actor whose storage
+//! * the state actor feeding a real `SqliteArchive` actor whose storage
 //!   first stops answering and then runs out of space;
 //! * the Manager's ProcessService talking to a real `SqliteAuditRepository`
 //!   through the audit actor while the disk crosses the 64 MiB low-water mark
@@ -23,7 +23,7 @@ use dgxtop_core::config::Config;
 use dgxtop_core::errors::{ErrorCode, InfraError, ResultCode};
 use dgxtop_core::identity::{CollectorId, MetricKey};
 use dgxtop_core::metric::{CanonicalUnit, Scalar, ids};
-use dgxtop_core::ports::{Dispatch, IngestionCompletion, SnapshotReader, StoreJob};
+use dgxtop_core::ports::{Dispatch, IngestionCompletion, SnapshotReader, StateJob};
 use dgxtop_core::quality::{Freshness, Namespace, Quality, SampleKind, SelectionState};
 use dgxtop_core::testing::{FakeClock, metric_key, source_id};
 use dgxtop_manager::INGESTION_INBOX_CAPACITY;
@@ -37,7 +37,7 @@ use crate::support::manager_rig::RESULT_WAIT;
 use crate::support::probes::{AdjustableFreeSpace, Gate, TempDir, serial, wait_until};
 use crate::support::workers::{
     ActionCall, ArchiveFeed, ArchiveProbe, Completions, WorkerSet, spawn_archive_worker,
-    spawn_store_worker,
+    spawn_state_worker,
 };
 
 const SECOND: u64 = 1_000_000_000;
@@ -48,10 +48,10 @@ const ACK_BOUND: Duration = Duration::from_millis(500);
 
 // ----- LiveState + archive --------------------------------------------------
 
-/// The HotStore actor with the archive actor behind it, on a fake clock.
+/// The state actor with the archive actor behind it, on a fake clock.
 struct ArchivedStore {
     clock: Arc<FakeClock>,
-    store: PoolHandle<StoreJob>,
+    store: PoolHandle<StateJob>,
     acks: Receiver<IngestionCompletion>,
     snapshots: SharedSnapshot,
     ledger: ByteLedger,
@@ -93,7 +93,7 @@ impl ArchivedStore {
         let feed = ArchiveFeed::new(archive_worker);
         let (ingestion, acks) = bounded(INGESTION_INBOX_CAPACITY);
         let (control, _unused_control) = bounded(1);
-        let store = spawn_store_worker(
+        let store = spawn_state_worker(
             writer,
             Some(feed.clone()),
             time,
@@ -153,7 +153,7 @@ impl ArchivedStore {
             self.commit_reading();
             if self.cycle.is_multiple_of(10) {
                 self.store
-                    .try_dispatch(StoreJob::Maintain)
+                    .try_dispatch(StateJob::Maintain)
                     .expect("store accepts maintenance");
             }
         }
@@ -188,7 +188,7 @@ impl ArchivedStore {
         };
         let sent = Instant::now();
         self.store
-            .try_dispatch(StoreJob::Commit {
+            .try_dispatch(StateJob::Commit {
                 batch: Box::new(batch),
                 guard,
             })

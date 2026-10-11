@@ -1,14 +1,14 @@
 //! History module (D-46, D-48, D-50): the overview's resources over a
-//! longer window, laid out like a monitoring dashboard ([`layout`]):
+//! longer span, laid out like a monitoring dashboard ([`layout`]):
 //!
-//! - the window bar: the windows `w`/`W` step through, how much of the
-//!   window is recorded (history starts with dgxtop) and what a short
-//!   terminal leaves out;
+//! - the bar-size row: the bar sizes `w`/`W` step through (D-78), how much
+//!   of the charts' span is recorded (history starts with dgxtop) and what a
+//!   short terminal leaves out;
 //! - the panels ([`panels`]) in bands, two side by side on a wide terminal:
 //!   the CPU and the memory, the GPUs' utilization and memory, their
 //!   temperature and power, the disk and the network. Each panel is a title
-//!   over its strips ([`strip`]): a gutter with the scale, block columns of
-//!   the window, a legend with the value now, the mean and the peak;
+//!   over its strips ([`strip`]): a gutter with the scale, one block column
+//!   a bar, a legend with the value now, the mean and the peak;
 //! - the time axis under each column of panels ([`axis`]);
 //! - the GPUs' long-term table over 1 h to 24 h ([`stats`]).
 //!
@@ -84,7 +84,7 @@ impl DisplayModule for HistoryModule {
     ) -> RenderOutput {
         let mut output = Output::default();
         let (title, keys) = match context.tab {
-            0 => ("Overview History", WINDOW_KEYS),
+            0 => ("Overview History", BAR_SIZE_KEYS),
             1 => ("Process History", PROCESS_LIST_KEYS),
             _ => ("Process History · run", PROCESS_DETAIL_KEYS),
         };
@@ -119,7 +119,7 @@ impl DisplayModule for HistoryModule {
     }
 }
 
-/// The window bar, the panels, the axis and the table (module docs).
+/// The bar-size row, the panels, the axis and the table (module docs).
 fn render_history(
     frame: &mut Frame<'_>,
     inner: Rect,
@@ -143,7 +143,7 @@ fn render_history(
             gpus: blocks.len() - layout.table_blocks,
             processes: 0,
         };
-        render_window_bar(frame, row, history, hidden, context);
+        render_bar_size_row(frame, row, history, hidden, context);
     }
     output.label(format!(
         "history: last {}",
@@ -356,14 +356,15 @@ impl Hidden {
 }
 
 /// The keys acting on the view, at the right of its title (D-70).
-const WINDOW_KEYS: &str = "w/W/←/→ bar size";
+const BAR_SIZE_KEYS: &str = "w/W/←/→ bar size";
 /// The keys of the process history's pages (D-72, D-75).
 const PROCESS_LIST_KEYS: &str = "j/k/↑/↓ select · Enter open";
 const PROCESS_DETAIL_KEYS: &str = "w/W bar · Enter back · j/k/↑/↓ next · e command · y copy";
 
-/// `5m [1h] 6h 12h 24h`, then at the right what did not fit
-/// and how much of the window is recorded, as much as fits.
-fn render_window_bar(
+/// ` 1m  5m  10m … 24h ` with the current size marked, then at the right
+/// what did not fit and how much of the charts' span is recorded, as much
+/// as fits.
+fn render_bar_size_row(
     frame: &mut Frame<'_>,
     row: Rect,
     history: &HistoryView,
@@ -374,13 +375,13 @@ fn render_window_bar(
     let current = clean(&history.window_label);
     let mut spans = Vec::new();
     // The Overview History's bar sizes (D-78): every size but `auto`.
-    for window in BarSize::fixed().map(BarSize::token) {
-        let style = if window == current {
+    for size in BarSize::fixed().map(BarSize::token) {
+        let style = if size == current {
             theme.selected_row_style()
         } else {
             theme.muted_style()
         };
-        spans.push(Span::styled(format!(" {window} "), style));
+        spans.push(Span::styled(format!(" {size} "), style));
     }
     let left = Line::from(spans);
     let room = usize::from(row.width).saturating_sub(left.width() + 2 * gap(context).width());
@@ -401,7 +402,7 @@ fn why_partly(disk: &DiskHistory) -> &'static str {
     }
 }
 
-/// The window bar's notes in the order tried: each form of what did not
+/// The bar-size row's notes in the order tried: each form of what did not
 /// fit (fullest first) with how much of the window is recorded and why,
 /// then with the record alone, then alone.
 fn bar_notes(hidden: Hidden, recorded: Option<String>, why: &str) -> Vec<String> {

@@ -1,9 +1,9 @@
-//! Rows and columns of the history view (D-50): the window bar, the panels
+//! Rows and columns of the history view (D-50): the bar-size row, the panels
 //! in bands (two side by side from [`HISTORY_TWO_COLUMN_WIDTH`]), the time
 //! axis under them, then the GPUs' long-term table and the GPU processes'
 //! table (D-64). Every strip has the same height, so the bands read alike.
 //! The panels come first at one row a strip (the bands that do not fit are
-//! named in the window bar), then grow to three rows; then the long-term
+//! named in the bar-size row), then grow to three rows; then the long-term
 //! table takes whole GPUs and the process table as many processes as fit;
 //! then the strips grow further. The rows left over go to the bands in
 //! order, the CPU and the memory first, each strip up to twice the others'
@@ -11,7 +11,7 @@
 
 use dgxtop_core::view::{HISTORY_PANEL_GAP, HISTORY_TWO_COLUMN_WIDTH};
 
-/// Rows of the window bar and of the time axis.
+/// Rows of the bar-size row and of the time axis.
 const FRAME_ROWS: u16 = 2;
 /// Strip height the panels reach before the table.
 const COMFORTABLE_STRIP_ROWS: u16 = 3;

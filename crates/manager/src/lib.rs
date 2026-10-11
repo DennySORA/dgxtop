@@ -35,6 +35,8 @@ mod setup;
 mod shutdown;
 #[cfg(test)]
 mod test_support;
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;
 mod time_format;
 mod views;
 

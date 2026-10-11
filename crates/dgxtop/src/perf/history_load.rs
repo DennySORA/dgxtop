@@ -184,7 +184,7 @@ enum Sample {
     },
 }
 
-/// Commits synthetic history into one hot store (the only writer of it).
+/// Commits synthetic history into one live state (the only writer of it).
 #[derive(Debug)]
 pub struct HistoryFeeder {
     series: Vec<HistorySeries>,
