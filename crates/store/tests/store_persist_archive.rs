@@ -23,7 +23,7 @@ use dgxtop_core::quality::SampleKind;
 use dgxtop_core::testing::{FakeClock, metric_key, source_id};
 use dgxtop_core::wire::parse_fixed_width;
 use dgxtop_store::archive::{ArchiveLimits, SqliteArchive};
-use dgxtop_store::sqlite::{FreeSpaceProbe, StorageFootprint, format_utc_rfc3339};
+use dgxtop_store::sqlite::{FreeSpaceProbe, StorageFootprint, format_stamp, format_utc_rfc3339};
 use rusqlite::Connection;
 use uuid::Uuid;
 
@@ -42,6 +42,10 @@ impl TempDir {
             Uuid::new_v4().simple()
         ));
         std::fs::create_dir_all(&path).unwrap();
+        // Like the real state directory: a file is recreated only in a
+        // private one (D-85).
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         Self(path)
     }
@@ -587,7 +591,7 @@ fn wal_pinned_by_a_reader_pauses_archive_writes() {
 }
 
 #[test]
-fn corrupt_and_future_archives_are_kept_and_reported() {
+fn corrupt_and_other_format_archives_are_recreated() {
     let fixture = Fixture::new("corrupt");
     std::fs::write(fixture.dir.database(), vec![0x42u8; 8192]).unwrap();
     std::fs::set_permissions(
@@ -596,35 +600,44 @@ fn corrupt_and_future_archives_are_kept_and_reported() {
     )
     .unwrap();
     let mut archive = fixture.open(ArchiveLimits::default());
-    assert_eq!(archive.status().state, PersistenceState::Failed);
+    assert!(archive.recreated().unwrap().contains("schema inspection"));
+    assert_eq!(archive.status().state, PersistenceState::Healthy);
     let now = minute_utc(&fixture, 0);
-    assert!(matches!(
-        archive.append(journal(1, vec![segment("seg-a", &now)], Vec::new())),
-        Err(InfraError::Unavailable(_))
-    ));
+    archive
+        .append(journal(1, vec![segment("seg-a", &now)], Vec::new()))
+        .unwrap();
     drop(archive);
-    assert_eq!(
-        std::fs::read(fixture.dir.database()).unwrap(),
-        vec![0x42u8; 8192]
-    );
 
-    let future = Fixture::new("future");
+    // An archive written before D-85 (the spec's schema, no format
+    // version) starts empty instead of being kept, and so does a newer one.
+    for (label, stamp) in [("unstamped", 0), ("newer", format_stamp(2))] {
+        let other = Fixture::new(label);
+        {
+            let mut archive = other.open(ArchiveLimits::default());
+            archive
+                .append(journal(1, vec![segment("seg-a", &now)], Vec::new()))
+                .unwrap();
+        }
+        Connection::open(other.dir.database())
+            .unwrap()
+            .pragma_update(None, "application_id", stamp)
+            .unwrap();
+        let archive = other.open(ArchiveLimits::default());
+        assert!(archive.recreated().unwrap().contains("format"), "{label}");
+        drop(archive);
+        assert_eq!(count(&other.reader(), "history_segments"), 0, "{label}");
+    }
+    let kept = Fixture::new("kept");
     {
-        let connection = Connection::open(future.dir.database()).unwrap();
-        connection
-            .execute_batch("PRAGMA user_version = 9;")
+        let mut archive = kept.open(ArchiveLimits::default());
+        archive
+            .append(journal(1, vec![segment("seg-a", &now)], Vec::new()))
             .unwrap();
     }
-    std::fs::set_permissions(
-        future.dir.database(),
-        std::fs::Permissions::from_mode(0o600),
-    )
-    .unwrap();
-    let before = std::fs::read(future.dir.database()).unwrap();
-    let mut archive = future.open(ArchiveLimits::default());
-    assert_eq!(archive.status().state, PersistenceState::ReadOnlyDiagnostic);
+    let archive = kept.open(ArchiveLimits::default());
+    assert_eq!(archive.recreated(), None);
     drop(archive);
-    assert_eq!(std::fs::read(future.dir.database()).unwrap(), before);
+    assert_eq!(count(&kept.reader(), "history_segments"), 1);
 }
 
 fn budget_limits() -> ArchiveLimits {

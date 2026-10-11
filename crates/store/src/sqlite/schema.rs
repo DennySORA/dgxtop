@@ -1,12 +1,14 @@
-//! Spec DDL (verbatim), schema inspection, migration safety (integrity check
-//! plus backup) and idempotent initialization (`STORAGE.md` §8).
+//! Spec DDL (verbatim), every partition's format version, schema
+//! inspection and idempotent initialization.
+//!
+//! One rule for every database dgxtop writes (D-85): a file is used only
+//! when it carries this build's format version, `user_version` and exactly
+//! the DDL's objects. Anything else is not migrated but recreated; this
+//! module only tells which ([`plan`]).
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
-
-use crate::fs::FileSystemOps;
 
 /// `contracts/audit.sql`, applied verbatim.
 pub const AUDIT_DDL: &str = include_str!("../../../../spec/dgxtop-v2/contracts/audit.sql");
@@ -14,8 +16,6 @@ pub const AUDIT_DDL: &str = include_str!("../../../../spec/dgxtop-v2/contracts/a
 pub const HISTORY_DDL: &str = include_str!("../../../../spec/dgxtop-v2/contracts/history.sql");
 /// The process history's DDL (D-76, D-77), dgxtop's own: the spec has none.
 pub const PROCESS_HISTORY_DDL: &str = include_str!("../process_history/schema.sql");
-/// Brings a version 2 process history to version 3 (D-77).
-const PROCESS_HISTORY_UPGRADE_FROM_2: &str = include_str!("../process_history/upgrade_from_2.sql");
 /// `PRAGMA user_version` written by the spec's DDL files.
 pub const SCHEMA_USER_VERSION: i64 = 2;
 /// `PRAGMA user_version` of the process history's DDL.
@@ -24,6 +24,25 @@ pub const PROCESS_HISTORY_USER_VERSION: i64 = 3;
 pub const HISTORY_TIERS_DDL: &str = include_str!("../history_tiers/schema.sql");
 /// `PRAGMA user_version` of the tiers' DDL.
 pub const HISTORY_TIERS_USER_VERSION: i64 = 1;
+
+/// The high half of `PRAGMA application_id` in every database dgxtop
+/// writes ("DG"); the low half is the partition's format version (D-85).
+pub const FORMAT_MAGIC: i32 = 0x4447_0000;
+
+/// The `application_id` that marks `format_version` as dgxtop's.
+pub fn format_stamp(format_version: u16) -> i32 {
+    FORMAT_MAGIC | i32::from(format_version)
+}
+
+/// The format version an `application_id` carries; `None` when it is no
+/// dgxtop stamp (a file without any stamp reads 0).
+pub fn format_of(application_id: i32) -> Option<u16> {
+    if application_id & !0xFFFF == FORMAT_MAGIC {
+        u16::try_from(application_id & 0xFFFF).ok()
+    } else {
+        None
+    }
+}
 
 /// Which SQLite partition a database belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,12 +72,20 @@ impl SchemaKind {
         }
     }
 
-    /// The script that brings `version` to the next version, where one does.
-    const fn upgrade_from(self, version: i64) -> Option<&'static str> {
-        match (self, version) {
-            (Self::ProcessHistory, 2) => Some(PROCESS_HISTORY_UPGRADE_FROM_2),
-            _ => None,
+    /// The version of the file's data format (D-85), kept in
+    /// `PRAGMA application_id`, apart from the app version and the spec's
+    /// `user_version`. Bump it whenever what the file holds changes meaning
+    /// (tables, columns, packing, units): a file of any other format, or of
+    /// none, is deleted and created afresh at the next start.
+    pub const fn format_version(self) -> u16 {
+        match self {
+            Self::Audit | Self::History | Self::ProcessHistory | Self::HistoryTiers => 1,
         }
+    }
+
+    /// The `application_id` its files carry.
+    pub fn format_stamp(self) -> i32 {
+        format_stamp(self.format_version())
     }
 
     pub const fn label(self) -> &'static str {
@@ -101,40 +128,51 @@ impl SchemaKind {
     }
 }
 
-/// What the open sequence must do with an existing database.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What the open sequence does with a database it may use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SchemaPlan {
-    /// The kind's `user_version` with every object present.
+    /// This build's format, `user_version` and objects.
     Current,
-    /// Empty database: apply the DDL directly (nothing to back up).
+    /// Nothing in it yet: apply the DDL and stamp the format.
     Initialize,
-    /// Pre-v2 content of our own objects: integrity check, backup, DDL.
-    Migrate,
-    /// An earlier version of this kind: integrity check, backup, the
-    /// upgrade script, then the DDL.
-    Upgrade { from: i64 },
 }
 
-impl SchemaPlan {
-    /// Whether it rewrites existing content (so a backup comes first).
-    pub(crate) const fn rewrites(&self) -> bool {
-        matches!(self, Self::Migrate | Self::Upgrade { .. })
+/// Why a database is not this build's: it is recreated (D-85).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SchemaRefusal {
+    /// Another format version, or no dgxtop stamp at all.
+    Format { found: Option<u16> },
+    /// This format but another `user_version`.
+    Version { found: i64 },
+    /// Objects missing or not the DDL's.
+    Structure(String),
+}
+
+impl std::fmt::Display for SchemaRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Format { found: Some(found) } => write!(formatter, "format version {found}"),
+            Self::Format { found: None } => formatter.write_str("no dgxtop format version"),
+            Self::Version { found } => write!(formatter, "user_version {found}"),
+            Self::Structure(detail) => formatter.write_str(detail),
+        }
     }
 }
 
-/// Why a database cannot be used for writes.
+/// What the read-only inspection found in a file.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SchemaRefusal {
-    /// Newer schema: diagnostics only, never rewritten or downgraded.
-    Future { found: i64 },
-    /// Unknown version or foreign objects: kept untouched.
-    Unknown(String),
-    /// The current version but objects are missing.
-    Incomplete(Vec<String>),
+struct Found {
+    application_id: i32,
+    user_version: i64,
+    objects: BTreeSet<String>,
 }
 
 pub(crate) fn user_version(connection: &Connection) -> rusqlite::Result<i64> {
     connection.pragma_query_value(None, "user_version", |row| row.get(0))
+}
+
+fn application_id(connection: &Connection) -> rusqlite::Result<i32> {
+    connection.pragma_query_value(None, "application_id", |row| row.get(0))
 }
 
 /// Names of every non-internal schema object.
@@ -145,69 +183,69 @@ fn schema_objects(connection: &Connection) -> rusqlite::Result<BTreeSet<String>>
     names.collect()
 }
 
-/// Decides how to treat the database given its `user_version` and objects.
+/// Whether the database is this build's, empty, or to be recreated.
 pub(crate) fn plan(
     connection: &Connection,
     kind: SchemaKind,
 ) -> rusqlite::Result<Result<SchemaPlan, SchemaRefusal>> {
-    let version = user_version(connection)?;
-    let objects = schema_objects(connection)?;
+    let found = Found {
+        application_id: application_id(connection)?,
+        user_version: user_version(connection)?,
+        objects: schema_objects(connection)?,
+    };
+    Ok(classify(kind, &found))
+}
+
+fn classify(kind: SchemaKind, found: &Found) -> Result<SchemaPlan, SchemaRefusal> {
+    if found.application_id == 0 && found.user_version == 0 && found.objects.is_empty() {
+        return Ok(SchemaPlan::Initialize);
+    }
+    if found.application_id != kind.format_stamp() {
+        return Err(SchemaRefusal::Format {
+            found: format_of(found.application_id),
+        });
+    }
+    if found.user_version != kind.user_version() {
+        return Err(SchemaRefusal::Version {
+            found: found.user_version,
+        });
+    }
     let expected: BTreeSet<String> = kind
         .objects()
         .iter()
         .map(|name| (*name).to_owned())
         .collect();
-    Ok(classify(kind, version, &objects, &expected))
-}
-
-fn classify(
-    kind: SchemaKind,
-    version: i64,
-    objects: &BTreeSet<String>,
-    expected: &BTreeSet<String>,
-) -> Result<SchemaPlan, SchemaRefusal> {
-    let current = kind.user_version();
-    let foreign = || -> Vec<String> { objects.difference(expected).cloned().collect() };
-    match version {
-        found if found == current => {
-            let missing: Vec<String> = expected.difference(objects).cloned().collect();
-            if missing.is_empty() {
-                Ok(SchemaPlan::Current)
-            } else {
-                Err(SchemaRefusal::Incomplete(missing))
-            }
-        }
-        found if found > current => Err(SchemaRefusal::Future { found }),
-        0 if objects.is_empty() => Ok(SchemaPlan::Initialize),
-        0 if foreign().is_empty() => Ok(SchemaPlan::Migrate),
-        0 => Err(SchemaRefusal::Unknown(format!(
-            "user_version 0 with foreign objects: {}",
-            foreign().join(", ")
-        ))),
-        from if kind.upgrade_from(from).is_some() && foreign().is_empty() => {
-            Ok(SchemaPlan::Upgrade { from })
-        }
-        other => Err(SchemaRefusal::Unknown(format!(
-            "user_version {other} has no migration path to {current}"
-        ))),
+    let missing: Vec<&str> = expected
+        .difference(&found.objects)
+        .map(String::as_str)
+        .collect();
+    let foreign: Vec<&str> = found
+        .objects
+        .difference(&expected)
+        .map(String::as_str)
+        .collect();
+    if !missing.is_empty() {
+        return Err(SchemaRefusal::Structure(format!(
+            "objects missing: {}",
+            missing.join(", ")
+        )));
     }
+    if !foreign.is_empty() {
+        return Err(SchemaRefusal::Structure(format!(
+            "objects not of this schema: {}",
+            foreign.join(", ")
+        )));
+    }
+    Ok(SchemaPlan::Current)
 }
 
-/// Runs the spec DDL (it carries its own `BEGIN IMMEDIATE … COMMIT`). On
-/// failure the open transaction is rolled back so nothing half-applied stays.
+/// Runs the DDL (it carries its own `BEGIN IMMEDIATE … COMMIT`), then
+/// stamps the format version: the spec's DDL is applied verbatim, so the
+/// stamp is a header write of its own (D-85). On failure the open
+/// transaction is rolled back so nothing half-applied stays.
 pub(crate) fn apply_ddl(connection: &Connection, kind: SchemaKind) -> rusqlite::Result<()> {
-    run_script(connection, kind.ddl())
-}
-
-/// Runs the upgrade from `from` (its own transaction, like the DDL); a
-/// version without one is left as it is.
-pub(crate) fn apply_upgrade(
-    connection: &Connection,
-    kind: SchemaKind,
-    from: i64,
-) -> rusqlite::Result<()> {
-    kind.upgrade_from(from)
-        .map_or(Ok(()), |script| run_script(connection, script))
+    run_script(connection, kind.ddl())?;
+    connection.pragma_update(None, "application_id", kind.format_stamp())
 }
 
 fn run_script(connection: &Connection, script: &str) -> rusqlite::Result<()> {
@@ -233,66 +271,6 @@ pub(crate) fn integrity_problem(
     Ok((verdict != "ok").then(|| dgxtop_core::text::sanitize_message(&verdict)))
 }
 
-/// Copies the database into a fresh 0600 file next to it before a migration.
-///
-/// `VACUUM INTO` writes a consistent snapshot (including WAL content) and
-/// accepts a pre-existing empty file, which keeps our 0600 mode; the copy is
-/// then fsynced together with its directory.
-pub(crate) fn backup_before_migration(
-    connection: &Connection,
-    (database_path, kind): (&Path, SchemaKind),
-    fs: &dyn FileSystemOps,
-    utc_label: &str,
-) -> Result<PathBuf, String> {
-    let directory = database_path
-        .parent()
-        .ok_or_else(|| "database path has no parent directory".to_owned())?;
-    let file_name = database_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| "database file name is not UTF-8".to_owned())?;
-    let compact_label: String = utc_label
-        .chars()
-        .filter(char::is_ascii_alphanumeric)
-        .collect();
-    let unique: String = uuid::Uuid::new_v4()
-        .simple()
-        .to_string()
-        .chars()
-        .take(8)
-        .collect();
-    let backup_path = directory.join(format!(
-        "{file_name}.pre-v{}-{compact_label}-{unique}.bak",
-        kind.user_version()
-    ));
-    let backup_text = backup_path
-        .to_str()
-        .ok_or_else(|| "backup path is not UTF-8".to_owned())?
-        .to_owned();
-    let backup_file = fs
-        .create_private_file(&backup_path)
-        .map_err(|error| format!("cannot create backup {backup_text}: {error}"))?;
-    let copied = connection
-        .execute("VACUUM INTO ?1", [backup_text.as_str()])
-        .map_err(|error| format!("VACUUM INTO {backup_text} failed: {error}"))
-        .and_then(|_| {
-            fs.sync_file(&backup_file)
-                .map_err(|error| format!("fsync of backup {backup_text} failed: {error}"))
-        })
-        .and_then(|()| {
-            fs.sync_directory(directory)
-                .map_err(|error| format!("directory fsync after backup failed: {error}"))
-        });
-    drop(backup_file);
-    match copied {
-        Ok(()) => Ok(backup_path),
-        Err(message) => {
-            let _cleanup = fs.remove_file(&backup_path);
-            Err(dgxtop_core::text::sanitize_message(&message))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,9 +279,20 @@ mod tests {
         items.iter().map(|item| (*item).to_owned()).collect()
     }
 
-    fn expected() -> BTreeSet<String> {
-        names(SchemaKind::Audit.objects())
+    fn current(kind: SchemaKind) -> Found {
+        Found {
+            application_id: kind.format_stamp(),
+            user_version: kind.user_version(),
+            objects: names(kind.objects()),
+        }
     }
+
+    const KINDS: [SchemaKind; 4] = [
+        SchemaKind::Audit,
+        SchemaKind::History,
+        SchemaKind::ProcessHistory,
+        SchemaKind::HistoryTiers,
+    ];
 
     #[test]
     fn ddl_is_the_spec_text() {
@@ -311,91 +300,96 @@ mod tests {
         assert!(AUDIT_DDL.contains("PRAGMA user_version = 2;"));
         assert!(HISTORY_DDL.contains("CREATE TABLE IF NOT EXISTS counter_bridges"));
         assert!(HISTORY_DDL.contains("BEGIN IMMEDIATE;"));
-    }
-
-    #[test]
-    fn classification_covers_every_version_case() {
-        let full = expected();
-        let audit = |version, objects: &BTreeSet<String>| {
-            classify(SchemaKind::Audit, version, objects, &full)
-        };
-        assert_eq!(audit(2, &full), Ok(SchemaPlan::Current));
-        assert!(matches!(
-            audit(2, &names(&["action_intents"])),
-            Err(SchemaRefusal::Incomplete(missing)) if missing.len() == 5
-        ));
-        assert_eq!(audit(3, &full), Err(SchemaRefusal::Future { found: 3 }));
-        assert_eq!(audit(0, &BTreeSet::new()), Ok(SchemaPlan::Initialize));
-        assert_eq!(
-            audit(0, &names(&["action_intents"])),
-            Ok(SchemaPlan::Migrate)
-        );
-        assert!(matches!(
-            audit(0, &names(&["someone_elses_table"])),
-            Err(SchemaRefusal::Unknown(_))
-        ));
-        assert!(matches!(audit(1, &full), Err(SchemaRefusal::Unknown(_))));
-        assert!(matches!(audit(-1, &full), Err(SchemaRefusal::Unknown(_))));
-    }
-
-    /// The process history is at version 3 and upgrades from 2 (D-77);
-    /// the spec's partitions have no upgrade from 2.
-    #[test]
-    fn the_process_history_upgrades_from_version_2() {
-        let full = names(SchemaKind::ProcessHistory.objects());
-        let process = |version, objects: &BTreeSet<String>| {
-            classify(SchemaKind::ProcessHistory, version, objects, &full)
-        };
-        assert_eq!(process(3, &full), Ok(SchemaPlan::Current));
-        assert_eq!(process(2, &full), Ok(SchemaPlan::Upgrade { from: 2 }));
-        assert!(SchemaPlan::Upgrade { from: 2 }.rewrites());
-        assert!(!SchemaPlan::Current.rewrites());
-        assert_eq!(process(4, &full), Err(SchemaRefusal::Future { found: 4 }));
-        assert!(matches!(process(1, &full), Err(SchemaRefusal::Unknown(_))));
-        let mut foreign = full.clone();
-        foreign.insert("someone_elses_table".to_owned());
-        assert!(matches!(
-            process(2, &foreign),
-            Err(SchemaRefusal::Unknown(_))
-        ));
         assert!(PROCESS_HISTORY_DDL.contains("PRAGMA user_version = 3;"));
-    }
-
-    /// The tiers are dgxtop's own partition at version 1 (D-82): applied
-    /// idempotently, a newer one refused, no upgrade path yet.
-    #[test]
-    fn the_history_tiers_apply_at_version_1() {
-        let connection = Connection::open_in_memory().unwrap();
-        apply_ddl(&connection, SchemaKind::HistoryTiers).unwrap();
-        apply_ddl(&connection, SchemaKind::HistoryTiers).unwrap();
-        assert_eq!(user_version(&connection).unwrap(), 1);
-        assert_eq!(
-            plan(&connection, SchemaKind::HistoryTiers).unwrap(),
-            Ok(SchemaPlan::Current)
-        );
-        let full = names(SchemaKind::HistoryTiers.objects());
-        let tiers = |version| classify(SchemaKind::HistoryTiers, version, &full, &full);
-        assert_eq!(tiers(2), Err(SchemaRefusal::Future { found: 2 }));
         assert!(HISTORY_TIERS_DDL.contains("PRAGMA user_version = 1;"));
     }
 
+    /// The stamp keeps dgxtop's magic apart from the format version, and
+    /// no other application's id reads as one of ours.
     #[test]
-    fn ddl_applies_idempotently_in_memory() {
-        let connection = Connection::open_in_memory().unwrap();
-        apply_ddl(&connection, SchemaKind::Audit).unwrap();
-        apply_ddl(&connection, SchemaKind::Audit).unwrap();
-        assert_eq!(user_version(&connection).unwrap(), 2);
-        assert_eq!(
-            plan(&connection, SchemaKind::Audit).unwrap(),
-            Ok(SchemaPlan::Current)
-        );
-        let history = Connection::open_in_memory().unwrap();
-        apply_ddl(&history, SchemaKind::History).unwrap();
-        assert_eq!(
-            plan(&history, SchemaKind::History).unwrap(),
-            Ok(SchemaPlan::Current)
-        );
-        assert_eq!(integrity_problem(&history, false).unwrap(), None);
-        assert_eq!(integrity_problem(&history, true).unwrap(), None);
+    fn the_format_stamp_round_trips() {
+        assert_eq!(format_of(format_stamp(1)), Some(1));
+        assert_eq!(format_of(format_stamp(u16::MAX)), Some(u16::MAX));
+        assert_eq!(format_of(0), None);
+        assert_eq!(format_of(0x0F05_5112), None);
+        assert!(format_stamp(1) > 0);
+    }
+
+    /// Every partition, the audit included, follows one rule (D-85): the
+    /// same format, version and objects are kept, every difference is a
+    /// refusal the open sequence answers by recreating the file.
+    #[test]
+    fn every_partition_keeps_only_its_own_format() {
+        for kind in KINDS {
+            let label = kind.label();
+            assert_eq!(classify(kind, &current(kind)), Ok(SchemaPlan::Current));
+            let empty = Found {
+                application_id: 0,
+                user_version: 0,
+                objects: BTreeSet::new(),
+            };
+            assert_eq!(classify(kind, &empty), Ok(SchemaPlan::Initialize));
+            let version = kind.format_version();
+            for (application_id, found) in [
+                (format_stamp(version + 1), Some(version + 1)),
+                (format_stamp(version - 1), Some(version - 1)),
+                (0, None),
+                (0x0F05_5112, None),
+            ] {
+                let other = Found {
+                    application_id,
+                    ..current(kind)
+                };
+                assert_eq!(
+                    classify(kind, &other),
+                    Err(SchemaRefusal::Format { found }),
+                    "{label}"
+                );
+            }
+            for user_version in [0, kind.user_version() - 1, kind.user_version() + 1] {
+                let other = Found {
+                    user_version,
+                    ..current(kind)
+                };
+                assert_eq!(
+                    classify(kind, &other),
+                    Err(SchemaRefusal::Version {
+                        found: user_version
+                    }),
+                    "{label}"
+                );
+            }
+            let mut missing = current(kind);
+            missing.objects.pop_first();
+            assert!(matches!(
+                classify(kind, &missing),
+                Err(SchemaRefusal::Structure(detail)) if detail.contains("missing")
+            ));
+            let mut foreign = current(kind);
+            foreign.objects.insert("someone_elses_table".to_owned());
+            assert!(matches!(
+                classify(kind, &foreign),
+                Err(SchemaRefusal::Structure(detail)) if detail.contains("someone_elses_table")
+            ));
+        }
+    }
+
+    #[test]
+    fn ddl_applies_idempotently_and_stamps_the_format() {
+        for kind in KINDS {
+            let connection = Connection::open_in_memory().unwrap();
+            apply_ddl(&connection, kind).unwrap();
+            apply_ddl(&connection, kind).unwrap();
+            assert_eq!(user_version(&connection).unwrap(), kind.user_version());
+            assert_eq!(
+                application_id(&connection).unwrap(),
+                kind.format_stamp(),
+                "{}",
+                kind.label()
+            );
+            assert_eq!(plan(&connection, kind).unwrap(), Ok(SchemaPlan::Current));
+            assert_eq!(integrity_problem(&connection, false).unwrap(), None);
+            assert_eq!(integrity_problem(&connection, true).unwrap(), None);
+        }
     }
 }

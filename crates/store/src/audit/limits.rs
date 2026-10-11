@@ -51,7 +51,8 @@ impl Default for AuditLimits {
 
 /// Invalid arguments to [`crate::audit::SqliteAuditRepository::open`].
 /// Database problems are not errors here: they open a repository whose
-/// status is `Failed`/`ReadOnlyDiagnostic` and which refuses every write.
+/// status is `Failed` and which refuses every write (a file that is merely
+/// not this build's is recreated instead, D-85).
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum AuditOpenError {
     #[error("invalid audit limits: {0}")]

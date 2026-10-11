@@ -4,22 +4,20 @@
 //! [`dgxtop_core::process_history::TIER_BUCKETS`] of each (series, size), as
 //! the history asks ([`TierJournal::keep_latest`]).
 //!
-//! Opened like the other partitions (0600, no symlinks, schema and
-//! integrity checked before any write, `max_page_count`); an unusable one
-//! makes every call fail with its reason and the history goes on in memory.
+//! Opened like the other partitions (0600, no symlinks, format, schema and
+//! integrity checked before any write, a file of another format recreated
+//! (D-85), `max_page_count`); one still unusable makes every call fail with
+//! its reason and the history goes on in memory.
 //! No series expires by age: past [`MAX_USED_BYTES`] the series written
 //! longest ago give way.
 
 mod database;
 
-use std::path::Path;
-use std::sync::Arc;
-
-use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::errors::InfraError;
 use dgxtop_core::overview_history::{StoredTierSeries, TierJournal};
 use dgxtop_core::ports::HistoryTierStore;
 use rusqlite::Connection;
+use std::path::Path;
 
 use crate::fs::{FileSystemOps, RealFileSystem};
 use crate::sqlite::{
@@ -41,6 +39,7 @@ const MAX_USED_BYTES: u64 = 48 * MIB;
 /// The tiers database in dgxtop's state directory.
 pub struct SqliteHistoryTiers {
     database: Result<Connection, String>,
+    recreated: Option<String>,
     max_used_bytes: u64,
 }
 
@@ -56,16 +55,11 @@ impl std::fmt::Debug for SqliteHistoryTiers {
 impl SqliteHistoryTiers {
     /// Opens (creating when missing) the database at `path`. Never fails:
     /// an unusable database is reported by every call.
-    pub fn open(path: &Path, clock: Arc<dyn TimeProvider>) -> Self {
-        Self::open_with(path, clock.as_ref(), &RealFileSystem, ensure_sqlite_version)
+    pub fn open(path: &Path) -> Self {
+        Self::open_with(path, &RealFileSystem, ensure_sqlite_version)
     }
 
-    pub(crate) fn open_with(
-        path: &Path,
-        clock: &dyn TimeProvider,
-        fs: &dyn FileSystemOps,
-        gate: VersionGate,
-    ) -> Self {
+    pub(crate) fn open_with(path: &Path, fs: &dyn FileSystemOps, gate: VersionGate) -> Self {
         let spec = DatabaseSpec {
             path,
             kind: SchemaKind::HistoryTiers,
@@ -78,13 +72,21 @@ impl SqliteHistoryTiers {
                 min_free_disk_bytes: MIN_FREE_DISK_BYTES,
             },
         };
-        let database = open_database(&spec, fs, clock, gate)
-            .map(|opened| opened.connection)
-            .map_err(|unusable| unusable.reason);
+        let (database, recreated) = match open_database(&spec, fs, gate) {
+            Ok(opened) => (Ok(opened.connection), opened.recreated),
+            Err(unusable) => (Err(unusable.reason), None),
+        };
         Self {
             database,
+            recreated,
             max_used_bytes: MAX_USED_BYTES,
         }
+    }
+
+    /// Why the database found at open was deleted and created afresh
+    /// (D-85), if it was.
+    pub fn recreated(&self) -> Option<&str> {
+        self.recreated.as_deref()
     }
 
     fn connection(&mut self) -> Result<&mut Connection, InfraError> {

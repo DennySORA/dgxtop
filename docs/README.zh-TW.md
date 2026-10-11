@@ -189,6 +189,8 @@ dgxtop --version --verbose   # 版本、commit、工具鏈、target、SQLite run
 
 目錄以 `0700`、檔案以 `0600` 建立。從 v1 升級不會修改 `~/.config/dgxtop/config.json`：先用 `--import-legacy <path> --dry-run` 檢查對應，再用 `--apply` 寫入 v2 設定檔。
 
+資料庫不做遷移。每個資料庫都有自己的格式版本；新版 dgxtop 寫入的格式不同，或資料庫無法讀取時，dgxtop 會在啟動時刪除它（連同 `-wal`、`-shm`）並從空的重新開始，日誌中記一行。不再需要的殘留檔（例如舊版寫下的 `*.pre-v*.bak` 備份）也會一併刪除。`config.json` 的設定會保留。
+
 ## 授權
 
 Apache-2.0，見 [LICENSE](../LICENSE)。

@@ -10,7 +10,9 @@ use dgxtop_core::process_history::{
 use dgxtop_core::testing::{FakeClock, boot_id, host_id};
 
 use super::*;
-use crate::sqlite::{SqliteGateError, SqliteVersion};
+use crate::sqlite::{
+    PROCESS_HISTORY_DDL, SchemaKind, SqliteGateError, SqliteVersion, format_stamp,
+};
 
 const MINUTE: i64 = 60 * 1_000_000_000;
 
@@ -24,6 +26,10 @@ impl Scratch {
             uuid::Uuid::new_v4().simple()
         ));
         std::fs::create_dir_all(&dir).unwrap();
+        // Like the real state directory: a file is recreated only in a
+        // private one (D-85).
+        std::fs::set_permissions(&dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .unwrap();
         Self(dir)
     }
 
@@ -354,76 +360,90 @@ fn buckets_pack_twelve_bytes_a_metric_and_back() {
     assert_eq!(older.value(RunMetric::OpenFiles).count, 0);
 }
 
-/// A version 2 database (D-76) is checked, backed up and upgraded: its
-/// runs and buckets stay, and it takes hour buckets and the run details.
+/// Writes a database of this schema holding one run, stamped with
+/// `application_id` (0: written before format versions existed).
+fn write_database_of_format(path: &std::path::Path, application_id: i32, clock: &FakeClock) {
+    let now = now_utc(clock);
+    let connection = rusqlite::Connection::open(path).unwrap();
+    connection.execute_batch(PROCESS_HISTORY_DDL).unwrap();
+    connection
+        .pragma_update(None, "application_id", application_id)
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO process_runs (host_id, boot_id, pid_namespace, pid, \
+             start_time_ticks, name, command, cwd, uid, gpus, started_utc_ns, \
+             last_seen_utc_ns) VALUES ('host-a', 'boot-a', 'pid:[4026531836]', 1, 700, \
+             'acme_llm.train', 'python -m acme_llm.train', '/srv', 1000, 'GPU 0', ?1, ?2)",
+            rusqlite::params![now - 30 * MINUTE, now - MINUTE],
+        )
+        .unwrap();
+    drop(connection);
+    std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+}
+
+/// A database of another format version, older, newer or none (one
+/// written before D-85), is deleted and created afresh, empty, without a
+/// backup; one of this format keeps its runs (D-85).
 #[test]
-fn a_version_2_database_upgrades_and_keeps_its_rows() {
-    let scratch = Scratch::new("upgrade");
+fn a_database_of_another_format_is_replaced_by_an_empty_one() {
     let clock = clock();
-    let now = now_utc(&clock);
-    let path = scratch.0.join("process_history.sqlite3");
-    {
-        let connection = rusqlite::Connection::open(&path).unwrap();
-        connection
-            .execute_batch(include_str!("schema_v2.sql"))
+    let current = SchemaKind::ProcessHistory.format_version();
+    for (label, application_id, kept) in [
+        ("same", format_stamp(current), true),
+        ("older", format_stamp(current - 1), false),
+        ("newer", format_stamp(current + 1), false),
+        ("missing", 0, false),
+    ] {
+        let scratch = Scratch::new(label);
+        let path = scratch.0.join("process_history.sqlite3");
+        write_database_of_format(&path, application_id, &clock);
+        let mut store = scratch.open(&clock);
+        assert_eq!(
+            store.load().unwrap().runs.len(),
+            usize::from(kept),
+            "{label}"
+        );
+        assert_eq!(store.recreated().is_none(), kept, "{label}");
+        drop(store);
+        let stamp: i32 = rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row("PRAGMA application_id", [], |row| row.get(0))
             .unwrap();
-        connection
-            .execute(
-                "INSERT INTO process_runs (host_id, boot_id, pid_namespace, pid, \
-                 start_time_ticks, name, command, cwd, uid, gpus, started_utc_ns, \
-                 last_seen_utc_ns) VALUES ('host-a', 'boot-a', 'pid:[4026531836]', 1, 700, \
-                 'acme_llm.train', 'python -m acme_llm.train', '/srv', 1000, 'GPU 0', ?1, ?2)",
-                rusqlite::params![now - 30 * MINUTE, now - MINUTE],
-            )
-            .unwrap();
-        let packed = database::pack(&bucket(now - 2 * MINUTE, 10.0));
-        connection
-            .execute(
-                "INSERT INTO process_buckets (run_id, tier, start_utc_ns, aggregates) \
-                 VALUES (1, 1, ?1, ?2)",
-                rusqlite::params![now - 2 * MINUTE, &packed[..96]],
-            )
-            .unwrap();
+        assert_eq!(stamp, format_stamp(current), "{label}");
+        let others: Vec<String> = std::fs::read_dir(&scratch.0)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".bak"))
+            .collect();
+        assert!(others.is_empty(), "no backup: {others:?}");
     }
+}
+
+/// A file that is no database at all is deleted and created afresh, and
+/// the store works at once.
+#[test]
+fn an_unreadable_database_is_replaced() {
+    let scratch = Scratch::new("garbage");
+    let clock = clock();
+    let path = scratch.0.join("process_history.sqlite3");
+    std::fs::write(&path, vec![0x42u8; 8192]).unwrap();
     std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
     let mut store = scratch.open(&clock);
-    let load = store.load().unwrap();
-    assert_eq!(load.runs.len(), 1);
-    assert_eq!(load.runs[0].command, "python -m acme_llm.train");
-    assert_eq!(load.runs[0].details, RunDetails::default());
-    assert_eq!(load.buckets.len(), 1);
-    assert_eq!(
-        load.buckets[0].bucket.value(RunMetric::Cpu).mean(),
-        Some(20.0)
+    assert!(
+        store.recreated().unwrap().contains("schema inspection"),
+        "{:?}",
+        store.recreated()
     );
-    let backups = std::fs::read_dir(&scratch.0)
-        .unwrap()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_name().to_string_lossy().contains(".pre-v3-"))
-        .count();
-    assert_eq!(backups, 1, "a backup before the upgrade");
-    let mut hour = bucket(Tier::OneHour.align(now, 0), 5.0);
-    hour.add(RunMetric::Threads, Some(24.0));
+    let now = now_utc(&clock);
     store
         .append(&ProcessHistoryJournal {
             runs: vec![run(1, now, None)],
-            buckets: vec![row(1, Tier::OneHour, hour)],
+            buckets: vec![row(1, Tier::OneMinute, bucket(now - MINUTE, 10.0))],
         })
         .unwrap();
-    let rows = store.read_run(&key(1)).unwrap();
-    assert_eq!(rows[0].tier, Tier::OneHour);
-    assert_eq!(rows[0].bucket.value(RunMetric::Threads).peak(), Some(24.0));
-    drop(store);
-    let version: i64 = rusqlite::Connection::open(&path)
-        .unwrap()
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(version, 3);
-    let mut reopened = scratch.open(&clock);
-    assert_eq!(
-        reopened.load().unwrap().runs[0].details,
-        run(1, 0, None).details
-    );
+    assert_eq!(store.load().unwrap().runs.len(), 1);
 }
 
 fn failing_gate() -> Result<SqliteVersion, SqliteGateError> {
@@ -455,4 +475,35 @@ fn an_unusable_database_reports_why() {
         runs: Vec::new(),
     };
     assert!(store.save_recent(&recent).is_ok());
+}
+
+/// A short-term file of another format is ignored at load and simply
+/// replaced by the next save (D-85): no migration, nothing kept aside.
+#[test]
+fn a_short_term_file_of_another_format_is_replaced() {
+    let scratch = Scratch::new("recent-format");
+    let clock = clock();
+    let path = scratch.0.join("process_recent.json");
+    std::fs::write(&path, br#"{"version":1,"runs":[["an","older","layout"]]}"#).unwrap();
+    std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+    let mut store = scratch.open(&clock);
+    assert!(store.load().unwrap().recent.is_none());
+    let recent = RecentHistory {
+        boot_id: boot_id("boot-a"),
+        saved_utc_ns: now_utc(&clock),
+        runs: Vec::new(),
+    };
+    store.save_recent(&recent).unwrap();
+    assert_eq!(store.load().unwrap().recent, Some(recent));
+    let names: Vec<String> = std::fs::read_dir(&scratch.0)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains("process_recent"))
+        .collect();
+    assert_eq!(
+        names,
+        vec!["process_recent.json".to_owned()],
+        "nothing kept aside"
+    );
 }

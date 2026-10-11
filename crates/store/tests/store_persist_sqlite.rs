@@ -28,6 +28,10 @@ impl TempDir {
             uuid::Uuid::new_v4().simple()
         ));
         std::fs::create_dir_all(&path).unwrap();
+        // Like the real state directory: a file is recreated only in a
+        // private one (D-85).
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         Self(path)
     }

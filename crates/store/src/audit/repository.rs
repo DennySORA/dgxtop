@@ -75,9 +75,11 @@ enum OutcomeAbort {
 
 /// The action audit on `audit.sqlite3`.
 ///
-/// A database that cannot be used safely (version gate, corruption, unknown
-/// or future schema, unsafe file) still yields a repository: its status is
-/// `Failed` or `ReadOnlyDiagnostic` and every write fails closed.
+/// A file that is not this build's format, or unreadable, is deleted and
+/// created afresh at open (D-85), so the audit starts empty and keeps
+/// working; what cannot be fixed that way (version gate, another writer, a
+/// state directory that is not private) still yields a repository whose
+/// status is `Failed` and whose every write fails closed.
 pub struct SqliteAuditRepository {
     path: PathBuf,
     limits: AuditLimits,
@@ -88,7 +90,7 @@ pub struct SqliteAuditRepository {
     unusable: Option<Unusable>,
     last_issue: Option<String>,
     last_retention_boot_ns: Option<u64>,
-    migration_backup: Option<PathBuf>,
+    recreated: Option<String>,
 }
 
 impl fmt::Debug for SqliteAuditRepository {
@@ -192,7 +194,7 @@ impl SqliteAuditRepository {
     }
 
     /// Like [`Self::open`] with an explicit filesystem for the pre-creation
-    /// and migration backup steps (fault injection).
+    /// and recreation steps (fault injection).
     pub fn open_with_filesystem(
         path: &Path,
         limits: AuditLimits,
@@ -220,7 +222,7 @@ impl SqliteAuditRepository {
             profile: ConnectionProfile::audit(limits.wal_checkpoint_bytes),
             policy,
         };
-        let opened = open_database(&spec, fs, clock.as_ref(), gate);
+        let opened = open_database(&spec, fs, gate);
         let mut repository = Self {
             path: path.to_path_buf(),
             limits,
@@ -231,12 +233,12 @@ impl SqliteAuditRepository {
             unusable: None,
             last_issue: None,
             last_retention_boot_ns: None,
-            migration_backup: None,
+            recreated: None,
         };
         match opened {
             Ok(opened) => {
                 repository.connection = Some(opened.connection);
-                repository.migration_backup = opened.backup;
+                repository.recreated = opened.recreated;
                 repository.maybe_run_retention();
             }
             Err(unusable) => repository.unusable = Some(unusable),
@@ -252,9 +254,10 @@ impl SqliteAuditRepository {
         &self.limits
     }
 
-    /// Backup written before a schema migration during open, if any.
-    pub fn migration_backup(&self) -> Option<&Path> {
-        self.migration_backup.as_deref()
+    /// Why the file found at open was deleted and created afresh (D-85),
+    /// if it was.
+    pub fn recreated(&self) -> Option<&str> {
+        self.recreated.as_deref()
     }
 
     /// Deletes rows older than `retention_days` (bounded per run). Also runs
@@ -325,7 +328,7 @@ impl SqliteAuditRepository {
                 connection.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true);
         }
         self.unusable = Some(Unusable::failed(format!(
-            "{message} (file kept, audit stopped)"
+            "{message} (audit stopped; the file is recreated at the next start, D-85)"
         )));
     }
 
