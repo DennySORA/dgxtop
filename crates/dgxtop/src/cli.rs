@@ -74,10 +74,6 @@ pub struct Cli {
     #[arg(long, requires = "version")]
     pub verbose: bool,
 
-    /// Log level for the bounded log file: error, warn, info or debug.
-    #[arg(long, value_name = "LEVEL", default_value = "warn")]
-    pub log_level: String,
-
     /// Internal: run as a managed adapter host (only valid behind the supervisor's pipe handshake).
     #[arg(long, hide = true, value_name = "ADAPTER_ID")]
     pub adapter_host: Option<String>,
@@ -114,8 +110,6 @@ pub enum CliError {
     RelativePath { flag: &'static str, path: String },
     #[error("--replay-slice must look like INDEX/COUNT with INDEX < COUNT (got {0})")]
     ReplaySlice(String),
-    #[error("--log-level must be error, warn, info or debug (got {0})")]
-    LogLevel(String),
 }
 
 impl Cli {
@@ -172,18 +166,6 @@ impl Cli {
         parsed
             .map(Some)
             .ok_or_else(|| CliError::ReplaySlice(text.to_owned()))
-    }
-
-    /// Validated log level name.
-    pub fn log_level(&self) -> Result<dgxtop_core::ports::LogLevel, CliError> {
-        use dgxtop_core::ports::LogLevel;
-        match self.log_level.as_str() {
-            "error" => Ok(LogLevel::Error),
-            "warn" => Ok(LogLevel::Warn),
-            "info" => Ok(LogLevel::Info),
-            "debug" | "trace" => Ok(LogLevel::Debug),
-            other => Err(CliError::LogLevel(other.to_owned())),
-        }
     }
 }
 
@@ -273,10 +255,14 @@ mod tests {
                 .validate_paths()
                 .is_ok()
         );
-        assert!(matches!(
-            parse(&["--log-level", "loud"]).log_level(),
-            Err(CliError::LogLevel(_))
-        ));
+    }
+
+    #[test]
+    fn the_removed_log_level_flag_is_refused() {
+        // D-93: the log file has no level filter, so the flag is gone.
+        for level in ["warn", "debug", "trace"] {
+            assert!(Cli::try_parse_from(["dgxtop", "--log-level", level]).is_err());
+        }
     }
 
     #[test]
