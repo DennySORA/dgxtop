@@ -1,6 +1,6 @@
 [package]
 name = "dgxtop-state"
-description = "dgxtop in-memory live state: the committed snapshot, collector state, candidate evidence and short trends; cleared on restart"
+description = "dgxtop in-memory live state: the committed snapshot and collector state; cleared on restart"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

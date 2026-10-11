@@ -4,7 +4,7 @@ use dgxtop_core::config::StoreConfig;
 
 /// Everything the live state needs from `store`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct StoreSettings {
+pub(crate) struct StateSettings {
     pub max_processes: usize,
     pub max_process_gpu_links: usize,
     /// Canonical keys not committed for this long leave the snapshot.
@@ -17,7 +17,7 @@ fn to_usize(value: u32) -> usize {
     usize::try_from(value).unwrap_or(usize::MAX)
 }
 
-impl StoreSettings {
+impl StateSettings {
     pub(crate) fn new(store: &StoreConfig) -> Self {
         Self {
             max_processes: to_usize(store.max_processes),
@@ -37,7 +37,7 @@ mod tests {
     #[test]
     fn defaults_follow_the_store_configuration() {
         let config = Config::defaults().unwrap();
-        let settings = StoreSettings::new(&config.store);
+        let settings = StateSettings::new(&config.store);
         assert_eq!(settings.process_key_ttl_ns, 300 * NANOS_PER_SECOND);
         assert_eq!(settings.key_ttl_ns, 24 * 3600 * NANOS_PER_SECOND);
     }
