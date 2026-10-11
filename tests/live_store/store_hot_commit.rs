@@ -410,25 +410,11 @@ fn at06_partition_usage_is_visible_in_store_health() {
         Partition::HotState,
         Partition::Catalog,
         Partition::RawHistory,
-        Partition::RawCandidates,
         Partition::Aggregates,
     ] {
         assert!(used[&partition] > 0, "{partition:?} usage is visible");
     }
     assert_eq!(health.series, 1);
-    assert_eq!(health.sources_retained, 1);
-    assert_eq!(
-        harness
-            .snapshots
-            .recent_candidates(&source_id("nvml:0:temp"), 10)
-            .len(),
-        5
-    );
-    assert_eq!(
-        harness.snapshots.candidate_sources(),
-        vec![source_id("nvml:0:temp")]
-    );
-    assert_eq!(harness.snapshots.counters().candidates_retained_total, 5);
     // The commit's raw batches are not kept alive by the store.
     assert_eq!(harness.ledger.used(Partition::Ingress), 0);
 }

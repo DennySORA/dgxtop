@@ -80,9 +80,9 @@ fn eviction_under_a_tiny_budget_never_exceeds_partitions_and_reports_truncation(
     let keys: Vec<_> = (0..10)
         .map(|index| temperature_key(&format!("gpu:{index}")))
         .collect();
-    // Twelve hours of minute rollups for ten series do not fit the 384 KiB
-    // aggregates partition of a 1 MiB budget.
-    let hours = 12u64;
+    // Eighteen hours of minute rollups for ten series do not fit the
+    // 512 KiB aggregates partition of a 1 MiB budget (D-84).
+    let hours = 18u64;
     for second in (0..hours * 3600).step_by(5) {
         let at = second * SECOND;
         let values = keys.iter().map(|key| gauge(key, 30.0, at)).collect();
@@ -232,10 +232,9 @@ fn series_slots_are_never_reused_for_another_series_after_churn() {
 }
 
 #[test]
-fn relieving_pressure_sheds_raw_candidates_then_raw_history() {
+fn relieving_pressure_sheds_raw_history_beyond_half_its_retention() {
     let mut harness = Harness::new();
     let key = temperature_key("gpu:0");
-    let source = dgxtop_core::testing::source_id("nvml:0:temp");
     for second in 0..600u64 {
         let at = second * SECOND;
         let mut batch = harness.batch(vec![gauge(&key, 50.0, at)], vec![]);
@@ -244,13 +243,9 @@ fn relieving_pressure_sheds_raw_candidates_then_raw_history() {
     }
     let now = 600 * SECOND;
     harness.maintain(now);
-    let candidates_before = harness.snapshots.recent_candidates(&source, 600).len();
     let raw_before = harness.ledger.used(Partition::RawHistory);
     let evicted_before = harness.snapshots.counters().evicted_records_total;
     harness.writer.relieve_pressure(now);
-    let candidates_after = harness.snapshots.recent_candidates(&source, 600).len();
-    assert_eq!(candidates_before, 59);
-    assert_eq!(candidates_after, 29, "candidates keep half their retention");
     assert!(harness.ledger.used(Partition::RawHistory) < raw_before);
     assert!(harness.snapshots.counters().evicted_records_total > evicted_before);
     let result = harness

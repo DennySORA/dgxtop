@@ -724,7 +724,6 @@ pub struct DomainSnapshot {
 pub struct StoreHealth {
     pub ledger: Option<LedgerSnapshot>,
     pub series: u32,
-    pub sources_retained: u32,
     pub gaps_total: u64,
     pub evicted_total: u64,
     pub rejected_batches_total: u64,

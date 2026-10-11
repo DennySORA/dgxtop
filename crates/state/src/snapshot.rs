@@ -12,7 +12,6 @@ use dgxtop_core::identity::SourceId;
 use dgxtop_core::ports::SnapshotReader;
 
 use super::counters::StoreCounters;
-use crate::candidates::{CandidateStore, RetainedCandidate};
 use dgxtop_core::sampling::stale_deadline;
 
 /// Gaps listed in `ImmutableSnapshot::recent_gaps`.
@@ -20,13 +19,12 @@ pub(crate) const RECENT_GAPS: usize = 64;
 
 struct SharedState {
     latest: RwLock<Arc<ImmutableSnapshot>>,
-    candidates: Arc<RwLock<CandidateStore>>,
     counters: Mutex<StoreCounters>,
 }
 
 /// Read side of the live state (`SnapshotReader`): the latest immutable
-/// snapshot behind a lock held only to clone one `Arc`, plus the retained
-/// raw candidates and the store counters. Cheap to clone.
+/// snapshot behind a lock held only to clone one `Arc`, plus the store
+/// counters. Cheap to clone.
 #[derive(Clone)]
 pub struct SharedSnapshot {
     shared: Arc<SharedState>,
@@ -42,14 +40,10 @@ impl fmt::Debug for SharedSnapshot {
 }
 
 impl SharedSnapshot {
-    pub(crate) fn new(
-        initial: Arc<ImmutableSnapshot>,
-        candidates: Arc<RwLock<CandidateStore>>,
-    ) -> Self {
+    pub(crate) fn new(initial: Arc<ImmutableSnapshot>) -> Self {
         Self {
             shared: Arc::new(SharedState {
                 latest: RwLock::new(initial),
-                candidates,
                 counters: Mutex::new(StoreCounters::default()),
             }),
         }
@@ -83,24 +77,6 @@ impl SharedSnapshot {
             .counters
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Newest retained raw readings of one source (oldest first).
-    pub fn recent_candidates(&self, source_id: &SourceId, max: usize) -> Vec<RetainedCandidate> {
-        self.shared
-            .candidates
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .recent(source_id, max)
-    }
-
-    /// Sources with retained raw readings.
-    pub fn candidate_sources(&self) -> Vec<SourceId> {
-        self.shared
-            .candidates
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .source_ids()
     }
 }
 
