@@ -154,7 +154,6 @@ pub struct SegmentIdentity {
 #[derive(Debug, Clone)]
 pub struct GaugeAppend {
     pub key: MetricKey,
-    pub descriptor: &'static crate::metric::MetricDescriptor,
     pub identity: SegmentIdentity,
     pub unit: crate::metric::CanonicalUnit,
     pub time_ns: u64,
@@ -176,7 +175,6 @@ pub struct CutAppend {
 #[derive(Debug, Clone)]
 pub struct IntervalAppend {
     pub key: MetricKey,
-    pub descriptor: &'static crate::metric::MetricDescriptor,
     pub identity: SegmentIdentity,
     pub unit: crate::metric::CanonicalUnit,
     pub start_ns: u64,

@@ -100,7 +100,6 @@ pub(crate) fn history_appends(
             (Some(scalar), Some(source), Some(generation)) if value.eligible_for_history => {
                 appends.gauges.push(GaugeAppend {
                     key: value.key.clone(),
-                    descriptor,
                     identity: SegmentIdentity {
                         source_id: source.clone(),
                         source_generation: generation,
@@ -137,7 +136,6 @@ pub(crate) fn history_appends(
         }
         appends.intervals.push(IntervalAppend {
             key: interval.key.clone(),
-            descriptor,
             identity: SegmentIdentity {
                 source_id: interval.source_id.clone(),
                 source_generation: interval.source_generation,

@@ -176,7 +176,7 @@ mod tests {
     use dgxtop_core::budget::{ByteLedger, Partition};
     use dgxtop_core::config::Config;
     use dgxtop_core::history::HistoryMethod;
-    use dgxtop_core::metric::{CanonicalUnit, Scalar, descriptor, ids};
+    use dgxtop_core::metric::{CanonicalUnit, Scalar, ids};
     use dgxtop_core::ports::{GaugeAppend, SegmentIdentity};
     use dgxtop_core::quality::SampleKind;
     use dgxtop_core::testing::{UTC_ON_A_WHOLE_MINUTE_NS, metric_key, source_id};
@@ -209,7 +209,6 @@ mod tests {
     fn gauge(seconds: u64, value: f64) -> GaugeAppend {
         GaugeAppend {
             key: metric_key("gpu:0", ids::GPU_TEMPERATURE, "gpu"),
-            descriptor: descriptor(ids::GPU_TEMPERATURE).unwrap(),
             identity: SegmentIdentity {
                 source_id: source_id("nvml:0:temp"),
                 source_generation: 1,
