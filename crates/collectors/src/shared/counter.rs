@@ -12,7 +12,7 @@ use dgxtop_core::clock::NANOS_PER_SECOND;
 use dgxtop_core::identity::{BootId, MetricKey, SourceId};
 use dgxtop_core::metric::{Conversion, Scalar};
 
-use crate::reasons;
+use crate::shared::reasons;
 
 /// One reading of one counter source incarnation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

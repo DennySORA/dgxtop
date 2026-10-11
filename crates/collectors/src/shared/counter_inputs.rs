@@ -9,12 +9,12 @@ use dgxtop_core::canonical::RejectReason;
 use dgxtop_core::metric::{CanonicalUnit, Conversion, Scalar, conversion_for};
 use dgxtop_core::quality::{Freshness, Namespace};
 
-use crate::arbitration::check_admission;
-use crate::context::{Record, Session};
-use crate::counter::{self, CounterDelta, CounterGap, CounterReading};
-use crate::output::Subject;
-use crate::reasons;
-use crate::values::{self, Evidence};
+use crate::shared::arbitration::check_admission;
+use crate::shared::context::{Record, Session};
+use crate::shared::counter::{self, CounterDelta, CounterGap, CounterReading};
+use crate::shared::output::Subject;
+use crate::shared::reasons;
+use crate::shared::values::{self, Evidence};
 
 /// Outcome of feeding one counter record.
 #[derive(Debug, Clone, Copy)]

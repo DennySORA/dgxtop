@@ -8,7 +8,7 @@ use dgxtop_core::quality::{Quality, RawKind, SampleKind, SelectionState};
 use dgxtop_core::testing::metric_key;
 
 use super::*;
-use crate::reasons;
+use crate::shared::reasons;
 use crate::testkit::{
     MILLISECOND, PlanBuilder, SECOND, SourceSpec, assert_close, catalog, collect, number, reading,
     value_of,

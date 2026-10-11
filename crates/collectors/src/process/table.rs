@@ -29,14 +29,14 @@ use dgxtop_core::ports::Collector;
 use dgxtop_core::quality::SampleKind;
 use dgxtop_core::text::{sanitize_command_name, sanitize_display};
 
-use crate::arbitration::{self, check_namespace};
-use crate::context::{self, CollectorSpec, Record, Route, Session};
-use crate::counter::{self, CounterReading};
-use crate::counter_inputs;
-use crate::gpu_processes::{self, PidRecords};
-use crate::output::Subject;
-use crate::reasons;
-use crate::state_bounds::PROCESS_BASES_PER_ROW;
+use crate::process::gpu_processes::{self, PidRecords};
+use crate::shared::arbitration::{self, check_namespace};
+use crate::shared::context::{self, CollectorSpec, Record, Route, Session};
+use crate::shared::counter::{self, CounterReading};
+use crate::shared::counter_inputs;
+use crate::shared::output::Subject;
+use crate::shared::reasons;
+use crate::shared::state_bounds::PROCESS_BASES_PER_ROW;
 
 const HOST_METRICS: [&str; 3] = [ids::PROCESS_CPU_TICKS, ids::PROCESS_RSS, ids::PROCESS_UID];
 
@@ -76,7 +76,7 @@ impl Collector for ProcessCollector {
     }
 
     fn consumes(&self, adapter_id: &AdapterId, read_group: &str) -> bool {
-        crate::routes_to(adapter_id, read_group, SPEC.id)
+        crate::shared::routes_to(adapter_id, read_group, SPEC.id)
     }
 
     fn collect(&self, plan: &CollectionPlan) -> CollectionBatch {

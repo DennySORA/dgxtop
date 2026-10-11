@@ -9,7 +9,7 @@ use dgxtop_core::canonical::{
 };
 use dgxtop_core::identity::{MetricKey, SourceId};
 
-use crate::reasons;
+use crate::shared::reasons;
 
 /// Upper bound on failures reported by one batch.
 pub(crate) const MAX_FAILURES: usize = 256;

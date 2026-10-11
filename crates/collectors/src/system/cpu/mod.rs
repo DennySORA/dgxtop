@@ -15,8 +15,8 @@ use dgxtop_core::metric::{Domain, MetricDescriptor, ids};
 use dgxtop_core::naming;
 use dgxtop_core::ports::Collector;
 
-use crate::context::{self, CollectorSpec, Route, SENSOR_PREFIX, Session};
-use crate::formulas::{self, Selections};
+use crate::shared::context::{self, CollectorSpec, Route, SENSOR_PREFIX, Session};
+use crate::shared::formulas::{self, Selections};
 
 /// Canonical CPU/SoC metrics published straight through arbitration.
 const PASS_THROUGH: [&str; 11] = [
@@ -79,7 +79,7 @@ impl Collector for CpuCollector {
     }
 
     fn consumes(&self, adapter_id: &AdapterId, read_group: &str) -> bool {
-        crate::routes_to(adapter_id, read_group, SPEC.id)
+        crate::shared::routes_to(adapter_id, read_group, SPEC.id)
     }
 
     fn collect(&self, plan: &CollectionPlan) -> CollectionBatch {

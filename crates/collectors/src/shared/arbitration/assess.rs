@@ -10,7 +10,7 @@ use dgxtop_core::observation::Observation;
 use dgxtop_core::quality::{Freshness, Namespace, RawKind};
 
 use super::{Candidate, CatalogMapping, Deadlines};
-use crate::reasons;
+use crate::shared::reasons;
 
 /// Metric id prefix of unclassified channels (diagnostics only).
 const SENSOR_PREFIX: &str = "sensor.";

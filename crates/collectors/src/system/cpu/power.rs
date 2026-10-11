@@ -20,12 +20,12 @@ use dgxtop_core::naming::entity;
 use dgxtop_core::observation::Observation;
 use dgxtop_core::quality::{Freshness, RawKind, ReadStatus};
 
-use crate::arbitration::{self, Candidate, CatalogMapping, Deadlines};
-use crate::context::{Record, Session, carries_formula};
-use crate::counter_inputs::{self, Step};
-use crate::output::Subject;
-use crate::reasons;
-use crate::values::{self, Evidence};
+use crate::shared::arbitration::{self, Candidate, CatalogMapping, Deadlines};
+use crate::shared::context::{Record, Session, carries_formula};
+use crate::shared::counter_inputs::{self, Step};
+use crate::shared::output::Subject;
+use crate::shared::reasons;
+use crate::shared::values::{self, Evidence};
 
 const POWER_METRICS: [&str; 2] = [ids::CPU_POWER_PACKAGE, ids::CPU_POWER_PLATFORM];
 
