@@ -20,20 +20,12 @@ use rusqlite::Connection;
 use std::path::Path;
 
 use crate::fs::{FileSystemOps, RealFileSystem};
-use crate::sqlite::{
-    CapacityPolicy, ConnectionProfile, DatabaseSpec, SchemaKind, VersionGate,
-    ensure_sqlite_version, open_database, path_problem,
-};
+use crate::sqlite::{SchemaKind, VersionGate, ensure_sqlite_version, open_small_database};
 
 const MIB: u64 = 1024 * 1024;
-/// The database, its WAL and shared memory together.
-const LIMIT_BYTES: u64 = 64 * MIB;
-const WAL_CHECKPOINT_BYTES: u64 = 4 * MIB;
-const WAL_STOP_BYTES: u64 = 16 * MIB;
-const MIN_FREE_DISK_BYTES: u64 = 64 * MIB;
 /// The pages in use past which the series written longest ago give way:
-/// room for the WAL below the limit. A full series (every size at 300
-/// buckets) takes about a quarter of a megabyte.
+/// room for the WAL below the 64 MiB of a small database. A full series
+/// (every size at 300 buckets) takes about a quarter of a megabyte.
 const MAX_USED_BYTES: u64 = 48 * MIB;
 
 /// The tiers database in dgxtop's state directory.
@@ -60,26 +52,11 @@ impl SqliteHistoryTiers {
     }
 
     pub(crate) fn open_with(path: &Path, fs: &dyn FileSystemOps, gate: VersionGate) -> Self {
-        let spec = DatabaseSpec {
-            path,
-            kind: SchemaKind::HistoryTiers,
-            profile: ConnectionProfile::best_effort(WAL_CHECKPOINT_BYTES),
-            policy: CapacityPolicy {
-                limit_bytes: LIMIT_BYTES,
-                reserve_bytes: 0,
-                wal_checkpoint_bytes: WAL_CHECKPOINT_BYTES,
-                wal_stop_bytes: WAL_STOP_BYTES,
-                min_free_disk_bytes: MIN_FREE_DISK_BYTES,
-            },
-        };
-        let opened = match path_problem(path) {
-            Some(problem) => Err(format!("{}: {problem}", path.display())),
-            None => open_database(&spec, fs, gate).map_err(|unusable| unusable.reason),
-        };
-        let (database, recreated) = match opened {
-            Ok(opened) => (Ok(opened.connection), opened.recreated),
-            Err(reason) => (Err(reason), None),
-        };
+        let (database, recreated) =
+            match open_small_database(path, SchemaKind::HistoryTiers, fs, gate) {
+                Ok(opened) => (Ok(opened.connection), opened.recreated),
+                Err(unusable) => (Err(unusable.reason), None),
+            };
         Self {
             database,
             recreated,

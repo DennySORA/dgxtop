@@ -26,6 +26,7 @@ mod database;
 mod errors;
 mod free_space;
 mod schema;
+mod statements;
 mod time;
 mod transaction;
 mod version;
@@ -44,7 +45,10 @@ pub(crate) use capacity::{
 };
 pub(crate) use connection::ConnectionProfile;
 pub(crate) use database::{DatabaseSpec, Unusable, VersionGate, open_database, path_problem};
-pub(crate) use errors::{FaultKind, describe, fault_kind};
+pub(crate) use errors::{FaultKind, describe, fault_kind, infra_error, tx_infra_error};
 #[cfg(test)]
 pub(crate) use schema::PROCESS_HISTORY_DDL;
+pub(crate) use statements::{
+    BucketTable, Drained, checkpoint, drain, open_small_database, used_bytes,
+};
 pub(crate) use transaction::{StepError, TxError, immediate_transaction};

@@ -26,7 +26,7 @@ use crate::fs::{FileSystemOps, RealFileSystem};
 use crate::sqlite::{
     CapacityPolicy, CapacityView, ConnectionProfile, DatabaseSpec, FaultKind, FreeSpaceProbe,
     PageUsage, Refusal, SchemaKind, StorageFootprint, TxError, Unusable, VersionGate, WriteClass,
-    describe, ensure_sqlite_version, fault_kind, immediate_transaction, open_database,
+    describe, drain, ensure_sqlite_version, fault_kind, immediate_transaction, open_database,
     pages_and_backlog, path_problem, utc_cutoff,
 };
 
@@ -412,22 +412,11 @@ impl SqliteArchive {
     ) -> Result<(u64, bool), InfraError> {
         let batch = u64::from(self.limits.batch_rows);
         let deadline = self.limits.busy_deadline();
-        let mut total = 0u64;
-        while *rounds_left > 0 {
-            *rounds_left -= 1;
-            let result: Result<u64, TxError<()>> =
-                immediate_transaction(self.connection()?, deadline, |transaction| {
-                    Ok(work(transaction)?)
-                });
-            let removed = result.map_err(|error| {
-                self.tx_failure("archive maintenance", "archive.maintenance", error)
-            })?;
-            total = total.saturating_add(removed);
-            if removed < batch {
-                return Ok((total, true));
-            }
-        }
-        Ok((total, false))
+        let drained = drain(self.connection()?, deadline, batch, rounds_left, work);
+        let drained = drained.map_err(|error| {
+            self.tx_failure("archive maintenance", "archive.maintenance", error)
+        })?;
+        Ok((drained.removed, drained.finished))
     }
 
     /// Removes rows that only existed for buckets already gone. Segments in

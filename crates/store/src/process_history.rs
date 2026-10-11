@@ -29,18 +29,12 @@ use rusqlite::Connection;
 
 use crate::fs::{FileSystemOps, RealFileSystem};
 use crate::sqlite::{
-    CapacityPolicy, ConnectionProfile, DatabaseSpec, SchemaKind, VersionGate,
-    ensure_sqlite_version, open_database, path_problem,
+    SchemaKind, VersionGate, ensure_sqlite_version, open_small_database, path_problem,
 };
 
 const MIB: u64 = 1024 * 1024;
-/// The database, its WAL and shared memory together.
-const LIMIT_BYTES: u64 = 64 * MIB;
-const WAL_CHECKPOINT_BYTES: u64 = 4 * MIB;
-const WAL_STOP_BYTES: u64 = 16 * MIB;
-const MIN_FREE_DISK_BYTES: u64 = 64 * MIB;
 /// The pages in use past which ended runs give way: room left for the WAL
-/// and the live runs' growth below the limit.
+/// and the live runs' growth below the 64 MiB of a small database.
 const MAX_USED_BYTES: u64 = 48 * MIB;
 /// Retention runs at most this often (boot clock).
 const RETENTION_EVERY_NS: u64 = 3_600 * 1_000_000_000;
@@ -88,25 +82,11 @@ impl ProcessHistoryFiles {
         fs: Box<dyn FileSystemOps>,
         gate: VersionGate,
     ) -> Self {
-        let spec = DatabaseSpec {
-            path: database_path,
-            kind: SchemaKind::ProcessHistory,
-            profile: ConnectionProfile::best_effort(WAL_CHECKPOINT_BYTES),
-            policy: CapacityPolicy {
-                limit_bytes: LIMIT_BYTES,
-                reserve_bytes: 0,
-                wal_checkpoint_bytes: WAL_CHECKPOINT_BYTES,
-                wal_stop_bytes: WAL_STOP_BYTES,
-                min_free_disk_bytes: MIN_FREE_DISK_BYTES,
-            },
-        };
-        let opened = match path_problem(database_path) {
-            Some(problem) => Err(format!("{}: {problem}", database_path.display())),
-            None => open_database(&spec, fs.as_ref(), gate).map_err(|unusable| unusable.reason),
-        };
+        let opened =
+            open_small_database(database_path, SchemaKind::ProcessHistory, fs.as_ref(), gate);
         let (database, recreated) = match opened {
             Ok(opened) => (Ok(opened.connection), opened.recreated),
-            Err(reason) => (Err(reason), None),
+            Err(unusable) => (Err(unusable.reason), None),
         };
         let recent_path = match path_problem(recent_path) {
             Some(problem) => Err(format!("{}: {problem}", recent_path.display())),

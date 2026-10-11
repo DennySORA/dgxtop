@@ -1,6 +1,7 @@
 //! Rows of the tiers database (D-82): series the history let go deleted,
-//! series upserted by their identity, closed buckets written as the history hands them, each (series, size)
-//! cut to the latest the journal asks for, the series written longest ago
+//! series upserted by their identity, closed buckets written as the history
+//! hands them, each (series, size) cut to the latest the journal asks for,
+//! the series written longest ago
 //! giving way past the size limit, and the read at startup. Only prepared
 //! statements with bound parameters.
 
@@ -14,10 +15,17 @@ use dgxtop_core::overview_history::{OverviewBucket, StoredTierSeries, TierJourna
 use dgxtop_core::process_history::Tier;
 use rusqlite::{Connection, Row, Transaction, params};
 
-use crate::sqlite::{StepError, TxError, describe, immediate_transaction};
+use crate::sqlite::{
+    BucketTable, StepError, checkpoint, immediate_transaction, infra_error, tx_infra_error,
+    used_bytes,
+};
 
 /// A transaction waits this long for the write lock at most.
 const BUSY_DEADLINE: Duration = Duration::from_millis(500);
+const TIER_BUCKETS: BucketTable = BucketTable {
+    table: "tier_buckets",
+    owner_column: "series_id",
+};
 /// Series a pass over a database past its size gives way at once.
 const SERIES_GIVING_WAY: i64 = 1;
 
@@ -41,16 +49,15 @@ pub(super) fn append(connection: &mut Connection, journal: &TierJournal) -> Resu
             touched.insert((series_id, tier));
             insert_bucket(transaction, series_id, tier, &row.bucket)?;
         }
+        // The older buckets are in the coarser sizes already.
+        let keep = u64::from(journal.keep_latest);
         for (series_id, tier) in touched {
-            keep_latest(transaction, series_id, tier, journal.keep_latest)?;
+            TIER_BUCKETS.keep_latest(transaction, series_id, tier, keep)?;
         }
         Ok::<_, StepError<()>>(())
     })
-    .map_err(|error| tx_error("history_tiers.append", error))?;
-    // The archive profile leaves checkpoints to the writer.
-    connection
-        .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()))
-        .map_err(|error| sqlite_error("history_tiers.checkpoint", &error))
+    .map_err(|error| tx_infra_error("history_tiers.append", error))?;
+    checkpoint(connection).map_err(|error| infra_error("history_tiers.checkpoint", &error))
 }
 
 /// Deletes one series and every bucket of it.
@@ -137,28 +144,6 @@ fn insert_bucket(
     Ok(())
 }
 
-/// Each (series, size) keeps its latest `keep` buckets: the older ones are
-/// in the coarser sizes already.
-fn keep_latest(
-    transaction: &Transaction<'_>,
-    series_id: i64,
-    tier: i64,
-    keep: u32,
-) -> rusqlite::Result<()> {
-    transaction
-        .prepare_cached(
-            "DELETE FROM tier_buckets WHERE series_id = ?1 AND tier = ?2 AND start_utc_ns < \
-             (SELECT start_utc_ns FROM tier_buckets WHERE series_id = ?1 AND tier = ?2 \
-              ORDER BY start_utc_ns DESC LIMIT 1 OFFSET ?3)",
-        )?
-        .execute(params![
-            series_id,
-            tier,
-            i64::from(keep.max(1)).saturating_sub(1)
-        ])?;
-    Ok(())
-}
-
 /// While the database holds more than `max_used_bytes`, the series written
 /// longest ago give way (D-82: none expires by age).
 pub(super) fn retain(connection: &mut Connection, max_used_bytes: u64) -> Result<(), InfraError> {
@@ -175,18 +160,7 @@ pub(super) fn retain(connection: &mut Connection, max_used_bytes: u64) -> Result
         }
         Ok::<_, StepError<()>>(())
     })
-    .map_err(|error| tx_error("history_tiers.retain", error))
-}
-
-/// Bytes of the pages in use (the free ones are reused before it grows).
-fn used_bytes(connection: &Connection) -> rusqlite::Result<u64> {
-    let pragma = |name: &str| -> rusqlite::Result<u64> {
-        connection
-            .query_row(&format!("PRAGMA {name}"), [], |row| row.get::<_, i64>(0))
-            .map(|value| u64::try_from(value).unwrap_or(0))
-    };
-    let pages = pragma("page_count")?.saturating_sub(pragma("freelist_count")?);
-    Ok(pages.saturating_mul(pragma("page_size")?))
+    .map_err(|error| tx_infra_error("history_tiers.retain", error))
 }
 
 /// Every series with its buckets, each size oldest first. A series whose
@@ -194,10 +168,10 @@ fn used_bytes(connection: &Connection) -> rusqlite::Result<u64> {
 pub(super) fn load(connection: &mut Connection) -> Result<Vec<StoredTierSeries>, InfraError> {
     let mut statement = connection
         .prepare("SELECT series_id, host_id, entity_id, metric_id, scope FROM tier_series")
-        .map_err(|error| sqlite_error("history_tiers.load", &error))?;
+        .map_err(|error| infra_error("history_tiers.load", &error))?;
     let series: Vec<(i64, SeriesInEveryBoot)> = statement
         .query_map([], series_of)
-        .map_err(|error| sqlite_error("history_tiers.load", &error))?
+        .map_err(|error| infra_error("history_tiers.load", &error))?
         .filter_map(Result::ok)
         .flatten()
         .collect();
@@ -238,10 +212,10 @@ fn buckets_of(
              sample_count, total FROM tier_buckets WHERE series_id = ?1 \
              ORDER BY tier, start_utc_ns",
         )
-        .map_err(|error| sqlite_error("history_tiers.buckets", &error))?;
+        .map_err(|error| infra_error("history_tiers.buckets", &error))?;
     let rows = statement
         .query_map(params![series_id], bucket_of)
-        .map_err(|error| sqlite_error("history_tiers.buckets", &error))?;
+        .map_err(|error| infra_error("history_tiers.buckets", &error))?;
     Ok(rows.filter_map(Result::ok).flatten().collect())
 }
 
@@ -269,19 +243,4 @@ fn bucket_of(row: &Row<'_>) -> rusqlite::Result<Option<(Tier, OverviewBucket)>> 
 #[cfg(test)]
 pub(super) fn series_count(connection: &Connection) -> rusqlite::Result<i64> {
     connection.query_row("SELECT count(*) FROM tier_series", [], |row| row.get(0))
-}
-
-fn sqlite_error(operation: &'static str, error: &rusqlite::Error) -> InfraError {
-    InfraError::Database(format!("{operation}: {}", describe(error)))
-}
-
-fn tx_error(operation: &'static str, error: TxError<()>) -> InfraError {
-    match error {
-        TxError::Sqlite(error) | TxError::Commit(error) => sqlite_error(operation, &error),
-        TxError::BusyTimeout { elapsed_ms } => InfraError::Timeout {
-            operation,
-            elapsed_ms,
-        },
-        TxError::Abort(()) => InfraError::Database(format!("{operation}: aborted")),
-    }
 }

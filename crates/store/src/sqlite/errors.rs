@@ -1,7 +1,10 @@
 //! Classification of SQLite failures into the few classes persistence
 //! policy distinguishes (busy, full, corrupt, I/O, constraint, ...).
 
+use dgxtop_core::errors::InfraError;
 use rusqlite::ErrorCode;
+
+use super::transaction::TxError;
 
 /// What a SQLite failure means for the partition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +46,23 @@ pub(crate) fn fault_kind(error: &rusqlite::Error) -> FaultKind {
 /// Sanitized one-line description for statuses and error messages.
 pub(crate) fn describe(error: &rusqlite::Error) -> String {
     dgxtop_core::text::sanitize_message(&error.to_string())
+}
+
+/// A failed statement of `operation`.
+pub(crate) fn infra_error(operation: &'static str, error: &rusqlite::Error) -> InfraError {
+    InfraError::Database(format!("{operation}: {}", describe(error)))
+}
+
+/// A failed transaction of `operation`.
+pub(crate) fn tx_infra_error(operation: &'static str, error: TxError<()>) -> InfraError {
+    match error {
+        TxError::Sqlite(error) | TxError::Commit(error) => infra_error(operation, &error),
+        TxError::BusyTimeout { elapsed_ms } => InfraError::Timeout {
+            operation,
+            elapsed_ms,
+        },
+        TxError::Abort(()) => InfraError::Database(format!("{operation}: aborted")),
+    }
 }
 
 #[cfg(test)]

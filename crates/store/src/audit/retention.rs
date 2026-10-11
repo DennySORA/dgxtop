@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use rusqlite::{Connection, params};
 
-use crate::sqlite::{TxError, immediate_transaction};
+use crate::sqlite::{Drained, TxError, drain};
 
 /// Rows deleted per transaction.
 pub(crate) const RETENTION_BATCH_ROWS: i64 = 512;
@@ -40,38 +40,27 @@ pub(crate) struct RetentionCounts {
     pub complete: bool,
 }
 
-struct Drained {
-    deleted: u64,
-    finished: bool,
-}
-
-/// Repeats one bounded DELETE until it removes less than a full batch or
-/// the shared round budget is spent.
-fn drain(
+/// Repeats one bounded DELETE of rows older than `cutoff_utc` until it
+/// removes less than a full batch or the shared round budget is spent.
+fn drain_expired(
     connection: &mut Connection,
     statement: &str,
     cutoff_utc: &str,
     deadline: Duration,
     rounds_left: &mut u32,
 ) -> Result<Drained, TxError<()>> {
-    let mut deleted_total = 0u64;
-    while *rounds_left > 0 {
-        *rounds_left -= 1;
-        let deleted = immediate_transaction(connection, deadline, |transaction| {
-            Ok(transaction.execute(statement, params![cutoff_utc, RETENTION_BATCH_ROWS])?)
-        })?;
-        deleted_total = deleted_total.saturating_add(u64::try_from(deleted).unwrap_or(u64::MAX));
-        if i64::try_from(deleted).unwrap_or(i64::MAX) < RETENTION_BATCH_ROWS {
-            return Ok(Drained {
-                deleted: deleted_total,
-                finished: true,
-            });
-        }
-    }
-    Ok(Drained {
-        deleted: deleted_total,
-        finished: false,
-    })
+    let batch_rows = u64::try_from(RETENTION_BATCH_ROWS).unwrap_or(u64::MAX);
+    drain(
+        connection,
+        deadline,
+        batch_rows,
+        rounds_left,
+        |transaction| {
+            let deleted =
+                transaction.execute(statement, params![cutoff_utc, RETENTION_BATCH_ROWS])?;
+            Ok(u64::try_from(deleted).unwrap_or(u64::MAX))
+        },
+    )
 }
 
 /// Deletes expired rows (`*_utc < cutoff_utc`).
@@ -83,36 +72,36 @@ pub(crate) fn delete_expired(
     let mut rounds_left = RETENTION_MAX_ROUNDS;
     let mut counts = RetentionCounts::default();
     // Events first: intents are only deleted once nothing references them.
-    let events = drain(
+    let events = drain_expired(
         connection,
         DELETE_EXPIRED_EVENTS,
         cutoff_utc,
         deadline,
         &mut rounds_left,
     )?;
-    counts.events = events.deleted;
+    counts.events = events.removed;
     if !events.finished {
         return Ok(counts);
     }
-    let attempts = drain(
+    let attempts = drain_expired(
         connection,
         DELETE_EXPIRED_ATTEMPTS,
         cutoff_utc,
         deadline,
         &mut rounds_left,
     )?;
-    counts.attempts = attempts.deleted;
+    counts.attempts = attempts.removed;
     if !attempts.finished {
         return Ok(counts);
     }
-    let intents = drain(
+    let intents = drain_expired(
         connection,
         DELETE_EXPIRED_INTENTS,
         cutoff_utc,
         deadline,
         &mut rounds_left,
     )?;
-    counts.intents = intents.deleted;
+    counts.intents = intents.removed;
     counts.complete = intents.finished;
     Ok(counts)
 }
