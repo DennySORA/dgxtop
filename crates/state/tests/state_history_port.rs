@@ -34,10 +34,6 @@ enum Call {
     },
     Gap(String),
     Maintain(u64),
-    ShedRaw {
-        now: u64,
-        keep_ns: u64,
-    },
     Revision(u64),
     FinalizeGrace(u64),
     WallClock(u64, i128),
@@ -92,10 +88,6 @@ impl HistoryIngest for RecordingHistory {
 
     fn maintain(&mut self, now: u64) -> HistoryOutcome {
         self.record(Call::Maintain(now))
-    }
-
-    fn shed_raw(&mut self, now: u64, keep_ns: u64) -> HistoryOutcome {
-        self.record(Call::ShedRaw { now, keep_ns })
     }
 
     fn set_revision(&mut self, revision: u64) {
@@ -299,20 +291,15 @@ fn an_empty_gap_is_refused_before_the_history() {
 }
 
 #[test]
-fn maintenance_relief_sampling_and_clock_are_forwarded() {
+fn maintenance_sampling_and_clock_are_forwarded() {
     let config = Config::defaults().unwrap();
     let mut rig = rig(false);
     rig.writer.maintain(10 * SECOND);
-    rig.writer.relieve_pressure(20 * SECOND);
     rig.writer.set_sampling(&config.sampling);
     rig.writer
         .observe_wall_clock(30 * SECOND, UTC_ON_A_WHOLE_MINUTE_NS);
     let calls = rig.history.calls();
     assert_eq!(calls[0], Call::Maintain(10 * SECOND));
-    assert!(calls.contains(&Call::ShedRaw {
-        now: 20 * SECOND,
-        keep_ns: config.store.raw_history_ns() / 2,
-    }));
     let grace =
         dgxtop_core::sampling::SamplingTiming::from_sampling(&config.sampling).finalize_grace_ns;
     assert!(calls.contains(&Call::FinalizeGrace(grace)));

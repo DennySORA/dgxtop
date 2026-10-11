@@ -78,8 +78,6 @@ impl DescriptorIndex {
 /// Epochs the store has seen.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct EpochState {
-    /// Current epoch announced by the Manager (`StateWriter::set_epoch`).
-    pub announced: Option<u64>,
     /// Highest epoch of a committed batch; older epochs are stale.
     pub highest_committed: Option<u64>,
 }
@@ -101,14 +99,6 @@ pub(crate) fn check_guard(
         return Err(Rejection::stale_epoch(format!(
             "batch epoch {} differs from expected epoch {}",
             batch.epoch, guard.expected_epoch
-        )));
-    }
-    if let Some(announced) = epochs.announced
-        && guard.expected_epoch != announced
-    {
-        return Err(Rejection::stale_epoch(format!(
-            "expected epoch {} differs from current epoch {announced}",
-            guard.expected_epoch
         )));
     }
     if let Some(highest) = epochs.highest_committed

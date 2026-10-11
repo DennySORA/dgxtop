@@ -135,11 +135,6 @@ impl HistoryIngest for HistoryRecorder {
         self.outcome(report)
     }
 
-    fn shed_raw(&mut self, now_boot_ns: u64, keep_ns: u64) -> HistoryOutcome {
-        let report = self.writer.shed_raw(now_boot_ns, keep_ns);
-        self.outcome(report)
-    }
-
     fn set_revision(&mut self, revision: u64) {
         self.revision = revision;
         self.writer.set_revision(revision);

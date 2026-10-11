@@ -614,25 +614,6 @@ impl HistoryState {
         eviction.records > 0
     }
 
-    /// Overload relief: raw history older than `keep_ns` is dropped (only
-    /// minutes that already have rollups, or by boot time while the grid is
-    /// unknown and no minute can have one yet).
-    pub(crate) fn shed_raw(&mut self, now_ns: u64, keep_ns: u64) -> HistoryReport {
-        let mut report = HistoryReport::default();
-        let target = now_ns.saturating_sub(keep_ns);
-        let grid = self.grid;
-        for handle in self.slots.handles() {
-            if let Some(series) = self.slots.get_mut(handle) {
-                let dropped = series.advance_raw_floors(target, grid);
-                report.evicted_records = report
-                    .evicted_records
-                    .saturating_add(u64::try_from(dropped).unwrap_or(u64::MAX));
-            }
-        }
-        self.summarize(&mut report);
-        report
-    }
-
     /// Retention, finalization, segment retirement and gap settlement.
     pub(crate) fn maintain(&mut self, now_ns: u64) -> HistoryReport {
         let mut report = HistoryReport::default();
@@ -814,16 +795,6 @@ mod tests {
         let first = series.gauge.buckets.first().unwrap();
         assert_eq!(first.start_ns, 300 * SECOND);
         assert_eq!(first.covered_ns, 60 * SECOND);
-    }
-
-    #[test]
-    fn overload_sheds_raw_history_before_the_minute_grid_is_known() {
-        let ledger = ByteLedger::for_memory_limit_mib(64);
-        let mut state = HistoryState::new(settings(), &ledger);
-        gauge_every_second(&mut state, 200);
-        let report = state.shed_raw(200 * SECOND, 60 * SECOND);
-        assert_eq!(report.evicted_records, 128, "two whole chunks");
-        assert_eq!(gpu_a(&state).gauge.raw_floor_ns, 140 * SECOND);
     }
 
     #[test]

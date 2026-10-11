@@ -194,17 +194,6 @@ impl std::fmt::Debug for StateWriter {
 }
 
 impl StateWriter {
-    /// Tells the store the Manager's current scheduler epoch. Optional: the
-    /// commit guard alone already rejects stale epochs; once set, a guard
-    /// expecting another epoch is rejected too. Epochs only move forward.
-    pub fn set_epoch(&mut self, epoch: u64) {
-        self.epochs.announced = Some(
-            self.epochs
-                .announced
-                .map_or(epoch, |current| current.max(epoch)),
-        );
-    }
-
     /// Applies a new sampling configuration to future samples only; stored
     /// stale deadlines and totals never change.
     pub fn set_sampling(&mut self, sampling: &SamplingConfig) {
@@ -228,21 +217,6 @@ impl StateWriter {
             return None;
         }
         self.history.take_archive_journal(max_bytes)
-    }
-
-    /// Store counters as of now.
-    pub fn counters(&self) -> StoreCounters {
-        self.counters
-    }
-
-    /// Sheds droppable data under memory pressure (overload `throttled`):
-    /// raw history beyond half its retention (minutes that already have
-    /// rollups).
-    pub fn relieve_pressure(&mut self, now_boot_ns: u64) {
-        let now = self.advance_clock(now_boot_ns);
-        let outcome = self.history.shed_raw(now, self.settings.raw_history_ns / 2);
-        self.absorb_history(outcome);
-        self.publish_now(SnapshotChange::default(), now);
     }
 
     fn advance_clock(&mut self, now_boot_ns: u64) -> u64 {

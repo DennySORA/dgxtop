@@ -232,32 +232,6 @@ fn series_slots_are_never_reused_for_another_series_after_churn() {
 }
 
 #[test]
-fn relieving_pressure_sheds_raw_history_beyond_half_its_retention() {
-    let mut harness = Harness::new();
-    let key = temperature_key("gpu:0");
-    for second in 0..600u64 {
-        let at = second * SECOND;
-        let mut batch = harness.batch(vec![gauge(&key, 50.0, at)], vec![]);
-        batch.inputs = vec![support::raw_input(&key, "nvml:0:temp", at)];
-        harness.commit_batch(batch, at);
-    }
-    let now = 600 * SECOND;
-    harness.maintain(now);
-    let raw_before = harness.ledger.used(Partition::RawHistory);
-    let evicted_before = harness.snapshots.counters().evicted_records_total;
-    harness.writer.relieve_pressure(now);
-    assert!(harness.ledger.used(Partition::RawHistory) < raw_before);
-    assert!(harness.snapshots.counters().evicted_records_total > evicted_before);
-    let result = harness
-        .query(&key, (0, now), 60_000, HistoryStat::Mean, 100)
-        .unwrap();
-    assert!(
-        result.coverage_ratio > 0.97,
-        "shed raw minutes remain as rollups"
-    );
-}
-
-#[test]
 fn idle_process_keys_and_orphan_explanations_leave_the_snapshot() {
     use dgxtop_core::canonical::Explanation;
     use dgxtop_core::metric::ids;

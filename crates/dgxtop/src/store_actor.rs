@@ -92,10 +92,6 @@ mod tests {
             HistoryOutcome::default()
         }
 
-        fn shed_raw(&mut self, _now: u64, _keep_ns: u64) -> HistoryOutcome {
-            HistoryOutcome::default()
-        }
-
         fn set_revision(&mut self, _revision: u64) {}
 
         fn set_finalize_grace(&mut self, grace_ns: u64) {

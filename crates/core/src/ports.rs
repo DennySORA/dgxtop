@@ -258,9 +258,6 @@ pub trait HistoryIngest: Send {
     fn record_gap(&mut self, gap: GapRecord) -> HistoryOutcome;
     /// Retention, finalization, eviction and gap settlement.
     fn maintain(&mut self, now_boot_ns: u64) -> HistoryOutcome;
-    /// Overload relief: drops raw history older than `keep_ns` (only
-    /// minutes that already have rollups).
-    fn shed_raw(&mut self, now_boot_ns: u64, keep_ns: u64) -> HistoryOutcome;
     /// The snapshot revision queries and journals report; follows every publish.
     fn set_revision(&mut self, revision: u64);
     /// Applies a new finalization horizon to future minutes only.
