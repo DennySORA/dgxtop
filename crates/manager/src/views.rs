@@ -438,10 +438,11 @@ fn validate_series(update: &ViewUpdate, context: &ViewContext<'_>) -> Result<(),
 mod tests {
     use super::*;
     use crate::session::Outstanding;
-    use crate::test_support::{entity, entity_id};
     use dgxtop_core::identity::{Pid, PidNamespace};
+    use dgxtop_core::observation::EntityKind;
     use dgxtop_core::quality::SampleKind;
     use dgxtop_core::testing::{boot_id, host_id};
+    use dgxtop_core::testing::{entity_id, entity_record};
 
     struct Bench {
         service: ViewSessionService,
@@ -650,9 +651,15 @@ mod tests {
         let mut bench = bench();
         let rows = table(&[]);
         let mut catalog = CatalogSnapshot::default();
-        catalog
-            .entities
-            .insert(entity_id("gpu:GPU-1"), Arc::new(entity("gpu:GPU-1")));
+        catalog.entities.insert(
+            entity_id("gpu:GPU-1"),
+            Arc::new(entity_record(
+                "gpu:GPU-1",
+                EntityKind::Gpu,
+                "gpu:GPU-1",
+                &[],
+            )),
+        );
         assert!(
             apply(
                 &mut bench,

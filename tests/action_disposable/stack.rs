@@ -30,7 +30,7 @@ use dgxtop_core::action::{
     ActionOp, ActionState, AuditOp, ConfirmationToken, PersistenceState, Signal,
 };
 use dgxtop_core::budget::{ByteLedger, MIB, Partition, QueueGate};
-use dgxtop_core::canonical::{CollectionPlan, ImmutableSnapshot, ProcessRow};
+use dgxtop_core::canonical::{ImmutableSnapshot, ProcessRow};
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::commands::{
     CommandBody, CommandEnvelope, CommandResult, CommandStatus, SortKey, ViewKind,
@@ -38,13 +38,12 @@ use dgxtop_core::commands::{
 use dgxtop_core::config::Config;
 use dgxtop_core::identity::{BootId, HostId, Pid, PidNamespace, ProcessKey};
 use dgxtop_core::ports::{
-    AdapterJob, AuditRepository, ConfigJob, ControlCompletion, HistoryJob, SessionPort,
-    SnapshotReader, StoreJob,
+    AuditRepository, ConfigJob, ControlCompletion, SessionPort, SnapshotReader,
 };
 use dgxtop_core::quality::{Namespace, SampleKind};
-use dgxtop_core::testing::{CapturingDispatch, MemoryLogger};
 use dgxtop_core::view::{ActionsView, ViewModel};
 use dgxtop_manager::presentation::HostFacts;
+use dgxtop_manager::testing::inert_ports;
 use dgxtop_manager::{
     Manager, ManagerChannels, ManagerPorts, ManagerSetup, SessionHandle, ShutdownSummary,
     ShutdownTrigger,
@@ -786,15 +785,8 @@ fn manager_ports(
     config: &Config,
 ) -> ManagerPorts {
     let ledger = ByteLedger::new(config.partition_limits());
+    let ingress = QueueGate::new("ingress", 32, 8 * MIB, ledger.clone(), Partition::Ingress);
     ManagerPorts {
-        clock,
-        adapters: Box::new(CapturingDispatch::<AdapterJob>::new()),
-        collectors: Box::new(CapturingDispatch::<CollectionPlan>::new()),
-        collector_registry: Vec::new(),
-        store: Box::new(CapturingDispatch::<StoreJob>::new()),
-        snapshots,
-        trends: Arc::new(dgxtop_core::trends::TrendBook::default()),
-        history: Box::new(CapturingDispatch::<HistoryJob>::new()),
         config: Box::new(workers.config.clone()),
         audit: Box::new(RecordingDispatch::new(
             workers.audit.clone(),
@@ -806,10 +798,7 @@ fn manager_ports(
             journal.clone(),
             Arc::clone(&workers.action_work),
         )),
-        process_history: None,
-        logger: Arc::new(MemoryLogger::default()),
-        ingress: QueueGate::new("ingress", 32, 8 * MIB, ledger.clone(), Partition::Ingress),
-        ledger,
+        ..inert_ports(clock, snapshots, &ledger, ingress)
     }
 }
 

@@ -537,6 +537,11 @@ pub fn snapshot_entry(key: &MetricKey, value: Option<f64>, read_ns: u64) -> Snap
     }
 }
 
+/// The entity id `value` (a test's own spelling, so a bad one panics).
+pub fn entity_id(value: &str) -> EntityId {
+    EntityId::new(value).unwrap_or_else(|error| panic!("test entity: {error}"))
+}
+
 /// A catalog entity of `kind` with `attributes`.
 pub fn entity_record(
     id: &str,
@@ -545,7 +550,7 @@ pub fn entity_record(
     attributes: &[(&str, &str)],
 ) -> EntityRecord {
     EntityRecord {
-        entity_id: EntityId::new(id).unwrap_or_else(|error| panic!("test entity: {error}")),
+        entity_id: entity_id(id),
         kind,
         parent_id: None,
         generation: 1,

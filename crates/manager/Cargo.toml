@@ -8,6 +8,11 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+# Inert ports (`dgxtop_manager::testing`) for the suites that assemble a
+# Manager.
+test-support = ["dgxtop-core/test-support"]
+
 [dependencies]
 dgxtop-core.workspace = true
 crossbeam-channel.workspace = true
@@ -17,6 +22,8 @@ uuid.workspace = true
 
 [dev-dependencies]
 dgxtop-core = { workspace = true, features = ["test-support"] }
+# Its own integration tests use the inert ports too.
+dgxtop-manager = { path = ".", features = ["test-support"] }
 
 [lints]
 workspace = true

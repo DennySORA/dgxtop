@@ -5,6 +5,7 @@ use crate::manager::{Iteration, Manager};
 use crate::presentation::HostFacts;
 use crate::session::SessionHandle;
 use crate::setup::{ManagerInboxes, ManagerPorts, ManagerSetup, ProcessHistoryHandles};
+use crate::testing::inert_ports;
 use dgxtop_core::action::{ActionOp, AuditCompletion, AuditOp, PersistenceKind, PersistenceStatus};
 use dgxtop_core::budget::{ByteLedger, Partition, QueueGate};
 use dgxtop_core::canonical::{CollectionBatch, CollectionPlan, CollectorState, ImmutableSnapshot};
@@ -12,13 +13,11 @@ use dgxtop_core::commands::{CommandBody, CommandEnvelope, CommandRejection, Comm
 use dgxtop_core::config::{Config, ValueOrigin};
 use dgxtop_core::identity::PidNamespace;
 use dgxtop_core::identity::{AdapterId, CollectorId};
-use dgxtop_core::identity::{EntityId, MetricKey, OriginIdentity, ProfileId};
+use dgxtop_core::identity::{MetricKey, OriginIdentity, ProfileId};
 use dgxtop_core::metric::NativeUnit;
 use dgxtop_core::naming::is_replay_adapter;
 use dgxtop_core::observation::CatalogDelta;
-use dgxtop_core::observation::{
-    AdapterManifest, AdapterOperation, EntityKind, EntityRecord, Isolation, SourceDescriptor,
-};
+use dgxtop_core::observation::{AdapterManifest, AdapterOperation, Isolation, SourceDescriptor};
 use dgxtop_core::ports::{
     AdapterJob, ConfigJob, ControlCompletion, HistoryJob, IngestionCompletion, ProcessHistoryInput,
     ProcessHistoryReader, SessionPort, StoreJob,
@@ -26,12 +25,12 @@ use dgxtop_core::ports::{
 use dgxtop_core::ports::{Collector, IngressBatch, SnapshotReader};
 use dgxtop_core::quality::Availability;
 use dgxtop_core::quality::{Namespace, RawKind, SampleKind};
+pub(crate) use dgxtop_core::testing::entity_id;
 use dgxtop_core::testing::{
     CapturingDispatch, FakeClock, MemoryLogger, StaticProcessHistory, boot_id, host_id,
 };
 use dgxtop_core::testing::{ObservationBuilder, batch_of, metric_key};
 use dgxtop_core::testing::{adapter_id, read_group, source_id};
-use dgxtop_core::trends::TrendBook;
 use dgxtop_core::view::{HostState, HostStatus};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -100,24 +99,6 @@ pub(crate) fn source_descriptor(
         profile_rank: 0,
         label: None,
         counter_modulus: None,
-    }
-}
-
-pub(crate) fn entity_id(value: &str) -> EntityId {
-    EntityId::new(value).unwrap()
-}
-
-/// A GPU entity record.
-pub(crate) fn entity(id: &str) -> EntityRecord {
-    EntityRecord {
-        entity_id: entity_id(id),
-        kind: EntityKind::Gpu,
-        parent_id: None,
-        generation: 1,
-        discovered_boot_ns: 0,
-        removed_boot_ns: None,
-        display_name: id.into(),
-        attributes: Vec::new(),
     }
 }
 
@@ -350,13 +331,10 @@ pub(crate) fn harness_ports(options: &HarnessOptions) -> (ManagerPorts, Ports) {
         ledger,
     };
     let manager_ports = ManagerPorts {
-        clock: ports.clock.clone(),
         adapters: Box::new(ports.adapters.clone()),
         collectors: Box::new(ports.collectors.clone()),
         collector_registry: options.collectors.clone(),
         store: Box::new(ports.store.clone()),
-        snapshots: ports.snapshots.clone(),
-        trends: Arc::new(TrendBook::default()),
         history: Box::new(ports.history.clone()),
         config: Box::new(ports.config.clone()),
         audit: Box::new(ports.audit.clone()),
@@ -366,8 +344,12 @@ pub(crate) fn harness_ports(options: &HarnessOptions) -> (ManagerPorts, Ports) {
             runs: Arc::clone(&ports.process_history) as Arc<dyn ProcessHistoryReader>,
         }),
         logger: ports.logger.clone(),
-        ledger: ports.ledger.clone(),
-        ingress: ports.ingress.clone(),
+        ..inert_ports(
+            ports.clock.clone(),
+            ports.snapshots.clone(),
+            &ports.ledger,
+            ports.ingress.clone(),
+        )
     };
     (manager_ports, ports)
 }

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use dgxtop_core::action::{ActionOp, AuditCompletion, AuditOp, PersistenceKind, PersistenceStatus};
+use dgxtop_core::action::{AuditCompletion, AuditOp, PersistenceKind, PersistenceStatus};
 use dgxtop_core::budget::{ByteLedger, Partition, QueueGate};
 use dgxtop_core::canonical::{CollectionBatch, CollectionPlan, ImmutableSnapshot};
 use dgxtop_core::commands::{CommandBody, CommandEnvelope, SortKey, ViewKind};
@@ -18,15 +18,14 @@ use dgxtop_core::errors::{ErrorCode, ResultCode};
 use dgxtop_core::identity::{AdapterId, CollectorId, PidNamespace};
 use dgxtop_core::observation::{AdapterManifest, AdapterOperation, Isolation};
 use dgxtop_core::ports::{
-    AdapterJob, Collector, ConfigJob, ControlCompletion, Dispatch, DispatchError, HistoryJob,
-    IngestionCompletion, SessionPort, SnapshotReader, StoreJob,
+    AdapterJob, Collector, ConfigJob, ControlCompletion, Dispatch, DispatchError,
+    IngestionCompletion, SessionPort, SnapshotReader,
 };
 use dgxtop_core::quality::Namespace;
-use dgxtop_core::testing::{
-    CapturingDispatch, FakeClock, MemoryLogger, adapter_id, boot_id, host_id,
-};
+use dgxtop_core::testing::{CapturingDispatch, FakeClock, adapter_id, boot_id, host_id};
 use dgxtop_core::view::{HostState, HostStatus};
 use dgxtop_manager::presentation::HostFacts;
+use dgxtop_manager::testing::inert_ports;
 use dgxtop_manager::{Manager, ManagerInboxes, ManagerPorts, ManagerSetup};
 
 #[derive(Default)]
@@ -113,21 +112,16 @@ fn fixture_with_audit(audit: Box<dyn Dispatch<AuditOp>>) -> Fixture {
     let config_jobs = CapturingDispatch::new();
     let adapters = CapturingDispatch::new();
     let ports = ManagerPorts {
-        clock: FakeClock::new(1_000_000_000_000),
         adapters: Box::new(adapters.clone()),
-        collectors: Box::new(CapturingDispatch::<CollectionPlan>::new()),
         collector_registry: vec![Arc::new(NoopCollector(CollectorId::new("cpu").unwrap()))],
-        store: Box::new(CapturingDispatch::<StoreJob>::new()),
-        snapshots: Arc::new(Snapshots::default()),
-        trends: Arc::new(dgxtop_core::trends::TrendBook::default()),
-        history: Box::new(CapturingDispatch::<HistoryJob>::new()),
         config: Box::new(config_jobs.clone()),
         audit,
-        actions: Box::new(CapturingDispatch::<ActionOp>::new()),
-        process_history: None,
-        logger: Arc::new(MemoryLogger::default()),
-        ledger: ledger.clone(),
-        ingress: QueueGate::new("ingress", 32, 8 << 20, ledger.clone(), Partition::Ingress),
+        ..inert_ports(
+            FakeClock::new(1_000_000_000_000),
+            Arc::new(Snapshots::default()),
+            &ledger,
+            QueueGate::new("ingress", 32, 8 << 20, ledger.clone(), Partition::Ingress),
+        )
     };
     let setup = ManagerSetup {
         saved_config: config.clone(),

@@ -660,6 +660,7 @@ version = "2.0.2"
 dependencies = [
  "crossbeam-channel",
  "dgxtop-core",
+ "dgxtop-manager",
  "serde_json",
  "thiserror 2.0.21",
  "uuid",
