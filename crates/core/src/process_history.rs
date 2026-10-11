@@ -291,10 +291,12 @@ impl Tier {
     }
 }
 
-/// How much time one bar of a run's chart covers (D-77): its mean of every
-/// sample in that time. `Auto` takes the finest that shows the whole run.
+/// How much time one bar of a chart covers (D-77, D-78): its mean of every
+/// sample in that time. The Process and the Overview History share these
+/// sizes; `Auto` (Process History only) takes the finest that shows the
+/// whole run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum RunBar {
+pub enum BarSize {
     Auto,
     OneMinute,
     FiveMinutes,
@@ -310,7 +312,7 @@ pub enum RunBar {
     OneDay,
 }
 
-impl RunBar {
+impl BarSize {
     /// In the order `w` steps through.
     pub const ALL: [Self; 13] = [
         Self::Auto,
@@ -401,7 +403,7 @@ pub struct HistoryFilter<'a> {
     /// The window token as given (empty for the default); the Manager
     /// checks it is a window.
     pub window: &'a str,
-    pub bar: RunBar,
+    pub bar: BarSize,
 }
 
 impl<'a> HistoryFilter<'a> {
@@ -411,16 +413,16 @@ impl<'a> HistoryFilter<'a> {
         let mut tokens = filter.split_whitespace();
         let window = tokens.next().unwrap_or("");
         let bar = match tokens.next() {
-            Some(token) => RunBar::parse(token)?,
-            None => RunBar::Auto,
+            Some(token) => BarSize::parse(token)?,
+            None => BarSize::Auto,
         };
         tokens.next().is_none().then_some(Self { window, bar })
     }
 
     /// The filter of `window` and `bar`.
-    pub fn format(window: &str, bar: RunBar) -> String {
+    pub fn format(window: &str, bar: BarSize) -> String {
         match bar {
-            RunBar::Auto => window.to_owned(),
+            BarSize::Auto => window.to_owned(),
             bar => format!("{window} {}", bar.token()),
         }
     }
@@ -696,33 +698,33 @@ mod tests {
             "version 2's minutes"
         );
         assert_eq!(Tier::from_code(2), Some(Tier::TenMinutes));
-        for bar in RunBar::fixed() {
+        for bar in BarSize::fixed() {
             assert_eq!(bar.tier().map(Tier::step_ns), bar.step_ns());
         }
     }
 
     #[test]
     fn bars_parse_step_and_wrap() {
-        let tokens: Vec<&str> = RunBar::ALL.iter().map(|bar| bar.token()).collect();
+        let tokens: Vec<&str> = BarSize::ALL.iter().map(|bar| bar.token()).collect();
         assert_eq!(
             tokens,
             vec![
                 "auto", "1m", "5m", "10m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "18h", "24h"
             ]
         );
-        for bar in RunBar::ALL {
-            assert_eq!(RunBar::parse(bar.token()), Some(bar));
+        for bar in BarSize::ALL {
+            assert_eq!(BarSize::parse(bar.token()), Some(bar));
         }
-        assert_eq!(RunBar::parse("3h"), None);
-        assert_eq!(RunBar::Auto.step_ns(), None);
+        assert_eq!(BarSize::parse("3h"), None);
+        assert_eq!(BarSize::Auto.step_ns(), None);
         assert_eq!(
-            RunBar::EighteenHours.step_ns(),
+            BarSize::EighteenHours.step_ns(),
             Some(18 * 3_600 * 1_000_000_000)
         );
-        assert_eq!(RunBar::OneDay.step(true), RunBar::Auto);
-        assert_eq!(RunBar::Auto.step(false), RunBar::OneDay);
-        assert_eq!(RunBar::OneMinute.step(true), RunBar::FiveMinutes);
-        assert_eq!(RunBar::fixed().count(), 12);
+        assert_eq!(BarSize::OneDay.step(true), BarSize::Auto);
+        assert_eq!(BarSize::Auto.step(false), BarSize::OneDay);
+        assert_eq!(BarSize::OneMinute.step(true), BarSize::FiveMinutes);
+        assert_eq!(BarSize::fixed().count(), 12);
     }
 
     #[test]
@@ -731,20 +733,20 @@ mod tests {
             HistoryFilter::parse(""),
             Some(HistoryFilter {
                 window: "",
-                bar: RunBar::Auto
+                bar: BarSize::Auto
             })
         );
         assert_eq!(
             HistoryFilter::parse("6h 30m"),
             Some(HistoryFilter {
                 window: "6h",
-                bar: RunBar::ThirtyMinutes
+                bar: BarSize::ThirtyMinutes
             })
         );
         assert_eq!(HistoryFilter::parse("6h 3h"), None, "no such bar");
         assert_eq!(HistoryFilter::parse("6h 1h 1h"), None);
-        assert_eq!(HistoryFilter::format("1h", RunBar::Auto), "1h");
-        assert_eq!(HistoryFilter::format("1h", RunBar::OneDay), "1h 24h");
+        assert_eq!(HistoryFilter::format("1h", BarSize::Auto), "1h");
+        assert_eq!(HistoryFilter::format("1h", BarSize::OneDay), "1h 24h");
     }
 
     /// A bucket saved before metrics were added reads with them empty.

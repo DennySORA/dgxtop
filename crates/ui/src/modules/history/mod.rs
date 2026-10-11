@@ -567,7 +567,7 @@ mod tests {
                 opened: None,
                 kept_on_disk: true,
                 utc_offset_s: 0,
-                bar: dgxtop_core::process_history::RunBar::Auto,
+                bar: dgxtop_core::process_history::BarSize::Auto,
                 cpu_scale: None,
             }),
             1,

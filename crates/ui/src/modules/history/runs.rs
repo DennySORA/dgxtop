@@ -8,7 +8,7 @@
 //! command line.
 
 use dgxtop_core::metric::CanonicalUnit;
-use dgxtop_core::process_history::{RunBar, RunInfo, RunMetric};
+use dgxtop_core::process_history::{BarSize, RunInfo, RunMetric};
 use dgxtop_core::view::{ProcessHistoryView, RunChartView, RunDetailView, RunRowView};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -532,12 +532,12 @@ fn render_charts(
 fn render_bar_row(
     frame: &mut Frame<'_>,
     row: Rect,
-    (detail, chosen): (&RunDetailView, RunBar),
+    (detail, chosen): (&RunDetailView, BarSize),
     hidden: Hidden,
     context: &DisplayContext,
 ) {
     let theme = &context.theme;
-    let spans: Vec<Span<'static>> = RunBar::ALL
+    let spans: Vec<Span<'static>> = BarSize::ALL
         .into_iter()
         .map(|bar| {
             let style = if bar == chosen {
@@ -563,7 +563,7 @@ fn render_bar_row(
 }
 
 /// `auto: 10m a bar · 13h 20m shown`, `24h a bar · 80d shown`.
-fn bar_note(detail: &RunDetailView, chosen: RunBar) -> String {
+fn bar_note(detail: &RunDetailView, chosen: BarSize) -> String {
     let seconds = detail
         .window_end_utc_ns
         .saturating_sub(detail.window_start_utc_ns)
@@ -573,7 +573,11 @@ fn bar_note(detail: &RunDetailView, chosen: RunBar) -> String {
     } else {
         format_span_seconds(seconds)
     };
-    let lead = if chosen == RunBar::Auto { "auto: " } else { "" };
+    let lead = if chosen == BarSize::Auto {
+        "auto: "
+    } else {
+        ""
+    };
     format!("{lead}{} a bar · {shown} shown", detail.bar.token())
 }
 

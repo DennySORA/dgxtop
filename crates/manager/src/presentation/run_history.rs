@@ -9,7 +9,7 @@ use dgxtop_compression::{Bars, bars_of, whole_series};
 use dgxtop_core::history::HistoryMethod;
 use dgxtop_core::identity::ProcessKey;
 use dgxtop_core::metric::CanonicalUnit;
-use dgxtop_core::process_history::{RunBar, RunBucket, RunInfo, RunMetric};
+use dgxtop_core::process_history::{BarSize, RunBucket, RunInfo, RunMetric};
 use dgxtop_core::view::{
     HistoryPointView, MAX_RUN_CHART_POINTS, MAX_RUN_ROWS, ProcessHistoryView, RunChartView,
     RunDetailView, RunRowView,
@@ -32,7 +32,7 @@ pub(crate) struct RunHistoryInputs<'a> {
     pub(crate) opened: Option<&'a ProcessKey>,
     pub(crate) kept_on_disk: bool,
     pub(crate) utc_offset_s: i32,
-    pub(crate) bar: RunBar,
+    pub(crate) bar: BarSize,
     /// Bars a chart's plot holds: its columns.
     pub(crate) columns: usize,
     pub(crate) scales: &'a RunScales,
@@ -267,7 +267,7 @@ mod tests {
     fn view_at(
         book: &ProcessHistoryBook,
         opened: Option<&ProcessKey>,
-        (bar, columns): (RunBar, usize),
+        (bar, columns): (BarSize, usize),
     ) -> ProcessHistoryView {
         build_process_history_view(&RunHistoryInputs {
             book,
@@ -282,7 +282,7 @@ mod tests {
     }
 
     fn view(book: &ProcessHistoryBook, opened: Option<&ProcessKey>) -> ProcessHistoryView {
-        view_at(book, opened, (RunBar::Auto, 80))
+        view_at(book, opened, (BarSize::Auto, 80))
     }
 
     fn started_at_one_second() -> ProcessKey {
@@ -315,7 +315,7 @@ mod tests {
         assert_eq!(view.more_runs, 0);
         assert!(view.opened.is_none());
         assert!(view.kept_on_disk);
-        assert_eq!((view.bar, view.cpu_scale), (RunBar::Auto, Some(2_000.0)));
+        assert_eq!((view.bar, view.cpu_scale), (BarSize::Auto, Some(2_000.0)));
     }
 
     /// An opened run charts every metric as bars against the host's
@@ -329,7 +329,7 @@ mod tests {
         }
         let key = started_at_one_second();
         let opened = view(&book, Some(&key)).opened.unwrap();
-        assert_eq!(opened.bar, RunBar::OneMinute);
+        assert_eq!(opened.bar, BarSize::OneMinute);
         assert_eq!(
             opened.window_end_utc_ns - opened.window_start_utc_ns,
             80 * 60 * SECOND,
@@ -371,10 +371,10 @@ mod tests {
             observe(&mut book, second, vec![row(1, 100, 4 << 30)]);
         }
         let key = started_at_one_second();
-        let opened = view_at(&book, Some(&key), (RunBar::OneHour, 24))
+        let opened = view_at(&book, Some(&key), (BarSize::OneHour, 24))
             .opened
             .unwrap();
-        assert_eq!(opened.bar, RunBar::OneHour);
+        assert_eq!(opened.bar, BarSize::OneHour);
         assert_eq!(
             opened.window_end_utc_ns - opened.window_start_utc_ns,
             24 * 3_600 * SECOND
@@ -417,7 +417,7 @@ mod tests {
         }
         let key = started_at_one_second();
         let opened = view(&book, Some(&key)).opened.unwrap();
-        assert_eq!(opened.bar, RunBar::OneMinute);
+        assert_eq!(opened.bar, BarSize::OneMinute);
         assert!(opened.charts[RunMetric::Cpu.index()].points.len() >= 2);
     }
 }

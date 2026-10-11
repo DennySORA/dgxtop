@@ -29,7 +29,7 @@ use dgxtop_core::commands::{
 use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::identity::{EntityId, ModuleId, ProcessKey, SessionId};
 use dgxtop_core::ports::SessionPort;
-use dgxtop_core::process_history::{HistoryFilter, RunBar};
+use dgxtop_core::process_history::{BarSize, HistoryFilter};
 use dgxtop_core::view::{BannerLevel, ViewModel};
 
 use crate::num::saturate_u16;
@@ -645,7 +645,7 @@ impl Controller {
         self.update_fields(context, |fields| {
             let filter = HistoryFilter::parse(&fields.filter).unwrap_or(HistoryFilter {
                 window: "",
-                bar: RunBar::Auto,
+                bar: BarSize::Auto,
             });
             // A bar needs a window token before it.
             let window = if HISTORY_WINDOWS.contains(&filter.window) {

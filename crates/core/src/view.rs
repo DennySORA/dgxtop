@@ -15,7 +15,7 @@ use crate::config::{Theme, ValueOrigin};
 use crate::history::HistoryMethod;
 use crate::identity::{EntityId, MetricKey, ModuleId, ProcessKey, SessionId};
 use crate::metric::{CanonicalUnit, Scalar};
-use crate::process_history::{RunBar, RunEnd, RunInfo, RunMetric};
+use crate::process_history::{BarSize, RunEnd, RunInfo, RunMetric};
 use crate::quality::{Freshness, Quality, SampleKind, SelectionState};
 
 /// Why a cell has (or lacks) a value; always rendered as text, never only color.
@@ -586,7 +586,7 @@ pub struct ProcessHistoryView {
     /// Local time's offset from UTC, seconds east.
     pub utc_offset_s: i32,
     /// The bar size the session chose (`Auto` among them).
-    pub bar: RunBar,
+    pub bar: BarSize,
     /// The CPU's whole: 100 % for each of the host's logical CPUs.
     pub cpu_scale: Option<f64>,
 }
@@ -619,7 +619,7 @@ pub struct RunDetailView {
     pub live: bool,
     pub slot: Option<u8>,
     /// The bar size drawn: the session's, or the one `Auto` chose.
-    pub bar: RunBar,
+    pub bar: BarSize,
     /// The time the charts span, UTC: as many bars as a plot has columns,
     /// ending with the bar of the run's latest sample.
     pub window_start_utc_ns: u64,

@@ -4,7 +4,7 @@
 //! latest sample and reach back as many bars as a plot has columns; the
 //! latest takes the finer buckets being filled that it has not merged yet.
 
-use dgxtop_core::process_history::{RunBar, Tier};
+use dgxtop_core::process_history::{BarSize, Tier};
 
 use crate::bucket::{Bucket, merged_at};
 use crate::series::TieredSeries;
@@ -12,7 +12,7 @@ use crate::series::TieredSeries;
 /// The bars of a series at one size.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Bars<B> {
-    pub bar: RunBar,
+    pub bar: BarSize,
     pub step_ns: i64,
     /// `[start, end)` of the window, UTC.
     pub window: (i64, i64),
@@ -24,15 +24,15 @@ pub struct Bars<B> {
 /// series) over `columns` bars; `None` without a bucket.
 pub fn bars_of<B: Bucket>(
     series: &TieredSeries<B>,
-    bar: RunBar,
+    bar: BarSize,
     columns: usize,
 ) -> Option<Bars<B>> {
     let span = Span::of(series)?;
     let columns = i64::try_from(columns.max(1)).unwrap_or(i64::MAX);
     let bar = match bar {
-        RunBar::Auto => RunBar::fixed()
+        BarSize::Auto => BarSize::fixed()
             .find(|candidate| shows_whole_series(series, *candidate, columns, span))
-            .unwrap_or(RunBar::OneDay),
+            .unwrap_or(BarSize::OneDay),
         fixed => fixed,
     };
     let tier = bar.tier()?;
@@ -49,7 +49,7 @@ pub fn bars_of<B: Bucket>(
 /// still holds that sample's bucket.
 fn shows_whole_series<B: Bucket>(
     series: &TieredSeries<B>,
-    bar: RunBar,
+    bar: BarSize,
     columns: i64,
     span: Span,
 ) -> bool {
@@ -188,7 +188,7 @@ mod tests {
         sampled(&mut series, (MIDNIGHT, 90, 1), |minute| {
             if minute < 60 { 10.0 } else { 40.0 }
         });
-        let bars = bars_of(&series, RunBar::ThirtyMinutes, 10).unwrap();
+        let bars = bars_of(&series, BarSize::ThirtyMinutes, 10).unwrap();
         assert_eq!(bars.step_ns, 30 * MINUTE);
         assert_eq!(
             bars.window.1,
@@ -197,7 +197,7 @@ mod tests {
         );
         assert_eq!(bars.window.0, bars.window.1 - 10 * 30 * MINUTE);
         assert_eq!(means(&bars), vec![(7, 10.0), (8, 10.0), (9, 40.0)]);
-        let hours = bars_of(&series, RunBar::OneHour, 10).unwrap();
+        let hours = bars_of(&series, BarSize::OneHour, 10).unwrap();
         assert_eq!(means(&hours), vec![(8, 10.0), (9, 40.0)]);
         let total: u32 = hours
             .bars
@@ -212,12 +212,12 @@ mod tests {
     fn auto_takes_the_finest_bar_holding_the_whole_run() {
         let mut series = RunSeries::default();
         sampled(&mut series, (MIDNIGHT, 90, 1), |_| 5.0);
-        let fit = |columns| bars_of(&series, RunBar::Auto, columns).unwrap().bar;
-        assert_eq!(fit(100), RunBar::OneMinute);
-        assert_eq!(fit(60), RunBar::FiveMinutes);
-        assert_eq!(fit(3), RunBar::ThirtyMinutes);
-        assert_eq!(fit(1), RunBar::TwoHours);
-        assert!(bars_of(&RunSeries::default(), RunBar::Auto, 10).is_none());
+        let fit = |columns| bars_of(&series, BarSize::Auto, columns).unwrap().bar;
+        assert_eq!(fit(100), BarSize::OneMinute);
+        assert_eq!(fit(60), BarSize::FiveMinutes);
+        assert_eq!(fit(3), BarSize::ThirtyMinutes);
+        assert_eq!(fit(1), BarSize::TwoHours);
+        assert!(bars_of(&RunSeries::default(), BarSize::Auto, 10).is_none());
     }
 
     /// Each size keeps its latest buckets only: a run of 20 days shows 20
@@ -228,7 +228,7 @@ mod tests {
         sampled(&mut series, (MIDNIGHT - 8 * HOUR, 20 * 24 * 60, 60), |_| {
             2.0
         });
-        let days = bars_of(&series, RunBar::OneDay, 30).unwrap();
+        let days = bars_of(&series, BarSize::OneDay, 30).unwrap();
         assert_eq!(days.bars.len(), 20, "20 bars, 20 local days");
         assert!(
             days.bars
@@ -236,18 +236,18 @@ mod tests {
                 .all(|bar| bar.value(RunMetric::Cpu).count == 24 * 60)
         );
         assert_eq!(days.bars[0].start_utc_ns, MIDNIGHT - 8 * HOUR);
-        let minutes = bars_of(&series, RunBar::OneMinute, 1_000).unwrap();
+        let minutes = bars_of(&series, BarSize::OneMinute, 1_000).unwrap();
         assert_eq!(
             minutes.bars.len(),
             TIER_BUCKETS + 1,
             "the latest minutes kept and the one being filled"
         );
         assert_eq!(
-            bars_of(&series, RunBar::Auto, 30).unwrap().bar,
-            RunBar::EighteenHours,
+            bars_of(&series, BarSize::Auto, 30).unwrap().bar,
+            BarSize::EighteenHours,
             "the finest whose 30 bars span the 20 days"
         );
-        let eighteen = bars_of(&series, RunBar::EighteenHours, 30).unwrap();
+        let eighteen = bars_of(&series, BarSize::EighteenHours, 30).unwrap();
         let counted: u32 = eighteen
             .bars
             .iter()
@@ -265,7 +265,7 @@ mod tests {
         for second in 0..(3 * 3_600) {
             series.record(second * SECOND, |tally| tally.samples += 1);
         }
-        let hours = bars_of(&series, RunBar::OneHour, 2).unwrap();
+        let hours = bars_of(&series, BarSize::OneHour, 2).unwrap();
         assert_eq!(hours.window, (HOUR, 3 * HOUR), "the last two hours");
         let counts: Vec<(i64, u32)> = hours
             .bars
@@ -273,9 +273,9 @@ mod tests {
             .map(|bar| (bar.start_utc_ns / HOUR, bar.samples))
             .collect();
         assert_eq!(counts, vec![(1, 3_600), (2, 3_600)]);
-        let auto = bars_of(&series, RunBar::Auto, 4).unwrap();
-        assert_eq!(auto.bar, RunBar::OneHour, "4 hour bars hold 3 hours");
-        assert!(bars_of(&TieredSeries::<Tally>::default(), RunBar::OneHour, 4).is_none());
+        let auto = bars_of(&series, BarSize::Auto, 4).unwrap();
+        assert_eq!(auto.bar, BarSize::OneHour, "4 hour bars hold 3 hours");
+        assert!(bars_of(&TieredSeries::<Tally>::default(), BarSize::OneHour, 4).is_none());
     }
 
     /// An empty bucket is no bar: a size can hold a bucket with no sample.
@@ -288,7 +288,7 @@ mod tests {
             samples: 2,
         };
         series.restore(Tier::OneMinute, counted, false);
-        let bars = bars_of(&series, RunBar::OneMinute, 10).unwrap();
+        let bars = bars_of(&series, BarSize::OneMinute, 10).unwrap();
         assert_eq!(bars.bars, vec![counted]);
     }
 }
