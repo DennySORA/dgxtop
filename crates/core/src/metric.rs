@@ -764,7 +764,6 @@ pub mod ids {
     pub const MEMORY_CACHED: &str = "memory.cached";
     pub const MEMORY_SWAP_TOTAL: &str = "memory.swap_total";
     pub const MEMORY_SWAP_USED: &str = "memory.swap_used";
-    pub const MEMORY_FREE_RAW: &str = "memory.free";
     pub const MEMORY_SWAP_FREE_RAW: &str = "memory.swap_free";
 
     // GPU
@@ -1262,15 +1261,6 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         Memory,
         true,
         "Swap used"
-    ),
-    descriptor!(
-        ids::MEMORY_FREE_RAW,
-        Bytes,
-        Raw,
-        Gauge,
-        Memory,
-        false,
-        "MemFree"
     ),
     descriptor!(
         ids::MEMORY_SWAP_FREE_RAW,

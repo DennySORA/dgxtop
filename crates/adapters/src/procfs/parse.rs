@@ -184,17 +184,15 @@ pub(crate) fn parse_loadavg(text: &str) -> LoadAverage {
 pub(crate) enum MemField {
     Total,
     Available,
-    Free,
     Buffers,
     Cached,
     SwapTotal,
     SwapFree,
 }
 
-pub(crate) const MEM_FIELDS: [MemField; 7] = [
+pub(crate) const MEM_FIELDS: [MemField; 6] = [
     MemField::Total,
     MemField::Available,
-    MemField::Free,
     MemField::Buffers,
     MemField::Cached,
     MemField::SwapTotal,
@@ -206,7 +204,6 @@ impl MemField {
         match self {
             Self::Total => "MemTotal",
             Self::Available => "MemAvailable",
-            Self::Free => "MemFree",
             Self::Buffers => "Buffers",
             Self::Cached => "Cached",
             Self::SwapTotal => "SwapTotal",
@@ -218,7 +215,6 @@ impl MemField {
         match self {
             Self::Total => ids::MEMORY_TOTAL,
             Self::Available => ids::MEMORY_AVAILABLE,
-            Self::Free => ids::MEMORY_FREE_RAW,
             Self::Buffers => ids::MEMORY_BUFFERS,
             Self::Cached => ids::MEMORY_CACHED,
             Self::SwapTotal => ids::MEMORY_SWAP_TOTAL,
@@ -556,10 +552,10 @@ ctxt 18225208\n";
     #[test]
     fn meminfo_requires_kb_and_reports_missing_fields_absent() {
         let info = parse_meminfo(
-            "MemTotal:       32654612 kB\nMemFree: 100 kB\nBuffers: 7 MB\nCached:\nMemTotal: 1 kB\n",
+            "MemTotal:       32654612 kB\nMemFree: 100 kB\nSwapFree: 100 kB\nBuffers: 7 MB\nCached:\nMemTotal: 1 kB\n",
         );
         assert_eq!(info.field(MemField::Total), Field::Value(32_654_612));
-        assert_eq!(info.field(MemField::Free), Field::Value(100));
+        assert_eq!(info.field(MemField::SwapFree), Field::Value(100));
         assert_eq!(info.field(MemField::Buffers), Field::Invalid);
         assert_eq!(info.field(MemField::Cached), Field::Invalid);
         assert_eq!(info.field(MemField::Available), Field::Absent);

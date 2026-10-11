@@ -9,7 +9,7 @@
 //! | Adapter | Read group | Period | Emits (metric id, native unit) |
 //! |---|---|---|---|
 //! | procfs | `cpu` | 1 s | `cpu.time.*` (ticks, counter; entity `cpu`, scope `host` for the aggregate line and entity `cpu.core.N`, scope `core:N` per logical CPU; guest fields are NOT emitted because they are already inside user/nice), `cpu.load.{1m,5m,15m}` and `cpu.tasks.{running,total}` (count; entity `host`, scope `host`), `cpu.frequency.current` (kHz, gauge, per core: `cpuinfo_avg_freq` where the kernel offers it, else `scaling_cur_freq`, D-67) |
-//! | procfs | `memory` | 1 s | `memory.{total,available,buffers,cached,swap_total}`, `memory.free`, `memory.swap_free` (KiB; entity `memory`, scope `system`) |
+//! | procfs | `memory` | 1 s | `memory.{total,available,buffers,cached,swap_total}`, `memory.swap_free` (KiB; entity `memory`, scope `system`) |
 //! | procfs | `disk` | 1 s | `disk.{reads.completed,sectors.read,read.time,writes.completed,sectors.written,write.time}` (count / sectors_512 / milliseconds counters; entity `blockdev:MAJ:MIN`, scope `device` or `partition`) |
 //! | procfs | `process` | 1 s, paged | one `process.cpu.ticks` record (ticks counter) per `ProcessKey` entity (`process:NS:PID:START`, scope `process`), the rest of its `stat` and its owner as `proc.*` tags ([`crate::process_stat`], D-86) |
 //! | hwmon | `fast` | 1 s | temperatures (mdegC), power (uW), fans (count) mapped by profile: `cpu.temperature.package`/`core`, `cpu.power.package`, `cpu.power.cluster`, `cpu.power.platform`, else `sensor.*` (diagnostics); thermal-zone mirrors (`acpitz`) are left to `thermal` (D-81) |
@@ -439,14 +439,8 @@ pub mod attributes {
     pub const MAJOR_MINOR: &str = "major_minor";
     pub const IFNAME: &str = "ifname";
     pub const OPERSTATE: &str = "operstate";
-    pub const UID: &str = "uid";
-    pub const COMM: &str = "comm";
     pub const CLK_TCK: &str = "clk_tck";
-    pub const PAGE_SIZE: &str = "page_size";
     pub const CPU_MODEL: &str = "cpu_model";
-    pub const KERNEL: &str = "kernel";
-    pub const HOSTNAME: &str = "hostname";
-    pub const PID_NAMESPACE: &str = "pid_namespace";
     pub const PHYSICAL_PACKAGE: &str = "physical_package";
 }
 

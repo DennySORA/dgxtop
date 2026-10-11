@@ -112,11 +112,10 @@ mod tests {
         .build()
     }
 
-    fn meminfo(total: u64, available: u64, free: u64, at: u64) -> Vec<Observation> {
+    fn meminfo(total: u64, available: u64, at: u64) -> Vec<Observation> {
         vec![
             field(ids::MEMORY_TOTAL, total, at),
             field(ids::MEMORY_AVAILABLE, available, at),
-            field(ids::MEMORY_FREE_RAW, free, at),
             field(ids::MEMORY_BUFFERS, 10, at),
             field(ids::MEMORY_CACHED, 20, at),
             field(ids::MEMORY_SWAP_TOTAL, 1000, at),
@@ -133,7 +132,7 @@ mod tests {
         let collector = MemoryCollector::new().unwrap();
         let plan = PlanBuilder::new("memory")
             .at(SECOND + 1)
-            .batch("procfs", "memory", meminfo(16_000, 6_000, 1_000, SECOND))
+            .batch("procfs", "memory", meminfo(16_000, 6_000, SECOND))
             .build();
         let batch = collect(&collector, &plan);
         let used = value_of(&batch, &key(ids::MEMORY_USED)).unwrap();
@@ -154,8 +153,8 @@ mod tests {
             Some(600.0 * 1024.0)
         );
         assert!(
-            value_of(&batch, &key(ids::MEMORY_FREE_RAW)).is_none(),
-            "raw MemFree is an input, never published"
+            value_of(&batch, &key(ids::MEMORY_SWAP_FREE_RAW)).is_none(),
+            "raw SwapFree is an input, never published"
         );
     }
 
@@ -164,7 +163,7 @@ mod tests {
         let collector = MemoryCollector::new().unwrap();
         let plan = PlanBuilder::new("memory")
             .at(SECOND + 1)
-            .batch("procfs", "memory", meminfo(1_000, 2_000, 500, SECOND))
+            .batch("procfs", "memory", meminfo(1_000, 2_000, SECOND))
             .build();
         let batch = collect(&collector, &plan);
         let used = value_of(&batch, &key(ids::MEMORY_USED)).unwrap();
@@ -178,7 +177,7 @@ mod tests {
     #[test]
     fn missing_available_never_falls_back_to_free() {
         let collector = MemoryCollector::new().unwrap();
-        let mut records = meminfo(16_000, 6_000, 1_000, SECOND);
+        let mut records = meminfo(16_000, 6_000, SECOND);
         records[1] = reading(
             &key(ids::MEMORY_AVAILABLE),
             "procfs",
@@ -206,7 +205,7 @@ mod tests {
             &collector,
             &PlanBuilder::new("memory")
                 .at(SECOND + 1)
-                .batch("procfs", "memory", meminfo(16_000, 6_000, 1_000, SECOND))
+                .batch("procfs", "memory", meminfo(16_000, 6_000, SECOND))
                 .build(),
         );
         let second = collect(

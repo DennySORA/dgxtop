@@ -660,7 +660,6 @@ fn memory_keys() -> Vec<KeySpec> {
             ids::MEMORY_AVAILABLE,
             exact(60_000_000, 110_000_000, 400_000),
         ),
-        memory(ids::MEMORY_FREE_RAW, exact(20_000_000, 60_000_000, 400_000)),
         memory(ids::MEMORY_BUFFERS, exact(100_000, 900_000, 5_000)),
         memory(ids::MEMORY_CACHED, exact(10_000_000, 40_000_000, 100_000)),
         memory(ids::MEMORY_SWAP_TOTAL, exact(8_388_604, 8_388_604, 0)),

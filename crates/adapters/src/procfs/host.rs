@@ -1,6 +1,7 @@
 //! Host-level facts: scheduler tick and page size (`sysconf`), the bounded
 //! host metadata attributes, and the `host` entity with its `/proc/loadavg`
-//! sources.
+//! sources. The entity carries only the attributes something reads (the
+//! tick rate and the CPU model); the page size serves the process RSS.
 
 use dgxtop_core::identity::{EntityId, Scope};
 use dgxtop_core::naming::{attributes, entity, groups};
@@ -10,12 +11,11 @@ use nix::unistd::{SysconfVar, sysconf};
 
 use super::catalog::{EntityParts, KeyContext, SnapshotBuilder, SourceSpec, source_draft};
 use super::locator::{DRIVER, FAMILY_HOST, LOAD_FIELDS, ProcfsLocator, RANK_HOST_WIDE};
-use super::mechanics::{invariant, namespace_link};
+use super::mechanics::invariant;
 use super::parse::parse_cpu_model;
 use crate::common::SystemFiles;
 
 const HOSTNAME_PATH: &str = "/proc/sys/kernel/hostname";
-const KERNEL_PATH: &str = "/proc/sys/kernel/osrelease";
 const CPUINFO_PATH: &str = "/proc/cpuinfo";
 const LOADAVG_PATH: &str = "/proc/loadavg";
 pub(crate) const PID_NAMESPACE_PATH: &str = "/proc/self/ns/pid";
@@ -47,21 +47,18 @@ fn sysconf_value(variable: SysconfVar) -> Option<u64> {
 /// Host metadata read once per adapter lifetime (static for the boot).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct HostMetadata {
+    /// The host entity's display name.
     pub hostname: Option<String>,
-    pub kernel: Option<String>,
     pub cpu_model: Option<String>,
-    pub pid_namespace: Option<String>,
 }
 
 pub(crate) fn load_host_metadata(files: &dyn SystemFiles) -> HostMetadata {
     HostMetadata {
         hostname: first_line(files, HOSTNAME_PATH),
-        kernel: first_line(files, KERNEL_PATH),
         cpu_model: files
             .read_to_string(CPUINFO_PATH)
             .ok()
             .and_then(|text| parse_cpu_model(&text)),
-        pid_namespace: namespace_link(files, PID_NAMESPACE_PATH),
     }
 }
 
@@ -77,14 +74,7 @@ fn host_attributes(metadata: &HostMetadata, constants: &HostConstants) -> Vec<At
             attributes::CLK_TCK,
             constants.clk_tck.map(|value| value.to_string()),
         ),
-        (
-            attributes::PAGE_SIZE,
-            constants.page_size.map(|value| value.to_string()),
-        ),
-        (attributes::HOSTNAME, metadata.hostname.clone()),
-        (attributes::KERNEL, metadata.kernel.clone()),
         (attributes::CPU_MODEL, metadata.cpu_model.clone()),
-        (attributes::PID_NAMESPACE, metadata.pid_namespace.clone()),
     ];
     candidates
         .into_iter()
@@ -160,7 +150,7 @@ mod tests {
     #[test]
     fn attributes_skip_unknown_values() {
         let metadata = HostMetadata {
-            hostname: Some("dgx".to_owned()),
+            hostname: Some("acme-node".to_owned()),
             ..HostMetadata::default()
         };
         let constants = HostConstants {
@@ -172,7 +162,31 @@ mod tests {
             .iter()
             .map(|attribute| attribute.key.as_str())
             .collect();
-        assert_eq!(keys, vec!["clk_tck", "hostname"]);
+        assert_eq!(keys, vec!["clk_tck"]);
+    }
+
+    /// Only the tick rate and the CPU model are attributes: the page size,
+    /// host name, kernel and PID namespace have no reader (the page size
+    /// still converts RSS pages, the host name still names the entity).
+    #[test]
+    fn attributes_are_the_tick_rate_and_the_cpu_model() {
+        let metadata = HostMetadata {
+            hostname: Some("acme-node".to_owned()),
+            cpu_model: Some("Acme Core 9".to_owned()),
+        };
+        let constants = HostConstants {
+            clk_tck: Some(100),
+            page_size: Some(4096),
+        };
+        let attributes = host_attributes(&metadata, &constants);
+        let pairs: Vec<(&str, &str)> = attributes
+            .iter()
+            .map(|attribute| (attribute.key.as_str(), attribute.value.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![("clk_tck", "100"), ("cpu_model", "Acme Core 9")]
+        );
     }
 
     #[test]

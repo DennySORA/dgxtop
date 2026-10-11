@@ -13,14 +13,6 @@
         {
           "key": "clk_tck",
           "value": "100"
-        },
-        {
-          "key": "page_size",
-          "value": "4096"
-        },
-        {
-          "key": "pid_namespace",
-          "value": "pid:[4026531836]"
         }
       ]
     },
@@ -372,24 +364,6 @@
       "profile_rank": 0
     },
     {
-      "source_id": "procfs:demo:memory:memory.free",
-      "entity_id": "memory",
-      "metric_id": "memory.free",
-      "scope": "system",
-      "native_unit": "KiB",
-      "raw_kind": "gauge",
-      "sample_kind": "simulated",
-      "read_group": "procfs.memory",
-      "origin": {
-        "origin_id": null,
-        "relation": "unknown"
-      },
-      "quality": "verified",
-      "profile_id": "demo-simulated",
-      "profile_revision": 1,
-      "profile_rank": 0
-    },
-    {
       "source_id": "network:demo:eno1:network.rx.bytes",
       "entity_id": "netif:net:[4026531840]:2",
       "metric_id": "network.rx.bytes",
@@ -681,10 +655,6 @@
         "value": "98000000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "40000000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5000000000"
       },
@@ -821,10 +791,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97900000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39920000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -965,10 +931,6 @@
         "value": "97800000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39840000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5002800000"
       },
@@ -1105,10 +1067,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97700000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39760000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -1249,10 +1207,6 @@
         "value": "97600000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39680000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5006000000"
       },
@@ -1389,10 +1343,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97500000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39600000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -1533,10 +1483,6 @@
         "value": "97400000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39520000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5009600000"
       },
@@ -1673,10 +1619,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97300000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39440000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -1817,10 +1759,6 @@
         "value": "97200000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39360000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5012200000"
       },
@@ -1957,10 +1895,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97100000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39280000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -2101,10 +2035,6 @@
         "value": "97000000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39200000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5015200000"
       },
@@ -2241,10 +2171,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "96900000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39120000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -2385,10 +2311,6 @@
         "value": "96800000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39040000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5018600000"
       },
@@ -2525,10 +2447,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "96700000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "38960000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -2669,10 +2587,6 @@
         "value": "96600000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "38880000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5021700000"
       },
@@ -2809,10 +2723,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "98000000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "40000000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -2953,10 +2863,6 @@
         "value": "97900000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39920000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5024500000"
       },
@@ -3093,10 +2999,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97800000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39840000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -3237,10 +3139,6 @@
         "value": "97700000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39760000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5027700000"
       },
@@ -3377,10 +3275,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97600000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39680000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -3525,10 +3419,6 @@
         "value": "97500000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39600000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5031300000"
       },
@@ -3665,10 +3555,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97400000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39520000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -3809,10 +3695,6 @@
         "value": "97300000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39440000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5033900000"
       },
@@ -3949,10 +3831,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97200000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39360000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -4093,10 +3971,6 @@
         "value": "97100000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39280000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5036900000"
       },
@@ -4233,10 +4107,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97000000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39200000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -4377,10 +4247,6 @@
         "value": "96900000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39120000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5040300000"
       },
@@ -4517,10 +4383,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "96800000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39040000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -4661,10 +4523,6 @@
         "value": "96700000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "38960000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5043400000"
       },
@@ -4803,10 +4661,6 @@
         "value": "96600000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "38880000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5044750000"
       },
@@ -4943,10 +4797,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "98000000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "40000000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -5090,10 +4940,6 @@
         "value": "97900000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39920000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5047750000"
       },
@@ -5230,10 +5076,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97800000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39840000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -5374,10 +5216,6 @@
         "value": "97700000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39760000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5051150000"
       },
@@ -5514,10 +5352,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97600000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39680000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -5658,10 +5492,6 @@
         "value": "97500000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39600000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5054250000"
       },
@@ -5798,10 +5628,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97400000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39520000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -5942,10 +5768,6 @@
         "value": "97300000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39440000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5057050000"
       },
@@ -6082,10 +5904,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97200000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39360000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -6226,10 +6044,6 @@
         "value": "97100000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39280000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5060250000"
       },
@@ -6366,10 +6180,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97000000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39200000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -6510,10 +6320,6 @@
         "value": "96900000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39120000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5063850000"
       },
@@ -6650,10 +6456,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "96800000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39040000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -6794,10 +6596,6 @@
         "value": "96700000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "38960000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5066450000"
       },
@@ -6934,10 +6732,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "96600000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "38880000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -7078,10 +6872,6 @@
         "value": "98000000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "40000000"
-      },
-      {
         "source_id": "network:demo:eno1:network.tx.bytes",
         "value": "1215300000"
       },
@@ -7214,10 +7004,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97900000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39920000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -7358,10 +7144,6 @@
         "value": "97800000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39840000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5072850000"
       },
@@ -7498,10 +7280,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97700000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39760000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -7642,10 +7420,6 @@
         "value": "97600000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39680000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5075950000"
       },
@@ -7782,10 +7556,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97500000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39600000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -7926,10 +7696,6 @@
         "value": "97400000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39520000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5078750000"
       },
@@ -8066,10 +7832,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97300000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39440000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -8210,10 +7972,6 @@
         "value": "97200000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39360000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5081950000"
       },
@@ -8350,10 +8108,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "97100000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39280000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -8494,10 +8248,6 @@
         "value": "97000000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39200000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5085550000"
       },
@@ -8634,10 +8384,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "96900000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39120000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",
@@ -8778,10 +8524,6 @@
         "value": "96800000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "39040000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5088150000"
       },
@@ -8920,10 +8662,6 @@
         "value": "96700000"
       },
       {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "38960000"
-      },
-      {
         "source_id": "network:demo:eno1:network.rx.bytes",
         "value": "5089600000"
       },
@@ -9060,10 +8798,6 @@
       {
         "source_id": "procfs:demo:memory:memory.available",
         "value": "96600000"
-      },
-      {
-        "source_id": "procfs:demo:memory:memory.free",
-        "value": "38880000"
       },
       {
         "source_id": "network:demo:eno1:network.rx.bytes",

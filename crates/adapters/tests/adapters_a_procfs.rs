@@ -346,7 +346,7 @@ fn offline_cpu_only_affects_itself() {
 fn memory_fields_are_native_kib_and_missing_available_is_unsupported() {
     let (tree, _clock, mut adapter, mut parent) = standard();
     let records = read_group(&mut adapter, "memory", 1);
-    assert_eq!(records.len(), 7);
+    assert_eq!(records.len(), 6);
     let total = find(&records, ids::MEMORY_TOTAL, "memory");
     assert_eq!(u64_value(total), 32_654_612);
     assert_eq!(total.native_unit.as_str(), "KiB");
@@ -374,9 +374,11 @@ fn memory_fields_are_native_kib_and_missing_available_is_unsupported() {
     let available = find(&records, ids::MEMORY_AVAILABLE, "memory");
     assert_eq!(available.read_status, ReadStatus::Unsupported);
     assert_eq!(available.value, None, "never computed from MemFree");
-    assert_eq!(
-        u64_value(find(&records, ids::MEMORY_FREE_RAW, "memory")),
-        1_000_000
+    assert!(
+        records
+            .iter()
+            .all(|record| record.key.metric_id.as_str() != "memory.free"),
+        "MemFree is not read"
     );
 }
 
