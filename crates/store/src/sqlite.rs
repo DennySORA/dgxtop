@@ -49,6 +49,7 @@ pub(crate) use database::{DatabaseSpec, Unusable, VersionGate, open_database, pa
 pub(crate) use errors::{FaultKind, describe, fault_kind, fault_message, tx_sqlite_error};
 #[cfg(test)]
 pub(crate) use schema::PROCESS_HISTORY_DDL;
+pub(crate) use schema::{SchemaPlan, plan};
 pub(crate) use statements::{
     BucketTable, Drained, checkpoint, drain, open_small_database, used_bytes,
 };

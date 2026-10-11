@@ -21,7 +21,7 @@ use dgxtop_core::ports::{
 use dgxtop_core::quality::SampleKind;
 use dgxtop_core::testing::{FakeClock, metric_key, source_id};
 use dgxtop_store::archive::{ArchiveLimits, SqliteArchive, SqliteArchiveReader};
-use dgxtop_store::sqlite::StatvfsFreeSpace;
+use dgxtop_store::sqlite::{StatvfsFreeSpace, format_stamp};
 use uuid::Uuid;
 
 const MINUTE: u64 = 60_000_000_000;
@@ -215,12 +215,58 @@ fn a_schema_this_build_does_not_know_is_refused_and_left_alone() {
     let error = reader
         .archived_minutes(&minutes_of(&key, 10 * MINUTE))
         .unwrap_err();
-    assert!(error.to_string().contains("schema version 3"), "{error:?}");
+    assert!(error.to_string().contains("another format"), "{error:?}");
     let version: i64 = rusqlite::Connection::open(dir.database())
         .unwrap()
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
     assert_eq!(version, 3);
+}
+
+/// The reader checks the file like the writer does (D-85): an archive of
+/// this schema but another format version, or none, is not read, and the
+/// reader leaves it for the writer to recreate.
+#[test]
+fn an_archive_of_another_format_is_not_read() {
+    let current = dgxtop_store::sqlite::SchemaKind::History.format_version();
+    for (label, stamp) in [
+        ("unstamped", 0),
+        ("newer", format_stamp(current + 1)),
+        ("older", format_stamp(current - 1)),
+    ] {
+        let mut fixture = Fixture::new(label);
+        let now = fixture.now_utc();
+        let key = temperature_in("boot-a");
+        let run = Run {
+            key: &key,
+            segment_id: "seg-a",
+            unit: CanonicalUnit::DegC,
+            start_utc: now - 30 * MINUTE,
+            start_boot: MINUTE,
+        };
+        fixture.write(&run, &[Some(40.0); 3]);
+        rusqlite::Connection::open(fixture.dir.database())
+            .unwrap()
+            .pragma_update(None, "application_id", stamp)
+            .unwrap();
+        let error = fixture
+            .reader()
+            .archived_minutes(&minutes_of(&key, now))
+            .unwrap_err();
+        assert!(
+            matches!(error, dgxtop_core::errors::InfraError::Unavailable(_)),
+            "{label}: {error:?}"
+        );
+        assert!(
+            error.to_string().contains("another format"),
+            "{label}: {error}"
+        );
+        let left: i32 = rusqlite::Connection::open(fixture.dir.database())
+            .unwrap()
+            .pragma_query_value(None, "application_id", |row| row.get(0))
+            .unwrap();
+        assert_eq!(left, stamp, "{label}: the reader never writes");
+    }
 }
 
 /// Units never mix: a segment of the series in another unit is not read.
