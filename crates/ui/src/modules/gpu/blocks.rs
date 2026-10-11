@@ -20,7 +20,8 @@
 //!   range the limit may be set within, the energy since the driver loaded.
 //! - CUDA: the driver's CUDA version, compute capability, toolkit, nvcc,
 //!   other toolkits.
-//! - Driver: version, kernel module, NVML, persistence, compute mode.
+//! - Driver: version, kernel module, the host's Linux kernel, NVML,
+//!   persistence, compute mode.
 //! - Device: architecture, brand, CUDA cores, board part, serial, UUID,
 //!   device node.
 //! - PCI & firmware: bus id, device id, subsystem, VBIOS, InfoROM, GSP.
@@ -89,11 +90,13 @@ impl Block {
     }
 }
 
-/// The blocks of `card`, in reading order.
-pub(super) fn blocks(card: &GpuCard, context: &DisplayContext) -> Vec<Block> {
+/// The blocks of `card`, in reading order; `kernel` is the host's kernel
+/// release from the header, which the driver's kernel module is built for.
+pub(super) fn blocks(card: &GpuCard, kernel: Option<&str>, context: &DisplayContext) -> Vec<Block> {
     let info = CardInfo {
         card,
         details: card.details.as_deref(),
+        kernel,
         context,
     };
     [
@@ -151,6 +154,8 @@ type Rows = Vec<Option<BlockRow>>;
 struct CardInfo<'a> {
     card: &'a GpuCard,
     details: Option<&'a GpuDetails>,
+    /// The host's kernel release (`HeaderView::kernel`).
+    kernel: Option<&'a str>,
     context: &'a DisplayContext,
 }
 
@@ -625,6 +630,8 @@ impl CardInfo<'_> {
         vec![
             self.attribute("version", attributes::DRIVER_VERSION),
             self.attribute("kernel module", attributes::KERNEL_MODULE),
+            self.kernel
+                .map(|kernel| BlockRow::new("Linux kernel", vec![self.text(clean(kernel))])),
             self.attribute("NVML", attributes::NVML_VERSION),
             self.attribute("persistence", attributes::PERSISTENCE_MODE),
             self.attribute("compute mode", attributes::COMPUTE_MODE),
@@ -750,7 +757,7 @@ mod tests {
     use dgxtop_core::view::{CellState, LabeledCell};
 
     fn texts(card: &GpuCard) -> Vec<String> {
-        blocks(card, &display_context())
+        blocks(card, None, &display_context())
             .iter()
             .map(block_text)
             .collect()
@@ -913,5 +920,27 @@ mod tests {
             block(&bare, "Device").contains("UUID GPU-0-uuid"),
             "{bare:#?}"
         );
+    }
+
+    /// The driver block names the host's kernel next to the kernel module
+    /// (D-91); without a kernel release the row is left out.
+    #[test]
+    fn the_driver_block_shows_the_host_kernel() {
+        let card = gpu_view().cards.remove(0);
+        let with_kernel: Vec<String> = blocks(&card, Some("6.12.0-acme"), &display_context())
+            .iter()
+            .map(block_text)
+            .collect();
+        let driver = block(&with_kernel, "Driver");
+        assert!(driver.contains("Linux kernel 6.12.0-acme"), "{driver}");
+        let module = driver.find("kernel module").unwrap();
+        assert!(module < driver.find("Linux kernel").unwrap(), "{driver}");
+        assert!(!block(&texts(&card), "Driver").contains("Linux kernel"));
+        let hostile: Vec<String> = blocks(&card, Some("6.1\u{1b}[31m"), &display_context())
+            .iter()
+            .map(block_text)
+            .collect();
+        assert!(block(&hostile, "Driver").contains("Linux kernel 6.1"));
+        assert!(!block(&hostile, "Driver").contains('\u{1b}'));
     }
 }

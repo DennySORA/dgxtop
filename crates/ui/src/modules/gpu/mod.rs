@@ -28,7 +28,7 @@ use super::common::{
 use crate::format::{CellDetail, clean, display_width, value_text};
 use crate::num::saturate_u16;
 use crate::registry::{
-    DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot, Topic,
+    DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot,
     controls,
 };
 
@@ -44,12 +44,11 @@ impl GpuModule {
             manifest: build_manifest(ManifestSpec {
                 id: "gpu",
                 title: "GPU devices",
-                topics: &[Topic::Gpu, Topic::Health, Topic::Sources],
                 min_columns: 36,
                 min_rows: 4,
                 // Above the CPU: the GPU row grows first (D-38).
                 priority: 95,
-                slots: &[Slot::Overview, Slot::Detail, Slot::Sidebar],
+                slots: &[Slot::Overview, Slot::Detail],
             })?,
         })
     }

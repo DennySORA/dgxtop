@@ -28,12 +28,11 @@ const MINIMAL_CORES: usize = 16;
 type TrimStep = fn(&mut ModuleViews, &BudgetHints) -> bool;
 
 /// Ordered from least to most information loss.
-const TRIM_STEPS: [TrimStep; 11] = [
+const TRIM_STEPS: [TrimStep; 10] = [
     halve_trends,
     halve_trends,
     drop_process_overscan,
     halve_history,
-    halve_sources,
     shorten_lists,
     |modules, _| limit_cores(modules, REDUCED_CORES),
     clear_trends,
@@ -196,34 +195,6 @@ fn halve_cells(means: &[Option<f64>]) -> Vec<Option<f64>> {
             (!known.is_empty()).then(|| known.iter().sum::<f64>() / count)
         })
         .collect()
-}
-
-/// Halves the metric window around the selected series and the
-/// unclassified list.
-fn halve_sources(modules: &mut ModuleViews, _: &BudgetHints) -> bool {
-    let Some(sources) = modules.sources.as_mut() else {
-        return false;
-    };
-    let view = Arc::make_mut(sources);
-    let before = view.metrics.len() + view.unclassified.len();
-    let length = view.metrics.len();
-    if length > 1 {
-        let center = view
-            .selected
-            .as_ref()
-            .and_then(|selected| {
-                view.metrics
-                    .iter()
-                    .position(|metric| &metric.key.series_selector() == selected)
-            })
-            .unwrap_or(0);
-        let keep = (length / 2).max(1);
-        let start = center.saturating_sub(keep / 2).min(length - keep);
-        view.metrics = view.metrics.drain(start..start + keep).collect();
-    }
-    let unclassified = view.unclassified.len() / 2;
-    view.unclassified.truncate(unclassified);
-    view.metrics.len() + view.unclassified.len() < before
 }
 
 fn shorten_lists(modules: &mut ModuleViews, _: &BudgetHints) -> bool {

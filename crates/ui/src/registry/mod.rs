@@ -15,7 +15,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use thiserror::Error;
 
-pub use manifest::{DISPLAY_MODULE_API_VERSION, DisplayModuleManifest, ManifestError, Slot, Topic};
+pub use manifest::{DISPLAY_MODULE_API_VERSION, DisplayModuleManifest, ManifestError, Slot};
 
 use crate::theme::ThemePalette;
 
@@ -135,16 +135,12 @@ pub trait DisplayModule: Send {
 /// Well-known control ids shared by modules (producers) and the Controller
 /// (consumer of the HitMap).
 pub mod controls {
-    use dgxtop_core::commands::ViewKind;
-
     /// A visible process row (carries the full `ProcessKey`).
     pub const PROCESS_ROW: &str = "processes.row";
     /// The highlighted selected process row; the only valid `K` target.
     pub const PROCESS_ROW_SELECTED: &str = "processes.row.selected";
     /// A GPU card or GPU selector chip (carries the GPU entity id).
     pub const GPU_CARD: &str = "gpu.card";
-    /// A source-diagnostics metric row (entity id = series selector).
-    pub const SOURCES_METRIC: &str = "sources.metric";
     /// A module toggle row in settings (entity id = module id).
     pub const SETTINGS_MODULE: &str = "settings.module";
     /// Expands or collapses the module that drew the target.
@@ -152,27 +148,6 @@ pub mod controls {
     /// A part of the module that drew the target the mouse wheel scrolls
     /// (D-70).
     pub const MODULE_SCROLL: &str = "module.scroll";
-
-    /// Control id of a view tab.
-    pub const fn tab(view: ViewKind) -> &'static str {
-        match view {
-            ViewKind::Overview => "tab.overview",
-            ViewKind::GpuDetail => "tab.gpu_detail",
-            ViewKind::Processes => "tab.processes",
-            ViewKind::History => "tab.history",
-            ViewKind::Sources => "tab.sources",
-            ViewKind::Settings => "tab.settings",
-            ViewKind::Actions => "tab.actions",
-        }
-    }
-
-    /// Inverse of [`tab`].
-    pub fn view_for_tab(control_id: &str) -> Option<ViewKind> {
-        ViewKind::ALL
-            .iter()
-            .copied()
-            .find(|view| tab(*view) == control_id)
-    }
 }
 
 /// Why a module was not registered.
@@ -219,8 +194,7 @@ impl ModuleRegistry {
         }
     }
 
-    /// The ten built-in modules: cpu, gpu, memory, disk, network, processes,
-    /// history, sources, settings, actions.
+    /// The built-in modules (`config::BUILTIN_MODULES`).
     pub fn builtin() -> Self {
         let mut registry = Self::empty();
         for candidate in crate::modules::builtin_modules() {
@@ -325,23 +299,22 @@ impl ModuleRegistry {
     }
 }
 
-/// View → module mapping of the seven logical views (`Overview` is composed
-/// from every overview-slot module instead).
+/// View → module mapping of the detail views. `Overview` is composed from
+/// every overview-slot module instead, and the retired Processes, Sources
+/// and Actions views have none (D-91).
 pub const fn detail_module_id(view: ViewKind) -> Option<&'static str> {
     match view {
-        ViewKind::Overview => None,
         ViewKind::GpuDetail => Some("gpu"),
-        ViewKind::Processes => Some("processes"),
         ViewKind::History => Some("history"),
-        ViewKind::Sources => Some("sources"),
         ViewKind::Settings => Some("settings"),
-        ViewKind::Actions => Some("actions"),
+        ViewKind::Overview | ViewKind::Processes | ViewKind::Sources | ViewKind::Actions => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dgxtop_core::config::BUILTIN_MODULES;
 
     struct StubModule {
         manifest: DisplayModuleManifest,
@@ -369,26 +342,24 @@ mod tests {
                 module_id: ModuleId::new(id).unwrap(),
                 api_version,
                 title: "Stub".into(),
-                topics: vec![Topic::Health],
                 min_columns: 20,
                 min_rows: 3,
                 priority: 10,
                 slots: vec![Slot::Overview],
                 enabled_by_default: true,
-                supports_compact: true,
             },
         })
     }
 
     #[test]
-    fn builtin_registers_the_ten_modules_without_warnings() {
+    fn builtin_registers_every_builtin_module_without_warnings() {
         let registry = ModuleRegistry::builtin();
         let ids: Vec<String> = registry
             .module_ids()
             .iter()
             .map(|id| id.as_str().to_owned())
             .collect();
-        assert_eq!(ids, dgxtop_core::config::BUILTIN_MODULES.map(str::to_owned));
+        assert_eq!(ids, BUILTIN_MODULES.map(str::to_owned));
         assert!(registry.warnings().is_empty(), "{:?}", registry.warnings());
         for module in registry.iter() {
             module.manifest().validate().unwrap();
@@ -400,7 +371,7 @@ mod tests {
         let mut registry = ModuleRegistry::builtin();
         let error = registry.register(stub("cpu", 1)).unwrap_err();
         assert_eq!(error, RegistryError::DuplicateId("cpu".into()));
-        assert_eq!(registry.len(), 10);
+        assert_eq!(registry.len(), BUILTIN_MODULES.len());
         assert!(registry.warnings()[0].contains("already registered"));
     }
 
@@ -417,10 +388,10 @@ mod tests {
     }
 
     #[test]
-    fn an_eleventh_module_can_be_registered() {
+    fn a_further_module_can_be_registered() {
         let mut registry = ModuleRegistry::builtin();
         registry.register(stub("fixture", 1)).unwrap();
-        assert_eq!(registry.len(), 11);
+        assert_eq!(registry.len(), BUILTIN_MODULES.len() + 1);
         assert!(registry.get("fixture").is_some());
     }
 

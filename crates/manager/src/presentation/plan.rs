@@ -13,9 +13,7 @@ pub(crate) const DISK: &str = "disk";
 pub(crate) const NETWORK: &str = "network";
 pub(crate) const PROCESSES: &str = "processes";
 pub(crate) const HISTORY: &str = "history";
-pub(crate) const SOURCES: &str = "sources";
 pub(crate) const SETTINGS: &str = "settings";
-pub(crate) const ACTIONS: &str = "actions";
 
 /// Viewport assumed until the session reports its terminal size.
 const DEFAULT_VIEWPORT: (u16, u16) = (80, 24);
@@ -30,11 +28,10 @@ pub fn visible_modules(view: ViewKind) -> &'static [&'static str] {
     match view {
         ViewKind::Overview => &[CPU, GPU, MEMORY, DISK, NETWORK, PROCESSES],
         ViewKind::GpuDetail => &[GPU],
-        ViewKind::Processes => &[PROCESSES],
         ViewKind::History => &[HISTORY],
-        ViewKind::Sources => &[SOURCES],
         ViewKind::Settings => &[SETTINGS],
-        ViewKind::Actions => &[ACTIONS],
+        // Retired views: the wire keeps their values, nothing is shown (D-91).
+        ViewKind::Processes | ViewKind::Sources | ViewKind::Actions => &[],
     }
 }
 
@@ -46,19 +43,10 @@ pub(crate) struct ViewPlan {
 }
 
 impl ViewPlan {
-    /// A pending confirmation always carries the actions view: its UID,
-    /// start identity and warning are safety information (UI.md §2, §6).
-    pub(crate) fn new(view: ViewKind, enabled: &[String], confirmation_pending: bool) -> Self {
-        let (mut shown, mut disabled): (Vec<&'static str>, Vec<&'static str>) =
-            visible_modules(view)
-                .iter()
-                .partition(|module| enabled.iter().any(|entry| entry == *module));
-        if confirmation_pending {
-            disabled.retain(|module| *module != ACTIONS);
-            if !shown.contains(&ACTIONS) {
-                shown.push(ACTIONS);
-            }
-        }
+    pub(crate) fn new(view: ViewKind, enabled: &[String]) -> Self {
+        let (shown, disabled) = visible_modules(view)
+            .iter()
+            .partition(|module| enabled.iter().any(|entry| entry == *module));
         Self { shown, disabled }
     }
 
@@ -147,14 +135,19 @@ mod tests {
         assert_eq!(visible_modules(ViewKind::Overview).len(), 6);
     }
 
+    /// The retired views show nothing and disable nothing (D-91).
     #[test]
-    fn pending_confirmation_always_carries_actions() {
-        let plan = ViewPlan::new(ViewKind::Processes, &all_enabled(), true);
-        assert!(plan.shows("processes"));
-        assert!(plan.shows("actions"));
-        let disabled = ViewPlan::new(ViewKind::Actions, &[], true);
-        assert!(disabled.shows("actions"));
-        assert!(disabled.disabled().is_empty());
+    fn retired_views_show_nothing() {
+        for view in [ViewKind::Processes, ViewKind::Sources, ViewKind::Actions] {
+            assert!(visible_modules(view).is_empty(), "{view:?}");
+            let plan = ViewPlan::new(view, &all_enabled());
+            assert!(plan.disabled().is_empty(), "{view:?}");
+        }
+        let overview = ViewPlan::new(ViewKind::Overview, &all_enabled());
+        assert!(overview.shows(PROCESSES));
+        let without_cpu = ViewPlan::new(ViewKind::Overview, &[GPU.to_owned()]);
+        assert!(without_cpu.shows(GPU));
+        assert!(without_cpu.disabled().contains(&CPU));
     }
 
     #[test]

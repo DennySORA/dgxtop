@@ -280,11 +280,12 @@ impl SessionDriver {
         }
     }
 
-    /// Navigates to the Actions view so every projection carries it.
+    /// Navigates to the Overview, the view of the process actions (every
+    /// projection carries their state, D-91).
     fn show_actions_view(&self) {
         let frame_revision = self.await_projection().frame_revision;
         let request_id = self.submit(CommandBody::UpdateViewSession {
-            view: ViewKind::Actions,
+            view: ViewKind::Overview,
             selected_entity_id: None,
             selected_process: None,
             filter: String::new(),

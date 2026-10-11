@@ -252,14 +252,14 @@ fn at24_at39_unreapable_host_is_quarantined_never_respawned_and_shutdown_stays_b
     assert_eq!(launcher.launches(), 1, "exactly one GPU child was started");
     assert!(rig.domain_committed_ns("cpu") > cpu_before);
     assert_eq!(rig.host(SYSTEM_HOST).state, HostState::Healthy);
-    rig.manager.show(ViewKind::Sources);
+    rig.manager.show(ViewKind::Settings);
     rig.manager.projection_where(
-        "the quarantine in the sources view",
+        "the quarantine in the settings' data sources",
         STARTUP_WAIT,
         |model| {
             model.header.hosts_healthy == 1
-                && model.modules.sources.as_deref().is_some_and(|sources| {
-                    sources.hosts.iter().any(|host| {
+                && model.modules.settings.as_deref().is_some_and(|settings| {
+                    settings.hosts.iter().any(|host| {
                         host.adapter_id == GPU_HOST && host.state == HostState::Quarantined
                     })
                 })

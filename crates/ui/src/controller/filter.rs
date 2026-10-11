@@ -4,8 +4,6 @@
 use dgxtop_core::commands::MAX_FILTER_BYTES;
 use thiserror::Error;
 
-use crate::viewer::FilterTarget;
-
 /// Why a character was not inserted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum FilterEditError {
@@ -20,19 +18,14 @@ pub enum FilterEditError {
 pub struct FilterEdit {
     buffer: String,
     cursor: usize,
-    target: FilterTarget,
 }
 
 impl FilterEdit {
     /// Starts editing from the current filter (cut to the byte limit).
-    pub fn new(initial: &str, target: FilterTarget) -> Self {
+    pub fn new(initial: &str) -> Self {
         let buffer = dgxtop_core::text::truncate_utf8(initial, MAX_FILTER_BYTES).to_owned();
         let cursor = buffer.len();
-        Self {
-            buffer,
-            cursor,
-            target,
-        }
+        Self { buffer, cursor }
     }
 
     pub fn text(&self) -> &str {
@@ -41,10 +34,6 @@ impl FilterEdit {
 
     pub fn cursor(&self) -> usize {
         self.cursor
-    }
-
-    pub fn target(&self) -> FilterTarget {
-        self.target
     }
 
     pub fn insert(&mut self, character: char) -> Result<(), FilterEditError> {
@@ -99,7 +88,7 @@ mod tests {
 
     #[test]
     fn editing_moves_the_cursor_on_char_boundaries() {
-        let mut edit = FilterEdit::new("py", FilterTarget::Processes);
+        let mut edit = FilterEdit::new("py");
         assert_eq!(edit.cursor(), 2);
         edit.insert('溫').unwrap();
         edit.left();
@@ -122,20 +111,20 @@ mod tests {
 
     #[test]
     fn the_256_byte_limit_is_enforced_in_utf8_bytes() {
-        let mut edit = FilterEdit::new(&"a".repeat(255), FilterTarget::Sources);
+        let mut edit = FilterEdit::new(&"a".repeat(255));
         edit.insert('b').unwrap();
         assert_eq!(edit.text().len(), MAX_FILTER_BYTES);
         assert_eq!(edit.insert('c'), Err(FilterEditError::TooLong));
-        let mut multibyte = FilterEdit::new(&"a".repeat(254), FilterTarget::Processes);
+        let mut multibyte = FilterEdit::new(&"a".repeat(254));
         assert_eq!(multibyte.insert('溫'), Err(FilterEditError::TooLong));
-        let long = FilterEdit::new(&"溫".repeat(200), FilterTarget::Processes);
+        let long = FilterEdit::new(&"溫".repeat(200));
         assert!(long.text().len() <= MAX_FILTER_BYTES);
         assert!(long.text().is_char_boundary(long.cursor()));
     }
 
     #[test]
     fn control_characters_are_rejected() {
-        let mut edit = FilterEdit::new("", FilterTarget::Processes);
+        let mut edit = FilterEdit::new("");
         assert_eq!(
             edit.insert('\u{1b}'),
             Err(FilterEditError::ControlCharacter)

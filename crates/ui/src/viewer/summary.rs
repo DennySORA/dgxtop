@@ -236,11 +236,7 @@ pub fn summary_lines(model: &ViewModel, palette: &ThemePalette, width: u16) -> V
         (modules.memory.is_some(), false, memory_lines),
         (modules.disk.is_some(), false, disk_lines),
         (modules.network.is_some(), false, network_lines),
-        (
-            modules.processes.is_some(),
-            view == ViewKind::Processes,
-            process_lines,
-        ),
+        (modules.processes.is_some(), false, process_lines),
     ];
     let overview = view == ViewKind::Overview;
     topics

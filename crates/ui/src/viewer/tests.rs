@@ -18,7 +18,7 @@ use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
 
 use super::*;
-use crate::registry::{DISPLAY_MODULE_API_VERSION, DisplayModule, RenderOutput, Topic, controls};
+use crate::registry::{DISPLAY_MODULE_API_VERSION, DisplayModule, RenderOutput, controls};
 use crate::test_fixtures::{self, process_key};
 
 const SIZES: [(u16, u16); 5] = [(160, 50), (100, 30), (80, 24), (40, 10), (20, 5)];
@@ -289,9 +289,9 @@ fn chart_under(rendered: &Rendered, bar: usize, rows: usize) -> bool {
 }
 
 #[test]
-fn processes_view_follows_the_reference_columns_and_marks_the_selection() {
-    for size in [(160, 50), (100, 30), (80, 24), (40, 10)] {
-        let rendered = render(&model(ViewKind::Processes), size);
+fn processes_table_follows_the_reference_columns_and_marks_the_selection() {
+    for size in [(160, 50), (100, 30), (80, 24)] {
+        let rendered = render(&model(ViewKind::Overview), size);
         let header = rendered
             .row_with("PID")
             .unwrap_or_else(|| panic!("{size:?}\n{}", rendered.text()));
@@ -303,7 +303,7 @@ fn processes_view_follows_the_reference_columns_and_marks_the_selection() {
         assert!(rendered.contains("4242"), "{size:?}\n{}", rendered.text());
         assert!(rendered.report.hit_map.visible_selected_process().is_some());
     }
-    let wide = render(&model(ViewKind::Processes), (160, 50));
+    let wide = render(&model(ViewKind::Overview), (160, 50));
     for text in [
         "USER",
         "NAME",
@@ -323,7 +323,7 @@ fn processes_view_follows_the_reference_columns_and_marks_the_selection() {
 
 #[test]
 fn processes_window_shows_scroll_position_filters_and_truncation() {
-    let mut model = model(ViewKind::Processes);
+    let mut model = model(ViewKind::Overview);
     let mut processes = test_fixtures::processes_view(40, 360, 412);
     processes.selected = Some(processes.rows[39].key.clone());
     processes.selected_index = Some(399);
@@ -331,7 +331,7 @@ fn processes_window_shows_scroll_position_filters_and_truncation() {
     processes.filter = "work".into();
     processes.gpu_filter = Some((test_fixtures::entity("gpu:GPU-0"), "GPU0".into()));
     model.modules.processes = Some(Arc::new(processes));
-    let rendered = render(&model, (100, 30));
+    let rendered = render(&model, (100, 50));
     assert!(rendered.contains("filter \"work\""), "{}", rendered.text());
     assert!(rendered.contains("GPU GPU0"), "{}", rendered.text());
     assert!(rendered.contains("of 412"), "{}", rendered.text());
@@ -439,36 +439,6 @@ fn history_says_when_it_loads_fails_is_partly_recorded_or_has_no_series() {
 }
 
 #[test]
-fn sources_view_explains_arbitration() {
-    let rendered = render(&model(ViewKind::Sources), (160, 50));
-    for text in [
-        "Sources · policy r3",
-        "≠ conflict",
-        "26.0 > 5.0",
-        "conflicting",
-        "fresh/unknown",
-        "quarantined (requires intervention)",
-        "overload x2",
-        "2 s",
-        "hwmon:nct6775:temp7",
-    ] {
-        assert!(
-            rendered.contains(text),
-            "missing {text:?}\n{}",
-            rendered.text()
-        );
-    }
-    for size in [(100, 30), (80, 24), (40, 10)] {
-        let rendered = render(&model(ViewKind::Sources), size);
-        assert!(
-            rendered.contains("Sources"),
-            "{size:?}\n{}",
-            rendered.text()
-        );
-    }
-}
-
-#[test]
 fn settings_view_shows_origins_restart_and_pending() {
     let rendered = render(&model(ViewKind::Settings), (160, 50));
     for text in [
@@ -492,30 +462,26 @@ fn settings_view_shows_origins_restart_and_pending() {
     }
 }
 
+/// The retired views (D-91) have no module: a session left on one shows a
+/// note and the offered tabs, never a panic.
 #[test]
-fn actions_view_never_says_terminated() {
-    let rendered = render(&model(ViewKind::Actions), (160, 50));
-    assert!(
-        rendered.contains("signal sent (exit not observed)"),
-        "{}",
-        rendered.text()
-    );
-    assert!(rendered.contains("unknown outcome"), "{}", rendered.text());
-    assert!(rendered.contains("audit healthy"), "{}", rendered.text());
-    assert!(
-        rendered.contains("never retried automatically"),
-        "{}",
-        rendered.text()
-    );
-    assert!(!rendered.text().contains("terminated"));
-    for size in [(100, 30), (80, 24), (40, 10)] {
-        assert!(render(&model(ViewKind::Actions), size).contains("Actions"));
+fn retired_views_render_a_note() {
+    for view in [ViewKind::Processes, ViewKind::Sources, ViewKind::Actions] {
+        for size in [(160, 50), (80, 24), (40, 10)] {
+            let rendered = render(&model(view), size);
+            assert!(
+                rendered.contains("no display module is registered"),
+                "{view:?} {size:?}\n{}",
+                rendered.text()
+            );
+            assert!(rendered.report.module_errors.is_empty());
+        }
     }
 }
 
 #[test]
 fn confirmation_banner_is_visible_and_never_clipped_at_40x10() {
-    let mut model = model(ViewKind::Processes);
+    let mut model = model(ViewKind::Overview);
     model.modules.actions = Some(Arc::new(test_fixtures::actions_view(true)));
     model.banners = vec![Banner {
         level: BannerLevel::Info,
@@ -658,6 +624,28 @@ fn missing_topics_render_no_data_instead_of_zero() {
     assert!(!rendered.contains("0.0%"), "{}", rendered.text());
 }
 
+/// The GPU view's driver block names the host kernel from the header
+/// (D-91); a narrow terminal still draws it, cut to the column.
+#[test]
+fn gpu_view_shows_the_host_kernel_in_the_driver_block() {
+    let model = model(ViewKind::GpuDetail);
+    assert_eq!(model.header.kernel.as_deref(), Some("6.12.0"));
+    let wide = render(&model, (200, 60));
+    let line = wide
+        .row_with("Linux kernel")
+        .unwrap_or_else(|| panic!("{}", wide.text()));
+    assert!(line.contains("6.12.0"), "{line}");
+    let narrow = render(&model, (80, 80));
+    let line = narrow
+        .row_with("Linux kernel")
+        .unwrap_or_else(|| panic!("{}", narrow.text()));
+    assert!(line.contains("6.12"), "{line}");
+    assert!(narrow.report.module_errors.is_empty());
+    let mut unknown = model;
+    unknown.header.kernel = None;
+    assert!(!render(&unknown, (200, 60)).contains("Linux kernel"));
+}
+
 #[test]
 fn gpu_unavailable_reason_is_shown() {
     let mut model = model(ViewKind::GpuDetail);
@@ -676,18 +664,14 @@ fn gpu_unavailable_reason_is_shown() {
 
 #[test]
 fn tabs_and_rows_produce_hit_targets_with_the_frame_revision() {
-    let rendered = render(&model(ViewKind::Processes), (160, 50));
+    let rendered = render(&model(ViewKind::Overview), (160, 50));
     let map = &rendered.report.hit_map;
     assert_eq!(map.frame_revision(), 7);
     for tab in crate::views::OFFERED_TABS {
         assert_eq!(map.count(tab.control_id()), 1, "{tab:?}");
     }
-    for hidden in [ViewKind::Sources, ViewKind::Processes] {
-        assert_eq!(
-            map.count(controls::tab(hidden)),
-            0,
-            "{hidden:?} is not offered"
-        );
+    for retired in ["tab.processes", "tab.sources", "tab.actions"] {
+        assert_eq!(map.count(retired), 0, "{retired} is not offered");
     }
     assert_eq!(map.visible_process_rows(), 12);
     let row = map
@@ -711,13 +695,11 @@ impl FixtureModule {
                 module_id: ModuleId::new(id).unwrap(),
                 api_version,
                 title: "Fixture health".into(),
-                topics: vec![Topic::Health],
                 min_columns: 20,
                 min_rows: 3,
                 priority: 10,
                 slots: vec![Slot::Overview],
                 enabled_by_default: true,
-                supports_compact: true,
             },
         }
     }
@@ -775,7 +757,7 @@ impl DisplayModule for PanickingModule {
 }
 
 #[test]
-fn an_eleventh_fixture_module_is_registered_and_laid_out() {
+fn a_further_fixture_module_is_registered_and_laid_out() {
     let mut viewer = Viewer::builtin();
     viewer
         .registry_mut()
@@ -784,7 +766,10 @@ fn an_eleventh_fixture_module_is_registered_and_laid_out() {
             DISPLAY_MODULE_API_VERSION,
         )))
         .unwrap();
-    assert_eq!(viewer.registry().len(), 11);
+    assert_eq!(
+        viewer.registry().len(),
+        dgxtop_core::config::BUILTIN_MODULES.len() + 1
+    );
     let rendered = render_with(
         &viewer,
         Some(&model(ViewKind::Overview)),
@@ -827,6 +812,27 @@ fn a_panicking_module_is_isolated_as_a_module_error() {
     );
     assert!(rendered.contains("module error"), "{}", rendered.text());
     assert!(rendered.contains("fixture failure"), "{}", rendered.text());
+    // The frame names the module by its manifest title, not its id.
+    assert!(
+        rendered.contains("module error · Fixture health"),
+        "{}",
+        rendered.text()
+    );
+    assert!(
+        rendered.contains("module error: Fixture health failed while rendering"),
+        "{}",
+        rendered.text()
+    );
+    assert!(
+        !rendered.contains("module error · crashy"),
+        "{}",
+        rendered.text()
+    );
+    assert_eq!(
+        rendered.report.module_errors,
+        vec!["crashy: fixture failure".to_owned()],
+        "the report keeps the id for diagnostics"
+    );
     assert!(
         !rendered.contains("half-drawn garbage"),
         "{}",

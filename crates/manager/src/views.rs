@@ -345,7 +345,9 @@ fn validate_view(
     context: &ViewContext<'_>,
 ) -> Result<(), ErrorDetail> {
     match update.view {
-        ViewKind::Processes => {
+        // The Overview holds the process table (D-36), so its selection is
+        // checked like the retired Processes view's was (D-91).
+        ViewKind::Overview => {
             validate_selected_process(update, stale, context)?;
             if let Some(gpu) = &update.selected_entity_id {
                 validate_gpu(gpu, stale, context)?;
@@ -368,8 +370,14 @@ fn validate_view(
             }
             Ok(())
         }
-        ViewKind::Sources => validate_series(update, context),
-        ViewKind::Overview | ViewKind::Settings | ViewKind::Actions => Ok(()),
+        ViewKind::Settings => Ok(()),
+        ViewKind::Processes | ViewKind::Sources | ViewKind::Actions => Err(ErrorDetail::new(
+            ErrorCode::Unsupported,
+            format!(
+                "the {} view was removed (D-91); its work is in the Overview and Settings",
+                update.view.title()
+            ),
+        )),
     }
 }
 
@@ -543,7 +551,7 @@ mod tests {
         assert!(
             apply(
                 &mut bench,
-                update(ViewKind::Processes, Some(key(10)), None, 20),
+                update(ViewKind::Overview, Some(key(10)), None, 20),
                 &rows,
                 &catalog
             )
@@ -561,7 +569,7 @@ mod tests {
         let after_exit = table(&[11]);
         apply(
             &mut bench,
-            update(ViewKind::Processes, Some(key(10)), None, 19),
+            update(ViewKind::Overview, Some(key(10)), None, 19),
             &after_exit,
             &catalog,
         )
@@ -578,7 +586,7 @@ mod tests {
         // ... but a stale frame carrying the vanished selection is StaleView.
         let error = apply(
             &mut bench,
-            update(ViewKind::Processes, Some(key(10)), None, 2),
+            update(ViewKind::Overview, Some(key(10)), None, 2),
             &after_exit,
             &catalog,
         )
@@ -588,7 +596,7 @@ mod tests {
         assert!(
             apply(
                 &mut bench,
-                update(ViewKind::Processes, Some(key(11)), None, 2),
+                update(ViewKind::Overview, Some(key(11)), None, 2),
                 &after_exit,
                 &catalog
             )
@@ -597,7 +605,7 @@ mod tests {
         // Frames never sent are invalid.
         let error = apply(
             &mut bench,
-            update(ViewKind::Processes, None, None, 99),
+            update(ViewKind::Overview, None, None, 99),
             &after_exit,
             &catalog,
         )
@@ -632,7 +640,7 @@ mod tests {
         );
         apply(
             &mut bench,
-            update(ViewKind::Processes, Some(key(10)), None, 0),
+            update(ViewKind::Overview, Some(key(10)), None, 0),
             &rows,
             &catalog,
         )
@@ -675,7 +683,7 @@ mod tests {
         assert!(
             apply(
                 &mut bench,
-                update(ViewKind::Processes, None, Some("gpu:GPU-1"), 0),
+                update(ViewKind::Overview, None, Some("gpu:GPU-1"), 0),
                 &rows,
                 &catalog
             )
@@ -717,16 +725,28 @@ mod tests {
         );
         window.filter = "24h".into();
         assert!(apply(&mut bench, window, &rows, &catalog).is_err());
-        let mut sources = update(ViewKind::Sources, None, None, 0);
-        sources.filter = "temp\u{1b}[31m".into();
-        apply(&mut bench, sources, &rows, &catalog).unwrap();
-        assert_eq!(bench.service.state(&bench.session).unwrap().filter, "temp");
+        let mut overview = update(ViewKind::Overview, None, None, 0);
+        overview.filter = "py\u{1b}[31m".into();
+        apply(&mut bench, overview, &rows, &catalog).unwrap();
+        assert_eq!(bench.service.state(&bench.session).unwrap().filter, "py");
+        // The retired views are refused with their own code (D-91).
+        for retired in [ViewKind::Processes, ViewKind::Sources, ViewKind::Actions] {
+            let error =
+                apply(&mut bench, update(retired, None, None, 0), &rows, &catalog).unwrap_err();
+            assert_eq!(error.code, ErrorCode::Unsupported, "{retired:?}");
+            assert!(error.message.contains("removed (D-91)"), "{error:?}");
+        }
+        assert_eq!(
+            bench.service.state(&bench.session).unwrap().view,
+            ViewKind::Overview,
+            "a refused view leaves the session where it was"
+        );
         let mut foreign = key(5);
         foreign.host_id = host_id("other");
         assert!(
             apply(
                 &mut bench,
-                update(ViewKind::Processes, Some(foreign), None, 0),
+                update(ViewKind::Overview, Some(foreign), None, 0),
                 &rows,
                 &catalog
             )

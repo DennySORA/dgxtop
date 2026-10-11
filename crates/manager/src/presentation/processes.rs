@@ -6,7 +6,7 @@
 use std::cmp::Ordering;
 
 use dgxtop_core::canonical::{ProcessRow, ProcessTable};
-use dgxtop_core::commands::{SortKey, ViewKind};
+use dgxtop_core::commands::SortKey;
 use dgxtop_core::identity::EntityId;
 use dgxtop_core::process_model::ProcessHistoryModel;
 use dgxtop_core::text::{MAX_BASENAME_BYTES, sanitize_display};
@@ -22,9 +22,6 @@ pub const PROCESS_OVERSCAN_ROWS: usize = 8;
 const MAX_LINKS_PER_ROW: usize = 16;
 const UNKNOWN_USER: &str = "unknown";
 const UNNAMED_PROCESS: &str = "?";
-/// Processes view chrome: header (with the tabs), summary block (3), column
-/// header, footer.
-const PROCESSES_VIEW_RESERVED_ROWS: u16 = 6;
 /// Overview rows around the process table in the reference grid, with the
 /// charts under their bars (D-38, D-43): header and footer, the CPU/memory
 /// row (8 with load and tasks on the sensor line; a narrow panel needs one
@@ -34,17 +31,14 @@ const OVERVIEW_RESERVED_ROWS: u16 = 2 + 8 + 9 + 4;
 /// Border of the overview GPU panel.
 const GPU_PANEL_BORDER_ROWS: u16 = 2;
 
-/// Process rows the viewer can show in `view`, estimated from the viewport
+/// Process rows the Overview can show, estimated from the viewport
 /// and the overview grid: the table takes the rows the other rows and the
 /// GPU panel of `gpu_count` GPUs leave. The overscan absorbs small
 /// differences from the viewer's real layout.
-pub(crate) fn visible_process_rows(view: ViewKind, viewport_rows: u16, gpu_count: usize) -> usize {
-    let rows = match view {
-        ViewKind::Overview => viewport_rows
-            .saturating_sub(OVERVIEW_RESERVED_ROWS)
-            .saturating_sub(gpu_panel_rows(gpu_count)),
-        _ => viewport_rows.saturating_sub(PROCESSES_VIEW_RESERVED_ROWS),
-    };
+pub(crate) fn visible_process_rows(viewport_rows: u16, gpu_count: usize) -> usize {
+    let rows = viewport_rows
+        .saturating_sub(OVERVIEW_RESERVED_ROWS)
+        .saturating_sub(gpu_panel_rows(gpu_count));
     usize::from(rows.max(1))
 }
 

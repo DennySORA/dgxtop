@@ -65,15 +65,14 @@ struct ViewMemory {
     filter: String,
 }
 
-/// Overview and Processes share one memory: they show the same table.
-const fn memory_slot(view: ViewKind) -> usize {
+/// Each offered view's memory; the retired views (D-91) remember nothing.
+const fn memory_slot(view: ViewKind) -> Option<usize> {
     match view {
-        ViewKind::Overview | ViewKind::Processes => 0,
-        ViewKind::GpuDetail => 1,
-        ViewKind::History => 2,
-        ViewKind::Sources => 3,
-        ViewKind::Settings => 4,
-        ViewKind::Actions => 5,
+        ViewKind::Overview => Some(0),
+        ViewKind::GpuDetail => Some(1),
+        ViewKind::History => Some(2),
+        ViewKind::Settings => Some(3),
+        ViewKind::Processes | ViewKind::Sources | ViewKind::Actions => None,
     }
 }
 
@@ -90,7 +89,7 @@ struct PendingDraft {
 pub struct SessionDrafts {
     staged: Option<SessionFields>,
     pending: Option<PendingDraft>,
-    memory: [Option<ViewMemory>; 6],
+    memory: [Option<ViewMemory>; 4],
 }
 
 impl SessionDrafts {
@@ -169,20 +168,16 @@ impl SessionDrafts {
     /// Fields for switching from `current` to `view`, remembering the view
     /// being left and restoring what `view` showed last time.
     pub fn switch_view(&mut self, current: &SessionFields, view: ViewKind) -> SessionFields {
-        self.memory[memory_slot(current.view)] = Some(ViewMemory {
-            selected_entity_id: current.selected_entity_id.clone(),
-            selected_process: current.selected_process.clone(),
-            filter: current.filter.clone(),
-        });
-        let memory = if memory_slot(current.view) == memory_slot(view) {
-            ViewMemory {
+        if let Some(slot) = memory_slot(current.view) {
+            self.memory[slot] = Some(ViewMemory {
                 selected_entity_id: current.selected_entity_id.clone(),
                 selected_process: current.selected_process.clone(),
                 filter: current.filter.clone(),
-            }
-        } else {
-            self.memory[memory_slot(view)].clone().unwrap_or_default()
-        };
+            });
+        }
+        let memory = memory_slot(view)
+            .and_then(|slot| self.memory[slot].clone())
+            .unwrap_or_default();
         SessionFields {
             view,
             selected_entity_id: memory.selected_entity_id,
@@ -220,10 +215,10 @@ mod tests {
         let mut drafts = SessionDrafts::default();
         let projected = drafts.current(Some(&model), Duration::ZERO).unwrap();
         assert_eq!(projected.view, ViewKind::Overview);
-        drafts.stage(fields(ViewKind::Processes));
+        drafts.stage(fields(ViewKind::Overview));
         assert_eq!(
             drafts.current(Some(&model), Duration::ZERO).unwrap().view,
-            ViewKind::Processes
+            ViewKind::Overview
         );
         let staged = drafts.take_staged().unwrap();
         drafts.mark_sent(staged, 7, Duration::ZERO);
@@ -232,7 +227,7 @@ mod tests {
                 .current(Some(&model), Duration::from_millis(500))
                 .unwrap()
                 .view,
-            ViewKind::Processes
+            ViewKind::Overview
         );
         assert_eq!(
             drafts
@@ -248,12 +243,12 @@ mod tests {
     fn acknowledged_drafts_yield_to_the_next_projection_and_rejections_drop_them() {
         let model = test_fixtures::view_model(ViewKind::Overview, 1);
         let mut drafts = SessionDrafts::default();
-        drafts.mark_sent(fields(ViewKind::Processes), 7, Duration::ZERO);
+        drafts.mark_sent(fields(ViewKind::Overview), 7, Duration::ZERO);
         drafts.on_result(8, true);
         drafts.on_projection(&model);
         assert_eq!(
             drafts.current(Some(&model), Duration::ZERO).unwrap().view,
-            ViewKind::Processes
+            ViewKind::Overview
         );
         drafts.on_result(7, true);
         drafts.on_projection(&model);
@@ -261,7 +256,7 @@ mod tests {
             drafts.current(Some(&model), Duration::ZERO).unwrap().view,
             ViewKind::Overview
         );
-        drafts.mark_sent(fields(ViewKind::Processes), 9, Duration::ZERO);
+        drafts.mark_sent(fields(ViewKind::Overview), 9, Duration::ZERO);
         drafts.on_result(9, false);
         assert_eq!(
             drafts.current(Some(&model), Duration::ZERO).unwrap().view,
@@ -271,11 +266,11 @@ mod tests {
 
     #[test]
     fn fields_become_an_update_view_session_command() {
-        let body = fields(ViewKind::Processes).into_command(42);
+        let body = fields(ViewKind::Overview).into_command(42);
         assert!(matches!(
             body,
             CommandBody::UpdateViewSession {
-                view: ViewKind::Processes,
+                view: ViewKind::Overview,
                 frame_revision: 42,
                 ascending: true,
                 ..

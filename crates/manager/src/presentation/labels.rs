@@ -6,10 +6,7 @@
 
 use dgxtop_core::clock::NANOS_PER_MILLI;
 use dgxtop_core::commands::MAX_FILTER_BYTES;
-use dgxtop_core::identity::OriginIdentity;
-use dgxtop_core::metric::{NativeUnit, Scalar, ScalarView};
 use dgxtop_core::naming::entity::SCOPE_SOC;
-use dgxtop_core::quality::ReadStatus;
 use dgxtop_core::text::sanitize_display;
 use dgxtop_core::view::HostStatus;
 
@@ -33,43 +30,6 @@ pub(crate) fn humanize_scope(scope: &str) -> String {
         return "SoC".to_owned();
     }
     label_text(&scope.replace(':', " "))
-}
-
-/// Exact text of a scalar (`u64` stays exact; `f64` uses the shortest
-/// round-trip form).
-pub(crate) fn scalar_text(value: Scalar) -> String {
-    match value.view() {
-        ScalarView::U64(number) => number.to_string(),
-        ScalarView::F64(number) => number.to_string(),
-    }
-}
-
-/// Native reading as shown in diagnostics: the raw value with its unit, or
-/// why there is no value (never a 0).
-pub(crate) fn native_text(value: Option<Scalar>, unit: &NativeUnit, status: ReadStatus) -> String {
-    match value {
-        Some(number) => format!("{} {}", scalar_text(number), label_text(unit.as_str())),
-        None => format!("no value ({})", read_status_label(status)),
-    }
-}
-
-pub(crate) const fn read_status_label(status: ReadStatus) -> &'static str {
-    match status {
-        ReadStatus::Ok => "ok",
-        ReadStatus::Unsupported => "unsupported",
-        ReadStatus::PermissionDenied => "permission denied",
-        ReadStatus::Timeout => "timeout",
-        ReadStatus::Error => "error",
-        ReadStatus::Removed => "removed",
-    }
-}
-
-/// Only confirmed origins name a physical sensor; anything else is unknown.
-pub(crate) fn origin_text(origin: &OriginIdentity) -> String {
-    match origin.confirmed_id() {
-        Some(origin_id) => format!("confirmed {}", label_text(origin_id.as_str())),
-        None => "unknown".to_owned(),
-    }
 }
 
 /// Adapter part of an `adapter:device:channel` source id.
@@ -135,20 +95,6 @@ mod tests {
     fn untrusted_text_is_stripped_and_bounded() {
         assert_eq!(label_text("ev\u{1b}[31mil"), "evil");
         assert!(note_text(&"x".repeat(1000)).len() <= MAX_NOTE_BYTES);
-    }
-
-    #[test]
-    fn native_text_never_invents_zero() {
-        let unit = NativeUnit::new("mdegC").unwrap();
-        assert_eq!(
-            native_text(Some(Scalar::from_u64(68000)), &unit, ReadStatus::Ok),
-            "68000 mdegC"
-        );
-        assert_eq!(
-            native_text(None, &unit, ReadStatus::Timeout),
-            "no value (timeout)"
-        );
-        assert_eq!(scalar_text(Scalar::from_f64(0.5).unwrap()), "0.5");
     }
 
     #[test]

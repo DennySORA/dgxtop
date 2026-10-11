@@ -423,7 +423,7 @@ fn at06_at39_stuck_audit_times_out_the_intent_and_its_late_receipt_never_sends()
     });
     // The control loop keeps serving while the audit worker hangs.
     let responsive = Instant::now();
-    for view in [ViewKind::Overview, ViewKind::Processes, ViewKind::Actions] {
+    for view in [ViewKind::Overview, ViewKind::GpuDetail, ViewKind::Settings] {
         rig.manager.show(view);
     }
     assert!(responsive.elapsed() < Duration::from_secs(1));
@@ -444,7 +444,7 @@ fn at06_at39_stuck_audit_times_out_the_intent_and_its_late_receipt_never_sends()
     });
     // Control completions are handled before commands, so once this
     // navigation is answered the late receipt has been processed.
-    rig.manager.show(ViewKind::Actions);
+    rig.manager.show(ViewKind::Overview);
     assert_eq!(rig.actions.sends(), 0, "a late receipt never sends");
     assert!(
         rig.actions

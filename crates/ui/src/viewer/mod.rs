@@ -24,7 +24,7 @@ pub use banners::{BannerBlock, wrap_words};
 pub use hitmap::{HitMap, MAX_HIT_TARGETS};
 pub use isolation::in_isolated_render;
 pub use layout::{MIN_COLUMNS, MIN_ROWS, SizeTier, size_tier};
-pub use ui_state::{FilterTarget, ModeView, Notice, UiState};
+pub use ui_state::{ModeView, Notice, UiState};
 
 use crate::num::saturate_u16;
 use crate::registry::{
@@ -90,7 +90,7 @@ impl Viewer {
         }
     }
 
-    /// Viewer over the ten built-in modules.
+    /// Viewer over the built-in modules.
     pub fn builtin() -> Self {
         Self::new(ModuleRegistry::builtin())
     }
@@ -99,6 +99,7 @@ impl Viewer {
         &self.registry
     }
 
+    #[cfg(test)]
     pub fn registry_mut(&mut self) -> &mut ModuleRegistry {
         &mut self.registry
     }
@@ -262,7 +263,8 @@ impl Viewer {
             }
             Err(message) => {
                 frame.render_widget(Clear, placement.area);
-                chrome::render_module_error(frame, placement.area, &module_id, &message, palette);
+                let title = &module.manifest().title;
+                chrome::render_module_error(frame, placement.area, title, &message, palette);
                 report.module_errors.push(format!("{module_id}: {message}"));
             }
         }

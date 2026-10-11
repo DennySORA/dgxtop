@@ -19,7 +19,7 @@ use crate::format::{
 use crate::num::saturate_u16;
 use crate::registry::{
     DISPLAY_MODULE_API_VERSION, DisplayContext, DisplayModuleManifest, HitTarget, RenderOutput,
-    Slot, Topic,
+    Slot,
 };
 use crate::theme::ThemePalette;
 use crate::widgets::{GapSparkline, Gauge, Part};
@@ -31,7 +31,6 @@ pub(crate) const MAX_LABELS: usize = 64;
 pub(crate) struct ManifestSpec {
     pub id: &'static str,
     pub title: &'static str,
-    pub topics: &'static [Topic],
     pub min_columns: u16,
     pub min_rows: u16,
     pub priority: u8,
@@ -45,13 +44,11 @@ pub(crate) fn build_manifest(
         module_id: ModuleId::new(spec.id)?,
         api_version: DISPLAY_MODULE_API_VERSION,
         title: spec.title.to_owned(),
-        topics: spec.topics.to_vec(),
         min_columns: spec.min_columns,
         min_rows: spec.min_rows,
         priority: spec.priority,
         slots: spec.slots.to_vec(),
         enabled_by_default: true,
-        supports_compact: true,
     };
     manifest.validate()?;
     Ok(manifest)

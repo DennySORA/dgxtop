@@ -48,7 +48,7 @@ use session::SessionDrafts;
 use crate::modules::{CPU_MODULE_ID, HISTORY_MODULE_ID, MEMORY_MODULE_ID};
 use crate::registry::controls;
 pub use crate::viewer::UiState;
-use crate::viewer::{FilterTarget, HitMap, ModeView};
+use crate::viewer::{HitMap, ModeView};
 use crate::views;
 
 /// Lines a module's scrollable part may be scrolled past its start.
@@ -233,7 +233,6 @@ impl Controller {
             (None, InputMode::Filter(edit)) => ModeView::Filter {
                 buffer: edit.text().to_owned(),
                 cursor: edit.cursor(),
-                target: edit.target(),
             },
             (None, InputMode::Help { scroll }) => ModeView::Help { scroll: *scroll },
             (None, InputMode::Normal) => ModeView::Normal,
@@ -508,12 +507,12 @@ impl Controller {
 
     fn navigate(&mut self, movement: Movement, context: &ControllerContext<'_>) {
         match current_view(context) {
-            ViewKind::Overview | ViewKind::Processes => self.navigate_processes(movement, context),
+            ViewKind::Overview => self.navigate_processes(movement, context),
             ViewKind::GpuDetail => self.navigate_gpu(movement, context),
-            ViewKind::Sources => self.navigate_metrics(movement, context),
             ViewKind::Settings => self.navigate_modules(movement, context),
-            // The history view charts fixed series (D-46); nothing to pick.
-            ViewKind::History | ViewKind::Actions => {}
+            // The history view charts fixed series (D-46); nothing to
+            // pick, and the retired views are never shown (D-91).
+            ViewKind::History | ViewKind::Processes | ViewKind::Sources | ViewKind::Actions => {}
         }
     }
 
@@ -573,35 +572,6 @@ impl Controller {
         }
     }
 
-    fn navigate_metrics(&mut self, movement: Movement, context: &ControllerContext<'_>) {
-        let Some(sources) = context
-            .model
-            .and_then(|model| model.modules.sources.as_deref())
-        else {
-            return;
-        };
-        let ids: Vec<EntityId> = sources
-            .metrics
-            .iter()
-            .filter_map(|metric| EntityId::new(metric.key.series_selector()).ok())
-            .collect();
-        let current = self
-            .drafts
-            .current(context.model, context.now)
-            .and_then(|fields| fields.selected_entity_id)
-            .filter(|id| ids.contains(id))
-            .or_else(|| {
-                sources
-                    .selected
-                    .clone()
-                    .and_then(|selector| EntityId::new(selector).ok())
-            })
-            .or_else(|| ids.first().cloned());
-        if let Some(next) = navigation::step_list(&ids, current.as_ref(), movement) {
-            self.select_entity(context, next);
-        }
-    }
-
     fn navigate_modules(&mut self, movement: Movement, context: &ControllerContext<'_>) {
         let Some(settings) = context
             .model
@@ -653,17 +623,15 @@ impl Controller {
     }
 
     fn start_filter(&mut self, context: &ControllerContext<'_>) {
-        let target = match current_view(context) {
-            ViewKind::Sources => FilterTarget::Sources,
-            ViewKind::Overview | ViewKind::Processes => FilterTarget::Processes,
-            _ => return,
-        };
+        if current_view(context) != ViewKind::Overview {
+            return;
+        }
         let initial = self
             .drafts
             .current(context.model, context.now)
             .map(|fields| fields.filter)
             .unwrap_or_default();
-        self.set_mode(InputMode::Filter(FilterEdit::new(&initial, target)));
+        self.set_mode(InputMode::Filter(FilterEdit::new(&initial)));
     }
 
     fn finish_filter(&mut self, apply: bool, context: &ControllerContext<'_>) {
@@ -892,7 +860,7 @@ impl Controller {
                     self.seek = None;
                 }
             }
-            controls::SOURCES_METRIC | controls::SETTINGS_MODULE => {
+            controls::SETTINGS_MODULE => {
                 if let Some(entity) = target.entity_id {
                     self.select_entity(context, entity);
                 }

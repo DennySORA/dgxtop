@@ -1,6 +1,7 @@
 //! Settings module: saved / effective / origin per field, restart-required
-//! and overload notes, pending change and last result, persistence status
-//! and the module list (toggled with SetModuleEnabled through the controller).
+//! and overload notes, pending change and last result, persistence status,
+//! the adapter hosts (the data sources block, D-91) and the module list
+//! (toggled with SetModuleEnabled through the controller).
 
 use dgxtop_core::action::{PersistenceState, PersistenceStatus};
 use dgxtop_core::config::ValueOrigin;
@@ -16,13 +17,15 @@ use super::common::{
     draw_table_header, draw_table_row, fit_columns, message, no_data, panel, panel_with_keys,
     split_columns,
 };
+use super::host_status::{host_status_rows, render_host_status};
 use crate::format::{clean, format_bytes, truncate_to_width};
 use crate::num::saturate_u16;
 use crate::registry::{
-    DisplayContext, DisplayModule, DisplayModuleManifest, RenderOutput, Slot, Topic, controls,
+    DisplayContext, DisplayModule, DisplayModuleManifest, RenderOutput, Slot, controls,
 };
 
 const MODULE_LIST_WIDTH: u16 = 26;
+const NANOS_PER_MILLI: u64 = 1_000_000;
 const SIDE_BY_SIDE: u16 = 140;
 
 const FIELD_COLUMNS: [ColumnSpec; 6] = [
@@ -47,7 +50,6 @@ impl SettingsModule {
             manifest: build_manifest(ManifestSpec {
                 id: "settings",
                 title: "Settings",
-                topics: &[Topic::Settings],
                 min_columns: 40,
                 min_rows: 6,
                 priority: 35,
@@ -98,6 +100,22 @@ impl DisplayModule for SettingsModule {
                 &Line::from(Span::styled(line, context.theme.text_style())),
             );
         }
+        // The data sources block takes at most a third of what is left, so
+        // the fields keep most of a short terminal.
+        let host_rows = host_status_rows(&settings.hosts).min((rows.remaining() / 3).max(3));
+        if let Some(hosts) = rows.take(host_rows) {
+            // The projection's clock moved on by its age since it was built.
+            let now_boot_ns = model
+                .generated_boot_ns
+                .saturating_add(context.projection_age_ms.saturating_mul(NANOS_PER_MILLI));
+            render_host_status(
+                frame,
+                hosts,
+                (&settings.hosts, now_boot_ns),
+                context,
+                &mut output,
+            );
+        }
         let Some(body) = rows.rest() else {
             return output.finish();
         };
@@ -132,7 +150,7 @@ fn persistence_word(state: PersistenceState) -> &'static str {
 }
 
 /// `config healthy · 12 KiB of 1.0 MiB` plus the optional detail.
-pub(crate) fn persistence_text(label: &str, status: &PersistenceStatus) -> String {
+fn persistence_text(label: &str, status: &PersistenceStatus) -> String {
     let mut text = format!("{label} {}", persistence_word(status.state));
     if status.bytes_limit > 0 {
         text.push_str(&format!(
@@ -306,5 +324,71 @@ mod tests {
         let lines = status_lines(&settings);
         assert!(lines[1].starts_with("pending: "));
         assert!(lines.iter().any(|line| line.starts_with("last result:")));
+    }
+
+    fn rendered(size: (u16, u16)) -> String {
+        let model = crate::test_fixtures::view_model(dgxtop_core::commands::ViewKind::Settings, 1);
+        crate::test_fixtures::render_text(&SettingsModule::new().unwrap(), &model, size)
+    }
+
+    fn line_of<'a>(text: &'a str, needle: &str) -> &'a str {
+        text.lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("{needle} in {text}"))
+    }
+
+    /// The data sources block shows each host's state, last success and
+    /// backoff on the projection's clock (D-91).
+    #[test]
+    fn data_sources_show_host_health_last_success_and_backoff() {
+        let wide = rendered((160, 40));
+        assert!(wide.contains("data sources"), "{wide}");
+        let header = line_of(&wide, "ADAPTER");
+        for column in ["STATE", "LAST OK", "BACKOFF", "FAILS", "DETAIL"] {
+            assert!(header.contains(column), "{column}: {header}");
+        }
+        let nvml = line_of(&wide, "nvml");
+        assert!(
+            nvml.contains("quarantined (requires intervention)"),
+            "{nvml}"
+        );
+        assert!(nvml.contains("never") && nvml.contains("7s"), "{nvml}");
+        assert!(nvml.contains("child not reaped"), "{nvml}");
+        let procfs = line_of(&wide, "procfs");
+        assert!(
+            procfs.contains("healthy") && procfs.contains("3s ago"),
+            "{procfs}"
+        );
+        // The fields and the module list still follow the block.
+        assert!(
+            wide.contains("SETTING") && wide.contains("modules"),
+            "{wide}"
+        );
+    }
+
+    /// A narrow terminal keeps each host and its state and gives up the
+    /// low-priority columns; nothing panics at the minimum size.
+    #[test]
+    fn data_sources_fit_a_narrow_terminal() {
+        let narrow = rendered((40, 24));
+        assert!(narrow.contains("data sources"), "{narrow}");
+        let header = line_of(&narrow, "ADAPTER");
+        assert!(header.contains("STATE"), "{header}");
+        assert!(!header.contains("DETAIL"), "{header}");
+        assert!(line_of(&narrow, "nvml").contains("quarantined"), "{narrow}");
+        let tiny = rendered((40, 10));
+        assert!(tiny.contains("data sources"), "{tiny}");
+    }
+
+    #[test]
+    fn data_sources_say_when_no_host_reported() {
+        let mut model =
+            crate::test_fixtures::view_model(dgxtop_core::commands::ViewKind::Settings, 1);
+        let mut settings = crate::test_fixtures::settings_view();
+        settings.hosts.clear();
+        model.modules.settings = Some(std::sync::Arc::new(settings));
+        let text =
+            crate::test_fixtures::render_text(&SettingsModule::new().unwrap(), &model, (120, 30));
+        assert!(text.contains("no adapter hosts reported"), "{text}");
     }
 }

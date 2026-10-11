@@ -645,12 +645,15 @@ fn at23_command_flood_is_busy_without_blocking_timers_and_shutdown_still_run() {
 
 // ----- AT08 -----------------------------------------------------------------
 
+/// A whole-configuration replacement, even of a restart-only field, is
+/// refused with its own code and never reaches the config worker (D-91);
+/// a stale revision conflicts.
 #[test]
-fn at08_restart_only_and_stale_revisions_never_persist() {
+fn at08_replaced_configurations_and_stale_revisions_never_persist() {
     let mut harness = ready_harness(HarnessOptions::default());
     let mut candidate = Config::defaults().unwrap();
     candidate.store.max_series = 100;
-    let restart = harness
+    let replace = harness
         .submit(CommandBody::ReplaceConfig {
             expected_config_revision: 1,
             candidate: Box::new(candidate),
@@ -664,13 +667,17 @@ fn at08_restart_only_and_stale_revisions_never_persist() {
         .unwrap();
     harness.settle();
     let results = harness.results();
-    let code_of = |id: Uuid| results.iter().find(|r| r.request_id == id).unwrap().code;
-    assert_eq!(
-        code_of(restart),
-        ResultCode::from(ErrorCode::RequiresRestart)
+    let result_of = |id: Uuid| results.iter().find(|r| r.request_id == id).unwrap();
+    let refused = result_of(replace);
+    assert_eq!(refused.status, CommandStatus::Rejected);
+    assert_eq!(refused.code, ResultCode::from(ErrorCode::Unsupported));
+    assert!(
+        refused.message.contains("ReplaceConfig is not supported"),
+        "{refused:?}"
     );
-    assert_eq!(code_of(stale), ResultCode::from(ErrorCode::Conflict));
+    assert_eq!(result_of(stale).code, ResultCode::from(ErrorCode::Conflict));
     assert!(harness.ports.config.is_empty());
+    assert_eq!(harness.manager.core().config.saved().revision, 1);
 }
 
 #[test]
@@ -730,7 +737,7 @@ fn at10_full_action_path_through_commands_sends_once() {
     with_process_table(&harness, &[4242]);
     let key = target(4242);
     let select = harness
-        .submit(navigation(ViewKind::Processes, Some(key.clone()), ""))
+        .submit(navigation(ViewKind::Overview, Some(key.clone()), ""))
         .unwrap();
     harness.settle();
     assert!(harness.result_for(select).code.is_ok());
@@ -824,7 +831,7 @@ fn at13_absent_or_unselected_targets_are_rejected_and_never_retargeted() {
         ResultCode::from(ErrorCode::ProcessExited)
     );
     harness
-        .submit(navigation(ViewKind::Processes, Some(target(10)), ""))
+        .submit(navigation(ViewKind::Overview, Some(target(10)), ""))
         .unwrap();
     harness.settle();
     harness.results();
@@ -1019,11 +1026,11 @@ fn a_view_change_gets_a_projection_while_a_cycle_settles() {
     commit(&mut harness, &plans[0], 2);
     assert_eq!(projections(&harness), 0);
     harness
-        .submit(navigation(ViewKind::Processes, None, ""))
+        .submit(navigation(ViewKind::Overview, None, ""))
         .unwrap();
     harness.settle();
     let projection = harness.session.take_projection().expect("prompt frame");
-    assert_eq!(projection.session.view, ViewKind::Processes);
+    assert_eq!(projection.session.view, ViewKind::Overview);
 }
 
 // ----- history -----------------------------------------------------------------

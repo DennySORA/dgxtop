@@ -42,6 +42,7 @@ impl CellDetail {
         age: false,
     };
     /// Everything the projection carries.
+    #[cfg(test)]
     pub const FULL: Self = Self {
         source: true,
         quality: true,

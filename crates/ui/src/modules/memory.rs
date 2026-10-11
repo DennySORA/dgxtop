@@ -23,7 +23,7 @@ use super::process_memory::{
 use crate::format::{clean, format_bytes, format_percent, value_text};
 use crate::num::saturate_u16;
 use crate::registry::{
-    DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot, Topic,
+    DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot,
     controls,
 };
 use crate::widgets::{Gauge, Segment, StackedBar};
@@ -55,7 +55,6 @@ impl MemoryModule {
             manifest: build_manifest(ManifestSpec {
                 id: MEMORY_MODULE_ID,
                 title: "Memory and swap",
-                topics: &[Topic::Memory],
                 min_columns: 30,
                 min_rows: 3,
                 priority: 80,

@@ -416,7 +416,8 @@ pub fn render_footer(
     ];
     let badge = match &ui.mode {
         ModeView::Normal => None,
-        ModeView::Filter { target, .. } => Some(format!(" FILTER {} ", target.label())),
+        // The process table is the only filtered list (D-91).
+        ModeView::Filter { .. } => Some(" FILTER process name ".to_owned()),
         ModeView::Confirm { .. } => Some(" CONFIRM ".to_owned()),
         ModeView::Help { .. } => Some(" HELP ".to_owned()),
     };
@@ -528,11 +529,12 @@ pub fn render_waiting(frame: &mut Frame<'_>, area: Rect, ui: &UiState, palette: 
     render_footer(frame, footer, ui, ViewKind::Overview, None, palette);
 }
 
-/// Replaces a panicked module's area; other modules are unaffected.
+/// Replaces a panicked module's area, named by its manifest title (the
+/// module could not draw its own); other modules are unaffected.
 pub fn render_module_error(
     frame: &mut Frame<'_>,
     area: Rect,
-    module_id: &str,
+    title: &str,
     message: &str,
     palette: &ThemePalette,
 ) {
@@ -544,13 +546,14 @@ pub fn render_module_error(
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(palette.danger))
         .title(Span::styled(
-            format!(" module error · {module_id} "),
+            format!(" module error · {} ", clean(title)),
             Style::new().fg(palette.danger).add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let text = format!(
-        "module error: {module_id} failed while rendering ({}); other modules keep updating",
+        "module error: {} failed while rendering ({}); other modules keep updating",
+        clean(title),
         clean(message)
     );
     frame.render_widget(

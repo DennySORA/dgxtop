@@ -39,6 +39,7 @@ impl<W: Write> AnsiBackend<W> {
         self.size = size;
     }
 
+    #[cfg(test)]
     pub fn writer_mut(&mut self) -> &mut W {
         &mut self.writer
     }

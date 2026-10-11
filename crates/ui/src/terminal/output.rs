@@ -221,6 +221,7 @@ impl OutputPipeline {
         self.bytes_written
     }
 
+    #[cfg(test)]
     pub fn frames(&self) -> impl Iterator<Item = &FrameRecord> {
         self.frames.iter()
     }

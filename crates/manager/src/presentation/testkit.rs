@@ -12,7 +12,7 @@ use dgxtop_core::canonical::{
 use dgxtop_core::commands::{SortKey, ViewKind};
 use dgxtop_core::config::{Config, ValueOrigin};
 use dgxtop_core::identity::{
-    EntityId, MetricKey, OriginId, OriginIdentity, Pid, PidNamespace, ProcessKey, SessionId,
+    EntityId, MetricKey, OriginIdentity, Pid, PidNamespace, ProcessKey, SessionId,
 };
 use dgxtop_core::metric::{NativeUnit, Scalar};
 use dgxtop_core::naming::collector_id;
@@ -200,21 +200,6 @@ impl CandidateBuilder {
 
     pub(crate) fn quality(mut self, quality: Quality) -> Self {
         self.candidate.quality = quality;
-        self
-    }
-
-    pub(crate) fn rank(mut self, rank: u16) -> Self {
-        self.candidate.profile_rank = rank;
-        self
-    }
-
-    pub(crate) fn origin(mut self, origin: &str) -> Self {
-        self.candidate.origin = OriginIdentity::confirmed(OriginId::new(origin).unwrap());
-        self
-    }
-
-    pub(crate) fn suspect(mut self, reason: &str) -> Self {
-        self.candidate.suspect_reasons.push(reason.to_owned());
         self
     }
 

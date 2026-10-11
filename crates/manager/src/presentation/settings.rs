@@ -1,6 +1,7 @@
 //! Settings module projection: one field per configuration leaf with saved
 //! vs effective values, field origin, restart-only marking and overload
-//! notes, plus the module list and persistence status.
+//! notes, plus the module list, persistence status and each adapter
+//! host's status (the data sources block, D-91).
 
 use std::collections::BTreeMap;
 
@@ -8,11 +9,11 @@ use dgxtop_core::config::{BUILTIN_MODULES, Config, ValueOrigin};
 use dgxtop_core::identity::ModuleId;
 use dgxtop_core::naming::groups;
 use dgxtop_core::observation::split_page;
-use dgxtop_core::view::{IntervalView, OverloadState, SettingField, SettingsView};
+use dgxtop_core::view::{HostStatus, IntervalView, OverloadState, SettingField, SettingsView};
 use serde_json::Value;
 
 use super::SettingsInputs;
-use super::labels::note_text;
+use super::labels::{label_text, note_text};
 
 /// Whole sections that only take effect after a restart (CONFIG.md matrix).
 const RESTART_ONLY_SECTIONS: [&str; 2] = ["queues", "runtime"];
@@ -33,14 +34,28 @@ const INTERVAL_FIELD: &str = "sampling.interval_ms";
 const CAPACITY_INTERVAL_FIELD: &str = "sampling.capacity_interval_ms";
 const SLOW_HEALTH_INTERVAL_FIELD: &str = "sampling.slow_health_interval_ms";
 const ABSENT_TEXT: &str = "(absent)";
+/// Adapter hosts listed in the data sources block.
+const MAX_HOSTS: usize = 16;
 const EMPTY_LIST_TEXT: &str = "none";
+
+/// What the settings projection is built from besides the configuration.
+pub(crate) struct SettingsRuntime<'a> {
+    pub(crate) intervals: &'a [IntervalView],
+    pub(crate) overload: OverloadState,
+    pub(crate) enabled_modules: &'a [String],
+    pub(crate) hosts: &'a [HostStatus],
+}
 
 pub(crate) fn build_settings_view(
     settings: &SettingsInputs<'_>,
-    intervals: &[IntervalView],
-    overload: OverloadState,
-    enabled_modules: &[String],
+    runtime: &SettingsRuntime<'_>,
 ) -> SettingsView {
+    let SettingsRuntime {
+        intervals,
+        overload,
+        enabled_modules,
+        hosts,
+    } = *runtime;
     let saved = leaf_texts(settings.saved);
     let notes = overload_notes(intervals, overload);
     let fields = leaf_texts(settings.effective)
@@ -64,6 +79,16 @@ pub(crate) fn build_settings_view(
         fields,
         modules: module_flags(enabled_modules),
         config_status: settings.status.clone(),
+        hosts: hosts.iter().take(MAX_HOSTS).map(bounded_host).collect(),
+    }
+}
+
+/// A host status whose texts are bounded like every other label.
+fn bounded_host(status: &HostStatus) -> HostStatus {
+    HostStatus {
+        adapter_id: label_text(&status.adapter_id),
+        detail: status.detail.as_deref().map(note_text),
+        ..status.clone()
     }
 }
 
@@ -192,15 +217,19 @@ fn module_flags(enabled: &[String]) -> Vec<(ModuleId, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presentation::testkit::Fixture;
+    use crate::presentation::testkit::{Fixture, host_status};
+    use dgxtop_core::view::HostState;
 
     fn build(fixture: &Fixture) -> SettingsView {
         let context = fixture.context();
         build_settings_view(
             &context.settings,
-            context.intervals,
-            context.overload,
-            context.enabled_modules,
+            &SettingsRuntime {
+                intervals: context.intervals,
+                overload: context.overload,
+                enabled_modules: context.enabled_modules,
+                hosts: context.hosts,
+            },
         )
     }
 
@@ -271,5 +300,31 @@ mod tests {
         assert!(is_restart_only("runtime.max_projection_bytes"));
         assert!(!is_restart_only("queuesx.commands"));
         assert!(!is_restart_only("store.max_history_points"));
+    }
+
+    /// The data sources block lists each adapter host with its timing
+    /// facts, bounded in count and text (D-91).
+    #[test]
+    fn settings_carry_bounded_host_status() {
+        let mut fixture = Fixture::new();
+        let mut nvml = host_status("nvml", HostState::CircuitOpen, Some(&"x".repeat(400)));
+        nvml.last_success_boot_ns = Some(3_000_000_000);
+        nvml.backoff_until_boot_ns = Some(9_000_000_000);
+        fixture.hosts = vec![nvml];
+        let view = build(&fixture);
+        assert_eq!(view.hosts.len(), 1);
+        let host = &view.hosts[0];
+        assert_eq!(host.adapter_id, "nvml");
+        assert_eq!(host.state, HostState::CircuitOpen);
+        assert_eq!(host.last_success_boot_ns, Some(3_000_000_000));
+        assert_eq!(host.backoff_until_boot_ns, Some(9_000_000_000));
+        assert!(host.detail.as_ref().unwrap().len() <= 256);
+
+        fixture.hosts = (0..40)
+            .map(|index| host_status(&format!("a{index}"), HostState::Healthy, None))
+            .collect();
+        assert_eq!(build(&fixture).hosts.len(), MAX_HOSTS);
+        fixture.hosts.clear();
+        assert!(build(&fixture).hosts.is_empty());
     }
 }

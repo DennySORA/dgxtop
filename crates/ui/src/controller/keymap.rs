@@ -134,7 +134,7 @@ impl Section {
             Self::General => "General",
             Self::Views => "Views",
             Self::Navigation => "Navigation (selection is by identity, never row number)",
-            Self::Processes => "Processes (Overview and Processes views)",
+            Self::Processes => "Processes (Overview)",
             Self::Gpu => "GPU view",
             Self::History => "History view",
             Self::Settings => "Settings view",
@@ -203,15 +203,10 @@ pub struct KeyBinding {
     pub action: KeyAction,
 }
 
-const LIST_VIEWS: &[ViewKind] = &[
-    ViewKind::Overview,
-    ViewKind::GpuDetail,
-    ViewKind::Processes,
-    ViewKind::Sources,
-    ViewKind::Settings,
-];
-const PROCESS_VIEWS: &[ViewKind] = &[ViewKind::Overview, ViewKind::Processes];
-const FILTER_VIEWS: &[ViewKind] = &[ViewKind::Overview, ViewKind::Processes, ViewKind::Sources];
+const LIST_VIEWS: &[ViewKind] = &[ViewKind::Overview, ViewKind::GpuDetail, ViewKind::Settings];
+/// The process table, and so its keys, is on the Overview only (D-91).
+const PROCESS_VIEWS: &[ViewKind] = &[ViewKind::Overview];
+const FILTER_VIEWS: &[ViewKind] = PROCESS_VIEWS;
 
 /// Table-row constructor: positional arguments keep the table one line per binding.
 #[allow(clippy::too_many_arguments)]
@@ -342,17 +337,17 @@ mod tests {
             resolve(&q, ModeKind::Normal, ViewKind::Overview),
             Some(KeyAction::Quit)
         );
-        assert_eq!(resolve(&q, ModeKind::Filter, ViewKind::Processes), None);
+        assert_eq!(resolve(&q, ModeKind::Filter, ViewKind::Overview), None);
         assert_eq!(
-            resolve(&ctrl_c, ModeKind::Filter, ViewKind::Processes),
+            resolve(&ctrl_c, ModeKind::Filter, ViewKind::Overview),
             Some(KeyAction::Quit)
         );
         assert_eq!(
-            resolve(&q, ModeKind::Confirm, ViewKind::Processes),
+            resolve(&q, ModeKind::Confirm, ViewKind::Overview),
             Some(KeyAction::Quit)
         );
         assert_eq!(
-            resolve(&q, ModeKind::Help, ViewKind::Processes),
+            resolve(&q, ModeKind::Help, ViewKind::Overview),
             Some(KeyAction::Quit)
         );
     }
@@ -361,20 +356,23 @@ mod tests {
     fn terminate_only_binds_in_process_views_in_normal_mode() {
         let shift_k = key(KeyCode::Char('K'), KeyModifiers::SHIFT);
         assert_eq!(
-            resolve(&shift_k, ModeKind::Normal, ViewKind::Processes),
+            resolve(&shift_k, ModeKind::Normal, ViewKind::Overview),
             Some(KeyAction::Terminate)
         );
         assert_eq!(
             resolve(&shift_k, ModeKind::Normal, ViewKind::Overview),
             Some(KeyAction::Terminate)
         );
-        assert_eq!(resolve(&shift_k, ModeKind::Normal, ViewKind::Sources), None);
         assert_eq!(
-            resolve(&shift_k, ModeKind::Filter, ViewKind::Processes),
+            resolve(&shift_k, ModeKind::Normal, ViewKind::Settings),
             None
         );
         assert_eq!(
-            resolve(&shift_k, ModeKind::Confirm, ViewKind::Processes),
+            resolve(&shift_k, ModeKind::Filter, ViewKind::Overview),
+            None
+        );
+        assert_eq!(
+            resolve(&shift_k, ModeKind::Confirm, ViewKind::Overview),
             None
         );
     }
@@ -383,10 +381,10 @@ mod tests {
     fn confirm_keys_only_exist_in_confirm_mode() {
         let y = key(KeyCode::Char('y'), KeyModifiers::NONE);
         let enter = key(KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(resolve(&y, ModeKind::Normal, ViewKind::Processes), None);
-        assert_eq!(resolve(&enter, ModeKind::Normal, ViewKind::Processes), None);
+        assert_eq!(resolve(&y, ModeKind::Normal, ViewKind::Overview), None);
+        assert_eq!(resolve(&enter, ModeKind::Normal, ViewKind::Overview), None);
         assert_eq!(
-            resolve(&y, ModeKind::Confirm, ViewKind::Processes),
+            resolve(&y, ModeKind::Confirm, ViewKind::Overview),
             Some(KeyAction::Confirm)
         );
         assert_eq!(

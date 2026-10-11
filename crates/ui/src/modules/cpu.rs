@@ -20,7 +20,7 @@ use super::common::{
 use crate::format::{CellDetail, clean, display_width, truncate_to_width, value_text};
 use crate::num::saturate_u16;
 use crate::registry::{
-    DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot, Topic,
+    DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot,
     controls,
 };
 use crate::widgets::Gauge;
@@ -59,7 +59,6 @@ impl CpuModule {
             manifest: build_manifest(ManifestSpec {
                 id: CPU_MODULE_ID,
                 title: "CPU utilization and temperature",
-                topics: &[Topic::Cpu, Topic::Sources, Topic::Health],
                 min_columns: 36,
                 min_rows: 4,
                 priority: 90,

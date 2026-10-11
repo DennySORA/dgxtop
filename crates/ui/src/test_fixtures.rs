@@ -12,17 +12,16 @@ use dgxtop_core::commands::{SortKey, ViewKind};
 use dgxtop_core::config::{Theme, ValueOrigin};
 use dgxtop_core::identity::{EntityId, ModuleId, ProcessKey, SessionId};
 use dgxtop_core::metric::{CanonicalUnit, Scalar};
-use dgxtop_core::quality::{Freshness, Quality, SampleKind, SelectionState};
+use dgxtop_core::quality::{Quality, SampleKind};
 pub(crate) use dgxtop_core::testing::metric_key;
 use dgxtop_core::testing::test_process_key;
 use dgxtop_core::view::{
-    ActionRecordView, ActionsView, CandidateView, CellState, ConfirmationView, ConflictView,
-    CoreView, CpuView, DiskDeviceView, DiskHistory, DiskView, FilesystemView, GpuCard, GpuDetails,
-    GpuView, HeaderView, HistoryChartKind, HistoryChartView, HistoryPointView, HistoryView,
-    HistoryWindowSummary, HostState, HostStatus, InterfaceView, IntervalView, LabeledCell,
-    LastGoodView, MemoryView, MetricCell, ModuleViews, NetworkView, OverloadState, ProcessGpuView,
-    ProcessRowView, ProcessesView, SessionState, SettingField, SettingsView, SourceMetricView,
-    SourcesView, Trend, ViewModel,
+    ActionRecordView, ActionsView, CellState, ConfirmationView, ConflictView, CoreView, CpuView,
+    DiskDeviceView, DiskHistory, DiskView, FilesystemView, GpuCard, GpuDetails, GpuView,
+    HeaderView, HistoryChartKind, HistoryChartView, HistoryPointView, HistoryView,
+    HistoryWindowSummary, HostState, HostStatus, InterfaceView, LabeledCell, LastGoodView,
+    MemoryView, MetricCell, ModuleViews, NetworkView, OverloadState, ProcessGpuView,
+    ProcessRowView, ProcessesView, SessionState, SettingField, SettingsView, Trend, ViewModel,
 };
 
 pub(crate) const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
@@ -777,107 +776,36 @@ pub(crate) fn history_view() -> HistoryView {
 /// End of the fixture's history window.
 pub(crate) const HISTORY_END: u64 = 10_000 * 1_000_000_000;
 
-fn candidate(source: &str, value: Option<f64>, disposition: &str, rank: u16) -> CandidateView {
-    CandidateView {
-        source_id: source.into(),
-        adapter_id: source.split(':').next().unwrap_or("x").into(),
-        value: value.map(|number| Scalar::from_f64(number).unwrap()),
-        unit: Some(CanonicalUnit::DegC),
-        native: "mdegC".into(),
-        quality: Quality::Usable,
-        kind: SampleKind::Measured,
-        freshness: Freshness::Fresh,
-        measurement_freshness: Freshness::Unknown,
-        age_ms: Some(1_200),
-        origin: "unknown".into(),
-        rank,
-        disposition: disposition.into(),
-        suspect_reasons: Vec::new(),
-    }
-}
-
-pub(crate) fn sources_view() -> SourcesView {
-    let conflict_metric = SourceMetricView {
-        key: metric_key("soc", "soc.temperature", "soc"),
-        label: "SoC temperature".into(),
-        selection_state: SelectionState::Conflict,
-        selected_source: None,
-        pinned_source: None,
-        policy_revision: 3,
-        conflict_spread: Some(26.0),
-        tolerance: Some(5.0),
-        candidates: vec![
-            candidate("hwmon:acpitz:temp1", Some(68.0), "conflicting", 1),
-            candidate("thermal:zone0", Some(42.0), "conflicting", 2),
-        ],
-        switch_note: None,
-    };
-    let selected_metric = SourceMetricView {
-        key: metric_key("cpu.package.0", "cpu.temperature.package", "package:0"),
-        label: "CPU package temperature".into(),
-        selection_state: SelectionState::Selected,
-        selected_source: Some("hwmon:coretemp:temp1".into()),
-        pinned_source: Some("hwmon:coretemp:temp1".into()),
-        policy_revision: 3,
-        conflict_spread: Some(1.0),
-        tolerance: Some(5.0),
-        candidates: vec![
-            candidate("hwmon:coretemp:temp1", Some(68.0), "selected", 1),
-            CandidateView {
-                suspect_reasons: vec!["fixed value for 600 s".into()],
-                quality: Quality::Suspect,
-                ..candidate("thermal:zone1", Some(25.0), "rejected: suspect", 3)
-            },
-        ],
-        switch_note: Some("pinned by policy r3".into()),
-    };
-    SourcesView {
-        selected: Some(conflict_metric.key.series_selector()),
-        metrics: vec![conflict_metric, selected_metric],
-        hosts: vec![
-            HostStatus {
-                adapter_id: "nvml".into(),
-                state: HostState::Quarantined,
-                generation: 4,
-                pid: None,
-                last_success_boot_ns: None,
-                timeouts_total: 3,
-                consecutive_failures: 3,
-                restarts_total: 2,
-                // 7 s after the projection was generated.
-                backoff_until_boot_ns: Some(12_000_000_000),
-                detail: Some("child not reaped".into()),
-            },
-            HostStatus {
-                adapter_id: "procfs".into(),
-                state: HostState::Healthy,
-                generation: 1,
-                pid: Some(5000),
-                // 3 s before the projection was generated.
-                last_success_boot_ns: Some(2_000_000_000),
-                timeouts_total: 0,
-                consecutive_failures: 0,
-                restarts_total: 0,
-                backoff_until_boot_ns: None,
-                detail: None,
-            },
-        ],
-        intervals: vec![IntervalView {
+/// Two adapter hosts: nvml backing off, procfs healthy.
+pub(crate) fn host_statuses() -> Vec<HostStatus> {
+    vec![
+        HostStatus {
+            adapter_id: "nvml".into(),
+            state: HostState::Quarantined,
+            generation: 4,
+            pid: None,
+            last_success_boot_ns: None,
+            timeouts_total: 3,
+            consecutive_failures: 3,
+            restarts_total: 2,
+            // 7 s after the projection was generated.
+            backoff_until_boot_ns: Some(12_000_000_000),
+            detail: Some("child not reaped".into()),
+        },
+        HostStatus {
             adapter_id: "procfs".into(),
-            read_group: "fast".into(),
-            configured_ms: 1000,
-            effective_ms: 2000,
-            reason: "overload x2".into(),
-        }],
-        policy_revision: 3,
-        filter: String::new(),
-        unclassified: vec![candidate(
-            "hwmon:nct6775:temp7",
-            Some(31.0),
-            "unclassified",
-            9,
-        )],
-    }
+            state: HostState::Healthy,
+            generation: 1,
+            pid: Some(5000),
+            // 3 s before the projection was generated.
+            last_success_boot_ns: Some(2_000_000_000),
+            timeouts_total: 0,
+            consecutive_failures: 0,
+            restarts_total: 0,
+            backoff_until_boot_ns: None,
+            detail: None,
+        },
+    ]
 }
 
 pub(crate) fn settings_view() -> SettingsView {
@@ -916,6 +844,7 @@ pub(crate) fn settings_view() -> SettingsView {
             .map(|id| (ModuleId::new(*id).unwrap(), *id != "history"))
             .collect(),
         config_status: PersistenceStatus::healthy(PersistenceKind::Config),
+        hosts: host_statuses(),
     }
 }
 
@@ -987,7 +916,6 @@ pub(crate) fn full_modules(with_confirmation: bool) -> ModuleViews {
         processes: Some(Arc::new(processes_view(12, 0, 12))),
         history: Some(Arc::new(history_view())),
         process_history: Some(Arc::new(process_history_view())),
-        sources: Some(Arc::new(sources_view())),
         settings: Some(Arc::new(settings_view())),
         actions: Some(Arc::new(actions_view(with_confirmation))),
     }

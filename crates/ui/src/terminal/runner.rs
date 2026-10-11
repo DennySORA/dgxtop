@@ -22,9 +22,7 @@ use super::backend::AnsiBackend;
 use super::clock::LoopClock;
 use super::error::TuiError;
 use super::input::InputSource;
-use super::output::{
-    FlushProgress, FrameRecord, FrameWriter, OUTPUT_BUFFER_CAPACITY, OutputPipeline,
-};
+use super::output::{FlushProgress, FrameWriter, OUTPUT_BUFFER_CAPACITY, OutputPipeline};
 use super::scheduler::{Decision, INPUT_REDRAW_INTERVAL, RenderKey, RenderScheduler};
 use super::setup;
 use super::stats::{FrameStats, FrameStatsSummary};
@@ -211,12 +209,6 @@ impl TuiLoop {
         })
     }
 
-    /// Replaces the viewer (e.g. a registry with extra modules).
-    pub fn with_viewer(mut self, viewer: Viewer) -> Self {
-        self.viewer = viewer;
-        self
-    }
-
     pub fn stats(&self) -> &FrameStats {
         &self.stats
     }
@@ -225,8 +217,9 @@ impl TuiLoop {
         &self.controller
     }
 
-    /// Recent frames written (diagnostics: frames never interleave).
-    pub fn frame_records(&self) -> Vec<FrameRecord> {
+    /// Recent frames written (frames never interleave).
+    #[cfg(test)]
+    pub fn frame_records(&self) -> Vec<super::FrameRecord> {
         self.output.frames().copied().collect()
     }
 

@@ -1,7 +1,7 @@
 //! PresentationService view building.
 //!
 //! Contract between the Manager control loop (which owns state and calls
-//! [`build_view_model`]) and the projection builders (pure functions over
+//! [`build_view_model_measured`]) and the projection builders (pure functions over
 //! immutable inputs). Builders never perform I/O, never block and only copy
 //! the visible window of large tables (processes) plus a small overscan.
 
@@ -27,7 +27,6 @@ mod reader;
 mod run_history;
 mod run_inputs;
 mod settings;
-mod sources;
 #[cfg(test)]
 mod testkit;
 #[cfg(test)]
@@ -46,7 +45,7 @@ use std::sync::Arc;
 use dgxtop_core::action::PersistenceStatus;
 use dgxtop_core::canonical::{CatalogSnapshot, ImmutableSnapshot};
 use dgxtop_core::commands::ViewKind;
-use dgxtop_core::config::{Config, ValueOrigin};
+use dgxtop_core::config::{BUILTIN_MODULES, Config, ValueOrigin};
 use dgxtop_core::identity::{MetricKey, ModuleId};
 use dgxtop_core::naming::adapters;
 use dgxtop_core::ports::ProcessMemoryReader;
@@ -62,7 +61,6 @@ use gpu::{GpuEnvironment, GpuTrendWidths};
 use gpu_directory::GpuDirectory;
 use plan::{ViewPlan, ViewportLayout};
 use reader::MetricReader;
-use sources::SourcesInputs;
 
 /// Bounded recent values per trend series (sparklines), fed by the Manager
 /// from committed snapshots. Gaps are kept as `None`.
@@ -216,19 +214,11 @@ pub fn build_header(context: &PresentationContext<'_>) -> HeaderView {
 /// Builds one immutable projection for one session: only the modules
 /// visible in the session's view (and enabled) are filled, large tables are
 /// windowed, and the result is kept within `runtime.max_projection_bytes`.
-pub fn build_view_model(context: &PresentationContext<'_>) -> ViewModel {
-    build_view_model_measured(context).0
-}
-
-/// [`build_view_model`] plus the size the projection is accounted at
+/// Returns it with the size it is accounted at
 /// ([`ViewModel::accounted_bytes`]), so the caller can size its byte permit
 /// without measuring the projection a second time.
 pub fn build_view_model_measured(context: &PresentationContext<'_>) -> (ViewModel, usize) {
-    let plan = ViewPlan::new(
-        context.session.view,
-        context.enabled_modules,
-        context.actions.confirmation.is_some(),
-    );
+    let plan = ViewPlan::new(context.session.view, context.enabled_modules);
     let layout = ViewportLayout::new(context.viewport);
     let reader = MetricReader::new(
         context.snapshot,
@@ -242,8 +232,7 @@ pub fn build_view_model_measured(context: &PresentationContext<'_>) -> (ViewMode
     } else {
         0
     };
-    let visible_process_rows =
-        processes::visible_process_rows(context.session.view, layout.rows, gpu_count);
+    let visible_process_rows = processes::visible_process_rows(layout.rows, gpu_count);
     let inputs = ModuleInputs {
         reader: &reader,
         directory: &directory,
@@ -362,26 +351,21 @@ fn build_modules(
             },
         )));
     }
-    if plan.shows(plan::SOURCES) {
-        modules.sources = Some(Arc::new(sources::build_sources_view(&SourcesInputs {
-            reader,
-            directory: inputs.directory,
-            session: context.session,
-            hosts: context.hosts,
-            intervals: context.intervals,
-        })));
-    }
     if plan.shows(plan::SETTINGS) {
         modules.settings = Some(Arc::new(settings::build_settings_view(
             &context.settings,
-            context.intervals,
-            context.overload,
-            context.enabled_modules,
+            &settings::SettingsRuntime {
+                intervals: context.intervals,
+                overload: context.overload,
+                enabled_modules: context.enabled_modules,
+                hosts: context.hosts,
+            },
         )));
     }
-    if plan.shows(plan::ACTIONS) {
-        modules.actions = Some(Arc::clone(&context.actions));
-    }
+    // The process actions' state is the session's, not a module's: every
+    // projection carries it, so a pending confirmation is a banner in
+    // every view (D-91, UI.md §2, §6).
+    modules.actions = Some(Arc::clone(&context.actions));
     modules
 }
 
@@ -421,9 +405,12 @@ fn build_gpu(context: &PresentationContext<'_>, inputs: &ModuleInputs<'_>) -> Gp
     )
 }
 
+/// The enabled built-in modules; a retired id a saved file still enables
+/// is left out (D-91).
 fn enabled_module_ids(enabled: &[String]) -> Vec<ModuleId> {
     enabled
         .iter()
+        .filter(|module| BUILTIN_MODULES.contains(&module.as_str()))
         .filter_map(|module| ModuleId::new(module.as_str()).ok())
         .collect()
 }

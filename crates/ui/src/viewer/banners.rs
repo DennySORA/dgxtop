@@ -8,8 +8,10 @@ use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthChar;
 
 use super::ui_state::{ModeView, UiState};
-use crate::format::{clean, display_width, format_countdown_ms, format_interval_ms};
-use crate::modules::{COMPACT_CONFIRMATION_WIDTH, CONFIRM_HINT, confirmation_lines_for_banner};
+use crate::format::{
+    COMPACT_CONFIRMATION_WIDTH, CONFIRM_HINT, clean, confirmation_lines, display_width,
+    format_countdown_ms, format_interval_ms,
+};
 use crate::num::saturate_u16;
 use crate::theme::ThemePalette;
 
@@ -142,9 +144,7 @@ fn confirmation_block(
     };
     let compact = width < COMPACT_CONFIRMATION_WIDTH;
     let mut details = match (projected, &ui.mode) {
-        (Some(confirmation), _) => {
-            confirmation_lines_for_banner(confirmation, projection_age_ms, compact)
-        }
+        (Some(confirmation), _) => confirmation_lines(confirmation, projection_age_ms, compact),
         (
             None,
             ModeView::Confirm {
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn confirmation_comes_first_and_errors_before_warnings() {
-        let mut model = test_fixtures::view_model(ViewKind::Processes, 1);
+        let mut model = test_fixtures::view_model(ViewKind::Overview, 1);
         model.modules.actions = Some(Arc::new(test_fixtures::actions_view(true)));
         model.banners = vec![
             Banner {

@@ -15,22 +15,6 @@ pub struct Notice {
     pub text: String,
 }
 
-/// Which filter the text input edits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FilterTarget {
-    Processes,
-    Sources,
-}
-
-impl FilterTarget {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Processes => "process name",
-            Self::Sources => "source text",
-        }
-    }
-}
-
 /// Input mode as the Viewer needs to show it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ModeView {
@@ -40,7 +24,6 @@ pub enum ModeView {
         buffer: String,
         /// Byte offset of the cursor inside `buffer` (always a char boundary).
         cursor: usize,
-        target: FilterTarget,
     },
     /// An active token exists; y/Enter would confirm, n/Esc cancels.
     Confirm {

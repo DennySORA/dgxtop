@@ -3,12 +3,15 @@
 //! values and local wall-clock times. Nothing here performs I/O or reads a
 //! clock.
 
+mod action;
 mod age;
 mod cell;
 mod clock;
 mod text;
 mod units;
 
+pub use action::action_state_label;
+pub(crate) use action::{COMPACT_CONFIRMATION_WIDTH, CONFIRM_HINT, confirmation_lines};
 pub use age::{
     format_age, format_countdown_ms, format_interval_ms, format_span_ns, format_span_seconds,
 };

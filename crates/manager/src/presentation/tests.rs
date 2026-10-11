@@ -15,7 +15,7 @@ use super::testkit::{
     Fixture, NOW, candidate, entity_record, explanation_for, gpu_link, history_chart, process_key,
     process_row, sample,
 };
-use super::{PROCESS_OVERSCAN_ROWS, build_view_model, build_view_model_measured, visible_modules};
+use super::{PROCESS_OVERSCAN_ROWS, build_view_model_measured, visible_modules};
 use dgxtop_core::canonical::CandidateDisposition;
 
 const ONE_MIB: usize = 1024 * 1024;
@@ -195,7 +195,6 @@ fn filled(model: &ViewModel) -> Vec<&'static str> {
         ("network", modules.network.is_some()),
         ("processes", modules.processes.is_some()),
         ("history", modules.history.is_some()),
-        ("sources", modules.sources.is_some()),
         ("settings", modules.settings.is_some()),
         ("actions", modules.actions.is_some()),
     ]
@@ -221,13 +220,13 @@ fn confirmation() -> ConfirmationView {
 #[test]
 fn the_header_follows_the_effective_redline() {
     let mut fixture = Fixture::new();
-    let model = build_view_model(&fixture.context());
+    let model = build_view_model_measured(&fixture.context()).0;
     assert_eq!(
         model.header.redline_threshold_percent,
         fixture.effective.viewer.redline_threshold_percent
     );
     fixture.effective.viewer.redline_threshold_percent = 92.5;
-    let applied = build_view_model(&fixture.context());
+    let applied = build_view_model_measured(&fixture.context()).0;
     assert_eq!(applied.header.redline_threshold_percent, 92.5);
 }
 
@@ -237,10 +236,13 @@ fn each_view_fills_only_its_visible_topics() {
     for view in ViewKind::ALL {
         let mut fixture = Fixture::new();
         fixture.session.view = view;
-        let model = build_view_model(&fixture.context());
-        assert_eq!(filled(&model), visible_modules(view).to_vec(), "{view:?}");
+        let model = build_view_model_measured(&fixture.context()).0;
+        // The process actions' state rides on every view (D-91).
+        let mut expected = visible_modules(view).to_vec();
+        expected.push("actions");
+        assert_eq!(filled(&model), expected, "{view:?}");
     }
-    let model = build_view_model(&fixture_base.context());
+    let model = build_view_model_measured(&fixture_base.context()).0;
     assert_eq!(model.frame_revision, 3);
     assert_eq!(model.snapshot_revision, 7);
     assert_eq!(model.generated_boot_ns, NOW);
@@ -259,12 +261,12 @@ fn each_view_fills_only_its_visible_topics() {
 #[test]
 fn pending_confirmation_is_first_and_carries_action_details_on_any_view() {
     let mut fixture = Fixture::new();
-    fixture.session.view = ViewKind::Processes;
+    fixture.session.view = ViewKind::Overview;
     let mut actions = (*fixture.actions).clone();
     actions.confirmation = Some(confirmation());
     fixture.actions = Arc::new(actions);
     fixture.overload = dgxtop_core::view::OverloadState::Pressured;
-    let model = build_view_model(&fixture.context());
+    let model = build_view_model_measured(&fixture.context()).0;
     assert_eq!(model.banners[0].level, BannerLevel::Confirmation);
     assert_eq!(
         model.banners[0].text,
@@ -294,54 +296,28 @@ fn reference_load_projection_stays_under_one_mebibyte() {
     let processes = model.modules.processes.as_ref().unwrap();
     assert_eq!(processes.total_rows, 256);
     // Only the estimated window plus overscan is copied, never all rows.
-    let window = super::processes::visible_process_rows(ViewKind::Overview, 50, 8);
+    let window = super::processes::visible_process_rows(50, 8);
     assert!(processes.rows.len() <= window + PROCESS_OVERSCAN_ROWS);
     assert!(processes.rows.len() < 256);
 }
 
 #[test]
-fn processes_view_copies_only_the_window() {
+fn the_process_table_copies_only_the_window() {
     let mut fixture = reference_fixture(4, 256);
-    fixture.session.view = ViewKind::Processes;
+    fixture.session.view = ViewKind::Overview;
     fixture.session.sort = SortKey::Pid;
     fixture.session.ascending = true;
     fixture.viewport = (120, 30);
     fixture.session.selected_process = Some(process_key(256, 1000));
-    let model = build_view_model(&fixture.context());
+    let model = build_view_model_measured(&fixture.context()).0;
     let processes = model.modules.processes.as_ref().unwrap();
-    let visible = 30 - 7;
+    let visible = super::processes::visible_process_rows(30, 4);
     assert!(processes.rows.len() <= visible + PROCESS_OVERSCAN_ROWS);
     assert_eq!(processes.selected_index, Some(255));
     assert_eq!(processes.rows.last().unwrap().key, process_key(256, 1000));
     assert_eq!(processes.rows[0].gpus[1].gpu_label, "GPU 1");
-    assert!(model.estimated_bytes() < 64 * 1024);
-}
-
-#[test]
-fn sources_view_is_bounded_on_reference_load() {
-    let mut fixture = reference_fixture(128, 16);
-    for core in 0..128_u32 {
-        let key = metric_key(
-            &format!("cpu.core.{core}"),
-            "cpu.utilization.total",
-            &format!("core:{core}"),
-        );
-        let candidates = (0..4)
-            .map(|index| candidate(&format!("procfs:cpu{core}:{index}"), "procfs").build())
-            .collect();
-        fixture.explain("cpu", explanation_for(&key, candidates));
-    }
-    fixture.session.view = ViewKind::Sources;
-    let model = build_view_model(&fixture.context());
-    let sources = model.modules.sources.as_ref().unwrap();
-    let candidates: usize = sources
-        .metrics
-        .iter()
-        .map(|metric| metric.candidates.len())
-        .sum();
-    assert!(sources.metrics.len() <= 48);
-    assert!(candidates + sources.unclassified.len() <= 200);
-    assert!(model.estimated_bytes() < ONE_MIB);
+    let table_bytes = serde_json::to_vec(processes.as_ref()).unwrap().len();
+    assert!(table_bytes < 64 * 1024, "{table_bytes}");
 }
 
 /// The bound replaces writing the JSON only where that changes nothing: a
@@ -352,9 +328,9 @@ fn sources_view_is_bounded_on_reference_load() {
 fn the_accounted_size_never_exceeds_the_budget_nor_trims_differently() {
     let views = [
         ViewKind::Overview,
-        ViewKind::Processes,
+        ViewKind::Overview,
         ViewKind::GpuDetail,
-        ViewKind::Sources,
+        ViewKind::Settings,
     ];
     for view in views {
         for max_bytes in [8_192_u32, 32_768, 65_536, 131_072, 262_144, 1_048_576] {
@@ -425,7 +401,7 @@ fn history_is_shared_when_small_and_downsampled_to_the_chart_width() {
     let mut fixture = Fixture::new();
     fixture.session.view = ViewKind::History;
     fixture.viewport = (100, 30);
-    let small = build_view_model(&fixture.context());
+    let small = build_view_model_measured(&fixture.context()).0;
     assert!(Arc::ptr_eq(
         small.modules.history.as_ref().unwrap(),
         &fixture.history
@@ -443,7 +419,7 @@ fn history_is_shared_when_small_and_downsampled_to_the_chart_width() {
         charts: vec![history_chart(points), history_chart(Vec::new())],
         ..(*fixture.history).clone()
     });
-    let large = build_view_model(&fixture.context());
+    let large = build_view_model_measured(&fixture.context()).0;
     let history = large.modules.history.as_ref().unwrap();
     // Each chart is downsampled to the columns it is drawn in: the width
     // without the panel border (D-46).
