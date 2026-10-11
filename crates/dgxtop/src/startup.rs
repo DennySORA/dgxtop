@@ -213,8 +213,8 @@ pub fn remove_unneeded_files(fs: &dyn FileSystemOps, paths: &StatePaths, logger:
         }
     };
     for leftover in leftovers {
-        let path = leftover.path.display();
-        let reason = leftover.kind.reason();
+        let path = leftover.path().display();
+        let reason = leftover.kind().reason();
         match remove_leftover(fs, &leftover) {
             Ok(()) => logger.log(
                 LogLevel::Info,
