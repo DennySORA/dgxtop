@@ -14,19 +14,24 @@ use dgxtop_core::canonical::{
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::config::Config;
 use dgxtop_core::errors::ErrorDetail;
-use dgxtop_core::history::{
-    HISTORY_SCHEMA_VERSION, HistoryPoint, HistoryQuery, HistoryResult, HistoryStat,
-};
+use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::identity::{BootId, CollectorId, MetricKey};
 use dgxtop_core::metric::{CanonicalUnit, Scalar, descriptor, ids};
-use dgxtop_core::ports::{CancelFlag, HistoryReader, IngressBatch, SnapshotReader, StoreWriter};
+use dgxtop_core::overview_history::{OverviewAnswer, OverviewBucket, OverviewRequest};
+use dgxtop_core::ports::{
+    ArchiveJournal, CancelFlag, IngressBatch, OverviewReader, SnapshotReader, StoreWriter,
+};
 use dgxtop_core::quality::{Freshness, Namespace, Quality, SampleKind, SelectionState};
 use dgxtop_core::testing::{
     FakeClock, ObservationBuilder, UTC_ON_A_WHOLE_MINUTE_NS, batch_of, metric_key, source_id,
 };
+use dgxtop_core::tiers::Tier;
 use dgxtop_history::HistoryIndex;
 use dgxtop_state::{SharedSnapshot, StateWriter};
 use uuid::Uuid;
+
+/// The longest window a test reads: everything a test series holds.
+pub const EVERYTHING_NS: u64 = 24 * 3600 * SECOND;
 
 pub const SECOND: u64 = 1_000_000_000;
 pub const MINUTE: u64 = 60 * SECOND;
@@ -65,6 +70,17 @@ impl Harness {
         Self::default()
     }
 
+    /// A paired harness whose history queues finished minutes for the
+    /// archive.
+    pub fn archived(config: Config) -> Self {
+        Self::build(
+            config,
+            ByteLedger::for_memory_limit_mib(256),
+            Namespace::Live,
+            true,
+        )
+    }
+
     pub fn with_config(config: Config) -> Self {
         Self::build(
             config,
@@ -95,7 +111,6 @@ impl Harness {
         let store = LiveStore::new(
             &config.store,
             &config.sampling,
-            &config.runtime,
             ledger.clone(),
             namespace,
             archive,
@@ -174,51 +189,100 @@ impl Harness {
         self.writer.maintain(now);
     }
 
-    pub fn query(
-        &self,
-        key: &MetricKey,
-        window: (u64, u64),
-        resolution_ms: u32,
-        stat: HistoryStat,
-        max_points: u32,
-    ) -> Result<HistoryResult, ErrorDetail> {
-        self.query_with(
-            &query(key, window, resolution_ms, stat, max_points),
+    /// A clock at the harness's boot time on the wall clock
+    /// [`Harness::build`] paired (boot 0 on a whole UTC minute), as the
+    /// Manager's history reads see it.
+    pub fn reader_clock(&self) -> Arc<FakeClock> {
+        let boot_ns = self.clock.now_boot_ns();
+        let clock = FakeClock::new(boot_ns);
+        let delta = utc_of(boot_ns) - i64::try_from(clock.now_utc_ns()).unwrap_or(i64::MAX);
+        clock.step_utc_ns(delta);
+        clock
+    }
+
+    /// The Overview's answer to `request`, with no deadline.
+    pub fn read(&self, request: &OverviewRequest) -> Result<OverviewAnswer, ErrorDetail> {
+        self.read_with(
+            request,
             u64::MAX,
             &CancelFlag::new(),
-            self.clock.as_ref(),
+            self.reader_clock().as_ref(),
         )
     }
 
-    pub fn query_with(
+    pub fn read_with(
         &self,
-        query: &HistoryQuery,
+        request: &OverviewRequest,
         deadline: u64,
         cancel: &CancelFlag,
         clock: &dyn TimeProvider,
-    ) -> Result<HistoryResult, ErrorDetail> {
-        self.history.query(query, deadline, cancel, clock)
+    ) -> Result<OverviewAnswer, ErrorDetail> {
+        self.history.read(request, deadline, cancel, clock)
+    }
+
+    /// What `key` holds in the `span_ns` ending now, merged from the
+    /// Overview's minutes (the finalized and the ones still filling).
+    pub fn window(&self, key: &MetricKey, span_ns: u64) -> OverviewBucket {
+        let request = OverviewRequest::Windows {
+            series: SeriesInEveryBoot::from(key),
+            spans_ns: vec![span_ns],
+            at_utc_ns: utc_of(self.clock.now_boot_ns()),
+        };
+        match self.read(&request) {
+            Ok(OverviewAnswer::Windows(windows)) => windows[0],
+            other => panic!("asked for a window, got {other:?}"),
+        }
+    }
+
+    /// The bars of `tier` starting in boot `[from, end)`, holding a value.
+    pub fn bars(
+        &self,
+        key: &MetricKey,
+        tier: Tier,
+        (from, end): (u64, u64),
+    ) -> Vec<OverviewBucket> {
+        let request = OverviewRequest::Bars {
+            series: SeriesInEveryBoot::from(key),
+            tier,
+            from_utc_ns: utc_of(from),
+            end_utc_ns: utc_of(end),
+            at_utc_ns: utc_of(self.clock.now_boot_ns()),
+        };
+        match self.read(&request) {
+            Ok(OverviewAnswer::Bars(bars)) => bars.bars,
+            other => panic!("asked for bars, got {other:?}"),
+        }
+    }
+
+    /// Finalizes every minute ending by `now` and takes what the history
+    /// queued for the archive.
+    pub fn archive_through(&mut self, now: u64) -> ArchiveJournal {
+        self.maintain(now);
+        self.writer
+            .take_archive_journal(64 << 20)
+            .unwrap_or_else(|| panic!("no archive journal by {now}"))
     }
 }
 
-pub fn query(
-    key: &MetricKey,
-    (start, end): (u64, u64),
-    resolution_ms: u32,
-    stat: HistoryStat,
-    max_points: u32,
-) -> HistoryQuery {
-    HistoryQuery {
-        schema_version: HISTORY_SCHEMA_VERSION,
-        request_id: Uuid::new_v4(),
-        key: key.clone(),
-        start_boot_ns: start,
-        end_boot_ns: end,
-        resolution_ms,
-        stat,
-        max_points,
-        source_filter: None,
-    }
+/// UTC of `boot_ns` on the pairing of [`Harness::build`].
+pub fn utc_of(boot_ns: u64) -> i64 {
+    i64::try_from(UTC_ON_A_WHOLE_MINUTE_NS + i128::from(boot_ns)).unwrap_or(i64::MAX)
+}
+
+/// Counter total a journal holds: its minute buckets' exact totals plus
+/// its bridges, each interval counted once.
+pub fn archived_total(journal: &ArchiveJournal) -> u128 {
+    let buckets: u128 = journal
+        .buckets
+        .iter()
+        .filter_map(|bucket| bucket.counter_delta)
+        .sum();
+    buckets
+        + journal
+            .bridges
+            .iter()
+            .map(|bridge| bridge.delta)
+            .sum::<u128>()
 }
 
 pub fn temperature_key(entity: &str) -> MetricKey {
@@ -309,52 +373,4 @@ pub fn raw_input(key: &MetricKey, source: &str, at: u64) -> Arc<IngressBatch> {
         batch_of("nvml", "fast", 1, vec![observation]),
         None,
     ))
-}
-
-pub fn value_f64(point: &HistoryPoint) -> f64 {
-    match point.value {
-        Some(value) => value.to_f64_lossy(),
-        None => panic!("point has no value: {point:?}"),
-    }
-}
-
-pub fn value_u64(point: &HistoryPoint) -> u64 {
-    match point.value.and_then(Scalar::as_u64) {
-        Some(value) => value,
-        None => panic!("point has no exact u64 value: {point:?}"),
-    }
-}
-
-/// Points in time order, contiguous, inside the window, coverage <= span.
-pub fn assert_well_formed(result: &HistoryResult) {
-    let mut cursor = result.start_boot_ns;
-    for point in &result.points {
-        assert!(
-            point.start_boot_ns >= cursor,
-            "points overlap or go back: {point:?}"
-        );
-        assert!(
-            point.end_boot_ns > point.start_boot_ns,
-            "empty point {point:?}"
-        );
-        assert!(
-            point.end_boot_ns <= result.end_boot_ns,
-            "point outside window {point:?}"
-        );
-        assert!(
-            point.covered_ns <= point.end_boot_ns - point.start_boot_ns,
-            "over-covered point {point:?}"
-        );
-        assert!(point.source_ids.len() <= 4);
-        if point.value.is_none() {
-            assert_eq!(point.covered_ns, 0, "null point with coverage {point:?}");
-        }
-        cursor = point.end_boot_ns;
-    }
-    assert!(result.covered_ns <= result.end_boot_ns - result.start_boot_ns);
-    assert!((0.0..=1.0).contains(&result.coverage_ratio));
-    let json = serde_json::to_value(result).unwrap_or_else(|error| panic!("serialize: {error}"));
-    let back: HistoryResult =
-        serde_json::from_value(json).unwrap_or_else(|error| panic!("round trip: {error}"));
-    assert_eq!(&back, result);
 }

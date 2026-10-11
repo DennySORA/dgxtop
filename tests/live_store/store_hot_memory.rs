@@ -6,10 +6,10 @@ mod support;
 
 use dgxtop_core::budget::{ByteLedger, Partition, PartitionLimits};
 use dgxtop_core::canonical::CanonicalValue;
-use dgxtop_core::history::HistoryStat;
-use dgxtop_core::ports::{HistoryReader, SnapshotReader};
+use dgxtop_core::ports::SnapshotReader;
 use dgxtop_core::quality::Namespace;
-use support::{Harness, MINUTE, SECOND, assert_well_formed, config, gauge, temperature_key};
+use dgxtop_core::tiers::Tier;
+use support::{EVERYTHING_NS, Harness, MINUTE, SECOND, config, gauge, temperature_key};
 
 fn wide_batch(count: usize, value: f64, at: u64) -> Vec<CanonicalValue> {
     (0..count)
@@ -71,8 +71,11 @@ fn at25_the_store_retains_only_the_latest_snapshot() {
     assert_eq!(harness.snapshots.latest().revision, 200);
 }
 
+/// Finished minutes are handed on, not kept (D-90): eighteen hours of ten
+/// series fit a 1 MiB budget without evicting anything, every partition
+/// stays under its limit and the Overview still holds the whole time.
 #[test]
-fn eviction_under_a_tiny_budget_never_exceeds_partitions_and_reports_truncation() {
+fn a_tiny_budget_holds_hours_of_history_within_its_partitions() {
     let ledger = ByteLedger::new(PartitionLimits::for_memory_limit_mib(1));
     let mut settings = config();
     settings.sampling.interval_ms = 5000;
@@ -80,8 +83,6 @@ fn eviction_under_a_tiny_budget_never_exceeds_partitions_and_reports_truncation(
     let keys: Vec<_> = (0..10)
         .map(|index| temperature_key(&format!("gpu:{index}")))
         .collect();
-    // Eighteen hours of minute rollups for ten series do not fit the
-    // 512 KiB aggregates partition of a 1 MiB budget (D-84).
     let hours = 18u64;
     for second in (0..hours * 3600).step_by(5) {
         let at = second * SECOND;
@@ -104,46 +105,25 @@ fn eviction_under_a_tiny_budget_never_exceeds_partitions_and_reports_truncation(
             usage.limit
         );
     }
+    assert!(!snapshot.health.truncated_history);
     assert!(
-        snapshot.health.truncated_history,
-        "aggregates were shortened"
-    );
-    assert!(snapshot.health.evicted_total > 0);
-    assert!(
-        snapshot
+        !snapshot
             .recent_gaps
             .iter()
-            .any(|gap| gap.reason == "evicted")
+            .any(|gap| gap.reason == "evicted"),
+        "nothing was lost to the budget"
     );
-    // A 1 MiB budget leaves 64 KiB for query results: ask for few points.
-    let full = harness
-        .query(&keys[0], (0, now), 60_000, HistoryStat::Mean, 100)
-        .unwrap();
-    assert_well_formed(&full);
+    let held = harness.window(&keys[0], EVERYTHING_NS);
     assert!(
-        full.coverage_ratio < 1.0,
-        "truncated history is not presented as complete"
+        held.covered_ns >= now - MINUTE,
+        "the Overview holds the whole time: {} ns",
+        held.covered_ns
     );
-    let evicted = full
-        .points
-        .iter()
-        .find(|point| point.value.is_none())
-        .unwrap();
-    assert_eq!(evicted.start_boot_ns, 0);
-    assert_eq!(evicted.reason.as_deref(), Some("evicted"));
-    let recent = harness
-        .query(
-            &keys[0],
-            (now - 10 * MINUTE, now),
-            60_000,
-            HistoryStat::Mean,
-            100,
-        )
-        .unwrap();
+    let recent = harness.window(&keys[0], 10 * MINUTE);
     assert!(
-        recent.coverage_ratio > 0.98,
-        "recent history survives eviction: {}",
-        recent.coverage_ratio
+        recent.covered_ns > 10 * MINUTE * 98 / 100,
+        "recent history: {} ns",
+        recent.covered_ns
     );
 }
 
@@ -166,7 +146,13 @@ fn series_over_the_cap_are_rejected_visibly_without_touching_the_snapshot() {
             .iter()
             .any(|gap| gap.reason == "series_capacity")
     );
-    assert_eq!(harness.history.series().len(), 2);
+    assert_eq!(
+        harness
+            .window(&temperature_key("gpu:2"), EVERYTHING_NS)
+            .samples,
+        0,
+        "the rejected series holds no history"
+    );
 }
 
 #[test]
@@ -191,8 +177,9 @@ fn series_slots_are_never_reused_for_another_series_after_churn() {
     let later = 3 * 3600 * SECOND;
     harness.maintain(later);
     harness.maintain(later + MINUTE);
-    assert!(
-        harness.history.series().is_empty(),
+    assert_eq!(
+        harness.snapshots.latest().health.series,
+        0,
         "aged-out series are reclaimed"
     );
     let replacement = temperature_key("gpu:new");
@@ -204,31 +191,19 @@ fn series_slots_are_never_reused_for_another_series_after_churn() {
             start + tick * SECOND,
         );
     }
-    assert_eq!(harness.history.series(), vec![replacement.clone()]);
+    assert_eq!(harness.snapshots.latest().health.series, 1);
     harness.clock.set_boot_ns(start + MINUTE);
-    let old = harness
-        .query(&first, (0, start + MINUTE), 0, HistoryStat::Mean, 100)
-        .unwrap();
+    let old = harness.bars(&first, Tier::OneMinute, (0, start + MINUTE));
     assert!(
-        old.points.is_empty(),
-        "the old identity resolves to nothing"
+        old.iter().all(|bar| bar.maximum == 11.0),
+        "the old series keeps only its own values"
     );
-    let new = harness
-        .query(
-            &replacement,
-            (0, start + MINUTE),
-            60_000,
-            HistoryStat::Max,
-            2000,
-        )
-        .unwrap();
-    assert!(
-        new.points
-            .iter()
-            .filter_map(|point| point.value)
-            .all(|value| value.to_f64_lossy() == 99.0)
+    let new = harness.bars(&replacement, Tier::OneMinute, (0, start + MINUTE));
+    assert!(new.iter().all(|bar| bar.maximum == 99.0));
+    assert_eq!(
+        new.iter().map(|bar| bar.covered_ns).sum::<u64>(),
+        10 * SECOND + 2 * SECOND
     );
-    assert_eq!(new.covered_ns, 10 * SECOND + 2 * SECOND);
 }
 
 #[test]

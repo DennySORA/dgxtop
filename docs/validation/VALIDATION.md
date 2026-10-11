@@ -155,7 +155,7 @@ Totals: PASS 14, FAIL 0, NOT_RUN 24, BLOCKED 2 (of 40).
 | [AT35](#at35) | R35 Replayable fixtures and benchmark evidence | NOT_RUN | `gate-test`, `spec-package-validation` | Deterministic fixtures in their own namespace; synthetic and wrong-workload reports cannot be measured; metrics are not recomputed from raw files |
 | [AT36](#at36) | R36 Uncertain outcomes of versioned configuration persistence | PASS | `gate-test` | Atomic write, rename and directory sync; commit_uncertain reloads the disk version; no concurrent overwrite |
 | [AT37](#at37) | R37 Release gate separate from hardware evidence | PASS | `release-v2.0.0`, `hardware-suites`, `hardware-suites-gb10` | The release gate ran the suite with every `hardware_*` test ignored; hardware support rests on the hardware suite logs of both hosts; no platform is claimed validated |
-| [AT38](#at38) | R38 Bounded cardinality, query and NSS cost | PASS | `gate-test` | Point, scan and byte caps; two history workers; numeric UIDs; Busy under memory shortage; bounded pinning |
+| [AT38](#at38) | R38 Bounded cardinality, query and NSS cost | PASS | `gate-test` | Bar cap; two history workers; numeric UIDs; deadline; scan, byte caps and pinning removed with the query engine (D-90) |
 | [AT39](#at39) | R39 Layered errors and safe shutdown | NOT_RUN | `gate-test` | Read failures stay local, Manager fail-stop sends nothing, bounded restore and 3 s shutdown, stuck storage never locks the loop; the end-to-end part is opt-in and was not run |
 | [AT40](#at40) | R40 Concrete performance evidence and full specification validation | NOT_RUN | `spec-package-validation`, `spec-copy-verification`, `gate-scripts` | Spec copy verified (CRC, bytes, MANIFEST) and this report is machine-checked; the spec's browser HTML checks were not run, and since D-59 they run only from the delivered archive |
 
@@ -248,7 +248,7 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 every partition's quota is queryable | `dgxtop/store_hot_commit::at06_partition_usage_is_visible_in_store_health`, `dgxtop/store_hot_memory::eviction_under_a_tiny_budget_never_exceeds_partitions_and_reports_truncation`, `dgxtop-store/store_persist_audit::database_files_are_private`, `dgxtop-store/store_persist_archive::batch_insert_writes_every_table_in_bounded_transactions`, `dgxtop-store/store_persist_config::cas_success_increments_revision_with_private_modes` | Memory partitions report usage and limit; audit and archive report db+wal+shm against their limits |
+| S1 every partition's quota is queryable | `dgxtop/store_hot_commit::at06_partition_usage_is_visible_in_store_health`, `dgxtop/store_hot_memory::a_tiny_budget_holds_hours_of_history_within_its_partitions`, `dgxtop-store/store_persist_audit::database_files_are_private`, `dgxtop-store/store_persist_archive::batch_insert_writes_every_table_in_bounded_transactions`, `dgxtop-store/store_persist_config::cas_success_increments_revision_with_private_modes` | Memory partitions report usage and limit; audit and archive report db+wal+shm against their limits |
 | S2 archive off does not affect the hot store | `dgxtop/store_hot_commit::at06_archive_disabled_does_not_affect_the_hot_store` |  |
 | F1 archive full: current values keep refreshing | `fault_injection::store_partitions::at06_stuck_then_full_archive_never_stalls_hot_store_commits`, `dgxtop-store/store_persist_archive::low_free_disk_refuses_appends_and_recovers`, `dgxtop-manager::archive::tests::gaps_are_counted_by_bounded_cause_and_made_visible` | Real hot store and SQLite archive actors |
 | F2 audit cannot persist: no signal | `action_disposable::at10::at10_audit_refusing_the_intent_sends_nothing`, `action_disposable::at10::at10_unavailable_audit_store_sends_nothing`, `fault_injection::store_partitions::at06_at31_audit_below_low_water_refuses_actions_before_the_action_worker`, `fault_injection::store_partitions::at06_at31_low_water_after_prepare_refuses_the_intent_and_recovers`, `dgxtop-manager::process::tests::intent_write_failure_never_sends` | Real Manager, SQLite audit, pidfd and disposable child |
@@ -258,7 +258,7 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 ### AT07 — R07 Real-time history, counters and coverage
 
-**Status: NOT_RUN.** Evidence: `gate-test`. F3 is only half covered: a UTC step is a discontinuity for gauges, and counter maths uses the boot clock, but no test runs counter intervals across a UTC step.
+**Status: NOT_RUN.** Evidence: `gate-test`. F3 is only half covered: a UTC step keeps the boot clock's minutes and their coverage for gauges, and counter maths uses the boot clock, but no test runs counter intervals across a UTC step. Since D-90 the history is read through the Overview's sizes and the archive's finished minutes (the query engine is removed), and the tests read it there.
 
 | Clause | Tests | Note |
 |---|---|---|
@@ -268,7 +268,7 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 | F1 counter reset | `dgxtop-collectors::shared::counter::tests::reset_generation_boot_and_interval_changes_are_gaps`, `dgxtop-collectors::system::network::tests::counter_reset_is_never_a_negative_or_zero_rate` |  |
 | F2 generation change | `dgxtop-collectors::system::network::tests::recreated_interface_restarts_from_warmup`, `dgxtop/store_hot_history::at07_generation_changes_cut_segments_and_utc_steps_are_discontinuities` |  |
 | F3 UTC going backwards | `dgxtop/store_hot_history::at07_generation_changes_cut_segments_and_utc_steps_are_discontinuities` | PARTIAL: gauges only |
-| F4 a different boot | `dgxtop-collectors::tests::boot_change_restarts_counters_at_warmup`, `dgxtop/store_hot_history::at07_other_boots_are_separate_series_and_unknown_boots_are_empty` |  |
+| F4 a different boot | `dgxtop-collectors::tests::boot_change_restarts_counters_at_warmup` | The per-boot query series are removed (D-90); the Overview joins boots on the wall clock (D-82) |
 | F5 a 2 h gap stays out of the last hour | `dgxtop/store_hot_history::at07_two_hour_gap_does_not_leak_into_the_last_hour` |  |
 
 <a id="at08"></a>
@@ -493,11 +493,11 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 every allocation takes a BytePermit | `dgxtop-runtime::supervisor::tests::busy_while_in_flight_and_capacity_when_credit_is_missing`, `dgxtop-runtime::ipc::frame::tests::body_allocation_is_exactly_the_declared_length`, `dgxtop/store_hot_commit::at05_capacity_rejection_leaves_no_partial_state`, `dgxtop-core::budget::accounted::tests::deque_capacity_is_reserved_before_growth`, `dgxtop/store_hot_query_limits::query_memory_is_reserved_up_front_and_released`, `dgxtop-manager::projection::tests::a_full_projection_budget_is_reserved_before_building_and_shrunk_after` | One test per site; "every" is confirmed by review |
+| S1 every allocation takes a BytePermit | `dgxtop-runtime::supervisor::tests::busy_while_in_flight_and_capacity_when_credit_is_missing`, `dgxtop-runtime::ipc::frame::tests::body_allocation_is_exactly_the_declared_length`, `dgxtop/store_hot_commit::at05_capacity_rejection_leaves_no_partial_state`, `dgxtop-core::budget::accounted::tests::deque_capacity_is_reserved_before_growth`, `dgxtop-manager::projection::tests::a_full_projection_budget_is_reserved_before_building_and_shrunk_after` | One test per site; "every" is confirmed by review; the query memory site is removed (D-90) |
 | S2 32 items and 8 MiB together | `dgxtop-core::budget::tests::queue_gate_enforces_items_and_bytes_together` |  |
 | S3 a 5 MiB batch fits | `dgxtop-core::budget::tests::reserve_release_and_never_overcommit`, `dgxtop-runtime::supervisor::credit::tests::whole_group_plans_reserve_the_bounded_worst_case` |  |
 | F1 small batches can still exceed the byte cap | `dgxtop-core::budget::tests::queue_gate_enforces_items_and_bytes_together` |  |
-| F2 release, hand-off and pinning never leak | `dgxtop-core::budget::tests::transfer_split_merge_keep_totals`, `dgxtop-core::budget::tests::random_reserve_release_balances`, `dgxtop-history::chunk::tests::evicted_chunk_stays_accounted_while_pinned` |  |
+| F2 release, hand-off and pinning never leak | `dgxtop-core::budget::tests::transfer_split_merge_keep_totals`, `dgxtop-core::budget::tests::random_reserve_release_balances` | No reader pins history chunks since D-90 |
 | F3 no allocate-then-check | `dgxtop-manager::projection::tests::a_ledger_without_room_for_a_full_projection_skips_the_frame_before_building`, `dgxtop-core::budget::accounted::tests::failed_growth_leaves_deque_unchanged`, `dgxtop-runtime::ipc::frame::tests::oversize_prefix_is_rejected_without_allocating` | NOT MET for IPC decode |
 
 <a id="at22"></a>
@@ -584,8 +584,8 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 |---|---|---|
 | S1 59.5 → 60.5 s bridge kept | `dgxtop/store_hot_history::at27_cross_minute_interval_is_a_bridge_counted_exactly_once`, `dgxtop-history::rollup::tests::crossing_interval_becomes_a_bridge_exactly_once` |  |
 | S2 exact totals counted once | `dgxtop/store_hot_properties::totals_of_disjoint_windows_add_up_to_their_union` |  |
-| F1 no proportional guess at an evicted edge | `dgxtop/store_hot_history::at27_boundary_without_raw_is_a_boundary_gap_never_proportional` |  |
-| F2 a missing segment shows boundary_gap | `dgxtop/store_hot_history::at27_boundary_without_raw_is_a_boundary_gap_never_proportional` |  |
+| F1 no proportional guess at an evicted edge | `dgxtop/store_hot_history::at27_cross_minute_interval_is_a_bridge_counted_exactly_once` | An interval across a minute is a bridge, never split; window edges of boot-time queries are removed (D-90) |
+| F2 a missing segment shows boundary_gap |  | REMOVED by D-90: `boundary_gap` points belonged to the removed query engine |
 | F3 2 < 10 < 100 ordering | `dgxtop-store/store_persist_archive::fixed_width_keys_sort_numerically`, `dgxtop-core::wire::tests::fixed_width_orders_lexically_like_numbers` |  |
 
 <a id="at28"></a>
@@ -745,16 +745,16 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 ### AT38 — R38 Bounded cardinality, query and NSS cost
 
-**Status: PASS.** Evidence: `gate-test`. Every clause has a passing test; scan and byte limits run at scaled values with the defaults asserted separately.
+**Status: PASS.** Evidence: `gate-test`. Every clause still in force has a passing test. D-90 removed the query engine with its scan and result byte caps (S1 in part, F1); the Overview's reads merge at most `TIER_BUCKETS` buckets a size and keep their deadline.
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 ≤ 2000 points, 200 k scanned, 4 MiB | `dgxtop/store_hot_query_limits::invalid_queries_are_validation_failures`, `dgxtop-history::query::tests::point_cap_respects_request_config_and_bytes`, `dgxtop-core::config::tests::query_and_worker_defaults_match_the_runtime_limits` |  |
+| S1 ≤ 2000 points, 200 k scanned, 4 MiB | `dgxtop-core::config::tests::query_and_worker_defaults_match_the_runtime_limits` | Bars a chart ≤ `store.max_history_points`; the scan and byte caps are REMOVED by D-90 |
 | S2 2 workers, 4 jobs | `dgxtop-manager::history::tests::every_chart_queries_one_window_at_a_bounded_resolution`, `dgxtop-runtime::queues::tests::busy_when_the_queue_is_full_and_never_blocks`, `dgxtop/store_hot_query_limits::at38_two_history_workers_query_while_commits_continue` |  |
 | S3 UID lookup off the control/UI threads, numeric fallback | `dgxtop-manager::presentation::processes::tests::rows_carry_gpu_labels_numeric_users_and_sanitized_names` | No NSS lookup exists |
-| F1 a pathological query → QueryTooLarge or Busy | `dgxtop/store_hot_query_limits::at38_scan_budget_returns_query_too_large_with_a_coarser_suggestion`, `dgxtop/store_hot_query_limits::query_memory_is_reserved_up_front_and_released` |  |
+| F1 a pathological query → QueryTooLarge or Busy |  | REMOVED by D-90: no request can ask for more than a size's buckets |
 | F2 a stuck NSS cannot freeze the screen | `contracts::structure::core_and_the_viewer_carry_no_system_or_driver_dependencies` | No NSS call exists |
-| F3 a long reader never pins all memory | `dgxtop-history::pin::tests::chunks_pinned_by_a_running_query_stay_accounted_after_eviction`, `dgxtop/store_hot_query_limits::at38_deadline_returns_timed_out` |  |
+| F3 a long reader never pins all memory | `dgxtop/store_hot_query_limits::at38_deadline_returns_timed_out` | Reads pin nothing since D-90 |
 
 <a id="at39"></a>
 

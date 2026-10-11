@@ -133,13 +133,6 @@ impl CounterTotal {
         }
     }
 
-    pub(crate) fn add_total(&mut self, other: &CounterTotal) {
-        self.add_exact(other.exact);
-        self.overflowed |= other.overflowed;
-        self.float += other.float;
-        self.float_count = self.float_count.saturating_add(other.float_count);
-    }
-
     fn add_exact(&mut self, value: u128) {
         match self.exact.checked_add(value) {
             Some(sum) => self.exact = sum,
@@ -153,27 +146,6 @@ impl CounterTotal {
     /// The exact integral total when no `f64` delta contributed.
     pub(crate) fn integral(self) -> Option<u128> {
         (self.float_count == 0 && !self.overflowed).then_some(self.exact)
-    }
-
-    /// Scalar value plus a reason when the total could not stay an exact `u64`.
-    #[allow(clippy::cast_precision_loss)]
-    pub(crate) fn to_scalar(self) -> Option<(Scalar, Option<&'static str>)> {
-        if let Some(exact) = self.integral() {
-            return Some(match u64::try_from(exact) {
-                Ok(value) => (Scalar::from_u64(value), None),
-                Err(_) => (
-                    Scalar::from_f64(exact as f64).ok()?,
-                    Some("total_exceeds_u64"),
-                ),
-            });
-        }
-        let reason = if self.overflowed {
-            "total_overflowed_u128"
-        } else {
-            "non_integral_delta"
-        };
-        let value = Scalar::from_f64(self.exact as f64 + self.float).ok()?;
-        Some((value, Some(reason)))
     }
 }
 
@@ -231,18 +203,13 @@ mod tests {
         total.add_delta(Scalar::from_u64(u64::MAX));
         total.add_delta(Scalar::from_u64(1));
         assert_eq!(total.integral(), Some(u128::from(u64::MAX) + 1));
-        let (value, reason) = total.to_scalar().unwrap();
-        assert_eq!(reason, Some("total_exceeds_u64"));
-        assert!(value.as_u64().is_none());
 
         let mut small = CounterTotal::default();
         small.add_delta(Scalar::from_u64(300));
-        assert_eq!(small.to_scalar().unwrap(), (Scalar::from_u64(300), None));
+        assert_eq!(small.integral(), Some(300));
         small.add_delta(Scalar::from_f64(0.5).unwrap());
-        let (value, reason) = small.to_scalar().unwrap();
-        assert_eq!(reason, Some("non_integral_delta"));
-        assert_eq!(value.to_f64_lossy(), 300.5);
         assert_eq!(small.integral(), None);
+        assert_eq!((small.exact, small.float, small.float_count), (300, 0.5, 1));
     }
 
     #[test]
@@ -254,7 +221,6 @@ mod tests {
         total.add_delta(Scalar::from_u64(5));
         assert!(total.overflowed);
         assert_eq!(total.integral(), None);
-        assert_eq!(total.to_scalar().unwrap().1, Some("total_overflowed_u128"));
     }
 
     #[test]

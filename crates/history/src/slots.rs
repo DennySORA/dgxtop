@@ -104,10 +104,6 @@ impl<T> SlotTable<T> {
             })
             .collect()
     }
-
-    pub(crate) fn values(&self) -> impl Iterator<Item = &T> {
-        self.entries.iter().filter_map(|entry| entry.value.as_ref())
-    }
 }
 
 #[cfg(test)]

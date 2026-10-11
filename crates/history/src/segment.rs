@@ -2,7 +2,7 @@
 //!
 //! A segment is a run of history with one source incarnation, one policy
 //! revision, one sample kind and one aggregation method. Any change cuts a new
-//! segment; queries report the cut as a source change and records refer to
+//! segment; the archive keeps each segment's identity and records refer to
 //! their segment by a per-series ordinal, so no per-sample string is stored.
 
 use std::sync::Arc;
@@ -30,8 +30,6 @@ pub(crate) struct SegmentMeta {
     pub identity: SegmentIdentity,
     pub unit: CanonicalUnit,
     pub started_ns: u64,
-    /// First segment of its method in this series: its start is not a change.
-    pub opens_series: bool,
 }
 
 /// Why no segment could be assigned.
@@ -96,7 +94,6 @@ impl SegmentTable {
             identity,
             unit,
             started_ns,
-            opens_series: current.is_none(),
         });
         Arc::make_mut(&mut self.segments).push(segment);
         if is_counter {
@@ -149,36 +146,6 @@ impl SegmentTable {
         self.account
             .shrink_to(remaining.saturating_mul(SEGMENT_BYTES));
     }
-
-    /// Shared snapshot for readers (copy-on-write).
-    pub(crate) fn view(&self) -> SegmentsView {
-        SegmentsView {
-            first_ordinal: self.first_ordinal,
-            segments: Arc::clone(&self.segments),
-        }
-    }
-
-    pub(crate) fn has_counter_segment(&self) -> bool {
-        self.current_counter.is_some()
-    }
-}
-
-/// Reader-side lookup of segments by ordinal.
-#[derive(Clone)]
-pub(crate) struct SegmentsView {
-    first_ordinal: u32,
-    segments: Arc<Vec<Arc<SegmentMeta>>>,
-}
-
-impl SegmentsView {
-    pub(crate) fn get(&self, ordinal: u32) -> Option<&Arc<SegmentMeta>> {
-        let index = ordinal.checked_sub(self.first_ordinal)?;
-        self.segments.get(usize::try_from(index).ok()?)
-    }
-
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &Arc<SegmentMeta>> {
-        self.segments.iter()
-    }
 }
 
 #[cfg(test)]
@@ -223,9 +190,6 @@ mod tests {
             .resolve(&key, identity("a", 2, gauge), CanonicalUnit::DegC, 30)
             .unwrap();
         assert_eq!(regenerated, 2);
-        assert!(table.get(first).unwrap().opens_series);
-        assert!(table.get(counter).unwrap().opens_series);
-        assert!(!table.get(regenerated).unwrap().opens_series);
         assert_eq!(table.get(regenerated).unwrap().started_ns, 30);
         assert_eq!(ledger.used(Partition::Aggregates), 3 * SEGMENT_BYTES);
     }
@@ -246,12 +210,9 @@ mod tests {
                 )
                 .unwrap();
         }
-        let view_before = table.view();
         table.retire_before(3);
         assert!(table.get(2).is_none());
         assert_eq!(table.get(3).unwrap().identity.source_generation, 3);
-        // A reader view taken earlier keeps its own copy.
-        assert!(view_before.get(0).is_some());
         assert_eq!(ledger.used(Partition::Aggregates), SEGMENT_BYTES);
         let next = table
             .resolve(&key, identity("b", 0, gauge), CanonicalUnit::DegC, 5)

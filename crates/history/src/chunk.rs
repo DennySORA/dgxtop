@@ -1,9 +1,8 @@
 //! Append-only logs of fixed-width records split into immutable chunks.
 //!
-//! The writer appends into one open chunk; full chunks are sealed into `Arc`s
-//! that readers pin without copying. Each sealed chunk owns the byte permit
-//! taken before its records were allocated, so a chunk evicted while a slow
-//! query still pins it stays accounted until the last `Arc` is dropped.
+//! The writer appends into one open chunk; full chunks are sealed into
+//! immutable `Arc`s. Each sealed chunk owns the byte permit taken before its
+//! records were allocated, released when the chunk is evicted.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -143,55 +142,6 @@ impl<T: TimeSpan> ChunkLog<T> {
                 .chain(std::iter::once(&self.open[..])),
         )
     }
-
-    /// Pins the chunks overlapping `[from_ns, to_ns)` plus one neighbour on
-    /// each side (predecessor and successor records). The open chunk is
-    /// copied only when the pinned run reaches it, so the view never has a
-    /// hole.
-    pub(crate) fn pin_around(&self, from_ns: u64, to_ns: u64) -> LogPin<T> {
-        let count = self.sealed.len();
-        let first_overlap = self
-            .sealed
-            .iter()
-            .position(|chunk| chunk.records.last().is_some_and(|r| r.end_ns() >= from_ns))
-            .unwrap_or(count);
-        let start = first_overlap.saturating_sub(1);
-        let end = self
-            .sealed
-            .iter()
-            .rposition(|chunk| chunk.records.first().is_some_and(|r| r.start_ns() < to_ns))
-            .map_or(start, |last| last.saturating_add(2).min(count))
-            .max(start.saturating_add(1).min(count));
-        let chunks = self.sealed.range(start..end).cloned().collect();
-        let tail = if end >= count {
-            self.open.clone()
-        } else {
-            Vec::new()
-        };
-        LogPin { chunks, tail }
-    }
-
-    /// Bytes of the open chunk a pin would copy.
-    pub(crate) fn open_bytes(&self) -> u64 {
-        bytes_of::<T>(self.open.len())
-    }
-}
-
-/// Reader-side pinned run of chunks plus a copy of the open chunk.
-pub(crate) struct LogPin<T> {
-    chunks: Vec<Arc<SealedChunk<T>>>,
-    tail: Vec<T>,
-}
-
-impl<T: TimeSpan> LogPin<T> {
-    pub(crate) fn slices(&self) -> Slices<'_, T> {
-        Slices::new(
-            self.chunks
-                .iter()
-                .map(|chunk| chunk.records())
-                .chain(std::iter::once(&self.tail[..])),
-        )
-    }
 }
 
 /// Position of one record inside [`Slices`]; ordered like the records.
@@ -267,38 +217,6 @@ impl<'a, T: TimeSpan> Slices<'a, T> {
             part: position.part,
             index: position.index,
         }
-    }
-
-    /// Number of records between two positions (`from <= to`).
-    pub(crate) fn distance(&self, from: Position, to: Position) -> usize {
-        if to <= from {
-            return 0;
-        }
-        if from.part == to.part {
-            return to.index - from.index;
-        }
-        let head = self
-            .parts
-            .get(from.part)
-            .map_or(0, |records| records.len().saturating_sub(from.index));
-        let middle: usize = self
-            .parts
-            .iter()
-            .take(to.part)
-            .skip(from.part.saturating_add(1))
-            .map(|records| records.len())
-            .sum();
-        head.saturating_add(middle).saturating_add(to.index)
-    }
-
-    /// Records starting inside `[from_ns, to_ns)`.
-    pub(crate) fn count_starting_in(&self, from_ns: u64, to_ns: u64) -> usize {
-        self.distance(self.seek_start(from_ns), self.seek_start(to_ns))
-    }
-
-    /// Records ending inside `(from_ns, to_ns]`.
-    pub(crate) fn count_ending_in(&self, from_ns: u64, to_ns: u64) -> usize {
-        self.distance(self.seek_end_after(from_ns), self.seek_end_after(to_ns))
     }
 
     /// Newest record starting strictly before `time_ns`.
@@ -380,23 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn evicted_chunk_stays_accounted_while_pinned() {
-        let ledger = ByteLedger::for_memory_limit_mib(64);
-        let mut log = log_with(200, &ledger);
-        let before = ledger.used(Partition::RawHistory);
-        let pin = log.pin_around(0, 100);
-        let dropped = log.drop_front_while(|last| last.time_ns < 700);
-        assert_eq!(dropped, 64);
-        assert_eq!(ledger.used(Partition::RawHistory), before);
-        drop(pin);
-        assert_eq!(
-            ledger.used(Partition::RawHistory),
-            before - chunk_bytes::<GaugeSample>()
-        );
-    }
-
-    #[test]
-    fn slices_seek_count_and_neighbours() {
+    fn slices_seek_and_neighbours() {
         let ledger = ByteLedger::for_memory_limit_mib(64);
         let log = log_with(150, &ledger);
         let slices = log.slices();
@@ -404,29 +306,11 @@ mod tests {
         assert_eq!(slices.get(position).unwrap().time_ns, 650);
         assert_eq!(slices.last_starting_before(645).unwrap().time_ns, 640);
         assert_eq!(slices.last_starting_before(0), None);
-        assert_eq!(slices.count_starting_in(0, 1500), 150);
-        assert_eq!(slices.count_starting_in(630, 1290), 66);
-        assert_eq!(slices.count_ending_in(0, 1490), 149);
         assert!(slices.get(slices.seek_start(10_000)).is_none());
         let collected: Vec<u64> = slices
             .iter_from(slices.seek_start(1460))
             .map(|record| record.time_ns)
             .collect();
         assert_eq!(collected, vec![1460, 1470, 1480, 1490]);
-    }
-
-    #[test]
-    fn pin_includes_neighbours_and_never_has_holes() {
-        let ledger = ByteLedger::for_memory_limit_mib(64);
-        let log = log_with(300, &ledger);
-        let pin = log.pin_around(700, 710);
-        let slices = pin.slices();
-        // Window inside chunk 1 (640..1270): chunks 0..=2 pinned, no tail.
-        assert_eq!(slices.get(slices.seek_start(0)).unwrap().time_ns, 0);
-        assert!(slices.last_starting_before(10_000).unwrap().time_ns < 2000);
-        let recent = log.pin_around(2950, 3000);
-        let slices = recent.slices();
-        assert_eq!(slices.last_starting_before(u64::MAX).unwrap().time_ns, 2990);
-        assert_eq!(slices.last_starting_before(2950).unwrap().time_ns, 2940);
     }
 }

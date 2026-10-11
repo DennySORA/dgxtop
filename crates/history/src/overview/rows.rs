@@ -158,7 +158,6 @@ mod tests {
             },
             unit,
             started_ns: 0,
-            opens_series: true,
         })
     }
 

@@ -1,14 +1,14 @@
 //! All series plus the global gap index; mutated only by the state actor
-//! (under the write lock) and pinned by history queries (under a short read
-//! lock).
+//! (under the write lock) and read by the Overview's reads for the minutes
+//! not finalized yet (under a short read lock).
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
 use dgxtop_core::budget::{ByteLedger, Partition};
 use dgxtop_core::canonical::GapRecord;
 use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::identity::MetricKey;
-use dgxtop_core::metric::{CanonicalUnit, MetricDescriptor};
+use dgxtop_core::metric::CanonicalUnit;
 pub(crate) use dgxtop_core::ports::{CutAppend, GaugeAppend, HistoryAppends, IntervalAppend};
 
 use super::gaps::{GapEntry, GapInsert, GapList, ReasonInterner};
@@ -21,8 +21,6 @@ use super::slots::{SlotHandle, SlotTable};
 
 /// Gap entries kept for keys without a series and host-wide gaps.
 const MAX_GLOBAL_GAPS: usize = 1024;
-/// Clock discontinuities remembered for query results.
-const MAX_DISCONTINUITIES: usize = 256;
 /// Evictions one admission may perform before giving up (bounds lock time).
 const MAX_EVICTIONS_PER_REQUEST: usize = 64;
 /// Segment metadata bytes reserved before a new segment is created.
@@ -32,7 +30,8 @@ const SEGMENT_HEADROOM_BYTES: u64 = 512;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct HistorySettings {
     pub raw_history_ns: u64,
-    pub aggregate_retention_ns: u64,
+    /// How long gaps are remembered (`store.aggregate_retention_hours`).
+    pub gap_retention_ns: u64,
     pub max_series: usize,
     /// Minutes older than `now - grace` are finalized; fresh samples are
     /// never older than this, so finalized buckets never change.
@@ -55,11 +54,9 @@ fn record_drop(report: &mut HistoryReport, kind: AppendKind, reason: DropReason)
 }
 
 pub(crate) struct HistoryState {
-    pub(super) revision: u64,
     pub(super) slots: SlotTable<Series>,
     pub(super) by_key: BTreeMap<MetricKey, SlotHandle>,
     pub(super) global_gaps: GapList,
-    pub(super) discontinuities: VecDeque<u64>,
     /// The boot's minutes, fixed by the first boot-to-UTC pairing; the one
     /// copy, handed to each series operation that needs it.
     grid: Option<MinuteGrid>,
@@ -71,11 +68,9 @@ pub(crate) struct HistoryState {
 impl HistoryState {
     pub(crate) fn new(settings: HistorySettings, ledger: &ByteLedger) -> Self {
         Self {
-            revision: 0,
             slots: SlotTable::new(),
             by_key: BTreeMap::new(),
             global_gaps: GapList::new(ledger, MAX_GLOBAL_GAPS),
-            discontinuities: VecDeque::new(),
             grid: None,
             reasons: ReasonInterner::new(ledger),
             settings,
@@ -99,6 +94,7 @@ impl HistoryState {
     }
 
     /// The boot's minutes, once known.
+    #[cfg(test)]
     pub(crate) fn minute_grid(&self) -> Option<MinuteGrid> {
         self.grid
     }
@@ -113,11 +109,6 @@ impl HistoryState {
         self.settings.finalize_grace_ns = grace_ns;
     }
 
-    /// Snapshot revision reported by queries; follows every publish.
-    pub(crate) fn set_revision(&mut self, revision: u64) {
-        self.revision = revision;
-    }
-
     /// Records a gap reported from outside the history (Manager or store).
     pub(crate) fn record_external_gap(&mut self, gap: GapRecord) -> HistoryReport {
         let mut report = HistoryReport::default();
@@ -126,25 +117,13 @@ impl HistoryState {
         report
     }
 
+    #[cfg(test)]
     pub(crate) fn series_keys(&self) -> Vec<MetricKey> {
         self.by_key.keys().cloned().collect()
     }
 
-    pub(crate) fn note_discontinuity(&mut self, boot_ns: u64) {
-        if self.discontinuities.len() >= MAX_DISCONTINUITIES {
-            self.discontinuities.pop_front();
-        }
-        self.discontinuities.push_back(boot_ns);
-    }
-
     /// Applies one committed batch and finalizes the touched series.
-    pub(crate) fn apply(
-        &mut self,
-        appends: HistoryAppends,
-        now_ns: u64,
-        revision: u64,
-    ) -> HistoryReport {
-        self.revision = revision;
+    pub(crate) fn apply(&mut self, appends: HistoryAppends, now_ns: u64) -> HistoryReport {
         let mut report = HistoryReport::default();
         let mut touched = BTreeSet::new();
         for append in appends.gauges {
@@ -181,14 +160,7 @@ impl HistoryState {
             record_drop(report, kind, DropReason::Future);
             return None;
         }
-        let handle = self.series_for(
-            &append.key,
-            append.descriptor,
-            append.time_ns,
-            now_ns,
-            kind,
-            report,
-        )?;
+        let handle = self.series_for(&append.key, append.time_ns, now_ns, kind, report)?;
         let admitted = self.slots.get(handle)?.admit_sample(append.time_ns);
         if let Err(reason) = admitted {
             record_drop(report, kind, reason);
@@ -270,14 +242,7 @@ impl HistoryState {
             record_drop(report, kind, DropReason::Future);
             return None;
         }
-        let handle = self.series_for(
-            &append.key,
-            append.descriptor,
-            append.start_ns,
-            now_ns,
-            kind,
-            report,
-        )?;
+        let handle = self.series_for(&append.key, append.start_ns, now_ns, kind, report)?;
         let grid = self.grid;
         let series = self.slots.get_mut(handle)?;
         series.reach_back_to(append.start_ns, grid);
@@ -343,7 +308,6 @@ impl HistoryState {
     fn series_for(
         &mut self,
         key: &MetricKey,
-        descriptor: &'static MetricDescriptor,
         time_ns: u64,
         now_ns: u64,
         kind: AppendKind,
@@ -366,7 +330,6 @@ impl HistoryState {
         }
         let created = Series::new(
             key.clone(),
-            descriptor,
             SeriesOpening {
                 first_time_ns: time_ns,
                 now_ns,
@@ -490,14 +453,8 @@ impl HistoryState {
         let Some(plan) = series.plan_finalization(horizon_ns, grid) else {
             return;
         };
-        let cost = series.finalization_cost(&plan);
-        self.ensure_headroom(Partition::Aggregates, cost, report);
-        let Some(series) = self.slots.get_mut(handle) else {
-            return;
-        };
-        let lost = series.commit_finalization(plan, report);
-        for range in lost {
-            self.record_loss_gap(handle, range, "history_capacity", report);
+        if let Some(series) = self.slots.get_mut(handle) {
+            series.commit_finalization(plan, report);
         }
     }
 
@@ -508,9 +465,8 @@ impl HistoryState {
             .saturating_sub(self.ledger.used(partition))
     }
 
-    /// Evicts the oldest evictable data of `partition` until `bytes` fit.
-    /// Chunks pinned by a running query stay accounted, so eviction may need
-    /// several rounds; it stops after a bounded number of evictions.
+    /// Evicts the oldest evictable data of `partition` until `bytes` fit;
+    /// it stops after a bounded number of evictions (bounds lock time).
     fn ensure_headroom(
         &mut self,
         partition: Partition,
@@ -526,7 +482,7 @@ impl HistoryState {
             }
             let evicted = match partition {
                 Partition::RawHistory => self.evict_raw_once(report),
-                Partition::Aggregates => self.evict_rollup_once(report),
+                Partition::Aggregates => self.evict_gap_once(report),
                 _ => false,
             };
             if !evicted {
@@ -565,53 +521,33 @@ impl HistoryState {
         eviction.records > 0
     }
 
-    fn evict_rollup_once(&mut self, report: &mut HistoryReport) -> bool {
-        let grid = self.grid;
+    /// Drops the oldest gap, of a series or global: the aggregates hold
+    /// no finished minutes (D-90), so gaps are all there is to evict. The
+    /// history no longer shows every gap then: it is truncated.
+    fn evict_gap_once(&mut self, report: &mut HistoryReport) -> bool {
         let victim = self
             .slots
             .handles()
             .into_iter()
-            .filter_map(|handle| Some((self.slots.get(handle)?.oldest_rollup_ns(grid)?, handle)))
+            .filter_map(|handle| Some((self.slots.get(handle)?.oldest_gap_ns()?, handle)))
             .min();
-        let global_oldest = self.global_gaps.oldest_start();
-        let series_first = match (victim, global_oldest) {
-            (Some((series_start, _)), Some(global_start)) => series_start <= global_start,
-            (Some(_), None) => true,
-            (None, _) => false,
+        let global_first = match (victim, self.global_gaps.oldest_start()) {
+            (Some((series_start, _)), Some(global_start)) => global_start < series_start,
+            (None, global) => global.is_some(),
+            (Some(_), None) => false,
         };
-        if !series_first {
-            let dropped = self.global_gaps.drop_oldest();
-            if dropped {
-                report.evicted_records = report.evicted_records.saturating_add(1);
-            }
-            return dropped;
+        let dropped = if global_first {
+            self.global_gaps.drop_oldest()
+        } else {
+            victim
+                .and_then(|(_, handle)| self.slots.get_mut(handle))
+                .is_some_and(Series::evict_oldest_gap)
+        };
+        if dropped {
+            report.evicted_records = report.evicted_records.saturating_add(1);
+            report.truncated = true;
         }
-        let Some((_, handle)) = victim else {
-            return false;
-        };
-        let Some(series) = self.slots.get_mut(handle) else {
-            return false;
-        };
-        let Some(eviction) = series.evict_oldest_rollup(grid) else {
-            return false;
-        };
-        report.evicted_records = report
-            .evicted_records
-            .saturating_add(u64::try_from(eviction.records).unwrap_or(u64::MAX));
-        report.truncated = true;
-        if eviction.to_ns > eviction.from_ns {
-            let key = series.key.clone();
-            let gap = GapRecord {
-                key: Some(key),
-                adapter_id: None,
-                start_boot_ns: eviction.from_ns,
-                end_boot_ns: eviction.to_ns,
-                reason: "evicted".to_owned(),
-                affected_count: 1,
-            };
-            self.note_gap(gap, report);
-        }
-        eviction.records > 0
+        dropped
     }
 
     /// Retention, finalization, segment retirement and gap settlement.
@@ -619,7 +555,7 @@ impl HistoryState {
         let mut report = HistoryReport::default();
         let horizon = now_ns.saturating_sub(self.settings.finalize_grace_ns);
         let raw_target = now_ns.saturating_sub(self.settings.raw_history_ns);
-        let rollup_target = now_ns.saturating_sub(self.settings.aggregate_retention_ns);
+        let gap_target = now_ns.saturating_sub(self.settings.gap_retention_ns);
         let settle_horizon = self.minute_floor(horizon);
         let archive = self.settings.archive_enabled;
         let grid = self.grid;
@@ -629,7 +565,7 @@ impl HistoryState {
                 continue;
             };
             series.advance_raw_floors(raw_target, grid);
-            series.advance_rollup_floors(rollup_target, grid);
+            series.age_gaps(gap_target, grid);
             series.retire_unreferenced_segments();
             if archive {
                 for entry in series.gaps.settle_before(settle_horizon) {
@@ -638,8 +574,8 @@ impl HistoryState {
             }
         }
         // Gaps age by boot time before the grid, as the series' do.
-        let rollup_floor = grid.map_or(rollup_target, |grid| grid.floor(rollup_target));
-        self.global_gaps.drop_ending_by(rollup_floor);
+        let gap_floor = grid.map_or(gap_target, |grid| grid.floor(gap_target));
+        self.global_gaps.drop_ending_by(gap_floor);
         if archive {
             for entry in self.global_gaps.settle_before(settle_horizon) {
                 report.archive_rows.push(ArchiveRow::Gap(entry.to_record()));
@@ -672,9 +608,9 @@ impl HistoryState {
 
     fn summarize(&self, report: &mut HistoryReport) {
         report.series_count = u32::try_from(self.slots.live()).unwrap_or(u32::MAX);
-        report.truncated |= self.slots.values().any(|series| series.capacity_truncated);
     }
 
+    #[cfg(test)]
     pub(crate) fn handle_of(&self, key: &MetricKey) -> Option<SlotHandle> {
         self.by_key.get(key).copied()
     }
@@ -714,7 +650,7 @@ mod tests {
     fn settings() -> HistorySettings {
         HistorySettings {
             raw_history_ns: 300 * SECOND,
-            aggregate_retention_ns: 24 * 3600 * SECOND,
+            gap_retention_ns: 24 * 3600 * SECOND,
             max_series: 2,
             finalize_grace_ns: 5 * SECOND,
             gap_merge_tolerance_ns: SECOND,
@@ -748,12 +684,17 @@ mod tests {
 
     /// Samples of `gpu:a` every second over `[0, seconds)`, committed as they come.
     fn gauge_every_second(state: &mut HistoryState, seconds: u64) {
-        for second in 0..seconds {
+        gauge_every_second_from(state, 0, seconds);
+    }
+
+    /// Samples of `gpu:a` every second over `[from, to)`.
+    fn gauge_every_second_from(state: &mut HistoryState, from: u64, to: u64) {
+        for second in from..to {
             let appends = HistoryAppends {
                 gauges: vec![gauge("gpu:a", second, 40.0)],
                 ..HistoryAppends::default()
             };
-            state.apply(appends, second * SECOND, second + 1);
+            state.apply(appends, second * SECOND);
         }
     }
 
@@ -770,29 +711,34 @@ mod tests {
         let ledger = ByteLedger::for_memory_limit_mib(64);
         let mut state = HistoryState::new(settings(), &ledger);
         gauge_every_second(&mut state, 600);
-        state.maintain(600 * SECOND);
+        let before_grid = state.maintain(600 * SECOND);
+        assert!(
+            before_grid.archive_rows.is_empty(),
+            "no minute without the grid"
+        );
         let series = gpu_a(&state);
         assert_eq!(series.gauge.raw_floor_ns, 300 * SECOND);
         // Whole chunks of 64 records go: the one holding 256 s to 319 s stays.
         assert_eq!(series.gauge.raw.first().unwrap().time_ns, 256 * SECOND);
-        assert!(
-            series.gauge.buckets.is_empty(),
-            "no minute without the grid"
-        );
         let late = state.apply(
             HistoryAppends {
                 gauges: vec![gauge("gpu:a", 299, 1.0)],
                 ..HistoryAppends::default()
             },
             600 * SECOND,
-            601,
         );
         assert_eq!(late.gauge_drops.late, 1, "older than the raw history");
 
         state.set_minute_grid(MinuteGrid::BOOT_CLOCK);
-        state.maintain(700 * SECOND);
-        let series = gpu_a(&state);
-        let first = series.gauge.buckets.first().unwrap();
+        let report = state.maintain(700 * SECOND);
+        let first = report
+            .archive_rows
+            .iter()
+            .find_map(|row| match row {
+                ArchiveRow::GaugeBucket { bucket, .. } => Some(*bucket),
+                _ => None,
+            })
+            .unwrap();
         assert_eq!(first.start_ns, 300 * SECOND);
         assert_eq!(first.covered_ns, 60 * SECOND);
     }
@@ -809,7 +755,7 @@ mod tests {
             ],
             ..HistoryAppends::default()
         };
-        let report = state.apply(appends, 2 * SECOND, 1);
+        let report = state.apply(appends, 2 * SECOND);
         assert_eq!(report.series_count, 2);
         assert_eq!(report.gauge_drops.series_limit, 1);
         assert_eq!(report.new_gaps.len(), 1);
@@ -831,7 +777,6 @@ mod tests {
                 ..HistoryAppends::default()
             },
             200 * SECOND,
-            1,
         );
         assert_eq!(report.gauge_drops.out_of_order, 1);
         assert_eq!(report.gauge_drops.future, 1);
@@ -842,7 +787,6 @@ mod tests {
                 ..HistoryAppends::default()
             },
             400 * SECOND,
-            2,
         );
         assert_eq!(report.gauge_drops.late, 1);
     }
@@ -857,7 +801,6 @@ mod tests {
                 ..HistoryAppends::default()
             },
             2 * SECOND,
-            1,
         );
         let key = metric_key("gpu:a", ids::GPU_TEMPERATURE, "gpu");
         let old_handle = state.handle_of(&key).unwrap();
@@ -872,12 +815,72 @@ mod tests {
                 ..HistoryAppends::default()
             },
             (late + 1) * SECOND,
-            2,
         );
         let new_handle = state
             .handle_of(&metric_key("gpu:b", ids::GPU_TEMPERATURE, "gpu"))
             .unwrap();
         assert_ne!(old_handle, new_handle);
         assert!(state.slots.get(old_handle).is_none());
+    }
+
+    fn gap_of(key: Option<&MetricKey>, start_s: u64, reason: &str) -> GapRecord {
+        GapRecord {
+            key: key.cloned(),
+            adapter_id: None,
+            start_boot_ns: start_s * SECOND,
+            end_boot_ns: (start_s + 1) * SECOND,
+            reason: reason.to_owned(),
+            affected_count: 1,
+        }
+    }
+
+    /// Finished minutes leave the series once handed on (D-90): the
+    /// aggregates hold only the series' bookkeeping, segments and gaps.
+    #[test]
+    fn finished_minutes_are_handed_on_and_not_kept() {
+        let ledger = ByteLedger::for_memory_limit_mib(64);
+        let mut state = state(&ledger);
+        gauge_every_second_from(&mut state, 0, 30);
+        let held = ledger.used(Partition::Aggregates);
+        gauge_every_second_from(&mut state, 30, 3600);
+        let report = state.maintain(3600 * SECOND);
+        assert_eq!(
+            ledger.used(Partition::Aggregates),
+            held,
+            "an hour of minutes later"
+        );
+        assert_eq!(
+            gpu_a(&state).finalized_through_ns,
+            3540 * SECOND,
+            "every minute but the last was handed on"
+        );
+        assert!(!report.truncated);
+    }
+
+    /// Under pressure on the aggregates the oldest gap goes first, global
+    /// or of a series, and the history says it is truncated.
+    #[test]
+    fn capacity_eviction_drops_the_oldest_gap_and_reports_truncation() {
+        let ledger = ByteLedger::for_memory_limit_mib(64);
+        let mut state = state(&ledger);
+        state.apply(
+            HistoryAppends {
+                gauges: vec![gauge("gpu:a", 1, 1.0)],
+                ..HistoryAppends::default()
+            },
+            2 * SECOND,
+        );
+        let key = metric_key("gpu:a", ids::GPU_TEMPERATURE, "gpu");
+        state.record_external_gap(gap_of(Some(&key), 10, "timeout"));
+        state.record_external_gap(gap_of(None, 5, "adapter_restart"));
+        let mut report = HistoryReport::default();
+        assert!(state.evict_gap_once(&mut report));
+        assert!(state.global_gaps.is_empty(), "the global gap was older");
+        assert!(!gpu_a(&state).gaps.is_empty());
+        assert!(report.truncated);
+        assert_eq!(report.evicted_records, 1);
+        assert!(state.evict_gap_once(&mut report));
+        assert!(gpu_a(&state).gaps.is_empty());
+        assert!(!state.evict_gap_once(&mut report), "nothing left to evict");
     }
 }

@@ -10,8 +10,9 @@
 //! * Collectors are pure (`Collector::collect`).
 //! * State (D-79): `StoreWriter` (HotStore actor only) and `SnapshotReader`.
 //! * History (D-79): `HistoryIngest`, through which the live state hands
-//!   each commit to the history, `HistoryReader` and `OverviewReader`
-//!   (D-82); `HistoryTierStore` keeps the Overview's sizes.
+//!   each commit to the history, and `OverviewReader` (D-82), through
+//!   which the Manager reads it (D-90); `HistoryTierStore` keeps the
+//!   Overview's sizes.
 //! * Store: `ConfigRepository`, `AuditRepository`, `ArchiveSink`,
 //!   `ArchiveReader` (D-51), `HistoryTierStore` (D-82).
 //! * Runtime: `Dispatch<J>` submits jobs to fixed workers without blocking;
@@ -43,7 +44,6 @@ use crate::clock::TimeProvider;
 use crate::commands::{CommandEnvelope, CommandRejection, CommandResult};
 use crate::config::{Config, ConfigError, SamplingConfig, ValidationIssue};
 use crate::errors::{ErrorDetail, InfraError};
-use crate::history::{HistoryQuery, HistoryResult};
 use crate::identity::{
     AdapterId, CollectorId, EntityId, MetricKey, ProcessKey, SessionId, SourceId,
 };
@@ -125,28 +125,10 @@ impl fmt::Debug for CancelFlag {
     }
 }
 
-/// Bounded history queries over immutable chunks.
-pub trait HistoryReader: Send + Sync {
-    /// Must return `QueryTooLarge` instead of scanning more than the
-    /// configured records, `TimedOut` past the deadline and `Cancelled` when
-    /// the flag is set.
-    fn query(
-        &self,
-        query: &HistoryQuery,
-        deadline_boot_ns: u64,
-        cancel: &CancelFlag,
-        clock: &dyn TimeProvider,
-    ) -> Result<HistoryResult, ErrorDetail>;
-
-    /// Series currently held (for the history module's series picker).
-    fn series(&self) -> Vec<MetricKey>;
-}
-
 /// The Overview History's reads (D-82): the bars of a size and the window
 /// statistics of one series, answered from the history's own sizes.
-/// Bounded like the history reader: `TimedOut` past the deadline,
-/// `Cancelled` when the flag is set; a series the history does not hold
-/// answers with no bars.
+/// Bounded: `TimedOut` past the deadline, `Cancelled` when the flag is
+/// set; a series the history does not hold answers with no bars.
 pub trait OverviewReader: Send + Sync {
     fn read(
         &self,

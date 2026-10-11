@@ -1,28 +1,34 @@
 //! # dgxtop-history
 //!
 //! The history of dgxtop (D-79): it takes what the state committed, keeps
-//! each series' recent samples and minutes in memory, decides what is
-//! saved and for how long, answers the Manager's history reads, and
-//! follows GPU process runs (D-76). Compression is the compression
-//! component's; the SQLite files are the store's, reached through ports.
+//! each series' recent samples in memory, decides what is
+//! saved and for how long, answers the Manager's history reads (through
+//! the Overview's sizes only, D-90), and follows GPU process runs (D-76).
+//! Compression is the compression component's; the SQLite files are the
+//! store's, reached through ports.
 //!
 //! Bounded canonical history (`STORAGE.md` §2–4). Per series (`MetricKey`):
 //! raw gauge steps and exact counter intervals kept apart in fixed-width
-//! chunked logs (`raw_history_seconds`), minute rollups derived from them
-//! once the finalization horizon passes (covered time, time-weighted sum,
-//! min/max, sample count, exact `u128` counter totals), counter bridges for
-//! intervals crossing a minute boundary, segments cut on
-//! source/generation/policy/kind changes, and a merged gap index. Raw
-//! history lives in the `raw_history` partition, rollups/bridges/segments/
-//! gaps in the `aggregates` partition; when a partition is full the oldest
-//! data is evicted (raw first, then rollups are shortened) and the
-//! truncation is recorded as an `evicted` gap.
+//! chunked logs (`raw_history_seconds`), segments cut on
+//! source/generation/policy/kind changes, and a merged gap index. Minute
+//! rollups (covered time, time-weighted sum, min/max, sample count, exact
+//! `u128` counter totals) and counter bridges for intervals crossing a
+//! minute boundary are cut from the raw data once the finalization horizon
+//! passes and handed on as finished rows, to the Overview's sizes and the
+//! archive; the series keeps none of them (D-90). Raw history lives in the
+//! `raw_history` partition, segments and gaps in the `aggregates`
+//! partition; when a partition is full the oldest data is evicted (raw
+//! already handed on first, else raw by boot time before the minutes are
+//! known, recorded as an `evicted` gap; the oldest gaps of the aggregates,
+//! reported as truncation).
 //!
 //! The state feeds it through the `HistoryIngest` port ([`HistoryRecorder`])
 //! inside each commit, so history never lags the snapshot; the Manager reads
-//! it through `HistoryReader` and `OverviewReader` ([`HistoryIndex`]); the
-//! archive receives the finished rows as `ArchiveJournal`s drained from the
-//! recorder.
+//! it through `OverviewReader` ([`HistoryIndex`]): the bars and window
+//! statistics of the Overview's sizes, with the minutes not finalized yet
+//! cut from the raw steps; the archive receives the finished rows as
+//! `ArchiveJournal`s drained from the recorder. The bounded query engine
+//! over the raw steps and minutes (`HistoryReader`) is removed (D-90).
 //!
 //! The Overview series are also kept in every bar size ([`OverviewTiers`],
 //! D-82), fed by the same finished minutes, kept on disk through the store
@@ -43,9 +49,7 @@ pub(crate) mod grid;
 mod index;
 pub(crate) mod output;
 mod overview;
-pub(crate) mod pin;
 mod process;
-mod query;
 mod recorder;
 pub(crate) mod records;
 pub(crate) mod rollup;
@@ -60,7 +64,7 @@ mod wall_clock;
 use std::sync::{Arc, RwLock};
 
 use dgxtop_core::budget::ByteLedger;
-use dgxtop_core::config::{RuntimeConfig, SamplingConfig, StoreConfig};
+use dgxtop_core::config::{SamplingConfig, StoreConfig};
 use dgxtop_core::sampling::SamplingTiming;
 
 pub use index::HistoryIndex;
@@ -89,7 +93,6 @@ impl History {
     pub fn new(
         store: &StoreConfig,
         sampling: &SamplingConfig,
-        runtime: &RuntimeConfig,
         ledger: &ByteLedger,
         archive_enabled: bool,
     ) -> Self {
@@ -97,12 +100,7 @@ impl History {
         let settings = settings::history_settings(store, &timing, archive_enabled);
         let shared = Arc::new(RwLock::new(HistoryState::new(settings, ledger)));
         let overview = OverviewTiers::new();
-        let index = HistoryIndex::new(
-            Arc::clone(&shared),
-            ledger.clone(),
-            settings::query_limits(store, runtime),
-            overview.clone(),
-        );
+        let index = HistoryIndex::new(Arc::clone(&shared), overview.clone());
         let recorder = HistoryRecorder::new(
             HistoryWriter::new(shared),
             ArchiveQueue::new(ledger),

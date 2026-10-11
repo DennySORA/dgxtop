@@ -32,7 +32,7 @@ use std::sync::Arc;
 use dgxtop_core::clock::{NANOS_PER_MILLI, TimeProvider, ms_to_ns};
 use dgxtop_core::commands::ViewKind;
 use dgxtop_core::errors::ErrorDetail;
-use dgxtop_core::history::{HistoryResult, MAX_HISTORY_POINTS, SeriesInEveryBoot};
+use dgxtop_core::history::{MAX_HISTORY_POINTS, SeriesInEveryBoot, coverage_ratio};
 use dgxtop_core::identity::{MetricKey, SessionId};
 use dgxtop_core::metric::{CanonicalUnit, descriptor};
 use dgxtop_core::overview_history::{
@@ -1140,7 +1140,7 @@ fn chart_view(
         points,
         mean: whole.mean(),
         peak: whole.peak(),
-        coverage_ratio: covered_ns.map(|covered| HistoryResult::ratio(covered, grid.span_ns())),
+        coverage_ratio: covered_ns.map(|covered| coverage_ratio(covered, grid.span_ns())),
         covered_ns,
         display_downsampled: merges,
         pending: active && !answered && chart.error.is_none(),
@@ -1168,8 +1168,7 @@ fn summaries_of(stats: &[StatState], active: bool) -> Vec<HistoryWindowSummary> 
                 unit: unit_of(stat.spec.key.metric_id.as_str()),
                 mean: bucket.and_then(OverviewBucket::mean),
                 peak: bucket.and_then(OverviewBucket::peak),
-                coverage_ratio: covered_ns
-                    .map(|covered| HistoryResult::ratio(covered, window.span_ns())),
+                coverage_ratio: covered_ns.map(|covered| coverage_ratio(covered, window.span_ns())),
                 covered_ns,
                 integral: (stat.spec.kind == HistoryChartKind::GpuPower)
                     .then_some(bucket)

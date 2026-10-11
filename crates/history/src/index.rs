@@ -1,27 +1,24 @@
 //! Shared handles over the history state: the single writer used by the
 //! state actor (through the recorder) and the cloneable reader used by
-//! history workers.
+//! history workers (`OverviewReader`, D-82).
 
 use std::fmt;
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use dgxtop_core::budget::ByteLedger;
 use dgxtop_core::canonical::GapRecord;
 
 use super::grid::MinuteGrid;
 use super::output::HistoryReport;
 use super::state::{HistoryAppends, HistoryState};
 use crate::overview::OverviewTiers;
-use crate::query::QueryLimits;
 
-/// Read side of the bounded history (`HistoryReader`). Cheap to clone; safe
-/// to query from several history workers while the state keeps
-/// committing. A query holds the lock only while pinning one series.
+/// Read side of the history (`OverviewReader`). Cheap to clone; safe to
+/// read from several history workers while the state keeps committing. A
+/// read holds the state's lock only while it cuts one series' minutes not
+/// finalized yet.
 #[derive(Clone)]
 pub struct HistoryIndex {
     shared: Arc<RwLock<HistoryState>>,
-    ledger: ByteLedger,
-    limits: QueryLimits,
     overview: OverviewTiers,
 }
 
@@ -29,24 +26,14 @@ impl fmt::Debug for HistoryIndex {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("HistoryIndex")
-            .field("limits", &self.limits)
+            .field("overview", &self.overview)
             .finish_non_exhaustive()
     }
 }
 
 impl HistoryIndex {
-    pub(crate) fn new(
-        shared: Arc<RwLock<HistoryState>>,
-        ledger: ByteLedger,
-        limits: QueryLimits,
-        overview: OverviewTiers,
-    ) -> Self {
-        Self {
-            shared,
-            ledger,
-            limits,
-            overview,
-        }
+    pub(crate) fn new(shared: Arc<RwLock<HistoryState>>, overview: OverviewTiers) -> Self {
+        Self { shared, overview }
     }
 
     /// The Overview series in every size (D-82): composition sets its local
@@ -57,14 +44,6 @@ impl HistoryIndex {
 
     pub(crate) fn read(&self) -> RwLockReadGuard<'_, HistoryState> {
         self.shared.read().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    pub(crate) fn ledger(&self) -> &ByteLedger {
-        &self.ledger
-    }
-
-    pub(crate) fn limits(&self) -> &QueryLimits {
-        &self.limits
     }
 }
 
@@ -82,13 +61,8 @@ impl HistoryWriter {
         self.shared.write().unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub(crate) fn apply(
-        &self,
-        appends: HistoryAppends,
-        now_ns: u64,
-        revision: u64,
-    ) -> HistoryReport {
-        self.write().apply(appends, now_ns, revision)
+    pub(crate) fn apply(&self, appends: HistoryAppends, now_ns: u64) -> HistoryReport {
+        self.write().apply(appends, now_ns)
     }
 
     pub(crate) fn maintain(&self, now_ns: u64) -> HistoryReport {
@@ -107,15 +81,7 @@ impl HistoryWriter {
         self.write().set_minute_grid(grid);
     }
 
-    pub(crate) fn note_discontinuity(&self, boot_ns: u64) {
-        self.write().note_discontinuity(boot_ns);
-    }
-
     pub(crate) fn set_finalize_grace(&self, grace_ns: u64) {
         self.write().set_finalize_grace(grace_ns);
-    }
-
-    pub(crate) fn set_revision(&self, revision: u64) {
-        self.write().set_revision(revision);
     }
 }

@@ -345,8 +345,7 @@
                     "audit_retention_days",
                     "audit_limit_mib",
                     "max_processes",
-                    "max_process_gpu_links",
-                    "max_query_scan_records"
+                    "max_process_gpu_links"
                   ]
                 },
                 "actions": {
@@ -616,7 +615,6 @@
                     "result_cache_entries",
                     "result_cache_ttl_ms",
                     "max_projection_bytes",
-                    "max_history_result_bytes",
                     "adaptive_enabled",
                     "pressure_samples",
                     "recovery_ms"
