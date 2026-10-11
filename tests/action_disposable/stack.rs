@@ -1,5 +1,5 @@
 //! The process-action stack of `dgxtop`, assembled the way the composition
-//! root (`crates/dgxtop/src/monitor.rs`) assembles it: the real Manager on its
+//! root (`crates/dgxtop/src/monitor/`) assembles it: the real Manager on its
 //! own control thread, the real SQLite audit repository in its single-writer
 //! actor, the real pidfd action adapter in its actor and the real file config
 //! repository in its actor, all talking through the Manager's bounded
@@ -10,7 +10,7 @@
 //! published directly from procfs facts of the disposable children. The
 //! workers run the production `dgxtop::control_ops` functions on the
 //! program's queue sizes (`dgxtop::worker_queues`); only the completion
-//! forwarding of monitor.rs is replicated at the bottom of this file.
+//! forwarding of the monitor is replicated at the bottom of this file.
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
@@ -842,7 +842,7 @@ impl SnapshotReader for TableSnapshots {
     }
 }
 
-// ----- composition glue as in crates/dgxtop/src/monitor.rs ----------------
+// ----- composition glue as in crates/dgxtop/src/monitor/ ----------------
 
 /// Forwards worker completions to the Manager's control inbox (bounded wait).
 #[derive(Clone)]

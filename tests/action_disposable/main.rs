@@ -4,7 +4,7 @@
 //! through a `SessionHandle`: the real Manager control thread, the real SQLite
 //! audit repository (WAL, `synchronous=FULL`) and the real pidfd action
 //! adapter in their single-owner worker actors, and the real file config
-//! repository, wired like `crates/dgxtop/src/monitor.rs` wires them.
+//! repository, wired like `crates/dgxtop/src/monitor/` wires them.
 //!
 //! Safety: the only processes that may ever be signalled are children this
 //! suite spawned itself (`sleep 60`), each killed and reaped by a guard on

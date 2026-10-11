@@ -1,5 +1,5 @@
 //! The REF composition: the same components and wiring as the monitor's
-//! composition root (`crates/dgxtop/src/monitor.rs`) in the replay
+//! composition root (`crates/dgxtop/src/monitor/`) in the replay
 //! namespace — HotStore actor, collector pool, history pool, config and
 //! audit (SQLite) actors, the adapter supervisor with seven *child-process*
 //! replay hosts (`dgxtop --adapter-host replay-N`, one fixture slice each)

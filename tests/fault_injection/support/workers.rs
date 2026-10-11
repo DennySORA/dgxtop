@@ -1,5 +1,5 @@
 //! Real worker wiring for the scenarios, mirroring the private assembly in
-//! `crates/dgxtop/src/monitor.rs`: the config, audit, action, collector,
+//! `crates/dgxtop/src/monitor/`: the config, audit, action, collector,
 //! history and LiveState workers on the runtime's fixed pools and actors, and
 //! the archive actor the LiveState feeds. The only deviations are test seams:
 //! a [`Gate`] in front of storage workers, probes recording what the archive
@@ -39,7 +39,7 @@ use dgxtop_store::config::FileConfigRepository;
 
 use super::probes::Gate;
 
-/// Bounded wait for a worker to hand a completion over (as in monitor.rs).
+/// Bounded wait for a worker to hand a completion over (as in the monitor).
 const COMPLETION_SEND_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Completion senders shared by every worker; sends are bounded in time.
@@ -376,7 +376,7 @@ impl ArchiveFeed {
         self.accepted.load(Ordering::SeqCst)
     }
 
-    /// Journals the busy archive refused (monitor.rs only logs them).
+    /// Journals the busy archive refused (the monitor only logs them).
     pub fn refused(&self) -> u64 {
         self.refused.load(Ordering::SeqCst)
     }
