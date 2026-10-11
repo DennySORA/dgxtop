@@ -33,8 +33,8 @@ use uuid::Uuid;
 
 use crate::action::{
     ActionAttempt, ActionCompletion, ActionError, ActionHandle, ActionIntent, ActionOutcomeRecord,
-    AuditCompletion, AuditFailure, CapabilityContext, DurableReceipt, ExitObservation,
-    PersistenceStatus, PreparedProcess, RecoveredIntent, Signal, SignalOutcome,
+    AuditCompletion, AuditExpiryReport, AuditFailure, CapabilityContext, DurableReceipt,
+    ExitObservation, PersistenceStatus, PreparedProcess, RecoveredIntent, Signal, SignalOutcome,
 };
 use crate::budget::{BytePermit, CapacityError};
 use crate::canonical::{
@@ -362,6 +362,11 @@ pub trait AuditRepository: Send {
         now_boot_ns: u64,
         now_utc: &str,
     ) -> Result<Vec<RecoveredIntent>, AuditFailure>;
+    /// Deletes the rows older than `before_utc` (RFC 3339 UTC), bounded per
+    /// call. The only way rows leave the audit: its owner decides the age
+    /// and when (D-96).
+    fn expire(&mut self, before_utc: &str) -> Result<AuditExpiryReport, AuditFailure>;
+    /// A read: never deletes or changes a row.
     fn status(&mut self) -> PersistenceStatus;
 }
 
@@ -419,14 +424,43 @@ pub struct ArchiveJournal {
     /// Minutes the history's compression holds in its coarser sizes, to be
     /// deleted (D-82).
     pub prunes: Vec<ArchivePrune>,
+    /// Rows the history no longer keeps by age, to be deleted (D-96).
+    pub expire: Option<ArchiveExpiry>,
+    /// What the archive does when this journal does not fit its budget
+    /// (D-96).
+    pub when_full: ArchiveWhenFull,
     pub permit: Option<BytePermit>,
 }
 
+/// Archive rows past the age the history keeps them (D-96): the store
+/// deletes exactly these, then the rows that only existed for them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArchiveExpiry {
+    /// Minutes that ended before this UTC time (and the segments left
+    /// without minutes that started before it).
+    pub before_utc_ns: i64,
+    /// The current boot's gaps that ended before this boot time.
+    pub current_boot_before_ns: u64,
+}
+
+/// What the archive does with a journal its budget cannot hold (D-96).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveWhenFull {
+    /// Delete the oldest whole minutes until the journal fits.
+    EvictOldest,
+    /// Refuse the journal (`DiskFull`); nothing is deleted.
+    Refuse,
+}
+
 /// Archive commit receipt.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveReceipt {
     pub revision: u64,
     pub rows: u64,
+    /// The deletions the journal asked for failed after its rows were
+    /// committed: the rows stay durable, the deletions wait for the next
+    /// request (D-96).
+    pub deletion_failure: Option<InfraError>,
 }
 
 /// Optional history archive (SQLite WAL, synchronous=NORMAL, off by default).

@@ -43,7 +43,7 @@ mod writer;
 pub use capacity::{StorageFootprint, shm_path, wal_path};
 pub use free_space::{FreeSpaceProbe, StatvfsFreeSpace};
 pub use schema::{AUDIT_DDL, HISTORY_DDL, SchemaKind, format_stamp};
-pub use time::{format_utc_rfc3339, is_rfc3339_utc, parse_utc_rfc3339_ns, utc_cutoff};
+pub use time::{format_utc_rfc3339, is_rfc3339_utc, parse_utc_rfc3339_ns};
 pub use version::{
     MIN_SQLITE_VERSION_NUMBER, SqliteGateError, SqliteVersion, check_version_number,
     check_versions, ensure_sqlite_version,

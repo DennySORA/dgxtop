@@ -7,10 +7,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use dgxtop_core::action::{PersistenceKind, PersistenceState, PersistenceStatus};
-use dgxtop_core::clock::{NANOS_PER_SECOND, TimeProvider, format_utc_ns};
+use dgxtop_core::clock::{TimeProvider, format_utc_ns};
 use dgxtop_core::errors::InfraError;
 use dgxtop_core::overview_history::ArchivePrune;
-use dgxtop_core::ports::{ArchiveJournal, ArchiveReceipt, ArchiveSink};
+use dgxtop_core::ports::{
+    ArchiveExpiry, ArchiveJournal, ArchiveReceipt, ArchiveSink, ArchiveWhenFull,
+};
 use dgxtop_core::wire::format_fixed_width;
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -26,20 +28,17 @@ use crate::sqlite::{
     CapacityPolicy, CapacityView, ConnectionProfile, DatabaseSpec, FaultKind, FreeSpaceProbe,
     PageUsage, Refusal, SchemaKind, StorageFootprint, TxError, VersionGate, WriteClass, Writer,
     drain, ensure_sqlite_version, fault_kind, fault_message, immediate_transaction, open_database,
-    pages_and_backlog, path_problem, tx_sqlite_error, utc_cutoff,
+    pages_and_backlog, path_problem, tx_sqlite_error,
 };
 
-/// Automatic retention runs at most every ten minutes (boot clock).
-const RETENTION_INTERVAL_NS: u64 = 600 * NANOS_PER_SECOND;
-/// Bounded transactions per retention run or eviction.
+/// Bounded transactions per expiry, prune or eviction.
 const MAX_MAINTENANCE_ROUNDS: u32 = 64;
 /// Eviction rounds tried before an append gives up with `DiskFull`.
 const MAX_EVICTION_ROUNDS: u32 = 16;
 /// Status probes as if a small batch were about to be written.
 const STATUS_PROBE_BYTES: u64 = 4096;
-const SECONDS_PER_DAY: u64 = 86_400;
 const SELECT_SEGMENT_EXISTS: &str = "SELECT 1 FROM history_segments WHERE segment_id = ?1";
-/// Time-based retention protects no segment.
+/// An expiry outside an append protects no segment.
 const NO_PROTECTED_SEGMENTS: &str = "[]";
 
 /// Counters since open.
@@ -49,7 +48,9 @@ pub struct ArchiveStats {
     /// Rows whose key already existed (re-appended journals).
     pub rows_already_present: u64,
     pub transactions: u64,
+    /// Minutes the history expired by age (D-96).
     pub buckets_expired: u64,
+    /// Minutes deleted to admit a journal that asked for it (D-96).
     pub buckets_evicted: u64,
     /// Minutes the history's compression asked to delete (D-82).
     pub buckets_pruned: u64,
@@ -58,9 +59,9 @@ pub struct ArchiveStats {
     pub gaps_deleted: u64,
 }
 
-/// Rows removed by one retention run.
+/// Rows removed by one expiry the history asked for (D-96).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ArchiveRetentionReport {
+pub struct ArchiveExpiryReport {
     pub cutoff_utc: String,
     pub buckets: u64,
     pub bridges: u64,
@@ -83,6 +84,12 @@ struct CleanupCounts {
 /// is deleted and created afresh at open (D-85); what cannot be fixed that
 /// way still yields an archive whose status says why and whose appends fail
 /// with `InfraError::Unavailable`.
+///
+/// Nothing here decides what goes (D-96): each journal says which minutes
+/// the compression holds (`prunes`), which rows are past the age the
+/// history keeps (`expire`) and whether the oldest minutes give way when
+/// the budget is reached (`when_full`). Opening, a status read and an
+/// append without such a request delete nothing.
 pub struct SqliteArchive {
     path: PathBuf,
     limits: ArchiveLimits,
@@ -91,7 +98,6 @@ pub struct SqliteArchive {
     free_space: Arc<dyn FreeSpaceProbe>,
     writer: Writer,
     last_issue: Option<String>,
-    last_retention_boot_ns: Option<u64>,
     recreated: Option<String>,
     stats: ArchiveStats,
 }
@@ -192,6 +198,12 @@ fn first_unknown_segment(
     Ok(None)
 }
 
+/// The archive's UTC text of a requested cutoff (before the epoch is the
+/// epoch: nothing is older).
+fn utc_text(utc_ns: i64) -> String {
+    format_utc_ns(i128::from(utc_ns.max(0))).unwrap_or_default()
+}
+
 impl SqliteArchive {
     /// Opens (creating with mode 0600 when missing) and verifies the
     /// archive. `Err` only for invalid arguments; see the type docs.
@@ -229,7 +241,7 @@ impl SqliteArchive {
             policy,
         };
         let (writer, recreated) = Writer::new("archive", open_database(&spec, fs, gate));
-        let mut archive = Self {
+        Ok(Self {
             path: path.to_path_buf(),
             limits,
             policy,
@@ -237,14 +249,9 @@ impl SqliteArchive {
             free_space,
             writer,
             last_issue: None,
-            last_retention_boot_ns: None,
             recreated,
             stats: ArchiveStats::default(),
-        };
-        if archive.writer.unusable().is_none() {
-            archive.maybe_run_retention();
-        }
-        Ok(archive)
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -265,18 +272,21 @@ impl SqliteArchive {
         self.recreated.as_deref()
     }
 
-    /// Age-based retention: buckets whose interval ended before
-    /// `now - retention_days`, then stale bridges, empty segments (cascade)
-    /// and gaps of boots without data. Also runs at open and at most every
-    /// ten minutes from `append`/`status`.
-    pub fn run_retention(&mut self) -> Result<ArchiveRetentionReport, InfraError> {
-        let cutoff_utc = utc_cutoff(self.clock.now_utc_ns(), self.limits.retention_days);
-        let now_boot_ns = self.clock.now_boot_ns();
-        self.last_retention_boot_ns = Some(now_boot_ns);
-        let window_ns = u64::from(self.limits.retention_days)
-            .saturating_mul(SECONDS_PER_DAY)
-            .saturating_mul(NANOS_PER_SECOND);
-        let cutoff_boot_ns = format_fixed_width(now_boot_ns.saturating_sub(window_ns));
+    /// Deletes what `expiry` names: minutes that ended before its UTC time,
+    /// then stale bridges, empty segments (cascade) and gaps of boots
+    /// without data and of this boot before its boot time. Bounded: what is
+    /// left goes with the next expiry.
+    pub fn expire(&mut self, expiry: &ArchiveExpiry) -> Result<ArchiveExpiryReport, InfraError> {
+        self.expire_keeping(expiry, NO_PROTECTED_SEGMENTS)
+    }
+
+    fn expire_keeping(
+        &mut self,
+        expiry: &ArchiveExpiry,
+        protected_json: &str,
+    ) -> Result<ArchiveExpiryReport, InfraError> {
+        let cutoff_utc = utc_text(expiry.before_utc_ns);
+        let cutoff_boot_ns = format_fixed_width(expiry.current_boot_before_ns);
         let batch = i64::from(self.limits.batch_rows);
         let mut rounds_left = MAX_MAINTENANCE_ROUNDS;
         let (buckets, buckets_done) = self.drain(&mut rounds_left, |connection| {
@@ -287,13 +297,13 @@ impl SqliteArchive {
             self.cleanup_dependents(
                 &cutoff_utc,
                 Some(&cutoff_boot_ns),
-                NO_PROTECTED_SEGMENTS,
+                protected_json,
                 &mut rounds_left,
             )?
         } else {
             CleanupCounts::default()
         };
-        Ok(ArchiveRetentionReport {
+        Ok(ArchiveExpiryReport {
             cutoff_utc,
             buckets,
             bridges: cleanup.bridges,
@@ -307,16 +317,6 @@ impl SqliteArchive {
         self.writer.connection().map_err(|unusable| {
             InfraError::Unavailable(format!("archive unavailable: {}", unusable.reason))
         })
-    }
-
-    fn maybe_run_retention(&mut self) {
-        let now = self.clock.now_boot_ns();
-        let due = self
-            .last_retention_boot_ns
-            .is_none_or(|last| now.saturating_sub(last) >= RETENTION_INTERVAL_NS);
-        if due && let Err(error) = self.run_retention() {
-            self.last_issue = Some(format!("archive retention failed: {error}"));
-        }
     }
 
     /// A failed statement; corruption stops the archive (D-85).
@@ -396,8 +396,8 @@ impl SqliteArchive {
     }
 
     /// Deletes the minutes the history's compression holds in its coarser
-    /// sizes (D-82), then the rows that depended on them. Bounded like a
-    /// retention run: what is left goes with the next prune.
+    /// sizes (D-82), then the rows that depended on them. Bounded like an
+    /// expiry: what is left goes with the next prune.
     fn prune(&mut self, prunes: &[ArchivePrune], protected_json: &str) -> Result<(), InfraError> {
         if prunes.is_empty() {
             return Ok(());
@@ -406,7 +406,7 @@ impl SqliteArchive {
         let mut rounds_left = MAX_MAINTENANCE_ROUNDS;
         let mut latest_cutoff = String::new();
         for prune in prunes {
-            let cutoff = format_utc_ns(i128::from(prune.before_utc_ns.max(0))).unwrap_or_default();
+            let cutoff = utc_text(prune.before_utc_ns);
             let (removed, _) = self.drain(&mut rounds_left, |connection| {
                 delete_pruned_minutes(connection, &prune.series, &cutoff, batch)
             })?;
@@ -414,6 +414,20 @@ impl SqliteArchive {
             latest_cutoff = latest_cutoff.max(cutoff);
         }
         self.cleanup_dependents(&latest_cutoff, None, protected_json, &mut rounds_left)?;
+        Ok(())
+    }
+
+    /// The deletions a journal asks for, after its rows: first what the
+    /// compression holds, then what is past its age.
+    fn delete_requested(
+        &mut self,
+        journal: &ArchiveJournal,
+        protected_json: &str,
+    ) -> Result<(), InfraError> {
+        self.prune(&journal.prunes, protected_json)?;
+        if let Some(expiry) = &journal.expire {
+            self.expire_keeping(expiry, protected_json)?;
+        }
         Ok(())
     }
 
@@ -458,10 +472,12 @@ impl SqliteArchive {
     }
 
     /// Admission before any row is written: low disk refuses, a pinned WAL
-    /// pauses, the page cap evicts the oldest data first.
+    /// pauses, the page cap evicts the oldest data first when the journal
+    /// asks for it (D-96) and refuses otherwise.
     fn admit_with_eviction(
         &mut self,
         estimate_bytes: u64,
+        when_full: ArchiveWhenFull,
         protected_json: &str,
     ) -> Result<(), InfraError> {
         for _ in 0..MAX_EVICTION_ROUNDS {
@@ -491,7 +507,9 @@ impl SqliteArchive {
                     });
                 }
                 Err(Refusal::PageCap { .. }) => {
-                    if self.evict_oldest(protected_json)? == 0 {
+                    if when_full == ArchiveWhenFull::Refuse
+                        || self.evict_oldest(protected_json)? == 0
+                    {
                         break;
                     }
                 }
@@ -506,7 +524,11 @@ impl SqliteArchive {
     /// Writes the rows in bounded transactions, each admitted on its own;
     /// returns (written, present). A refusal after some transactions leaves
     /// those committed (a retry skips them), so the caller records a gap.
-    fn insert_batch(&mut self, batch: &ArchiveBatch) -> Result<(u64, u64), InfraError> {
+    fn insert_batch(
+        &mut self,
+        batch: &ArchiveBatch,
+        when_full: ArchiveWhenFull,
+    ) -> Result<(u64, u64), InfraError> {
         let protected_json = protected_segments_json(batch);
         let deadline = self.limits.busy_deadline();
         let max_rows = usize::try_from(self.limits.batch_rows).unwrap_or(usize::MAX);
@@ -514,7 +536,7 @@ impl SqliteArchive {
         let mut present_total = 0u64;
         for bounds in chunk_bounds(&batch.rows, max_rows, self.limits.batch_bytes) {
             let chunk = batch.rows.get(bounds).unwrap_or_default();
-            self.admit_with_eviction(storage_estimate(chunk), &protected_json)?;
+            self.admit_with_eviction(storage_estimate(chunk), when_full, &protected_json)?;
             let result: Result<u64, TxError<()>> =
                 immediate_transaction(self.connection()?, deadline, |transaction| {
                     let mut written = 0u64;
@@ -570,7 +592,6 @@ impl SqliteArchive {
         if let Some(unusable) = self.writer.unusable() {
             return (PersistenceState::Failed, Some(unusable.reason.clone()));
         }
-        self.maybe_run_retention();
         let view = match self.capacity_view() {
             Ok(view) => view,
             Err(error) => return (PersistenceState::Failed, Some(error.to_string())),
@@ -605,14 +626,23 @@ impl ArchiveSink for SqliteArchive {
             InfraError::Database(format!("archive journal rejected: {reason}"))
         })?;
         self.connection()?;
-        self.maybe_run_retention();
         self.check_segment_references(&batch)?;
         self.check_fits_budget(&batch)?;
-        let (written, present) = self.insert_batch(&batch)?;
-        self.prune(&journal.prunes, &protected_segments_json(&batch))?;
+        let (written, present) = self.insert_batch(&batch, journal.when_full)?;
         self.stats.rows_written = self.stats.rows_written.saturating_add(written);
         self.stats.rows_already_present = self.stats.rows_already_present.saturating_add(present);
         self.last_issue = None;
+        // The rows are committed: a deletion that fails now is reported
+        // beside the receipt, never as a failed append (D-96).
+        let deletion_failure = self
+            .delete_requested(&journal, &protected_segments_json(&batch))
+            .err();
+        if let Some(error) = &deletion_failure {
+            self.last_issue = Some(format!(
+                "archive deletion after the commit failed ({}): {error}",
+                error.code().as_str()
+            ));
+        }
         let revision = journal.revision;
         // The journal (and its byte permit) is released only once its rows
         // are committed.
@@ -620,6 +650,7 @@ impl ArchiveSink for SqliteArchive {
         Ok(ArchiveReceipt {
             revision,
             rows: written,
+            deletion_failure,
         })
     }
 
@@ -715,7 +746,10 @@ mod tests {
         assert_eq!(status.state, PersistenceState::Failed);
         assert!(!path.exists());
         assert!(matches!(
-            archive.run_retention(),
+            archive.expire(&ArchiveExpiry {
+                before_utc_ns: 0,
+                current_boot_before_ns: 0,
+            }),
             Err(InfraError::Unavailable(_))
         ));
         std::fs::remove_dir_all(dir).unwrap();
@@ -805,7 +839,10 @@ mod tests {
         assert_eq!(status.state, PersistenceState::Failed);
         assert!(status.detail.unwrap().contains("archive stopped"));
         assert!(matches!(
-            archive.run_retention(),
+            archive.expire(&ArchiveExpiry {
+                before_utc_ns: 0,
+                current_boot_before_ns: 0,
+            }),
             Err(InfraError::Unavailable(_))
         ));
         drop(archive);

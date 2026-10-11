@@ -20,8 +20,6 @@ const MIN_WAL_HEADROOM_BYTES: u64 = 32 * 1024;
 pub struct AuditLimits {
     /// db + wal + shm hard budget (default 128 MiB).
     pub limit_bytes: u64,
-    /// Rows older than this may be deleted; younger rows never are.
-    pub retention_days: u32,
     /// WAL size that triggers a PASSIVE checkpoint (default 8 MiB).
     pub wal_checkpoint_bytes: u64,
     /// WAL backlog after a checkpoint attempt that stops new intents
@@ -39,7 +37,6 @@ impl Default for AuditLimits {
     fn default() -> Self {
         Self {
             limit_bytes: 128 * MIB,
-            retention_days: 30,
             wal_checkpoint_bytes: 8 * MIB,
             wal_stop_bytes: 16 * MIB,
             min_free_disk_bytes: 64 * MIB,
@@ -62,7 +59,9 @@ pub enum AuditOpenError {
 }
 
 impl AuditLimits {
-    /// Limits from `store.audit_*` and `runtime.audit_intent_deadline_ms`.
+    /// Limits from `store.audit_limit_mib` and
+    /// `runtime.audit_intent_deadline_ms`. The age rows are kept is the
+    /// owner's (`store.audit_retention_days`, D-96).
     /// The WAL thresholds shrink with small budgets (at most a quarter of the
     /// budget may be WAL) so the main file always keeps most of the space.
     pub fn from_config(config: &Config) -> Self {
@@ -71,7 +70,6 @@ impl AuditLimits {
         let wal_stop_bytes = defaults.wal_stop_bytes.min(limit_bytes / 4);
         Self {
             limit_bytes,
-            retention_days: config.store.audit_retention_days,
             wal_checkpoint_bytes: defaults.wal_checkpoint_bytes.min(wal_stop_bytes / 2),
             wal_stop_bytes,
             min_free_disk_bytes: defaults.min_free_disk_bytes,
@@ -82,9 +80,6 @@ impl AuditLimits {
 
     pub fn validate(&self) -> Result<(), AuditOpenError> {
         let invalid = |message: &str| Err(AuditOpenError::InvalidLimits(message.to_owned()));
-        if self.retention_days == 0 {
-            return invalid("retention_days must be at least 1");
-        }
         if self.busy_deadline_ms == 0 {
             return invalid("busy_deadline_ms must be at least 1");
         }
@@ -130,7 +125,6 @@ mod tests {
     fn defaults_match_the_storage_policy_table() {
         let limits = AuditLimits::default();
         assert_eq!(limits.limit_bytes, 128 * MIB);
-        assert_eq!(limits.retention_days, 30);
         assert_eq!(limits.wal_checkpoint_bytes, 8 * MIB);
         assert_eq!(limits.wal_stop_bytes, 16 * MIB);
         assert_eq!(limits.min_free_disk_bytes, 64 * MIB);
@@ -142,10 +136,6 @@ mod tests {
     fn inconsistent_limits_are_rejected() {
         let base = AuditLimits::default();
         let cases = [
-            AuditLimits {
-                retention_days: 0,
-                ..base
-            },
             AuditLimits {
                 busy_deadline_ms: 0,
                 ..base

@@ -1,4 +1,4 @@
-//! UTC text used for SQLite `*_utc` columns and retention cutoffs.
+//! UTC text used for SQLite `*_utc` columns and expiry cutoffs.
 //!
 //! UTC is only an index and a display value (`STORAGE.md` §3); it is never
 //! used for durations inside a boot. Stored UTC must be RFC 3339 with a `Z`
@@ -14,12 +14,6 @@ const SECONDS_PER_DAY: i64 = 86_400;
 /// the audit validates exactly the format the Manager produces.
 pub fn format_utc_rfc3339(unix_ns: i128) -> String {
     dgxtop_core::clock::format_utc_rfc3339(unix_ns)
-}
-
-/// UTC text `days` before `now_unix_ns` (retention cutoff).
-pub fn utc_cutoff(now_unix_ns: i128, days: u32) -> String {
-    let span = i128::from(days) * i128::from(SECONDS_PER_DAY) * i128::from(NANOS_PER_SECOND);
-    format_utc_rfc3339(now_unix_ns.saturating_sub(span))
 }
 
 /// `YYYY-MM-DDTHH:MM:SS[.f{1,9}]Z` with plausible field ranges.
@@ -133,15 +127,6 @@ mod tests {
         assert_eq!(format_utc_rfc3339(-SECOND), "1969-12-31T23:59:59Z");
         assert_eq!(format_utc_rfc3339(i128::MIN), "0000-01-01T00:00:00Z");
         assert_eq!(format_utc_rfc3339(i128::MAX), "9999-12-31T23:59:59Z");
-    }
-
-    #[test]
-    fn cutoff_subtracts_whole_days() {
-        assert_eq!(
-            utc_cutoff(1_790_000_000 * SECOND, 30),
-            "2026-08-22T14:13:20Z"
-        );
-        assert_eq!(utc_cutoff(0, 1), "1969-12-31T00:00:00Z");
     }
 
     #[test]

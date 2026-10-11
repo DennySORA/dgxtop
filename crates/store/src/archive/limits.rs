@@ -17,11 +17,10 @@ const WAL_HEADROOM_BATCHES: u64 = 4;
 /// Budget, batching and deadlines of the optional history archive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArchiveLimits {
-    /// db + wal + shm hard budget (default 1 GiB); the oldest data is
-    /// evicted first when an append would exceed it.
+    /// db + wal + shm hard budget (default 1 GiB); an append that would
+    /// exceed it evicts the oldest data first when its journal asks for it
+    /// (D-96), else fails.
     pub limit_bytes: u64,
-    /// Soft retention target (default 7 days).
-    pub retention_days: u32,
     /// WAL size that triggers a PASSIVE checkpoint (default 16 MiB).
     pub wal_checkpoint_bytes: u64,
     /// WAL backlog after a checkpoint attempt that pauses archive writes
@@ -41,7 +40,6 @@ impl Default for ArchiveLimits {
     fn default() -> Self {
         Self {
             limit_bytes: 1024 * MIB,
-            retention_days: 7,
             wal_checkpoint_bytes: 16 * MIB,
             wal_stop_bytes: 32 * MIB,
             batch_rows: 512,
@@ -64,15 +62,15 @@ pub enum ArchiveOpenError {
 }
 
 impl ArchiveLimits {
-    /// Limits from `store.archive_limit_mib` and `store.archive_retention_days`;
-    /// WAL thresholds shrink with small budgets (at most a quarter is WAL).
+    /// Limits from `store.archive_limit_mib`; WAL thresholds shrink with
+    /// small budgets (at most a quarter is WAL). The age rows are kept is
+    /// the history's (`store.archive_retention_days`, D-96).
     pub fn from_config(config: &Config) -> Self {
         let defaults = Self::default();
         let limit_bytes = u64::from(config.store.archive_limit_mib).saturating_mul(MIB);
         let wal_stop_bytes = defaults.wal_stop_bytes.min(limit_bytes / 4);
         Self {
             limit_bytes,
-            retention_days: config.store.archive_retention_days,
             wal_checkpoint_bytes: defaults.wal_checkpoint_bytes.min(wal_stop_bytes / 2),
             wal_stop_bytes,
             ..defaults
@@ -81,9 +79,6 @@ impl ArchiveLimits {
 
     pub fn validate(&self) -> Result<(), ArchiveOpenError> {
         let invalid = |message: &str| Err(ArchiveOpenError::InvalidLimits(message.to_owned()));
-        if self.retention_days == 0 {
-            return invalid("retention_days must be at least 1");
-        }
         if self.batch_rows == 0 || self.batch_bytes == 0 {
             return invalid("batch_rows and batch_bytes must be positive");
         }
@@ -128,7 +123,6 @@ mod tests {
     fn defaults_match_the_storage_policy_table() {
         let limits = ArchiveLimits::default();
         assert_eq!(limits.limit_bytes, 1024 * MIB);
-        assert_eq!(limits.retention_days, 7);
         assert_eq!(limits.wal_checkpoint_bytes, 16 * MIB);
         assert_eq!(limits.wal_stop_bytes, 32 * MIB);
         assert_eq!(limits.batch_rows, 512);
@@ -142,10 +136,6 @@ mod tests {
     fn inconsistent_limits_are_rejected() {
         let base = ArchiveLimits::default();
         for case in [
-            ArchiveLimits {
-                retention_days: 0,
-                ..base
-            },
             ArchiveLimits {
                 batch_rows: 0,
                 ..base

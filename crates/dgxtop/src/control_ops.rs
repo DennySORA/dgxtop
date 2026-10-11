@@ -29,6 +29,9 @@ pub fn run_audit_op(repository: &mut dyn AuditRepository, op: AuditOp) -> AuditC
         } => AuditCompletion::Recovered {
             result: repository.recover_unknown(now_boot_ns, &now_utc),
         },
+        AuditOp::Expire { before_utc } => AuditCompletion::Expired {
+            result: repository.expire(&before_utc),
+        },
         AuditOp::Status => AuditCompletion::Status(repository.status()),
     }
 }

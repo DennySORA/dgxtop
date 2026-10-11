@@ -7,10 +7,10 @@ use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 use dgxtop_core::action::ActionRecordSummary;
 use dgxtop_core::action::{
-    ActionAttempt, ActionIntent, ActionOutcomeRecord, ActionState, AuditFailure, DurableReceipt,
-    PersistenceKind, PersistenceState, PersistenceStatus, RecoveredIntent,
+    ActionAttempt, ActionIntent, ActionOutcomeRecord, ActionState, AuditExpiryReport, AuditFailure,
+    DurableReceipt, PersistenceKind, PersistenceState, PersistenceStatus, RecoveredIntent,
 };
-use dgxtop_core::clock::{NANOS_PER_SECOND, TimeProvider};
+use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::ports::AuditRepository;
 use dgxtop_core::wire::parse_fixed_width;
@@ -36,7 +36,7 @@ use crate::sqlite::{
     CapacityPolicy, CapacityView, ConnectionProfile, DatabaseSpec, FaultKind, FreeSpaceProbe,
     SchemaKind, StepError, StorageFootprint, TxError, Unusable, VersionGate, WriteClass, Writer,
     ensure_sqlite_version, fault_kind, fault_message, immediate_transaction, is_rfc3339_utc,
-    open_database, pages_and_backlog, path_problem, utc_cutoff,
+    open_database, pages_and_backlog, path_problem,
 };
 
 /// Pages one new intent may touch: table leaf, three index leaves, page 1
@@ -48,20 +48,6 @@ const EVENT_WRITE_ESTIMATE_BYTES: u64 = 4 * 4096;
 const RECOVERY_BATCH: i64 = 256;
 /// Upper bound of the list returned by `recover_unknown` (all are marked).
 const MAX_RECOVERED_REPORTED: usize = 4096;
-/// Automatic retention runs at most hourly (boot clock).
-const RETENTION_INTERVAL_NS: u64 = 3600 * NANOS_PER_SECOND;
-
-/// Rows removed by one retention run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuditRetentionReport {
-    pub cutoff_utc: String,
-    pub deleted_events: u64,
-    pub deleted_attempts: u64,
-    pub deleted_intents: u64,
-    /// False when the per-run budget stopped before every expired row was
-    /// deleted (the next run continues).
-    pub complete: bool,
-}
 
 /// Abort reasons inside an intent transaction.
 enum IntentAbort {
@@ -83,6 +69,10 @@ enum OutcomeAbort {
 /// working; what cannot be fixed that way (version gate, another writer, a
 /// state directory that is not private) still yields a repository whose
 /// status is `Failed` and whose every write fails closed.
+///
+/// Nothing here decides when rows go (D-96): its owner (the Manager's
+/// process service) asks `expire` with the age it keeps; opening, a status
+/// read and an append delete nothing.
 pub struct SqliteAuditRepository {
     path: PathBuf,
     limits: AuditLimits,
@@ -91,7 +81,6 @@ pub struct SqliteAuditRepository {
     free_space: Arc<dyn FreeSpaceProbe>,
     writer: Writer,
     last_issue: Option<String>,
-    last_retention_boot_ns: Option<u64>,
     recreated: Option<String>,
 }
 
@@ -215,7 +204,7 @@ impl SqliteAuditRepository {
             policy,
         };
         let (writer, recreated) = Writer::new("audit", open_database(&spec, fs, gate));
-        let mut repository = Self {
+        Ok(Self {
             path: path.to_path_buf(),
             limits,
             policy,
@@ -223,13 +212,8 @@ impl SqliteAuditRepository {
             free_space,
             writer,
             last_issue: None,
-            last_retention_boot_ns: None,
             recreated,
-        };
-        if repository.writer.unusable().is_none() {
-            repository.maybe_run_retention();
-        }
-        Ok(repository)
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -246,39 +230,8 @@ impl SqliteAuditRepository {
         self.recreated.as_deref()
     }
 
-    /// Deletes rows older than `retention_days` (bounded per run). Also runs
-    /// automatically at open and at most hourly from `status()`.
-    pub fn run_retention(&mut self) -> Result<AuditRetentionReport, AuditFailure> {
-        let cutoff_utc = utc_cutoff(self.clock.now_utc_ns(), self.limits.retention_days);
-        self.last_retention_boot_ns = Some(self.clock.now_boot_ns());
-        let deadline = self.limits.busy_deadline();
-        let result = delete_expired(self.connection()?, &cutoff_utc, deadline);
-        match result {
-            Ok(counts) => Ok(AuditRetentionReport {
-                cutoff_utc,
-                deleted_events: counts.events,
-                deleted_attempts: counts.attempts,
-                deleted_intents: counts.intents,
-                complete: counts.complete,
-            }),
-            Err(error) => Err(self.tx_failure("audit retention", error, |()| {
-                failure(ErrorCode::InternalError, "retention aborted")
-            })),
-        }
-    }
-
     fn connection(&mut self) -> Result<&mut Connection, AuditFailure> {
         self.writer.connection().map_err(unusable_failure)
-    }
-
-    fn maybe_run_retention(&mut self) {
-        let now = self.clock.now_boot_ns();
-        let due = self
-            .last_retention_boot_ns
-            .is_none_or(|last| now.saturating_sub(last) >= RETENTION_INTERVAL_NS);
-        if due && let Err(error) = self.run_retention() {
-            self.last_issue = Some(format!("retention failed: {}", error.message));
-        }
     }
 
     /// Classifies a SQLite error like every partition does; corruption
@@ -394,7 +347,6 @@ impl SqliteAuditRepository {
         if let Some(unusable) = self.writer.unusable() {
             return (PersistenceState::Failed, Some(unusable.reason.clone()));
         }
-        self.maybe_run_retention();
         let view = match self.capacity_view(WriteClass::NewRecord) {
             Ok(view) => view,
             Err(error) => return (PersistenceState::Failed, Some(error.message)),
@@ -624,6 +576,29 @@ impl AuditRepository for SqliteAuditRepository {
         Ok(reported)
     }
 
+    fn expire(&mut self, before_utc: &str) -> Result<AuditExpiryReport, AuditFailure> {
+        if !is_rfc3339_utc(before_utc) {
+            return Err(invalid("before_utc must be RFC 3339 UTC"));
+        }
+        let deadline = self.deadline();
+        let result = delete_expired(self.connection()?, before_utc, deadline);
+        match result {
+            Ok(counts) => Ok(AuditExpiryReport {
+                deleted_events: counts.events,
+                deleted_attempts: counts.attempts,
+                deleted_intents: counts.intents,
+                complete: counts.complete,
+            }),
+            Err(error) => {
+                let failure = self.tx_failure("audit expiry", error, |()| {
+                    failure(ErrorCode::InternalError, "expiry aborted")
+                });
+                self.last_issue = Some(format!("expiry failed: {}", failure.message));
+                Err(failure)
+            }
+        }
+    }
+
     fn status(&mut self) -> PersistenceStatus {
         let (state, detail) = self.state_and_detail();
         let footprint = StorageFootprint::measure(&self.path).unwrap_or_default();
@@ -817,7 +792,7 @@ mod tests {
         );
         assert!(matches!(relative, Err(AuditOpenError::InvalidPath { .. })));
         let limits = AuditLimits {
-            retention_days: 0,
+            busy_deadline_ms: 0,
             ..AuditLimits::default()
         };
         let invalid = SqliteAuditRepository::open(

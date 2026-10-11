@@ -489,8 +489,27 @@ pub enum AuditOp {
     AppendIntent(ActionIntent),
     AppendOutcome(ActionOutcomeRecord),
     AppendAttempt(ActionAttempt),
-    RecoverUnknown { now_boot_ns: u64, now_utc: String },
+    RecoverUnknown {
+        now_boot_ns: u64,
+        now_utc: String,
+    },
+    /// Delete the rows older than `before_utc` (RFC 3339 UTC); the owner of
+    /// the audit decides the age and when (D-96).
+    Expire {
+        before_utc: String,
+    },
     Status,
+}
+
+/// Rows one audit expiry deleted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AuditExpiryReport {
+    pub deleted_events: u64,
+    pub deleted_attempts: u64,
+    pub deleted_intents: u64,
+    /// False when the per-request budget stopped before every expired row
+    /// was deleted (the next request continues).
+    pub complete: bool,
 }
 
 /// Audit worker -> Manager.
@@ -511,6 +530,9 @@ pub enum AuditCompletion {
     },
     Recovered {
         result: Result<Vec<RecoveredIntent>, AuditFailure>,
+    },
+    Expired {
+        result: Result<AuditExpiryReport, AuditFailure>,
     },
     Status(PersistenceStatus),
 }
