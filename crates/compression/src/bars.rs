@@ -6,7 +6,7 @@
 
 use dgxtop_core::tiers::{BarSize, Tier};
 
-use crate::bucket::{Bucket, merged_at};
+use crate::bucket::{Bucket, regroup_into};
 use crate::series::TieredSeries;
 
 /// The bars of a series at one size.
@@ -41,7 +41,7 @@ pub fn bars_of<B: Bucket>(
         bar,
         step_ns: tier.step_i64(),
         window,
-        bars: collect(series, tier, window),
+        bars: bars_in(series, tier, window, std::iter::empty()),
     })
 }
 
@@ -75,32 +75,29 @@ fn window_of<B: Bucket>(
 }
 
 /// The buckets of `tier` that start in the window `[start, end)`, each with
-/// what the finer sizes still fill of its time; the ones holding nothing are
-/// left out (a gap). The Overview's charts share one window, the bars of
-/// the local clock ending with the one being filled now (D-82).
-pub fn bars_in<B: Bucket>(series: &TieredSeries<B>, tier: Tier, window: (i64, i64)) -> Vec<B> {
-    collect(series, tier, window)
-}
-
-/// The buckets of `tier` in the window, the latest with what its sources
-/// fill.
-fn collect<B: Bucket>(series: &TieredSeries<B>, tier: Tier, (start, end): (i64, i64)) -> Vec<B> {
+/// what the finer sizes still fill of its time and the `extra` pieces
+/// (finer buckets the series was not given yet, in any order) it holds;
+/// the ones holding nothing are left out (a gap). The Overview's charts
+/// share one window, the bars of the local clock ending with the one being
+/// filled now (D-82).
+pub fn bars_in<'a, B: Bucket + 'a>(
+    series: &'a TieredSeries<B>,
+    tier: Tier,
+    (start, end): (i64, i64),
+    extra: impl IntoIterator<Item = &'a B>,
+) -> Vec<B> {
+    let shift = series.shift_ns();
     let in_window = |at: i64| at >= start && at < end;
     let mut bars: Vec<B> = series
         .buckets(tier)
         .filter(|bucket| in_window(bucket.start_utc_ns()))
         .copied()
         .collect();
-    for unmerged in series.unmerged(tier) {
-        let at = tier.align(unmerged.start_utc_ns(), series.shift_ns());
-        if !in_window(at) {
-            continue;
-        }
-        match bars.last_mut() {
-            Some(last) if last.start_utc_ns() == at => last.merge(unmerged),
-            _ => bars.push(merged_at(at, unmerged)),
-        }
-    }
+    let pieces = series
+        .unmerged(tier)
+        .chain(extra.into_iter().filter(|piece| !piece.is_empty()))
+        .filter(|piece| in_window(tier.align(piece.start_utc_ns(), shift)));
+    regroup_into(&mut bars, tier, shift, pieces);
     bars.retain(|bar| !bar.is_empty());
     bars
 }
@@ -277,6 +274,47 @@ mod tests {
         let auto = bars_of(&series, BarSize::Auto, 4).unwrap();
         assert_eq!(auto.bar, BarSize::OneHour, "4 hour bars hold 3 hours");
         assert!(bars_of(&TieredSeries::<Tally>::default(), BarSize::OneHour, 4).is_none());
+    }
+
+    /// The bars in a window: only buckets starting inside it, the one being
+    /// filled with its unmerged sources, extra pieces (in any order) merged
+    /// into the bar holding them or starting one, empty pieces no bar.
+    #[test]
+    fn bars_in_a_window_take_the_unmerged_and_extra_pieces() {
+        let mut series = TieredSeries::<Tally>::default();
+        for second in 0..(3 * 3_600) {
+            series.record(second * SECOND, |tally| tally.samples += 1);
+        }
+        let hour_samples = |bars: &[Tally]| -> Vec<(i64, u32)> {
+            bars.iter()
+                .map(|bar| (bar.start_utc_ns / HOUR, bar.samples))
+                .collect()
+        };
+        let plain = bars_in(&series, Tier::OneHour, (HOUR, 3 * HOUR), std::iter::empty());
+        assert_eq!(hour_samples(&plain), vec![(1, 3_600), (2, 3_600)]);
+        let late = Tally {
+            start_utc_ns: 4 * HOUR + MINUTE,
+            samples: 5,
+        };
+        let early = Tally {
+            start_utc_ns: 2 * HOUR + MINUTE,
+            samples: 7,
+        };
+        let outside = Tally {
+            start_utc_ns: 9 * HOUR,
+            samples: 1,
+        };
+        let empty = Tally::new(3 * HOUR);
+        let extra = [late, early, outside, empty];
+        let bars = bars_in(&series, Tier::OneHour, (HOUR, 5 * HOUR), extra.iter());
+        assert_eq!(hour_samples(&bars), vec![(1, 3_600), (2, 3_607), (4, 5)]);
+        let none = bars_in(
+            &TieredSeries::<Tally>::new(0),
+            Tier::OneHour,
+            (0, HOUR),
+            std::iter::empty(),
+        );
+        assert!(none.is_empty());
     }
 
     /// An empty bucket is no bar: a size can hold a bucket with no sample.

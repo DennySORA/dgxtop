@@ -378,18 +378,12 @@ impl TierBook {
             return OverviewBars {
                 epoch: 0,
                 settled_through_utc_ns: i64::MIN,
-                bars: merge_extra(Vec::new(), tier, self.shift_ns, window, extra),
+                bars: bars_in(&TieredSeries::new(self.shift_ns), tier, window, extra),
                 kept_on_disk: false,
                 store_issue: None,
             };
         };
-        let bars = bars_in(&entry.tiers, tier, window);
-        let waiting: Vec<OverviewBucket> = entry
-            .pending
-            .iter()
-            .chain(self.after_fed(entry, extra))
-            .copied()
-            .collect();
+        let waiting = entry.pending.iter().chain(self.after_fed(entry, extra));
         OverviewBars {
             epoch: entry.epoch,
             settled_through_utc_ns: if entry.ready {
@@ -397,7 +391,7 @@ impl TierBook {
             } else {
                 i64::MIN
             },
-            bars: merge_extra(bars, tier, self.shift_ns, window, &waiting),
+            bars: bars_in(&entry.tiers, tier, window, waiting),
             kept_on_disk: false,
             store_issue: None,
         }
@@ -413,25 +407,22 @@ impl TierBook {
         extra: &[OverviewBucket],
     ) -> Vec<OverviewBucket> {
         let entry = self.entries.get(series);
+        let empty = TieredSeries::new(self.shift_ns);
         spans_ns
             .iter()
             .map(|span| {
-                let start = end.saturating_sub(i64::try_from(*span).unwrap_or(i64::MAX));
-                let mut merged = entry.map_or_else(
-                    || OverviewBucket::new(start),
-                    |entry| merged_between(&entry.tiers, (start, end)),
+                let window = (
+                    end.saturating_sub(i64::try_from(*span).unwrap_or(i64::MAX)),
+                    end,
                 );
-                let pending = entry.into_iter().flat_map(|entry| entry.pending.iter());
-                let unfinalized = entry.map_or(extra.iter().collect::<Vec<_>>(), |entry| {
-                    self.after_fed(entry, extra).collect()
-                });
-                for minute in pending.chain(unfinalized) {
-                    let at = Tier::OneMinute.align(minute.start_utc_ns, self.shift_ns);
-                    if at >= start && at < end {
-                        merged.merge(minute);
-                    }
+                match entry {
+                    Some(entry) => merged_between(
+                        &entry.tiers,
+                        window,
+                        entry.pending.iter().chain(self.after_fed(entry, extra)),
+                    ),
+                    None => merged_between(&empty, window, extra),
                 }
-                merged
             })
             .collect()
     }
@@ -461,31 +452,4 @@ impl TierBook {
     ) -> Option<&TieredSeries<OverviewBucket>> {
         self.entries.get(series).map(|entry| &entry.tiers)
     }
-}
-
-/// `bars` with each extra minute merged into the bar of `tier` holding it
-/// (a new bar where none was), in time order, the window kept.
-fn merge_extra(
-    mut bars: Vec<OverviewBucket>,
-    tier: Tier,
-    shift_ns: i64,
-    (start, end): (i64, i64),
-    extra: &[OverviewBucket],
-) -> Vec<OverviewBucket> {
-    for minute in extra.iter().filter(|minute| !minute.is_empty()) {
-        let at = tier.align(minute.start_utc_ns, shift_ns);
-        if at < start || at >= end {
-            continue;
-        }
-        let position = bars.partition_point(|bar| bar.start_utc_ns < at);
-        match bars.get_mut(position) {
-            Some(bar) if bar.start_utc_ns == at => bar.merge(minute),
-            _ => {
-                let mut bar = OverviewBucket::new(at);
-                bar.merge(minute);
-                bars.insert(position, bar);
-            }
-        }
-    }
-    bars
 }

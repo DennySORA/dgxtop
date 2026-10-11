@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 
 use dgxtop_core::tiers::Tier;
 
-use crate::bucket::{Bucket, merged_at};
+use crate::bucket::{Bucket, merged_at, regroup_into};
 
 const LEVELS: usize = Tier::ALL.len();
 
@@ -101,16 +101,14 @@ impl<B: Bucket> TieredSeries<B> {
                 last.start_utc_ns().saturating_add(tier.step_i64())
             });
             let mut groups: Vec<B> = Vec::new();
-            for bucket in self.kept[source.level()]
-                .iter()
-                .filter(|bucket| bucket.start_utc_ns() >= after)
-            {
-                let start = tier.align(bucket.start_utc_ns(), self.shift_ns);
-                match groups.last_mut() {
-                    Some(last) if last.start_utc_ns() == start => last.merge(bucket),
-                    _ => groups.push(merged_at(start, bucket)),
-                }
-            }
+            regroup_into(
+                &mut groups,
+                tier,
+                self.shift_ns,
+                self.kept[source.level()]
+                    .iter()
+                    .filter(|bucket| bucket.start_utc_ns() >= after),
+            );
             self.filling[level] = groups.pop();
             for bucket in groups {
                 made.push((tier, bucket));
@@ -227,17 +225,15 @@ impl<B: Bucket> TieredSeries<B> {
     fn regrouped_before(&self, source: Tier, tier: Tier, first: i64, live: bool) -> Vec<B> {
         let mut older: Vec<B> = Vec::new();
         let source_filling = self.filling[source.level()].filter(|_| !live);
-        for bucket in self.kept[source.level()]
-            .iter()
-            .chain(source_filling.as_ref())
-            .filter(|bucket| bucket.start_utc_ns() < first)
-        {
-            let start = tier.align(bucket.start_utc_ns(), self.shift_ns);
-            match older.last_mut() {
-                Some(last) if last.start_utc_ns() == start => last.merge(bucket),
-                _ => older.push(merged_at(start, bucket)),
-            }
-        }
+        regroup_into(
+            &mut older,
+            tier,
+            self.shift_ns,
+            self.kept[source.level()]
+                .iter()
+                .chain(source_filling.as_ref())
+                .filter(|bucket| bucket.start_utc_ns() < first),
+        );
         older
     }
 
