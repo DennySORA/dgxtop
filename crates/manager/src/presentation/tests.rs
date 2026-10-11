@@ -267,7 +267,8 @@ fn reference_load_projection_stays_under_one_mebibyte() {
     let fixture = reference_fixture(128, 256);
     assert!(series_count(&fixture) >= 512);
     let (model, measured) = build_view_model_measured(&fixture.context());
-    assert_eq!(measured, model.estimated_bytes());
+    assert_eq!(measured, model.accounted_bytes(ONE_MIB));
+    assert!(measured >= model.estimated_bytes());
     assert!(measured < ONE_MIB, "{measured} bytes");
     assert!(model.banners.is_empty(), "{:?}", model.banners);
     let cpu = model.modules.cpu.as_ref().unwrap();
@@ -329,13 +330,72 @@ fn sources_view_is_bounded_on_reference_load() {
     assert!(model.estimated_bytes() < ONE_MIB);
 }
 
+/// The bound replaces writing the JSON only where that changes nothing: a
+/// projection is published at most at `max_projection_bytes` of real JSON,
+/// trimmed exactly as the exact length would trim it, for every budget and
+/// view of the reference load.
+#[test]
+fn the_accounted_size_never_exceeds_the_budget_nor_trims_differently() {
+    let views = [
+        ViewKind::Overview,
+        ViewKind::Processes,
+        ViewKind::GpuDetail,
+        ViewKind::Sources,
+    ];
+    for view in views {
+        for max_bytes in [8_192_u32, 32_768, 65_536, 131_072, 262_144, 1_048_576] {
+            let mut fixture = reference_fixture(256, 256);
+            fixture.session.view = view;
+            fixture.effective.runtime.max_projection_bytes = max_bytes;
+            let limit = usize::try_from(max_bytes).unwrap();
+            let (model, measured) = build_view_model_measured(&fixture.context());
+            let exact = model.estimated_bytes();
+            assert!(
+                measured >= exact,
+                "{view:?} {max_bytes}: {measured} < {exact}"
+            );
+            assert!(model.bytes_bound() >= exact, "{view:?} {max_bytes}");
+            assert_eq!(
+                measured <= limit,
+                exact <= limit,
+                "{view:?} {max_bytes}: published exactly when the JSON fits"
+            );
+            let reduced = model
+                .banners
+                .iter()
+                .any(|banner| banner.text.starts_with("view reduced to fit"));
+            let exceeded = model
+                .banners
+                .iter()
+                .any(|banner| banner.text.starts_with("view exceeds"));
+            assert!(!(reduced && exceeded), "{view:?} {max_bytes}");
+            if exceeded {
+                assert!(exact > limit.saturating_sub(1024), "{view:?} {max_bytes}");
+            }
+        }
+    }
+}
+
+/// A projection well inside the budget is accounted at its bound: no JSON
+/// is written for it, and the bound stays close to the real size.
+#[test]
+fn a_projection_inside_the_budget_is_accounted_at_its_bound() {
+    let fixture = reference_fixture(128, 256);
+    let (model, measured) = build_view_model_measured(&fixture.context());
+    let exact = model.estimated_bytes();
+    assert_eq!(measured, model.bytes_bound());
+    assert!(measured >= exact);
+    assert!(measured <= exact * 2, "{measured} vs {exact}");
+}
+
 #[test]
 fn small_budget_is_respected_and_announced() {
     let mut fixture = reference_fixture(256, 256);
     fixture.effective.runtime.max_projection_bytes = 65_536;
     let (model, measured) = build_view_model_measured(&fixture.context());
     assert!(measured <= 65_536, "{measured} bytes");
-    assert_eq!(measured, model.estimated_bytes());
+    assert_eq!(measured, model.accounted_bytes(65_536));
+    assert!(measured >= model.estimated_bytes());
     assert!(
         model.banners.iter().any(
             |banner| banner.text == "view reduced to fit runtime.max_projection_bytes (64 KiB)"

@@ -223,9 +223,9 @@ pub fn build_view_model(context: &PresentationContext<'_>) -> ViewModel {
     build_view_model_measured(context).0
 }
 
-/// [`build_view_model`] plus the final [`ViewModel::estimated_bytes`] of the
-/// projection, so the caller can size its byte permit without serializing
-/// the projection a second time.
+/// [`build_view_model`] plus the size the projection is accounted at
+/// ([`ViewModel::accounted_bytes`]), so the caller can size its byte permit
+/// without measuring the projection a second time.
 pub fn build_view_model_measured(context: &PresentationContext<'_>) -> (ViewModel, usize) {
     let plan = ViewPlan::new(
         context.session.view,
