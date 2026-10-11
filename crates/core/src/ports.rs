@@ -8,7 +8,8 @@
 //! * Collectors are pure (`Collector::collect`).
 //! * State (D-79): `StoreWriter` (HotStore actor only) and `SnapshotReader`.
 //! * History (D-79): `HistoryIngest`, through which the live state hands
-//!   each commit to the history, and `HistoryReader`.
+//!   each commit to the history, `HistoryReader` and `OverviewReader`
+//!   (D-82); `HistoryTierStore` keeps the Overview's sizes.
 //! * Store: `ConfigRepository`, `AuditRepository`, `ArchiveSink`,
 //!   `ArchiveReader` (D-51).
 //! * Runtime: `Dispatch<J>` submits jobs to fixed workers without blocking;
@@ -45,8 +46,8 @@ use crate::observation::{
     AdapterHealth, AdapterManifest, CatalogDelta, DiscoverRequest, ObservationBatch, ReadPlan,
 };
 use crate::overview_history::{
-    ArchivePrune, ArchivedMinutes, ArchivedMinutesRead, ArchivedSeriesList, StoredTierSeries,
-    TierJournal,
+    ArchivePrune, ArchivedMinutes, ArchivedMinutesRead, ArchivedSeriesList, OverviewAnswer,
+    OverviewRequest, StoredTierSeries, TierJournal,
 };
 use crate::process_history::{
     ProcessHistoryJournal, ProcessHistoryLoad, RecentHistory, RunBucketRow,
@@ -133,6 +134,21 @@ pub trait HistoryReader: Send + Sync {
 
     /// Series currently held (for the history module's series picker).
     fn series(&self) -> Vec<MetricKey>;
+}
+
+/// The Overview History's reads (D-82): the bars of a size and the window
+/// statistics of one series, answered from the history's own sizes.
+/// Bounded like the history reader: `TimedOut` past the deadline,
+/// `Cancelled` when the flag is set; a series the history does not hold
+/// answers with no bars.
+pub trait OverviewReader: Send + Sync {
+    fn read(
+        &self,
+        request: &OverviewRequest,
+        deadline_boot_ns: u64,
+        cancel: &CancelFlag,
+        clock: &dyn TimeProvider,
+    ) -> Result<OverviewAnswer, ErrorDetail>;
 }
 
 /// Everything whose change cuts a history segment.

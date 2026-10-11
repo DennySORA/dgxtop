@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+dgxtop-compression.workspace = true
 dgxtop-core.workspace = true
 uuid.workspace = true
 

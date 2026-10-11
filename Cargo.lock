@@ -652,6 +652,7 @@ dependencies = [
 name = "dgxtop-history"
 version = "2.0.2"
 dependencies = [
+ "dgxtop-compression",
  "dgxtop-core",
  "uuid",
 ]

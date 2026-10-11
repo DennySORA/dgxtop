@@ -6,13 +6,14 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use dgxtop_core::budget::{ByteLedger, Partition};
 use dgxtop_core::canonical::GapRecord;
+use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::identity::MetricKey;
 use dgxtop_core::metric::{CanonicalUnit, MetricDescriptor};
 pub(crate) use dgxtop_core::ports::{CutAppend, GaugeAppend, HistoryAppends, IntervalAppend};
 
 use super::gaps::{GapEntry, GapInsert, GapList, ReasonInterner};
 use super::output::{ArchiveRow, DropReason, HistoryReport};
-use super::records::{CounterSample, floor_bucket};
+use super::records::{CounterSample, GaugeBucket, floor_bucket};
 use super::segment::SegmentIdentity;
 use super::series::{Series, gauge_record, series_overhead_bytes};
 use super::slots::{SlotHandle, SlotTable};
@@ -447,11 +448,10 @@ impl HistoryState {
         };
         let cost = series.finalization_cost(&plan);
         self.ensure_headroom(Partition::Aggregates, cost, report);
-        let archive = self.settings.archive_enabled;
         let Some(series) = self.slots.get_mut(handle) else {
             return;
         };
-        let lost = series.commit_finalization(plan, archive, report);
+        let lost = series.commit_finalization(plan, report);
         for range in lost {
             self.record_loss_gap(handle, range, "history_capacity", report);
         }
@@ -637,6 +637,23 @@ impl HistoryState {
 
     pub(crate) fn handle_of(&self, key: &MetricKey) -> Option<SlotHandle> {
         self.by_key.get(key).copied()
+    }
+
+    /// The held series that is `series` in this boot, if any.
+    pub(crate) fn key_in_this_boot(&self, series: &SeriesInEveryBoot) -> Option<MetricKey> {
+        self.by_key
+            .keys()
+            .find(|key| SeriesInEveryBoot::from(*key) == *series)
+            .cloned()
+    }
+
+    /// `key`'s minutes not finalized yet, up to `now_ns` (D-82).
+    pub(crate) fn provisional_minutes(&self, key: &MetricKey, now_ns: u64) -> Vec<GaugeBucket> {
+        self.by_key
+            .get(key)
+            .and_then(|handle| self.slots.get(*handle))
+            .map(|series| series.provisional_gauge_buckets(now_ns))
+            .unwrap_or_default()
     }
 }
 

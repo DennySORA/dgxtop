@@ -287,6 +287,8 @@ pub struct OverviewBars {
     /// history in time order).
     pub settled_through_utc_ns: i64,
     pub bars: Vec<OverviewBucket>,
+    /// Why the history's store is not keeping the sizes, if it is not.
+    pub store_issue: Option<String>,
 }
 
 /// The history's answer to an [`OverviewRequest`].

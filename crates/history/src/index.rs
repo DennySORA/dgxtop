@@ -10,6 +10,7 @@ use dgxtop_core::canonical::GapRecord;
 
 use super::output::HistoryReport;
 use super::state::{HistoryAppends, HistoryState};
+use crate::overview::OverviewTiers;
 use crate::query::QueryLimits;
 
 /// Read side of the bounded history (`HistoryReader`). Cheap to clone; safe
@@ -20,6 +21,7 @@ pub struct HistoryIndex {
     shared: Arc<RwLock<HistoryState>>,
     ledger: ByteLedger,
     limits: QueryLimits,
+    overview: OverviewTiers,
 }
 
 impl fmt::Debug for HistoryIndex {
@@ -36,12 +38,20 @@ impl HistoryIndex {
         shared: Arc<RwLock<HistoryState>>,
         ledger: ByteLedger,
         limits: QueryLimits,
+        overview: OverviewTiers,
     ) -> Self {
         Self {
             shared,
             ledger,
             limits,
+            overview,
         }
+    }
+
+    /// The Overview series in every size (D-82): composition sets its local
+    /// clock and attaches its store; the readers ask it.
+    pub fn overview(&self) -> &OverviewTiers {
+        &self.overview
     }
 
     pub(crate) fn read(&self) -> RwLockReadGuard<'_, HistoryState> {
