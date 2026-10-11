@@ -1,4 +1,4 @@
-//! Store settings derived from the validated configuration.
+//! State settings derived from the validated configuration.
 
 use dgxtop_core::clock::NANOS_PER_SECOND;
 use dgxtop_core::config::StoreConfig;
@@ -6,7 +6,7 @@ use dgxtop_core::quality::Namespace;
 
 use crate::candidates::CandidateSettings;
 
-/// Everything the hot store needs from `store`.
+/// Everything the live state needs from `store`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StoreSettings {
     pub candidates: CandidateSettings,

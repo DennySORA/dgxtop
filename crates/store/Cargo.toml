@@ -1,6 +1,6 @@
 [package]
 name = "dgxtop-store"
-description = "dgxtop storage: hot snapshot store, bounded history, config repository, SQLite audit and optional archive"
+description = "dgxtop storage: config repository, SQLite audit, process history and optional archive, lock and paths"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -21,7 +21,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 dgxtop-core = { workspace = true, features = ["test-support"] }
-proptest.workspace = true
 
 [lints]
 workspace = true

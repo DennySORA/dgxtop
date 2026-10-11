@@ -1,5 +1,5 @@
 //! The telemetry path of the composition root: adapter-host supervisor →
-//! Manager (scheduler, ingestion) → real collectors → real HotStore, with
+//! Manager (scheduler, ingestion) → real collectors → real LiveState, with
 //! replay hosts as the only data sources.
 
 use std::sync::Arc;
@@ -23,7 +23,7 @@ use dgxtop_runtime::supervisor::{
     HostLauncher, HostSpec, ShutdownReport, StandardLauncher, Supervisor, SupervisorConfig,
     SupervisorHandle,
 };
-use dgxtop_store::hot::SharedSnapshot;
+use dgxtop_state::SharedSnapshot;
 
 use super::manager_rig::{Identity, RunningManager, inert_ports, ingress_gate, manager_setup};
 use super::workers::{

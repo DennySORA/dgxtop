@@ -24,7 +24,7 @@ struct SharedState {
     counters: Mutex<StoreCounters>,
 }
 
-/// Read side of the hot store (`SnapshotReader`): the latest immutable
+/// Read side of the live state (`SnapshotReader`): the latest immutable
 /// snapshot behind a lock held only to clone one `Arc`, plus the retained
 /// raw candidates and the store counters. Cheap to clone.
 #[derive(Clone)]

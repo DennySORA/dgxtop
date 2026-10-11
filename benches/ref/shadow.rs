@@ -21,7 +21,7 @@ use dgxtop_core::config::Config;
 use dgxtop_core::ports::StoreWriter;
 use dgxtop_core::quality::Namespace;
 use dgxtop_history::HistoryIndex;
-use dgxtop_store::hot::HotStoreWriter;
+use dgxtop_state::StateWriter;
 
 use crate::common::BenchResult;
 
@@ -112,7 +112,7 @@ pub fn history_bytes(ledger: &ByteLedger) -> u64 {
 
 fn spawn_feeder(
     mut feeder: HistoryFeeder,
-    mut writer: HotStoreWriter,
+    mut writer: StateWriter,
     clock: Arc<dyn TimeProvider>,
     stop: Arc<AtomicBool>,
     harness: HarnessCpu,

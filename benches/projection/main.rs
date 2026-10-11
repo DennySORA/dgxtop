@@ -58,7 +58,7 @@ use dgxtop_manager::presentation::{
     build_view_model_measured,
 };
 use dgxtop_manager::process_history::ProcessHistoryBook;
-use dgxtop_store::hot::{HotStoreWriter, SharedSnapshot};
+use dgxtop_state::{SharedSnapshot, StateWriter};
 use dgxtop_ui::terminal::GatedInput;
 use dgxtop_ui::{TuiLoop, TuiOptions};
 use serde::Serialize;
@@ -199,7 +199,7 @@ fn run() -> BenchResult<PathBuf> {
 /// plus the Manager-equivalent sparkline feed and process memory record.
 struct SnapshotWorld {
     pipeline: ReplayPipeline,
-    writer: HotStoreWriter,
+    writer: StateWriter,
     snapshots: SharedSnapshot,
     trends: TrendFeed,
     process_memory: ProcessMemoryBook,

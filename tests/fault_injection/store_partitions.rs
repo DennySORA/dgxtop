@@ -30,8 +30,8 @@ use dgxtop_core::quality::{Freshness, Namespace, Quality, SampleKind, SelectionS
 use dgxtop_core::testing::{FakeClock, metric_key, source_id};
 use dgxtop_manager::INGESTION_INBOX_CAPACITY;
 use dgxtop_runtime::queues::PoolHandle;
+use dgxtop_state::SharedSnapshot;
 use dgxtop_store::archive::{ArchiveLimits, SqliteArchive};
-use dgxtop_store::hot::SharedSnapshot;
 use uuid::Uuid;
 
 use crate::support::action_rig::{ActionRig, action_config};
@@ -43,12 +43,12 @@ use crate::support::workers::{
 };
 
 const SECOND: u64 = 1_000_000_000;
-/// Fake boot time at which the HotStore scenario starts.
+/// Fake boot time at which the LiveState scenario starts.
 const START_NS: u64 = 1_000 * SECOND;
 /// A commit must be acknowledged this fast even while the archive is stuck.
 const ACK_BOUND: Duration = Duration::from_millis(500);
 
-// ----- HotStore + archive --------------------------------------------------
+// ----- LiveState + archive --------------------------------------------------
 
 /// The HotStore actor with the archive actor behind it, on a fake clock.
 struct ArchivedStore {
@@ -200,7 +200,7 @@ impl ArchivedStore {
         let completion = self
             .acks
             .recv_timeout(Duration::from_secs(5))
-            .expect("the HotStore acknowledges every commit");
+            .expect("the LiveState acknowledges every commit");
         self.slowest_ack = self.slowest_ack.max(sent.elapsed());
         let IngestionCompletion::Committed(ack) = completion else {
             panic!("unexpected completion {completion:?}");
@@ -292,7 +292,7 @@ fn at06_stuck_then_full_archive_never_stalls_hot_store_commits() {
         Some(PersistenceState::Failed)
     );
 
-    // 3. Space is back: later journals are archived; the HotStore never
+    // 3. Space is back: later journals are archived; the LiveState never
     //    waited for any of it.
     free_space.restore();
     store.run_for(3 * 60);

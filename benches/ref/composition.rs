@@ -57,9 +57,9 @@ use dgxtop_runtime::queues::{PoolHandle, spawn_actor, spawn_pool};
 use dgxtop_runtime::supervisor::{
     HostLaunch, HostSpec, Supervisor, SupervisorConfig, SupervisorHandle,
 };
+use dgxtop_state::{SharedSnapshot, StateWriter};
 use dgxtop_store::audit::{AuditLimits, SqliteAuditRepository};
 use dgxtop_store::config::FileConfigRepository;
-use dgxtop_store::hot::{HotStoreWriter, SharedSnapshot};
 use dgxtop_store::paths::{ProcessEnv, StatePaths};
 use dgxtop_store::sqlite::{StatvfsFreeSpace, ensure_sqlite_version};
 
@@ -443,7 +443,7 @@ fn replay_hosts(inputs: &CompositionInputs<'_>) -> BenchResult<HostPlan> {
 }
 
 impl Wiring {
-    fn spawn_store(&self, writer: HotStoreWriter) -> BenchResult<PoolHandle<StoreJob>> {
+    fn spawn_store(&self, writer: StateWriter) -> BenchResult<PoolHandle<StoreJob>> {
         let clock = Arc::clone(&self.clock);
         let completions = self.completions.clone();
         let probes = Arc::clone(&self.probes);
@@ -451,7 +451,7 @@ impl Wiring {
             "hot-store",
             64,
             writer,
-            move |writer: &mut HotStoreWriter, job: StoreJob| match job {
+            move |writer: &mut StateWriter, job: StoreJob| match job {
                 StoreJob::Commit { batch, guard } => {
                     let reads = reads_of(&batch);
                     let ack = writer.commit_collection(*batch, &guard, clock.now_boot_ns());

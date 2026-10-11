@@ -78,7 +78,7 @@ impl DescriptorIndex {
 /// Epochs the store has seen.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct EpochState {
-    /// Current epoch announced by the Manager (`HotStoreWriter::set_epoch`).
+    /// Current epoch announced by the Manager (`StateWriter::set_epoch`).
     pub announced: Option<u64>,
     /// Highest epoch of a committed batch; older epochs are stale.
     pub highest_committed: Option<u64>,

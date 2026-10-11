@@ -8,14 +8,14 @@ use dgxtop_core::budget::ByteLedger;
 use dgxtop_core::config::{RuntimeConfig, SamplingConfig, StoreConfig};
 use dgxtop_core::quality::Namespace;
 use dgxtop_history::{History, HistoryIndex};
-use dgxtop_store::hot::{HotStore, HotStoreWriter, SharedSnapshot};
+use dgxtop_state::{LiveState, SharedSnapshot, StateWriter};
 
 /// The three handles of one live store, built together: `writer` belongs
 /// to the HotStore actor, `snapshots` to presentation and `history` to the
 /// history workers.
 #[derive(Debug)]
 pub struct LiveStore {
-    pub writer: HotStoreWriter,
+    pub writer: StateWriter,
     pub snapshots: SharedSnapshot,
     pub history: HistoryIndex,
 }
@@ -26,7 +26,7 @@ impl LiveStore {
     /// `namespace` is the only data namespace accepted (live, or replay in
     /// `--replay`); `archive_enabled` makes the history queue finished
     /// minute buckets, bridges and gaps for
-    /// [`HotStoreWriter::take_archive_journal`].
+    /// [`StateWriter::take_archive_journal`].
     pub fn new(
         store: &StoreConfig,
         sampling: &SamplingConfig,
@@ -37,7 +37,7 @@ impl LiveStore {
     ) -> Self {
         let (recorder, history) =
             History::new(store, sampling, runtime, &ledger, archive_enabled).into_parts();
-        let (writer, snapshots) = HotStore::new(
+        let (writer, snapshots) = LiveState::new(
             store,
             sampling,
             ledger,
@@ -54,7 +54,7 @@ impl LiveStore {
     }
 
     /// Splits the store into its writer, snapshot reader and history reader.
-    pub fn into_parts(self) -> (HotStoreWriter, SharedSnapshot, HistoryIndex) {
+    pub fn into_parts(self) -> (StateWriter, SharedSnapshot, HistoryIndex) {
         (self.writer, self.snapshots, self.history)
     }
 }

@@ -656,7 +656,7 @@ impl Wiring {
 
     fn spawn_store(
         &self,
-        writer: dgxtop_store::hot::HotStoreWriter,
+        writer: dgxtop_state::StateWriter,
         archive: Option<PoolHandle<ArchiveJournal>>,
         completions: Completions,
         archive_bytes: u64,
@@ -667,7 +667,7 @@ impl Wiring {
             "hot-store",
             64,
             writer,
-            move |writer: &mut dgxtop_store::hot::HotStoreWriter, job: StoreJob| {
+            move |writer: &mut dgxtop_state::StateWriter, job: StoreJob| {
                 // After a fail-stop the writer's state is not trusted again.
                 if fail_stop.is_halted() {
                     return;

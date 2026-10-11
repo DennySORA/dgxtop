@@ -1,7 +1,7 @@
 //! Real worker wiring for the scenarios, mirroring the private assembly in
 //! `crates/dgxtop/src/monitor.rs`: the config, audit, action, collector,
-//! history and HotStore workers on the runtime's fixed pools and actors, and
-//! the archive actor the HotStore feeds. The only deviations are test seams:
+//! history and LiveState workers on the runtime's fixed pools and actors, and
+//! the archive actor the LiveState feeds. The only deviations are test seams:
 //! a [`Gate`] in front of storage workers, probes recording what the archive
 //! did, and a recording action port that never signals anything. The audit
 //! and action workers run the production `dgxtop::control_ops` functions.
@@ -28,9 +28,9 @@ use dgxtop_core::ports::{
 };
 use dgxtop_manager::ManagerInboxes;
 use dgxtop_runtime::queues::{PoolHandle, StopReport, spawn_actor, spawn_pool};
+use dgxtop_state::StateWriter;
 use dgxtop_store::archive::{ArchiveStats, SqliteArchive};
 use dgxtop_store::config::FileConfigRepository;
-use dgxtop_store::hot::HotStoreWriter;
 
 use super::probes::Gate;
 
@@ -431,7 +431,7 @@ impl ArchiveFeed {
 }
 
 pub fn spawn_store_worker(
-    writer: HotStoreWriter,
+    writer: StateWriter,
     archive: Option<ArchiveFeed>,
     clock: Arc<dyn TimeProvider>,
     completions: Completions,
@@ -441,7 +441,7 @@ pub fn spawn_store_worker(
         "hot-store",
         STORE_MAILBOX,
         writer,
-        move |writer: &mut HotStoreWriter, job: StoreJob| {
+        move |writer: &mut StateWriter, job: StoreJob| {
             match job {
                 StoreJob::Commit { batch, guard } => {
                     let ack = writer.commit_collection(*batch, &guard, clock.now_boot_ns());

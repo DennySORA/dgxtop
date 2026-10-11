@@ -23,7 +23,7 @@ use dgxtop_core::ports::{CancelFlag, HistoryReader, IngressBatch, SnapshotReader
 use dgxtop_core::quality::{Freshness, Namespace, Quality, SampleKind, SelectionState};
 use dgxtop_core::testing::{FakeClock, ObservationBuilder, batch_of, metric_key, source_id};
 use dgxtop_history::HistoryIndex;
-use dgxtop_store::hot::{HotStoreWriter, SharedSnapshot};
+use dgxtop_state::{SharedSnapshot, StateWriter};
 use uuid::Uuid;
 
 pub const SECOND: u64 = 1_000_000_000;
@@ -36,7 +36,7 @@ pub fn config() -> Config {
 
 /// A hot store plus a fake clock and one collector's commit bookkeeping.
 pub struct Harness {
-    pub writer: HotStoreWriter,
+    pub writer: StateWriter,
     pub snapshots: SharedSnapshot,
     pub history: HistoryIndex,
     pub ledger: ByteLedger,

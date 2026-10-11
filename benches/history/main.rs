@@ -38,7 +38,7 @@ use dgxtop_core::identity::{BootId, HostId};
 use dgxtop_core::ports::{CancelFlag, HistoryReader, StoreWriter};
 use dgxtop_core::quality::Namespace;
 use dgxtop_history::HistoryIndex;
-use dgxtop_store::hot::HotStoreWriter;
+use dgxtop_state::StateWriter;
 use serde::Serialize;
 use serde_json::json;
 use uuid::Uuid;
@@ -307,7 +307,7 @@ fn preload_history(
     config: &Config,
     seed: u64,
     clock: &BenchClock,
-    writer: &mut HotStoreWriter,
+    writer: &mut StateWriter,
 ) -> BenchResult<(HistoryFeeder, PreloadReport, f64)> {
     let host = HostId::new("bench-history-host").map_err(|error| error.to_string())?;
     let limit = usize::try_from(config.store.max_series).unwrap_or(512);
@@ -356,7 +356,7 @@ fn probe_day_coverage(
 /// boot time of the last append.
 fn append_back_to_back(
     feeder: &mut HistoryFeeder,
-    writer: &mut HotStoreWriter,
+    writer: &mut StateWriter,
     from_ns: u64,
     cycles: u64,
     samples: &mut RunSamples,
@@ -378,7 +378,7 @@ fn append_back_to_back(
 /// once per second.
 fn query_under_writes(
     feeder: &mut HistoryFeeder,
-    writer: &mut HotStoreWriter,
+    writer: &mut StateWriter,
     history: &HistoryIndex,
     clock: &BenchClock,
     config: &Config,
@@ -438,7 +438,7 @@ fn paced_client(
 
 fn paced_writer(
     feeder: &mut HistoryFeeder,
-    writer: &mut HotStoreWriter,
+    writer: &mut StateWriter,
     clock: &BenchClock,
     finished: &AtomicBool,
 ) -> u64 {
@@ -573,7 +573,7 @@ fn write_run_evidence(
         &RawSamples {
             stream: "append_commit",
             unit: "us",
-            definition: "HotStoreWriter::commit_collection of one 1 s cycle of 512 history series",
+            definition: "StateWriter::commit_collection of one 1 s cycle of 512 history series",
             samples: &samples.append_us,
         },
     )?;
@@ -583,7 +583,7 @@ fn write_run_evidence(
         &RawSamples {
             stream: "append_maintain",
             unit: "us",
-            definition: "HotStoreWriter::maintain after each append (rollup finalization, eviction)",
+            definition: "StateWriter::maintain after each append (rollup finalization, eviction)",
             samples: &samples.maintain_us,
         },
     )

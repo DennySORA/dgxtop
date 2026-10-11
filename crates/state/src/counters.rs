@@ -1,4 +1,4 @@
-//! Visible counters of the hot store (finer than `StoreHealth`).
+//! Visible counters of the live state (finer than `StoreHealth`).
 
 use crate::candidates::CandidateReport;
 use dgxtop_core::ports::HistoryOutcome;
