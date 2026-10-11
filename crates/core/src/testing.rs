@@ -2,19 +2,22 @@
 //! (`dgxtop-core` feature `test-support`). Nothing here touches real drivers,
 //! files or the network.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use uuid::Uuid;
 
-use crate::canonical::{GpuUsageKind, ProcessGpuLink, ProcessRow, ProcessTable};
+use crate::canonical::{
+    CanonicalSample, DomainSnapshot, GpuUsageKind, ImmutableSnapshot, ProcessGpuLink, ProcessRow,
+    ProcessTable, SnapshotEntry,
+};
 use crate::clock::TimeProvider;
 use crate::identity::{
-    AdapterId, BootId, EntityId, HostId, MetricId, MetricKey, OriginId, OriginRelation, Pid,
-    PidNamespace, ProcessKey, ProfileId, ReadGroup, Scope, SourceId,
+    AdapterId, BootId, CollectorId, EntityId, HostId, MetricId, MetricKey, OriginId,
+    OriginRelation, Pid, PidNamespace, ProcessKey, ProfileId, ReadGroup, Scope, SourceId,
 };
-use crate::metric::{NativeUnit, Scalar};
+use crate::metric::{CanonicalUnit, NativeUnit, Scalar};
 use crate::observation::{
     BatchStatus, IPC_PROTOCOL_VERSION, Observation, ObservationBatch, Provenance,
 };
@@ -24,7 +27,7 @@ use crate::ports::{
 };
 use crate::process_model::{MemoryPart, ProcessHistoryModel};
 use crate::process_probe::{ProbeReading, ProbeState};
-use crate::quality::{Quality, ReadStatus, SampleKind};
+use crate::quality::{Freshness, Quality, ReadStatus, SampleKind, SelectionState};
 
 /// UTC on a whole minute (2026-09-21T14:14:00Z), in nanoseconds. Boot 0
 /// paired with it puts the history's minutes, which are cut on whole UTC
@@ -492,5 +495,65 @@ pub fn batch_of(
         records,
         status: BatchStatus::Ok,
         error_code: None,
+    }
+}
+
+/// A committed sample of `key` read at `read_ns`: selected with `value`,
+/// or unavailable without one.
+pub fn snapshot_entry(key: &MetricKey, value: Option<f64>, read_ns: u64) -> SnapshotEntry {
+    let selection_state = if value.is_some() {
+        SelectionState::Selected
+    } else {
+        SelectionState::Unavailable
+    };
+    SnapshotEntry {
+        stale_after_boot_ns: None,
+        sample: CanonicalSample {
+            schema_version: 1,
+            snapshot_revision: 1,
+            cycle_id: 1,
+            key: key.clone(),
+            source_id: value.map(|_| source_id("test:source:1")),
+            source_generation: value.map(|_| 1),
+            unit: CanonicalUnit::Percent,
+            value: value.map(|number| {
+                Scalar::from_f64(number).unwrap_or_else(|error| panic!("test value: {error}"))
+            }),
+            sample_kind: SampleKind::Measured,
+            selection_state,
+            quality: Quality::Verified,
+            freshness: Freshness::Fresh,
+            observed_boot_ns: None,
+            committed_boot_ns: read_ns,
+            policy_revision: 1,
+            candidate_source_ids: Vec::new(),
+            reason_codes: Vec::new(),
+            eligible_for_history: value.is_some(),
+            measurement_freshness: Freshness::Unknown,
+            read_finished_boot_ns: read_ns,
+        },
+        last_good: None,
+    }
+}
+
+/// A snapshot of `revision` holding the given `(collector, entry)` samples.
+pub fn snapshot_of(revision: u64, entries: Vec<(&str, SnapshotEntry)>) -> ImmutableSnapshot {
+    let mut domains: BTreeMap<CollectorId, DomainSnapshot> = BTreeMap::new();
+    for (collector, entry) in entries {
+        let collector =
+            CollectorId::new(collector).unwrap_or_else(|error| panic!("test collector: {error}"));
+        let domain = domains.entry(collector).or_default();
+        domain.revision = revision;
+        domain
+            .samples
+            .insert(entry.sample.key.clone(), Arc::new(entry));
+    }
+    ImmutableSnapshot {
+        revision,
+        domains: domains
+            .into_iter()
+            .map(|(id, domain)| (id, Arc::new(domain)))
+            .collect(),
+        ..ImmutableSnapshot::default()
     }
 }

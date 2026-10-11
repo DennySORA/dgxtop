@@ -13,7 +13,6 @@ use dgxtop_core::metric::ids;
 use dgxtop_core::naming::entity;
 use dgxtop_core::view::HistoryChartKind;
 
-use super::TrendBook;
 use super::disk::device_views;
 use super::gpu::gpu_name;
 use super::gpu_directory::{GpuDirectory, GpuIdentity};
@@ -35,11 +34,10 @@ const SERIES_PER_GPU: usize = 4;
 pub(crate) fn history_charts(
     snapshot: &ImmutableSnapshot,
     catalog: &CatalogSnapshot,
-    trends: &TrendBook,
     now_boot_ns: u64,
     request: &ChartRequest<'_>,
 ) -> HistoryPicks {
-    let reader = MetricReader::new(snapshot, catalog, trends, now_boot_ns);
+    let reader = MetricReader::new(snapshot, catalog, now_boot_ns);
     HistoryPicks {
         charts: dashboard(&reader, catalog, request.shown),
         stats: gpu_stats(&reader, catalog),
@@ -279,7 +277,6 @@ mod tests {
         history_charts(
             &fixture.snapshot,
             &fixture.catalog,
-            &fixture.trends,
             NOW,
             &ChartRequest { shown },
         )

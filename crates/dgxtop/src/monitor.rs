@@ -542,6 +542,9 @@ impl Wiring {
             effective.store.archive_enabled && sqlite_ok,
         )
         .into_parts();
+        // The state fills the trends at commit; the Manager only reads them
+        // (D-99).
+        let trends = Arc::new(writer.trends());
         // The Overview's sizes follow the local clock and are kept with the
         // archive (D-82); both before the hot store feeds them.
         history_index
@@ -634,6 +637,7 @@ impl Wiring {
             collector_registry,
             store: Box::new(store),
             snapshots: Arc::new(snapshots),
+            trends,
             history: Box::new(history),
             config: Box::new(config),
             audit: Box::new(audit),

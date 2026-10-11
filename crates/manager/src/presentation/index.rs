@@ -179,7 +179,6 @@ mod tests {
             let reader = crate::presentation::reader::MetricReader::new(
                 &fixture.snapshot,
                 &fixture.catalog,
-                &fixture.trends,
                 fixture.now_boot_ns,
             );
             reader.index().shared

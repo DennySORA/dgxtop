@@ -24,7 +24,6 @@ use crate::config::{AppliedChange, PersistOutcome, applied_result};
 use crate::effects::Effects;
 use crate::hosts::HostStatusRejection;
 use crate::ingestion::pages::PagePush;
-use crate::ingestion::trends::unified_gpus;
 use crate::ingestion::{CollectedOutcome, CommitOutcome, CycleInput};
 use crate::presentation::run_inputs;
 use crate::process::Now;
@@ -147,7 +146,6 @@ impl ControlCore {
         if change.previous.scheduling_changed(&effective) {
             self.scheduler.reconfigure(&effective, now.boot_ns);
             let fast = self.scheduler.effective_fast_interval_ms();
-            self.trends.set_step(u64::from(fast));
             self.history.set_raw_interval(fast);
             // A full store queue keeps the old sampling until the next
             // periodic retry.
@@ -480,12 +478,6 @@ impl ControlCore {
             CommitOutcome::Committed => {
                 let snapshot = self.ingestion.snapshots().latest();
                 self.forward_process_table(&snapshot);
-                let processes = self.process_history.model();
-                self.trends.record(
-                    &snapshot,
-                    &unified_gpus(&self.catalog.snapshot()),
-                    &processes.tracked,
-                );
                 self.sessions.mark_all_data_changed(now);
                 self.pump_collectors(now);
             }

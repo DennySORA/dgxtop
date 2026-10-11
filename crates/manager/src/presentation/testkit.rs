@@ -28,7 +28,8 @@ use dgxtop_core::view::{
 };
 
 use super::cell::canonical_unit_of;
-use super::{HostFacts, PresentationContext, SettingsInputs, TrendBook};
+use super::{HostFacts, PresentationContext, SettingsInputs};
+use dgxtop_core::trends::TrendBook;
 
 /// Boot-clock "now" of every fixture.
 pub(crate) const NOW: u64 = 100_000_000_000;

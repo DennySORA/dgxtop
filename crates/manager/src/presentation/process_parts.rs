@@ -39,16 +39,6 @@ pub(crate) fn process_shares(
         .collect()
 }
 
-/// The GPUs of `directory` that allocate from system RAM.
-pub(crate) fn unified_gpus(directory: &GpuDirectory<'_>) -> BTreeSet<EntityId> {
-    directory
-        .gpus()
-        .iter()
-        .filter(|gpu| gpu.has_unified_memory())
-        .map(|gpu| gpu.entity_id.clone())
-        .collect()
-}
-
 /// What the history view's process parts are made from.
 pub(crate) struct ProcessHistoryInputs<'a> {
     /// The processes holding a color.
@@ -74,7 +64,7 @@ pub(crate) fn with_process_parts(
     }
     let window = (history.start_utc_ns, history.end_utc_ns);
     let cells = bars_of(&history).unwrap_or(inputs.cells);
-    let unified = unified_gpus(inputs.directory);
+    let unified = inputs.directory.unified_gpus();
     let mut view = (*history).clone();
     for chart in &mut view.charts {
         let gpus = match chart.kind {

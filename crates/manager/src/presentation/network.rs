@@ -145,7 +145,8 @@ mod tests {
         interface(&mut fixture, "netif:ns:3", "ib0", Some(5e9));
         interface(&mut fixture, "netif:ns:4", "eth1", None);
         interface(&mut fixture, "netif:ns:5", "docker0", Some(0.0));
-        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
+        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, NOW)
+            .with_trends(&fixture.trends);
         let view = build_network_view(&reader, 3, TREND_WIDTH);
         let names: Vec<&str> = view
             .interfaces
@@ -174,7 +175,8 @@ mod tests {
         fixture.trends.push(&rx, Some(5e9));
         fixture.trends.push(&tx, Some(2.0));
         fixture.trends.push(&loopback, Some(9e9));
-        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
+        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, NOW)
+            .with_trends(&fixture.trends);
         let view = build_network_view(&reader, 3, TREND_WIDTH);
         assert_eq!(view.interfaces[0].name, "ib0");
         assert_eq!(view.rx_trend.points, vec![Some(4e9), Some(5e9)]);

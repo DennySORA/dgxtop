@@ -9,7 +9,6 @@ use dgxtop_core::identity::EntityId;
 use dgxtop_core::naming::{attributes, entity};
 use dgxtop_core::view::InterfaceView;
 
-use super::TrendBook;
 use super::gpu_directory::GpuDirectory;
 use super::network::ranked_interfaces;
 use super::reader::MetricReader;
@@ -29,8 +28,7 @@ pub(crate) fn run_inputs(
     catalog: &CatalogSnapshot,
     now_boot_ns: u64,
 ) -> RunInputs {
-    let trends = TrendBook::new(0);
-    let reader = MetricReader::new(snapshot, catalog, &trends, now_boot_ns);
+    let reader = MetricReader::new(snapshot, catalog, now_boot_ns);
     let directory = GpuDirectory::new(catalog, reader.index());
     let gpu_labels = directory
         .gpus()

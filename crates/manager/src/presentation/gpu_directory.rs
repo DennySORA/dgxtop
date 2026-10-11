@@ -1,7 +1,7 @@
 //! GPU identities and display labels. A GPU is identified by its
 //! `gpu:<UUID>` entity; the NVML index only orders and labels it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use dgxtop_core::canonical::CatalogSnapshot;
 use dgxtop_core::identity::EntityId;
@@ -34,7 +34,7 @@ impl GpuIdentity<'_> {
 }
 
 /// The adapter reports the GPU of `record` as allocating from system RAM.
-pub(crate) fn is_unified_memory(record: &EntityRecord) -> bool {
+fn is_unified_memory(record: &EntityRecord) -> bool {
     record
         .attribute(attributes::MEMORY_MODEL)
         .is_some_and(|model| model.trim().eq_ignore_ascii_case(UNIFIED_MEMORY_MODEL))
@@ -88,6 +88,16 @@ impl<'a> GpuDirectory<'a> {
             .iter()
             .find(|gpu| &gpu.entity_id == entity_id)
             .map_or_else(|| uuid_label(entity_id.as_str()), |gpu| gpu.label.clone())
+    }
+
+    /// The GPUs that allocate from system RAM (D-36): the one place this
+    /// set is made.
+    pub(crate) fn unified_gpus(&self) -> BTreeSet<EntityId> {
+        self.gpus
+            .iter()
+            .filter(|gpu| gpu.has_unified_memory())
+            .map(|gpu| gpu.entity_id.clone())
+            .collect()
     }
 
     pub(crate) fn choices(&self) -> Vec<(EntityId, String)> {

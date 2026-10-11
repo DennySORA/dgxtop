@@ -295,6 +295,7 @@ impl RefComposition {
         )
         .into_parts();
         let history = Arc::new(SwitchableHistory::new(Arc::new(history_index)));
+        let trends = Arc::new(writer.trends());
         let mut workers: Vec<Box<dyn StopWorker>> = Vec::new();
         let store = wiring.spawn_store(writer)?;
         workers.push(Box::new(NamedPool("hot-store", store.clone())));
@@ -381,6 +382,7 @@ impl RefComposition {
             collector_registry,
             store: Box::new(store),
             snapshots: Arc::new(snapshots.clone()),
+            trends,
             history: Box::new(TimedHistoryDispatch {
                 pool: history_pool,
                 probes: Arc::clone(&inputs.probes),

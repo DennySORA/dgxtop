@@ -469,8 +469,6 @@ fn at05_pages_accumulate_into_one_job_and_state_advances_only_after_the_ack() {
         reason: None,
     }));
     harness.settle();
-    let trend = harness.manager.core().trends.book().trend(&cpu, 10);
-    assert_eq!(trend.points, vec![Some(42.0)]);
     let next = next_read_of(&mut harness, "cpu");
     let now = harness.now_ns();
     harness.ingest(batch_reply(&next, Vec::new(), false, now));

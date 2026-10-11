@@ -145,10 +145,9 @@ impl ControlCore {
         let snapshot = self.ingestion.snapshots().latest();
         if self.history.wants_charts(snapshot.revision) {
             let catalog = self.catalog.snapshot();
-            let trends = self.trends.book();
             let dirty = self.history.update_charts(
                 snapshot.revision,
-                |request| history_charts(&snapshot, &catalog, trends, now_ns, request),
+                |request| history_charts(&snapshot, &catalog, now_ns, request),
                 now_ns,
             );
             for session_id in &dirty {
@@ -299,7 +298,7 @@ impl ControlCore {
             overload: self.overload.state(),
             actions: self.process.view_for(session_id, now_ns),
             history: self.history.view(session_id),
-            trends: self.trends.book(),
+            trends: self.trends.as_ref(),
             processes: &inputs.processes,
             process_memory: self.process_history.memory(),
             facts: &self.facts,
