@@ -24,8 +24,6 @@ pub const MIB: u64 = 1024 * 1024;
 pub enum Partition {
     /// Interned strings, descriptors, tombstones, profile index, committed bases.
     Catalog,
-    /// 60 s raw candidate retention and evidence.
-    RawCandidates,
     /// Canonical hot state and the live process table.
     HotState,
     /// 300 s full-resolution canonical history.
@@ -43,9 +41,8 @@ pub enum Partition {
 }
 
 impl Partition {
-    pub const ALL: [Partition; 9] = [
+    pub const ALL: [Partition; 8] = [
         Partition::Catalog,
-        Partition::RawCandidates,
         Partition::HotState,
         Partition::RawHistory,
         Partition::Aggregates,
@@ -59,10 +56,11 @@ impl Partition {
     pub const fn reference_mib(self) -> u64 {
         match self {
             Self::Catalog => 24,
-            Self::RawCandidates => 32,
             Self::HotState => 16,
             Self::RawHistory => 32,
-            Self::Aggregates => 96,
+            // RUNTIME.md §6's 96 MiB plus the 32 MiB of the raw candidate
+            // retention, which nothing read (D-84).
+            Self::Aggregates => 128,
             Self::Ingress => 8,
             Self::Presentation => 12,
             Self::HistoryQuery => 16,
@@ -73,21 +71,19 @@ impl Partition {
     const fn index(self) -> usize {
         match self {
             Self::Catalog => 0,
-            Self::RawCandidates => 1,
-            Self::HotState => 2,
-            Self::RawHistory => 3,
-            Self::Aggregates => 4,
-            Self::Ingress => 5,
-            Self::Presentation => 6,
-            Self::HistoryQuery => 7,
-            Self::Reserve => 8,
+            Self::HotState => 1,
+            Self::RawHistory => 2,
+            Self::Aggregates => 3,
+            Self::Ingress => 4,
+            Self::Presentation => 5,
+            Self::HistoryQuery => 6,
+            Self::Reserve => 7,
         }
     }
 
     pub const fn name(self) -> &'static str {
         match self {
             Self::Catalog => "catalog",
-            Self::RawCandidates => "raw_candidates",
             Self::HotState => "hot_state",
             Self::RawHistory => "raw_history",
             Self::Aggregates => "aggregates",
@@ -102,13 +98,13 @@ impl Partition {
 /// Byte limits per partition. Scaling is exact: `share_mib * limit_mib * 4096`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PartitionLimits {
-    limits: [u64; 9],
+    limits: [u64; 8],
 }
 
 impl PartitionLimits {
     /// Limits for a total budget of `memory_limit_mib` MiB.
     pub fn for_memory_limit_mib(memory_limit_mib: u64) -> Self {
-        let mut limits = [0u64; 9];
+        let mut limits = [0u64; 8];
         for partition in Partition::ALL {
             // share/256 of the budget; MIB/256 == 4096 keeps this exact.
             limits[partition.index()] = partition
@@ -162,7 +158,7 @@ impl PartitionCounters {
 
 struct LedgerInner {
     limits: PartitionLimits,
-    counters: [PartitionCounters; 9],
+    counters: [PartitionCounters; 8],
 }
 
 impl LedgerInner {
@@ -237,7 +233,6 @@ impl ByteLedger {
             inner: Arc::new(LedgerInner {
                 limits,
                 counters: [
-                    PartitionCounters::new(),
                     PartitionCounters::new(),
                     PartitionCounters::new(),
                     PartitionCounters::new(),
@@ -647,7 +642,7 @@ mod tests {
     fn partitions_scale_exactly_and_sum_to_total() {
         let reference = PartitionLimits::for_memory_limit_mib(256);
         assert_eq!(reference.total(), 256 * MIB);
-        assert_eq!(reference.limit(Partition::Aggregates), 96 * MIB);
+        assert_eq!(reference.limit(Partition::Aggregates), 128 * MIB);
         assert_eq!(reference.limit(Partition::Ingress), 8 * MIB);
         let small = PartitionLimits::for_memory_limit_mib(64);
         assert_eq!(small.total(), 64 * MIB);

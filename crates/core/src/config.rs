@@ -99,6 +99,9 @@ pub struct PinnedSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StoreConfig {
+    /// Accepted and range-checked because the sealed schema requires it,
+    /// but nothing retains raw candidates any more: the Sources view reads
+    /// the snapshot's arbitration explanations (D-84).
     pub raw_candidate_seconds: u32,
     pub raw_history_seconds: u32,
     pub aggregate_seconds: u32,

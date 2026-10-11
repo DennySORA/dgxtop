@@ -10,7 +10,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use dgxtop_core::budget::{ByteLedger, Partition};
-use dgxtop_core::canonical::{AckStatus, StoreAck};
+use dgxtop_core::canonical::{AckStatus, BatchFingerprint, StoreAck};
 use uuid::Uuid;
 
 use dgxtop_core::budget::accounted::Account;
@@ -34,7 +34,7 @@ pub(crate) enum Recall {
 }
 
 struct Remembered {
-    fingerprint: String,
+    fingerprint: BatchFingerprint,
     ack: StoreAck,
 }
 
@@ -57,7 +57,7 @@ impl RememberedBatches {
         }
     }
 
-    pub(crate) fn recall(&self, batch_id: Uuid, fingerprint: &str) -> Recall {
+    pub(crate) fn recall(&self, batch_id: Uuid, fingerprint: BatchFingerprint) -> Recall {
         match self.entries.get(&batch_id) {
             None => Recall::New,
             Some(entry) if entry.fingerprint == fingerprint => {
@@ -72,7 +72,12 @@ impl RememberedBatches {
     /// Remembers a committed batch, forgetting the oldest when full. When
     /// even that leaves no memory the batch is not remembered: a resend then
     /// fails the base check instead of committing twice.
-    pub(crate) fn remember(&mut self, batch_id: Uuid, fingerprint: String, ack: StoreAck) {
+    pub(crate) fn remember(
+        &mut self,
+        batch_id: Uuid,
+        fingerprint: BatchFingerprint,
+        ack: StoreAck,
+    ) {
         if self.capacity == 0 || self.entries.contains_key(&batch_id) {
             return;
         }
@@ -113,6 +118,29 @@ mod tests {
     use dgxtop_core::canonical::ArchiveState;
     use dgxtop_core::identity::CollectorId;
 
+    /// A batch's fingerprint, distinct per `content`.
+    fn fingerprint(content: u64) -> BatchFingerprint {
+        let batch = dgxtop_core::canonical::CollectionBatch {
+            batch_id: Uuid::nil(),
+            collector_id: CollectorId::new("cpu").unwrap(),
+            cycle_id: content,
+            epoch: 1,
+            config_revision: 1,
+            catalog_revision: 1,
+            policy_revision: 1,
+            state_base_revision: 0,
+            canonical: vec![],
+            explanations: vec![],
+            counter_intervals: vec![],
+            inputs: vec![],
+            process_table: None,
+            next_state: dgxtop_core::canonical::CollectorState::default(),
+            failures: vec![],
+            events: vec![],
+        };
+        batch.content_fingerprint()
+    }
+
     fn ack(batch_id: Uuid) -> StoreAck {
         StoreAck {
             batch_id,
@@ -130,14 +158,17 @@ mod tests {
         let ledger = ByteLedger::for_memory_limit_mib(64);
         let mut batches = RememberedBatches::new(&ledger, 4);
         let id = Uuid::new_v4();
-        assert_eq!(batches.recall(id, "a"), Recall::New);
-        batches.remember(id, "a".to_owned(), ack(id));
-        let Recall::Duplicate(duplicate) = batches.recall(id, "a") else {
+        assert_eq!(batches.recall(id, fingerprint(1)), Recall::New);
+        batches.remember(id, fingerprint(1), ack(id));
+        let Recall::Duplicate(duplicate) = batches.recall(id, fingerprint(1)) else {
             panic!("expected duplicate");
         };
         assert_eq!(duplicate.status, AckStatus::Duplicate);
         assert_eq!(duplicate.committed_revision, 7);
-        assert!(matches!(batches.recall(id, "b"), Recall::Conflict(_)));
+        assert!(matches!(
+            batches.recall(id, fingerprint(2)),
+            Recall::Conflict(_)
+        ));
     }
 
     #[test]
@@ -146,10 +177,10 @@ mod tests {
         let mut batches = RememberedBatches::new(&ledger, 3);
         let ids: Vec<Uuid> = (0..5).map(|_| Uuid::new_v4()).collect();
         for id in &ids {
-            batches.remember(*id, "x".to_owned(), ack(*id));
+            batches.remember(*id, fingerprint(9), ack(*id));
         }
         assert_eq!(batches.len(), 3);
-        assert_eq!(batches.recall(ids[0], "x"), Recall::New);
+        assert_eq!(batches.recall(ids[0], fingerprint(9)), Recall::New);
         assert_eq!(ledger.used(Partition::Reserve), 3 * ENTRY_BYTES);
         assert_eq!(ledger.used(Partition::HotState), 0);
         let reference = ByteLedger::for_memory_limit_mib(256);
@@ -160,7 +191,7 @@ mod tests {
 
         let tiny = ByteLedger::new(PartitionLimits::for_memory_limit_mib(0));
         let mut starved = RememberedBatches::new(&tiny, 3);
-        starved.remember(ids[0], "x".to_owned(), ack(ids[0]));
+        starved.remember(ids[0], fingerprint(9), ack(ids[0]));
         assert_eq!(starved.len(), 0);
     }
 }

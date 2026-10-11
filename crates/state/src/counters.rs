@@ -1,6 +1,5 @@
 //! Visible counters of the live state (finer than `StoreHealth`).
 
-use crate::candidates::CandidateReport;
 use dgxtop_core::ports::HistoryOutcome;
 
 /// Monotonic counters exposed through `SharedSnapshot::counters`.
@@ -19,8 +18,6 @@ pub struct StoreCounters {
     pub series_rejected_total: u64,
     /// Records removed because a partition was full (not normal retention).
     pub evicted_records_total: u64,
-    pub candidates_retained_total: u64,
-    pub candidates_dropped_total: u64,
     pub gaps_total: u64,
     /// `record_gap` calls with `end <= start` (ignored).
     pub invalid_gaps_total: u64,
@@ -48,12 +45,6 @@ impl StoreCounters {
             &mut self.archive_rows_dropped_total,
             outcome.archive_rows_dropped,
         );
-    }
-
-    pub(crate) fn absorb_candidates(&mut self, report: &CandidateReport) {
-        add(&mut self.candidates_retained_total, report.retained);
-        add(&mut self.candidates_dropped_total, report.dropped);
-        add(&mut self.evicted_records_total, report.evicted);
     }
 
     pub(crate) fn count_commit(&mut self) {

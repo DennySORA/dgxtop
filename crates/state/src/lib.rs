@@ -2,15 +2,15 @@
 //!
 //! The live state of dgxtop (D-79): what the collectors committed, held in
 //! memory only and gone at restart, like a small Redis. It serves the
-//! Manager's real-time reads (the latest snapshot, collector state for the
-//! next delta, candidate evidence) and hands every committed batch on to
-//! the history. No persistence, no history, no I/O.
+//! Manager's real-time reads (the latest snapshot with its arbitration
+//! explanations, collector state for the next delta) and hands every
+//! committed batch on to the history. No persistence, no history, no I/O.
 //!
 //! The single-writer commit pipeline (`STORAGE.md` §1, `INTERFACES.md` §8):
 //! [`StateWriter`] is owned by the HotStore actor thread. Each commit is
 //! validated completely before anything changes (epoch, base revision,
-//! values, namespace, units, memory admission), then samples, history,
-//! candidate evidence and collector state are applied and exactly one new
+//! values, namespace, units, memory admission), then samples, history
+//! and collector state are applied and exactly one new
 //! [`ImmutableSnapshot`] revision is published. History is reached only
 //! through the injected `HistoryIngest` port (D-79), called on this thread
 //! before the publish, so a commit is in history once its ack is visible.
@@ -19,7 +19,6 @@
 
 #![forbid(unsafe_code)]
 
-pub mod candidates;
 mod counters;
 mod dedup;
 mod estimate;
@@ -30,12 +29,12 @@ mod snapshot;
 mod validate;
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::Arc;
 
 use dgxtop_core::budget::{ByteLedger, BytePermit, Partition};
 use dgxtop_core::canonical::{
     AckStatus, ArchiveState, CollectionBatch, CollectorState, CommitGuard, DomainSnapshot,
-    GapRecord, ImmutableSnapshot, ProcessTable, StoreAck, StoreHealth,
+    GapRecord, ImmutableSnapshot, ProcessTable, SampleIndexCache, StoreAck, StoreHealth,
 };
 use dgxtop_core::config::{SamplingConfig, StoreConfig};
 use dgxtop_core::identity::{CollectorId, MetricKey};
@@ -50,7 +49,6 @@ use uuid::Uuid;
 pub use counters::StoreCounters;
 pub use snapshot::SharedSnapshot;
 
-use crate::candidates::{CandidateReport, CandidateStore};
 use dedup::{REMEMBERED_BATCHES, Recall, RememberedBatches};
 use retained::RetainedAllocations;
 use settings::StoreSettings;
@@ -82,11 +80,7 @@ impl LiveState {
         history: Box<dyn HistoryIngest>,
     ) -> Self {
         let timing = SamplingTiming::from_sampling(sampling);
-        let settings = StoreSettings::new(store, namespace);
-        let candidates = Arc::new(RwLock::new(CandidateStore::new(
-            settings.candidates,
-            &ledger,
-        )));
+        let settings = StoreSettings::new(store);
         let initial = Arc::new(ImmutableSnapshot {
             health: StoreHealth {
                 ledger: Some(ledger.snapshot()),
@@ -98,7 +92,7 @@ impl LiveState {
         if let Ok(permit) = ledger.try_reserve(Partition::HotState, estimate::frame_bytes(0, 0)) {
             retained.track(&initial, permit);
         }
-        let snapshots = SharedSnapshot::new(Arc::clone(&initial), Arc::clone(&candidates));
+        let snapshots = SharedSnapshot::new(Arc::clone(&initial));
         let writer = StateWriter {
             settings,
             timing,
@@ -108,15 +102,14 @@ impl LiveState {
             shared: snapshots.clone(),
             current: initial,
             key_owners: BTreeMap::new(),
+            domain_bytes: BTreeMap::new(),
             retained,
             remembered: RememberedBatches::new(&ledger, REMEMBERED_BATCHES),
             epochs: EpochState::default(),
             history,
-            candidates,
             recent_gaps: RecentGaps::new(timing.fast_period_ns),
             counters: StoreCounters::default(),
             series_count: 0,
-            sources_retained: 0,
             truncated: false,
             revision: 0,
             last_now_ns: 0,
@@ -174,15 +167,16 @@ pub struct StateWriter {
     shared: SharedSnapshot,
     current: Arc<ImmutableSnapshot>,
     key_owners: BTreeMap<MetricKey, CollectorId>,
+    /// Accounted bytes of each published domain, so admitting a commit
+    /// does not re-estimate the whole previous domain.
+    domain_bytes: BTreeMap<CollectorId, u64>,
     retained: RetainedAllocations,
     remembered: RememberedBatches,
     epochs: EpochState,
     history: Box<dyn HistoryIngest>,
-    candidates: Arc<RwLock<CandidateStore>>,
     recent_gaps: RecentGaps,
     counters: StoreCounters,
     series_count: u32,
-    sources_retained: u32,
     truncated: bool,
     revision: u64,
     last_now_ns: u64,
@@ -242,20 +236,10 @@ impl StateWriter {
     }
 
     /// Sheds droppable data under memory pressure (overload `throttled`):
-    /// raw candidates beyond half their retention first, then raw history
-    /// beyond half its retention (minutes that already have rollups).
+    /// raw history beyond half its retention (minutes that already have
+    /// rollups).
     pub fn relieve_pressure(&mut self, now_boot_ns: u64) {
         let now = self.advance_clock(now_boot_ns);
-        let shed = self
-            .candidates
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .expire_within(now, self.settings.candidates.retention_ns / 2);
-        self.counters.absorb_candidates(&CandidateReport {
-            evicted: shed,
-            ..CandidateReport::default()
-        });
-        self.refresh_candidate_count();
         let outcome = self.history.shed_raw(now, self.settings.raw_history_ns / 2);
         self.absorb_history(outcome);
         self.publish_now(SnapshotChange::default(), now);
@@ -316,12 +300,12 @@ impl StateWriter {
     fn admit(
         &mut self,
         batch: &CollectionBatch,
-        previous: Option<&DomainSnapshot>,
+        previous_bytes: Option<u64>,
     ) -> Result<Admission, Rejection> {
         self.retained.sweep();
         let domain = self.reserve(
             Partition::HotState,
-            estimate::domain_upper_bound(previous, batch),
+            estimate::domain_upper_bound(previous_bytes, batch),
             "hot_state (domain snapshot)",
         )?;
         let state = self.reserve(
@@ -378,7 +362,8 @@ impl StateWriter {
         };
         let checked = validate::check_contents(&batch, &rules)?;
         let previous = self.current.domains.get(&batch.collector_id).cloned();
-        let admission = self.admit(&batch, previous.as_deref())?;
+        let previous_bytes = self.domain_bytes.get(&batch.collector_id).copied();
+        let admission = self.admit(&batch, previous_bytes)?;
         Ok(self.build(batch, checked, previous.as_deref(), admission, now))
     }
 
@@ -457,14 +442,9 @@ impl StateWriter {
         let outcome = self.history.ingest(appends, now, revision);
         self.counters.count_gaps(outcome.gaps_added);
         self.absorb_history(outcome);
-        let candidate_report = self
-            .candidates
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .retain(&inputs, now);
+        // The raw batches are evidence only until the commit: dropping them
+        // here releases their ingress bytes before the publish (D-84).
         drop(inputs);
-        self.counters.absorb_candidates(&candidate_report);
-        self.refresh_candidate_count();
         for key in new_keys {
             self.key_owners.insert(key, collector_id.clone());
         }
@@ -503,20 +483,10 @@ impl StateWriter {
         }
     }
 
-    fn refresh_candidate_count(&mut self) {
-        let count = self
-            .candidates
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .source_count();
-        self.sources_retained = u32::try_from(count).unwrap_or(u32::MAX);
-    }
-
     fn health(&self) -> StoreHealth {
         StoreHealth {
             ledger: Some(self.ledger.snapshot()),
             series: self.series_count,
-            sources_retained: self.sources_retained,
             gaps_total: self.counters.gaps_total,
             evicted_total: self.counters.evicted_records_total,
             rejected_batches_total: self.counters.rejected_batches_total,
@@ -544,6 +514,9 @@ impl StateWriter {
     fn publish(&mut self, change: SnapshotChange, frame: BytePermit, revision: u64, now: u64) {
         let mut domains = self.current.domains.clone();
         for (collector_id, domain, permit) in change.domains {
+            // Every permit was shrunk to its domain's estimate.
+            self.domain_bytes
+                .insert(collector_id.clone(), permit.bytes());
             let shared = Arc::new(domain);
             self.retained.track(&shared, permit);
             domains.insert(collector_id, shared);
@@ -571,6 +544,9 @@ impl StateWriter {
             collector_states,
             health: self.health(),
             recent_gaps,
+            // Built by the first reader: most revisions of a cycle are
+            // superseded before a frame reads them (D-83, D-84).
+            sample_index: SampleIndexCache::default(),
         });
         self.retained.track(&snapshot, frame);
         self.current = Arc::clone(&snapshot);
@@ -674,7 +650,7 @@ impl StoreWriter for StateWriter {
         let now = self.advance_clock(now_boot_ns);
         let identity = (batch.batch_id, batch.collector_id.clone());
         let fingerprint = batch.content_fingerprint();
-        match self.remembered.recall(batch.batch_id, &fingerprint) {
+        match self.remembered.recall(batch.batch_id, fingerprint) {
             Recall::Duplicate(ack) => {
                 self.counters.count_duplicate();
                 self.shared.publish_counters(self.counters);
@@ -721,14 +697,8 @@ impl StoreWriter for StateWriter {
     fn maintain(&mut self, now_boot_ns: u64) {
         let now = self.advance_clock(now_boot_ns);
         self.retained.sweep();
-        let expired = self
-            .candidates
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .expire(now);
-        self.refresh_candidate_count();
         let outcome = self.history.maintain(now);
-        let visible = outcome.changed_visible_state() || expired > 0;
+        let visible = outcome.changed_visible_state();
         self.counters.count_gaps(outcome.gaps_added);
         self.absorb_history(outcome);
         let pruned = self.prune_idle_keys(now);

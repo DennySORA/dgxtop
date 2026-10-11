@@ -1,41 +1,32 @@
-//! Read-only lookups over one committed snapshot, built once per projection
-//! so module builders never rescan every domain for each cell.
+//! Read-only lookups over one committed snapshot. The index itself is the
+//! snapshot's own, built once per revision and shared by the frame build,
+//! the process history's inputs and the History tab's chart picks (D-84);
+//! this view only adapts it to the module builders.
 
-use std::collections::BTreeMap;
+use std::sync::Arc;
 
-use dgxtop_core::canonical::{CatalogSnapshot, ImmutableSnapshot, SnapshotEntry};
+use dgxtop_core::canonical::{self, CatalogSnapshot, ImmutableSnapshot, SnapshotEntry};
 use dgxtop_core::identity::{BootId, EntityId, HostId, MetricId, MetricKey, Scope};
 
-/// `(metric_id, entity_id, scope)`: a series without host and boot, which
-/// are fixed within one snapshot.
-type SeriesCoordinates<'a> = (&'a str, &'a str, &'a str);
-
 /// Committed samples ordered by metric, then entity, then scope.
+#[derive(Clone, Copy)]
 pub(crate) struct SampleIndex<'a> {
-    entries: BTreeMap<SeriesCoordinates<'a>, &'a SnapshotEntry>,
+    shared: &'a canonical::SampleIndex,
+}
+
+fn entries(slice: &[Arc<SnapshotEntry>]) -> Vec<&SnapshotEntry> {
+    slice.iter().map(Arc::as_ref).collect()
 }
 
 impl<'a> SampleIndex<'a> {
     pub(crate) fn new(snapshot: &'a ImmutableSnapshot) -> Self {
-        let mut entries: BTreeMap<SeriesCoordinates<'a>, &'a SnapshotEntry> = BTreeMap::new();
-        for domain in snapshot.domains.values() {
-            for (key, entry) in &domain.samples {
-                let coordinates = (
-                    key.metric_id.as_str(),
-                    key.entity_id.as_str(),
-                    key.scope.as_str(),
-                );
-                let slot = entries.entry(coordinates).or_insert(entry);
-                if is_newer(entry, slot) {
-                    *slot = entry;
-                }
-            }
+        Self {
+            shared: snapshot.index(),
         }
-        Self { entries }
     }
 
     pub(crate) fn get(&self, metric: &str, entity: &str, scope: &str) -> Option<&'a SnapshotEntry> {
-        self.entries.get(&(metric, entity, scope)).copied()
+        self.shared.get(metric, entity, scope)
     }
 
     /// The preferred scope when reported, else the first scope (in order)
@@ -46,70 +37,39 @@ impl<'a> SampleIndex<'a> {
         entity: &str,
         preferred_scope: &str,
     ) -> Option<&'a SnapshotEntry> {
-        self.get(metric, entity, preferred_scope)
-            .or_else(|| self.entries_of_entity(metric, entity).into_iter().next())
+        self.shared.find(metric, entity, preferred_scope)
     }
 
     pub(crate) fn entries_of_metric(&self, metric: &str) -> Vec<&'a SnapshotEntry> {
-        self.entries
-            .range((metric, "", "")..)
-            .take_while(|((candidate, _, _), _)| *candidate == metric)
-            .map(|(_, entry)| *entry)
-            .collect()
+        entries(self.shared.entries_of_metric(metric))
     }
 
     pub(crate) fn entries_of_entity(&self, metric: &str, entity: &str) -> Vec<&'a SnapshotEntry> {
-        self.entries
-            .range((metric, entity, "")..)
-            .take_while(|((candidate_metric, candidate_entity, _), _)| {
-                *candidate_metric == metric && *candidate_entity == entity
-            })
-            .map(|(_, entry)| *entry)
-            .collect()
+        entries(self.shared.entries_of_entity(metric, entity))
     }
 
     /// Distinct entities (sorted by id) reporting any of `metrics` whose id
     /// starts with `prefix`.
     pub(crate) fn entities_reporting(&self, metrics: &[&str], prefix: &str) -> Vec<&'a EntityId> {
-        let mut entities: BTreeMap<&'a str, &'a EntityId> = BTreeMap::new();
-        for metric in metrics {
-            for entry in self.entries_of_metric(metric) {
-                let entity = &entry.sample.key.entity_id;
-                if entity.as_str().starts_with(prefix) {
-                    entities.entry(entity.as_str()).or_insert(entity);
-                }
-            }
-        }
-        entities.into_values().collect()
+        let mut entities: Vec<&'a EntityId> = metrics
+            .iter()
+            .flat_map(|metric| self.shared.entries_of_metric(metric))
+            .map(|entry| &entry.sample.key.entity_id)
+            .filter(|entity| entity.as_str().starts_with(prefix))
+            .collect();
+        entities.sort();
+        entities.dedup();
+        entities
     }
 
     /// Distinct entities (sorted by id) whose id starts with `prefix`.
     pub(crate) fn entities_with_prefix(&self, prefix: &str) -> Vec<&'a EntityId> {
-        let mut entities: BTreeMap<&'a str, &'a EntityId> = BTreeMap::new();
-        for entry in self.entries.values() {
-            let entity = &entry.sample.key.entity_id;
-            if entity.as_str().starts_with(prefix) {
-                entities.entry(entity.as_str()).or_insert(entity);
-            }
-        }
-        entities.into_values().collect()
+        self.shared.entities_with_prefix(prefix).iter().collect()
     }
 
     fn any_key(&self) -> Option<&'a MetricKey> {
-        self.entries.values().next().map(|entry| &entry.sample.key)
+        self.shared.any_key()
     }
-}
-
-/// Two domains never own the same key; if a transition ever produces one,
-/// the most recently committed sample wins deterministically.
-fn is_newer(candidate: &SnapshotEntry, current: &SnapshotEntry) -> bool {
-    let rank = |entry: &SnapshotEntry| {
-        (
-            entry.sample.snapshot_revision,
-            entry.sample.read_finished_boot_ns,
-        )
-    };
-    rank(candidate) > rank(current)
 }
 
 /// Rebuilds full metric keys (for trend lookups) when no sample carries one.
@@ -194,19 +154,29 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_coordinates_keep_the_newest_commit() {
-        let mut fixture = Fixture::new();
-        fixture.add(
-            "cpu",
-            sample("cpu.load.1m", "host", "host").f64(1.0).revision(1),
-        );
-        fixture.add(
-            "memory",
-            sample("cpu.load.1m", "host", "host").f64(2.0).revision(5),
-        );
-        let index = SampleIndex::new(&fixture.snapshot);
-        let entry = index.get("cpu.load.1m", "host", "host").unwrap();
-        assert_eq!(entry.sample.value.unwrap().to_f64_lossy(), 2.0);
+    fn every_reader_of_a_revision_shares_the_snapshot_index() {
+        let fixture = fixture();
+        let frame = MetricReaderProbe::of(&fixture);
+        let history_tab = MetricReaderProbe::of(&fixture);
+        let run_inputs = SampleIndex::new(&fixture.snapshot);
+        assert!(std::ptr::eq(frame, history_tab));
+        assert!(std::ptr::eq(frame, run_inputs.shared));
+        assert!(std::ptr::eq(frame, fixture.snapshot.index()));
+    }
+
+    /// The shared index behind a reader built as the frame build does.
+    struct MetricReaderProbe;
+
+    impl MetricReaderProbe {
+        fn of(fixture: &Fixture) -> &canonical::SampleIndex {
+            let reader = crate::presentation::reader::MetricReader::new(
+                &fixture.snapshot,
+                &fixture.catalog,
+                &fixture.trends,
+                fixture.now_boot_ns,
+            );
+            reader.index().shared
+        }
     }
 
     #[test]
