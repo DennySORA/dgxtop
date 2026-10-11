@@ -240,6 +240,12 @@ Directories are created `0700` and files `0600`. Upgrading from v1 never modifie
 `~/.config/dgxtop/config.json`: review the mapping with `--import-legacy <path> --dry-run`, then
 write the v2 file with `--apply`.
 
+The databases are never migrated. Each carries its own format version; when a new dgxtop writes a
+different format, or a database cannot be read, dgxtop deletes it (with its `-wal` and `-shm`) at
+startup and starts it empty, with one line in the log. Leftovers no version needs any more, such
+as the `*.pre-v*.bak` backups older versions wrote, are deleted too. Settings in `config.json` are
+kept.
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
