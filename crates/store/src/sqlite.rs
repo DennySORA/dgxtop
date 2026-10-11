@@ -29,7 +29,7 @@ mod version;
 pub use capacity::{StorageFootprint, shm_path, wal_path};
 pub use connection::{ConnectionProfile, Synchronous};
 pub use free_space::{FreeSpaceProbe, StatvfsFreeSpace};
-pub use schema::{AUDIT_DDL, HISTORY_DDL, SCHEMA_USER_VERSION, SchemaKind};
+pub use schema::{AUDIT_DDL, HISTORY_DDL, PROCESS_HISTORY_DDL, SCHEMA_USER_VERSION, SchemaKind};
 pub use time::{format_utc_rfc3339, is_rfc3339_utc, parse_utc_rfc3339_ns, utc_cutoff};
 pub use version::{
     MIN_SQLITE_VERSION_NUMBER, SqliteGateError, SqliteVersion, check_version_number,

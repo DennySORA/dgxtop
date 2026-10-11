@@ -24,6 +24,10 @@ pub const REPLAY_DIRECTORY: &str = "replay";
 pub const CONFIG_FILE_NAME: &str = "config.json";
 pub const AUDIT_DATABASE_NAME: &str = "audit.sqlite3";
 pub const HISTORY_DATABASE_NAME: &str = "history.sqlite3";
+/// The process history's database (D-76).
+pub const PROCESS_HISTORY_DATABASE_NAME: &str = "process_history.sqlite3";
+/// The process history's short-term file (D-76).
+pub const PROCESS_RECENT_FILE_NAME: &str = "process_recent.json";
 pub const LOG_FILE_NAME: &str = "dgxtop.log";
 pub const INSTANCE_LOCK_NAME: &str = "instance.lock";
 
@@ -125,6 +129,10 @@ pub struct StatePaths {
     pub state_dir: PathBuf,
     pub audit_database: PathBuf,
     pub history_database: PathBuf,
+    /// The process history's runs and buckets (D-76).
+    pub process_history_database: PathBuf,
+    /// The live runs' recent buckets, replaced every 30 s (D-76).
+    pub process_recent_file: PathBuf,
     pub log_file: PathBuf,
     pub instance_lock: PathBuf,
     /// Default location of the v1 configuration (only read on an explicit
@@ -165,6 +173,8 @@ impl StatePaths {
             namespace,
             audit_database: state_dir.join(AUDIT_DATABASE_NAME),
             history_database: state_dir.join(HISTORY_DATABASE_NAME),
+            process_history_database: state_dir.join(PROCESS_HISTORY_DATABASE_NAME),
+            process_recent_file: state_dir.join(PROCESS_RECENT_FILE_NAME),
             log_file: state_dir.join(LOG_FILE_NAME),
             instance_lock: state_dir.join(INSTANCE_LOCK_NAME),
             config_file,

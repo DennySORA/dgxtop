@@ -30,8 +30,9 @@ use dgxtop_core::observation::AdapterManifest;
 use dgxtop_core::ports::{
     ArchiveGapCause, ArchiveJournal, ArchiveOutcome, ArchiveReadJob, ArchiveReader, ArchiveSink,
     AuditRepository, Collector, ConfigJob, ConfigRepository, ControlCompletion, Dispatch,
-    HistoryJob, HistoryReader, IngestionCompletion, LogLevel, Logger, ProcessProbe,
-    ProcessProbeJob, StoreJob, StoreWriter, TelemetryPort,
+    HistoryJob, HistoryReader, IngestionCompletion, LogLevel, Logger, ProcessHistoryCompletion,
+    ProcessHistoryJob, ProcessHistoryStore, ProcessProbe, ProcessProbeJob, StoreJob, StoreWriter,
+    TelemetryPort,
 };
 use dgxtop_core::quality::Namespace;
 use dgxtop_manager::presentation::HostFacts;
@@ -54,6 +55,7 @@ use dgxtop_store::audit::{AuditLimits, SqliteAuditRepository};
 use dgxtop_store::config::FileConfigRepository;
 use dgxtop_store::lock::InstanceLock;
 use dgxtop_store::paths::StatePaths;
+use dgxtop_store::process_history::ProcessHistoryFiles;
 use dgxtop_store::sqlite::{StatvfsFreeSpace, ensure_sqlite_version};
 
 use crate::cli::Cli;
@@ -81,6 +83,9 @@ const SIGNAL_POLL: Duration = Duration::from_millis(50);
 const ARCHIVE_READ_QUEUE: usize = 4;
 /// Probe jobs waiting (D-76); the manager keeps one in flight.
 const PROCESS_PROBE_QUEUE: usize = 2;
+/// Process history store jobs waiting (D-76): a journal every 10 s, the
+/// short-term file every 30 s, a run's read now and then.
+const PROCESS_HISTORY_QUEUE: usize = 8;
 
 /// Runs the monitor until the user quits, a signal arrives or the terminal hangs up.
 pub fn run(cli: &Cli) -> ExitCode {
@@ -503,6 +508,13 @@ impl Wiring {
         let actions = self.spawn_actions(completions.clone())?;
         workers.push(Box::new(("action".to_owned(), actions.clone())));
         let process_probe = self.spawn_process_probe(completions.clone(), &mut workers)?;
+        let process_history = self.spawn_process_history(
+            effective,
+            paths,
+            sqlite_ok,
+            completions.clone(),
+            &mut workers,
+        )?;
 
         let (specs, manifests) = host_specs(cli, effective, self.namespace, &self.clock, &host_id)?;
         let supervisor = Supervisor::start(
@@ -545,7 +557,8 @@ impl Wiring {
             actions: Box::new(actions),
             process_probe: process_probe
                 .map(|port| Box::new(port) as Box<dyn Dispatch<ProcessProbeJob>>),
-            process_history: None,
+            process_history: process_history
+                .map(|port| Box::new(port) as Box<dyn Dispatch<ProcessHistoryJob>>),
             logger: Arc::clone(&self.logger),
             diagnostics: self.diagnostics.clone(),
             ledger: self.ledger.clone(),
@@ -823,6 +836,50 @@ impl Wiring {
         )
         .map_err(|error| StartError::failure(error.to_string()))?;
         workers.push(Box::new(("process-probe".to_owned(), handle.clone())));
+        Ok(Some(handle))
+    }
+
+    /// The process history's stores (D-76), on with the history archive:
+    /// without it the runs live only while dgxtop runs.
+    fn spawn_process_history(
+        &self,
+        effective: &Config,
+        paths: &StatePaths,
+        sqlite_ok: bool,
+        completions: Completions,
+        workers: &mut Vec<Box<dyn StopOnShutdown>>,
+    ) -> Result<Option<PoolHandle<ProcessHistoryJob>>, StartError> {
+        if !(effective.store.archive_enabled && sqlite_ok) {
+            return Ok(None);
+        }
+        let store = ProcessHistoryFiles::open(
+            &paths.process_history_database,
+            &paths.process_recent_file,
+            Arc::clone(&self.clock),
+        );
+        let handle = spawn_actor(
+            "process-history",
+            PROCESS_HISTORY_QUEUE,
+            store,
+            move |store: &mut ProcessHistoryFiles, job: ProcessHistoryJob| {
+                let completion = match job {
+                    ProcessHistoryJob::Load => ProcessHistoryCompletion::Loaded(store.load()),
+                    ProcessHistoryJob::Append(journal) => {
+                        ProcessHistoryCompletion::Appended(store.append(&journal))
+                    }
+                    ProcessHistoryJob::SaveRecent(recent) => {
+                        ProcessHistoryCompletion::Saved(store.save_recent(&recent))
+                    }
+                    ProcessHistoryJob::ReadRun(key) => {
+                        let result = store.read_run(&key);
+                        ProcessHistoryCompletion::RunRead { key, result }
+                    }
+                };
+                completions.control(ControlCompletion::ProcessHistory(completion));
+            },
+        )
+        .map_err(|error| StartError::failure(error.to_string()))?;
+        workers.push(Box::new(("process-history".to_owned(), handle.clone())));
         Ok(Some(handle))
     }
 

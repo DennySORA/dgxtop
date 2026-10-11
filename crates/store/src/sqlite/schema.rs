@@ -12,14 +12,17 @@ use crate::fs::FileSystemOps;
 pub const AUDIT_DDL: &str = include_str!("../../../../spec/dgxtop-v2/contracts/audit.sql");
 /// `contracts/history.sql`, applied verbatim.
 pub const HISTORY_DDL: &str = include_str!("../../../../spec/dgxtop-v2/contracts/history.sql");
-/// `PRAGMA user_version` written by both DDL files.
+/// The process history's DDL (D-76), dgxtop's own: the spec has none.
+pub const PROCESS_HISTORY_DDL: &str = include_str!("../process_history/schema.sql");
+/// `PRAGMA user_version` written by every DDL file.
 pub const SCHEMA_USER_VERSION: i64 = 2;
 
-/// Which of the two SQLite partitions a database belongs to.
+/// Which SQLite partition a database belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchemaKind {
     Audit,
     History,
+    ProcessHistory,
 }
 
 impl SchemaKind {
@@ -27,6 +30,7 @@ impl SchemaKind {
         match self {
             Self::Audit => AUDIT_DDL,
             Self::History => HISTORY_DDL,
+            Self::ProcessHistory => PROCESS_HISTORY_DDL,
         }
     }
 
@@ -34,6 +38,7 @@ impl SchemaKind {
         match self {
             Self::Audit => "audit",
             Self::History => "history",
+            Self::ProcessHistory => "process history",
         }
     }
 
@@ -56,6 +61,12 @@ impl SchemaKind {
                 "idx_history_utc",
                 "idx_segments_key",
                 "idx_bridges_end",
+            ],
+            Self::ProcessHistory => &[
+                "process_runs",
+                "process_buckets",
+                "idx_process_runs_seen",
+                "idx_process_buckets_time",
             ],
         }
     }

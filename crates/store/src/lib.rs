@@ -15,5 +15,6 @@ pub mod history;
 pub mod hot;
 pub mod lock;
 pub mod paths;
+pub mod process_history;
 pub mod query;
 pub mod sqlite;
