@@ -23,6 +23,13 @@ pub(crate) enum DatabaseFailure {
         operation: &'static str,
         error: TxError<()>,
     },
+    /// A row SQLite read but this build cannot decode: this format never
+    /// writes one, so the file holds something it should not. Reported,
+    /// never dropped; the writer keeps working.
+    Row {
+        operation: &'static str,
+        detail: String,
+    },
 }
 
 impl DatabaseFailure {
@@ -131,6 +138,9 @@ impl Writer {
             DatabaseFailure::Transaction { operation, error } => {
                 self.transaction_failed(operation, error)
             }
+            DatabaseFailure::Row { operation, detail } => {
+                InfraError::Database(format!("{operation}: {detail}"))
+            }
         }
     }
 }
@@ -212,5 +222,19 @@ mod tests {
         // A second failure keeps the first reason.
         writer.statement_failed("acme.read", &failure(rusqlite::ffi::SQLITE_NOTADB));
         assert!(writer.unusable().unwrap().reason.contains("acme.write"));
+    }
+
+    #[test]
+    fn an_undecodable_row_is_a_database_error_that_keeps_the_writer() {
+        let mut writer = open_writer();
+        let mapped = writer.fail(&DatabaseFailure::Row {
+            operation: "acme.load",
+            detail: "bucket 3 holds 96 bytes".to_owned(),
+        });
+        assert_eq!(
+            mapped,
+            InfraError::Database("acme.load: bucket 3 holds 96 bytes".to_owned())
+        );
+        assert!(writer.unusable().is_none());
     }
 }

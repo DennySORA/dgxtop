@@ -302,6 +302,28 @@ fn a_full_database_reports_disk_full() {
     assert!(matches!(error, InfraError::DiskFull { .. }), "{error:?}");
 }
 
+/// A stored bucket SQLite cannot hand over as this build's types is
+/// reported, not dropped: the load fails with what is wrong.
+#[test]
+fn an_unreadable_bucket_fails_the_load() {
+    let scratch = Scratch::new("bad-bucket");
+    let mut store = scratch.open();
+    store
+        .append(&journal(vec![row("gpu:0", Tier::OneMinute, gauge(0, 1.0))]))
+        .unwrap();
+    store
+        .connection()
+        .unwrap()
+        .execute("UPDATE tier_buckets SET sample_count = 1099511627776", [])
+        .unwrap();
+    let error = store.load().unwrap_err();
+    assert!(matches!(error, InfraError::Database(_)), "{error:?}");
+    assert!(
+        error.to_string().contains("history_tiers.buckets"),
+        "{error}"
+    );
+}
+
 /// Corruption stops the database like every partition's (sqlite::Writer):
 /// later calls say why.
 #[test]

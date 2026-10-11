@@ -121,10 +121,13 @@ pub(super) fn load(
             "SELECT {RUN_COLUMNS} FROM process_runs ORDER BY last_seen_utc_ns DESC LIMIT ?1"
         ))
         .map_err(DatabaseFailure::statement("process_history.load"))?;
+    let failed = DatabaseFailure::statement("process_history.load");
     let runs: Vec<(i64, RunInfo)> = statement
         .query_map(params![limit], run_of)
-        .map_err(DatabaseFailure::statement("process_history.load"))?
-        .filter_map(Result::ok)
+        .map_err(&failed)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(&failed)?
+        .into_iter()
         .flatten()
         .collect();
     drop(statement);
@@ -164,48 +167,45 @@ pub(super) fn read_run(
     }
 }
 
+/// One run's buckets, coarsest size first and each oldest first: of each
+/// size as many as the history keeps in memory. A bucket this format
+/// never writes fails the read.
 fn buckets_of(
     connection: &Connection,
     run_id: i64,
     key: &ProcessKey,
 ) -> Result<Vec<RunBucketRow>, DatabaseFailure> {
-    let read =
-        |sql: &str, (limit, tier): (i64, i64)| -> Result<Vec<RunBucketRow>, DatabaseFailure> {
-            let mut statement = connection
-                .prepare_cached(sql)
-                .map_err(DatabaseFailure::statement("process_history.buckets"))?;
-            let rows = statement
-                .query_map(params![run_id, limit, tier], |row| {
-                    let tier: i64 = row.get(0)?;
-                    let start: i64 = row.get(1)?;
-                    let packed: Vec<u8> = row.get(2)?;
-                    Ok(Tier::from_code(tier).zip(unpack(start, &packed)))
-                })
-                .map_err(DatabaseFailure::statement("process_history.buckets"))?;
-            Ok(rows
-                .filter_map(Result::ok)
-                .flatten()
-                .map(|(tier, bucket)| RunBucketRow {
-                    key: key.clone(),
-                    tier,
-                    bucket,
-                })
-                .collect())
-        };
+    let failed = DatabaseFailure::statement("process_history.buckets");
+    let mut statement = connection
+        .prepare_cached(
+            "SELECT start_utc_ns, aggregates FROM process_buckets \
+             WHERE run_id = ?1 AND tier = ?2 ORDER BY start_utc_ns DESC LIMIT ?3",
+        )
+        .map_err(&failed)?;
     let mut rows = Vec::new();
-    // Coarsest first, each oldest first.
     for tier in Tier::ALL.into_iter().skip(1).rev() {
-        // The latest of each tier, as many as the history keeps in memory.
-        let mut latest = read(
-            "SELECT tier, start_utc_ns, aggregates FROM process_buckets \
-             WHERE run_id = ?1 AND tier = ?3 ORDER BY start_utc_ns DESC LIMIT ?2",
-            (
-                i64::try_from(tier.capacity()).unwrap_or(i64::MAX),
-                tier.code(),
-            ),
-        )?;
-        latest.reverse();
-        rows.extend(latest);
+        let limit = i64::try_from(tier.capacity()).unwrap_or(i64::MAX);
+        let latest = statement
+            .query_map(params![run_id, tier.code(), limit], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })
+            .map_err(&failed)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(&failed)?;
+        for (start, packed) in latest.into_iter().rev() {
+            let bucket = unpack(start, &packed).ok_or_else(|| DatabaseFailure::Row {
+                operation: "process_history.buckets",
+                detail: format!(
+                    "run {run_id} holds a {tier:?} bucket of {} bytes, not {PACKED_BYTES}",
+                    packed.len()
+                ),
+            })?;
+            rows.push(RunBucketRow {
+                key: key.clone(),
+                tier,
+                bucket,
+            });
+        }
     }
     Ok(rows)
 }

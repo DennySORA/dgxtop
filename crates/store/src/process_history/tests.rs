@@ -538,6 +538,43 @@ fn a_full_database_reports_disk_full() {
     assert!(matches!(error, InfraError::DiskFull { .. }), "{error:?}");
 }
 
+/// A stored bucket this format never writes is reported, not dropped: the
+/// load fails with what is wrong, and the database keeps working.
+#[test]
+fn an_undecodable_bucket_fails_the_load() {
+    let scratch = Scratch::new("bad-bucket");
+    let clock = clock();
+    let now = now_utc(&clock);
+    let mut store = scratch.open(&clock);
+    store
+        .append(&ProcessHistoryJournal {
+            runs: vec![run(1, now, None)],
+            buckets: vec![row(1, Tier::OneMinute, bucket(now - MINUTE, 10.0))],
+        })
+        .unwrap();
+    store
+        .connection()
+        .unwrap()
+        .execute("UPDATE process_buckets SET aggregates = zeroblob(96)", [])
+        .unwrap();
+    let error = store.load().unwrap_err();
+    assert!(matches!(error, InfraError::Database(_)), "{error:?}");
+    assert!(error.to_string().contains("96 bytes"), "{error}");
+    let error = store.read_run(&key(1)).unwrap_err();
+    assert!(error.to_string().contains("96 bytes"), "{error}");
+    store
+        .append(&ProcessHistoryJournal {
+            runs: vec![run(1, now, None)],
+            buckets: vec![row(1, Tier::OneMinute, bucket(now - MINUTE, 10.0))],
+        })
+        .unwrap();
+    assert_eq!(
+        store.load().unwrap().buckets.len(),
+        1,
+        "rewritten, read again"
+    );
+}
+
 /// Corruption stops the database like every partition's (sqlite::Writer):
 /// later calls say why, and the short-term file still works.
 #[test]

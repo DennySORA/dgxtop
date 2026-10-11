@@ -173,10 +173,13 @@ pub(super) fn load(connection: &mut Connection) -> Result<Vec<StoredTierSeries>,
     let mut statement = connection
         .prepare("SELECT series_id, host_id, entity_id, metric_id, scope FROM tier_series")
         .map_err(DatabaseFailure::statement("history_tiers.load"))?;
+    let failed = DatabaseFailure::statement("history_tiers.load");
     let series: Vec<(i64, SeriesInEveryBoot)> = statement
         .query_map([], series_of)
-        .map_err(DatabaseFailure::statement("history_tiers.load"))?
-        .filter_map(Result::ok)
+        .map_err(&failed)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(&failed)?
+        .into_iter()
         .flatten()
         .collect();
     drop(statement);
@@ -206,24 +209,40 @@ fn series_of(row: &Row<'_>) -> rusqlite::Result<Option<(i64, SeriesInEveryBoot)>
     Ok(parsed.map(|series| (series_id, series)))
 }
 
+/// One series' buckets, each size oldest first. A bucket SQLite cannot
+/// read as this build's types, or of a size this build does not know,
+/// fails the read.
 fn buckets_of(
     connection: &Connection,
     series_id: i64,
 ) -> Result<Vec<(Tier, OverviewBucket)>, DatabaseFailure> {
+    let failed = DatabaseFailure::statement("history_tiers.buckets");
     let mut statement = connection
         .prepare_cached(
             "SELECT tier, start_utc_ns, covered_ns, weighted_sum, minimum, maximum, \
              sample_count, total FROM tier_buckets WHERE series_id = ?1 \
              ORDER BY tier, start_utc_ns",
         )
-        .map_err(DatabaseFailure::statement("history_tiers.buckets"))?;
-    let rows = statement
+        .map_err(&failed)?;
+    let stored = statement
         .query_map(params![series_id], bucket_of)
-        .map_err(DatabaseFailure::statement("history_tiers.buckets"))?;
-    Ok(rows.filter_map(Result::ok).flatten().collect())
+        .map_err(&failed)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(&failed)?;
+    stored
+        .into_iter()
+        .map(|(code, bucket)| {
+            let tier = Tier::from_code(code).ok_or_else(|| DatabaseFailure::Row {
+                operation: "history_tiers.buckets",
+                detail: format!("series {series_id} holds a bucket of unknown size {code}"),
+            })?;
+            Ok((tier, bucket))
+        })
+        .collect()
 }
 
-fn bucket_of(row: &Row<'_>) -> rusqlite::Result<Option<(Tier, OverviewBucket)>> {
+/// A stored bucket with its size's code.
+fn bucket_of(row: &Row<'_>) -> rusqlite::Result<(i64, OverviewBucket)> {
     let tier: i64 = row.get(0)?;
     let covered: i64 = row.get(2)?;
     let minimum: Option<f64> = row.get(4)?;
@@ -240,7 +259,7 @@ fn bucket_of(row: &Row<'_>) -> rusqlite::Result<Option<(Tier, OverviewBucket)>> 
         total: exact_total.unwrap_or(0),
         total_exact: exact_total.is_some(),
     };
-    Ok(Tier::from_code(tier).map(|tier| (tier, bucket)))
+    Ok((tier, bucket))
 }
 
 /// Whether a series is stored (tests).
