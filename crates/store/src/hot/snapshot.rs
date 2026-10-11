@@ -13,7 +13,7 @@ use dgxtop_core::ports::SnapshotReader;
 
 use super::counters::StoreCounters;
 use crate::candidates::{CandidateStore, RetainedCandidate};
-use crate::history::series::stale_deadline;
+use dgxtop_core::sampling::stale_deadline;
 
 /// Gaps listed in `ImmutableSnapshot::recent_gaps`.
 pub(crate) const RECENT_GAPS: usize = 64;

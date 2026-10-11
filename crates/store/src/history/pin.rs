@@ -11,13 +11,13 @@ use dgxtop_core::history::HistoryStat;
 use dgxtop_core::identity::MetricKey;
 use dgxtop_core::metric::MetricDescriptor;
 
-use super::accounted::bytes_of;
 use super::chunk::LogPin;
 use super::gaps::GapEntry;
 use super::records::{CounterBucket, CounterSample, GaugeBucket, GaugeSample};
 use super::segment::SegmentsView;
 use super::series::Series;
 use super::state::HistoryState;
+use dgxtop_core::budget::accounted::bytes_of;
 
 /// Fixed bytes of one pin (chunk pointer vectors, segment view, bookkeeping).
 const PIN_OVERHEAD_BYTES: u64 = 4096;

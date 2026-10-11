@@ -12,7 +12,7 @@ use dgxtop_core::canonical::GapRecord;
 use dgxtop_core::identity::{AdapterId, MetricKey};
 use dgxtop_core::text::sanitize_display;
 
-use super::accounted::{Account, AccountedDeque};
+use dgxtop_core::budget::accounted::{Account, AccountedDeque};
 
 /// Longest reason kept (bytes); the result schema allows 256.
 pub(crate) const MAX_REASON_BYTES: usize = 128;

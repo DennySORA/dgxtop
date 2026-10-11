@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use dgxtop_core::budget::{ByteLedger, BytePermit, CapacityError, Partition};
 
-use super::accounted::bytes_of;
 use super::records::TimeSpan;
+use dgxtop_core::budget::accounted::bytes_of;
 
 /// Records per chunk.
 pub(crate) const CHUNK_RECORDS: usize = 64;

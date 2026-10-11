@@ -13,7 +13,7 @@ use dgxtop_core::budget::{ByteLedger, Partition};
 use dgxtop_core::canonical::{AckStatus, StoreAck};
 use uuid::Uuid;
 
-use crate::history::accounted::Account;
+use dgxtop_core::budget::accounted::Account;
 
 /// Committed batches remembered for duplicate detection.
 pub(crate) const REMEMBERED_BATCHES: usize = 4096;

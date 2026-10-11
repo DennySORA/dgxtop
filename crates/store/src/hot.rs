@@ -32,12 +32,11 @@ use dgxtop_core::identity::{CollectorId, MetricKey};
 use dgxtop_core::metric::Domain;
 use dgxtop_core::ports::{ArchiveJournal, IngressBatch, StoreWriter};
 use dgxtop_core::quality::Namespace;
+use dgxtop_core::sampling::SamplingTiming;
 use uuid::Uuid;
 
 pub use counters::StoreCounters;
 pub use snapshot::SharedSnapshot;
-
-pub(crate) use wall_clock::format_utc;
 
 use crate::candidates::{CandidateReport, CandidateStore};
 use crate::history::output::HistoryReport;
@@ -46,7 +45,7 @@ use crate::history::{HistoryIndex, HistoryWriter};
 use archive::ArchiveQueue;
 use dedup::{REMEMBERED_BATCHES, Recall, RememberedBatches};
 use retained::RetainedAllocations;
-use settings::{StoreSettings, Timing};
+use settings::StoreSettings;
 use snapshot::RecentGaps;
 use validate::{CheckedBatch, ContentRules, DescriptorIndex, EpochState, Rejection};
 use wall_clock::WallClock;
@@ -76,7 +75,7 @@ impl HotStore {
         namespace: Namespace,
         archive_enabled: bool,
     ) -> Self {
-        let timing = Timing::from_sampling(sampling);
+        let timing = SamplingTiming::from_sampling(sampling);
         let settings = StoreSettings::new(store, &timing, runtime, namespace, archive_enabled);
         let shared_history = Arc::new(RwLock::new(HistoryState::new(settings.history, &ledger)));
         let candidates = Arc::new(RwLock::new(CandidateStore::new(
@@ -170,7 +169,7 @@ struct SnapshotChange {
 /// Write side of the hot store (`StoreWriter`), owned by the HotStore actor.
 pub struct HotStoreWriter {
     settings: StoreSettings,
-    timing: Timing,
+    timing: SamplingTiming,
     namespace: Namespace,
     archive_enabled: bool,
     ledger: ByteLedger,
@@ -220,7 +219,7 @@ impl HotStoreWriter {
     /// Applies a new sampling configuration to future samples only; stored
     /// stale deadlines and totals never change.
     pub fn set_sampling(&mut self, sampling: &SamplingConfig) {
-        self.timing = Timing::from_sampling(sampling);
+        self.timing = SamplingTiming::from_sampling(sampling);
         self.history
             .set_finalize_grace(self.timing.finalize_grace_ns);
     }

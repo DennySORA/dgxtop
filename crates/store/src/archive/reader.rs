@@ -24,8 +24,8 @@ use dgxtop_core::ports::{ArchiveReader, CancelFlag};
 use rusqlite::config::DbConfig;
 use rusqlite::{Connection, OpenFlags, params};
 
-use crate::hot::format_utc;
 use crate::sqlite::{FaultKind, SCHEMA_USER_VERSION, describe, fault_kind, parse_utc_rfc3339_ns};
+use dgxtop_core::clock::format_utc_ns;
 
 /// The writer holds the lock only for its short batches.
 const BUSY_TIMEOUT: Duration = Duration::from_millis(50);
@@ -324,7 +324,7 @@ fn segments_of(connection: &Connection, query: &ArchiveQuery) -> Result<Segments
 
 /// The window as the archive's UTC text (`…T12:00:00.000000000Z`).
 fn utc_bounds(query: &ArchiveQuery) -> (String, String) {
-    let text = |utc_ns: u64| format_utc(i128::from(utc_ns)).unwrap_or_default();
+    let text = |utc_ns: u64| format_utc_ns(i128::from(utc_ns)).unwrap_or_default();
     (text(query.start_utc_ns), text(query.end_utc_ns))
 }
 

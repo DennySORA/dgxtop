@@ -1,48 +1,13 @@
 //! Store settings derived from the validated configuration.
 
-use dgxtop_core::clock::{NANOS_PER_SECOND, ms_to_ns};
-use dgxtop_core::config::{RuntimeConfig, SamplingConfig, StoreConfig};
+use dgxtop_core::clock::NANOS_PER_SECOND;
+use dgxtop_core::config::{RuntimeConfig, StoreConfig};
 use dgxtop_core::quality::Namespace;
+use dgxtop_core::sampling::SamplingTiming;
 
 use crate::candidates::CandidateSettings;
 use crate::history::state::HistorySettings;
 use crate::query::QueryLimits;
-
-/// Sampling cadence used for stale deadlines and the finalization horizon.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Timing {
-    /// `sampling.interval_ms`: period of the fast read groups.
-    pub fast_period_ns: u64,
-    /// `sampling.capacity_interval_ms`.
-    pub capacity_period_ns: u64,
-    /// `sampling.slow_health_interval_ms`.
-    pub slow_period_ns: u64,
-    pub stale_factor: u32,
-    /// Minutes older than `now - grace` are rolled up. A fresh sample is
-    /// never older than its read group's stale window plus the read
-    /// deadline, so finalized minutes never change afterwards.
-    pub finalize_grace_ns: u64,
-}
-
-impl Timing {
-    pub(crate) fn from_sampling(sampling: &SamplingConfig) -> Self {
-        let fast = ms_to_ns(u64::from(sampling.interval_ms.max(1)));
-        let capacity = ms_to_ns(u64::from(sampling.capacity_interval_ms.max(1)));
-        let slow = ms_to_ns(u64::from(sampling.slow_health_interval_ms.max(1)));
-        let stale_factor = sampling.stale_factor.max(1);
-        let slowest = fast.max(capacity).max(slow);
-        let grace = u64::from(stale_factor)
-            .saturating_mul(slowest)
-            .saturating_add(ms_to_ns(u64::from(sampling.read_deadline_ms)));
-        Self {
-            fast_period_ns: fast,
-            capacity_period_ns: capacity,
-            slow_period_ns: slow,
-            stale_factor,
-            finalize_grace_ns: grace,
-        }
-    }
-}
 
 /// Everything the hot store needs from `store`, `sampling` and `runtime`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,14 +34,13 @@ fn to_usize(value: u32) -> usize {
 impl StoreSettings {
     pub(crate) fn new(
         store: &StoreConfig,
-        timing: &Timing,
+        timing: &SamplingTiming,
         runtime: &RuntimeConfig,
         namespace: Namespace,
         archive_enabled: bool,
     ) -> Self {
-        let raw_history_ns = seconds(store.raw_history_seconds.max(1));
-        let aggregate_retention_ns =
-            seconds(store.aggregate_retention_hours.max(1)).saturating_mul(3600);
+        let raw_history_ns = store.raw_history_ns();
+        let aggregate_retention_ns = store.aggregate_retention_ns();
         Self {
             history: HistorySettings {
                 raw_history_ns,
@@ -110,14 +74,9 @@ mod tests {
     use dgxtop_core::config::Config;
 
     #[test]
-    fn defaults_give_a_grace_covering_the_slowest_group() {
+    fn defaults_follow_the_store_configuration() {
         let config = Config::defaults().unwrap();
-        let timing = Timing::from_sampling(&config.sampling);
-        assert_eq!(timing.fast_period_ns, NANOS_PER_SECOND);
-        assert_eq!(
-            timing.finalize_grace_ns,
-            15 * NANOS_PER_SECOND + 500_000_000
-        );
+        let timing = SamplingTiming::from_sampling(&config.sampling);
         let settings = StoreSettings::new(
             &config.store,
             &timing,

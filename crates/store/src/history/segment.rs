@@ -14,7 +14,7 @@ use dgxtop_core::metric::CanonicalUnit;
 use dgxtop_core::quality::SampleKind;
 use uuid::Uuid;
 
-use super::accounted::Account;
+use dgxtop_core::budget::accounted::Account;
 
 /// Upper bound of segments retained per series.
 pub(crate) const MAX_SEGMENTS_PER_SERIES: usize = 4096;

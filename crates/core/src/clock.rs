@@ -146,6 +146,25 @@ pub fn format_utc_rfc3339(unix_ns: i128) -> String {
     )
 }
 
+/// RFC 3339 UTC text with nanoseconds, e.g. `2026-10-04T12:00:00.000000000Z`,
+/// as the archive stores boot-time rows; `None` past the representable range
+/// (no clamping, so a stored instant always reads back as itself).
+pub fn format_utc_ns(utc_ns: i128) -> Option<String> {
+    let seconds = utc_ns.div_euclid(i128::from(NANOS_PER_SECOND));
+    let nanos = utc_ns.rem_euclid(i128::from(NANOS_PER_SECOND));
+    let days = i64::try_from(seconds.div_euclid(86_400)).ok()?;
+    // civil_from_days shifts the day count; refuse what would overflow it.
+    days.checked_add(719_468)?;
+    let second_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let hour = second_of_day / 3600;
+    let minute = second_of_day % 3600 / 60;
+    let second = second_of_day % 60;
+    Some(format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{nanos:09}Z"
+    ))
+}
+
 /// Gregorian date of a day count since 1970-01-01 (Howard Hinnant's
 /// `civil_from_days`).
 pub fn civil_from_days(days: i64) -> (i64, i64, i64) {
@@ -229,5 +248,20 @@ mod tests {
         assert_eq!(format_utc_rfc3339(i128::MAX), "9999-12-31T23:59:59Z");
         assert_eq!(format_utc_rfc3339(i128::MIN), "0000-01-01T00:00:00Z");
         assert!(format_utc_rfc3339(1_000_000_000) < format_utc_rfc3339(2_000_000_000));
+    }
+
+    #[test]
+    fn utc_formatting_matches_known_instants() {
+        assert_eq!(format_utc_ns(0).unwrap(), "1970-01-01T00:00:00.000000000Z");
+        assert_eq!(
+            format_utc_ns(1_790_000_000_123_456_789).unwrap(),
+            "2026-09-21T14:13:20.123456789Z"
+        );
+        assert_eq!(format_utc_ns(-1).unwrap(), "1969-12-31T23:59:59.999999999Z");
+        assert_eq!(
+            format_utc_ns(951_782_400_000_000_000).unwrap(),
+            "2000-02-29T00:00:00.000000000Z"
+        );
+        assert_eq!(format_utc_ns(i128::MAX), None);
     }
 }

@@ -30,6 +30,7 @@ pub mod ports;
 pub mod process_history;
 pub mod process_probe;
 pub mod quality;
+pub mod sampling;
 pub mod shared_text;
 pub mod text;
 pub mod view;

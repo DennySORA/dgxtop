@@ -13,6 +13,8 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub mod accounted;
+
 /// Bytes per MiB.
 pub const MIB: u64 = 1024 * 1024;
 

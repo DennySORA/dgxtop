@@ -18,11 +18,13 @@ use dgxtop_core::identity::{BootId, HostId};
 use dgxtop_core::metric::ScalarView;
 use dgxtop_core::ports::{ArchiveJournal, ArchivedBridge, ArchivedBucket, ArchivedSegment};
 
-use super::wall_clock::{WallClock, format_utc};
-use crate::history::accounted::Account;
+use dgxtop_core::clock::format_utc_ns;
+
+use super::wall_clock::WallClock;
 use crate::history::output::ArchiveRow;
 use crate::history::records::BUCKET_NS;
 use crate::history::segment::SegmentMeta;
+use dgxtop_core::budget::accounted::Account;
 
 /// Most bytes queued for the archive (`queues.archive_bytes` upper bound).
 pub(crate) const MAX_QUEUED_BYTES: u64 = 8 * 1024 * 1024;
@@ -204,7 +206,7 @@ impl ArchiveQueue {
 fn utc_text(clock: &WallClock, boot_ns: u64) -> String {
     clock
         .utc_of(boot_ns)
-        .and_then(format_utc)
+        .and_then(format_utc_ns)
         .unwrap_or_default()
 }
 
