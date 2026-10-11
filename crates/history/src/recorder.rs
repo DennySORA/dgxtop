@@ -22,7 +22,7 @@ use crate::grid::MinuteGrid;
 use crate::index::HistoryWriter;
 use crate::output::{ArchiveRow, HistoryReport};
 use crate::overview::OverviewTiers;
-use crate::overview::rows::{is_overview_row, tier_minutes};
+use crate::overview::rows::overview_minutes;
 use crate::wall_clock::WallClock;
 
 /// Write side of the history, handed to the live state at composition.
@@ -66,25 +66,29 @@ impl HistoryRecorder {
     }
 
     /// The Overview minutes among `rows` into their sizes, on the wall
-    /// clock (known: minutes are finished only after the first pairing).
-    fn feed_overview(&mut self, rows: &[ArchiveRow]) {
-        let overview_rows: Vec<ArchiveRow> = rows
-            .iter()
-            .filter(|row| is_overview_row(row))
-            .cloned()
-            .collect();
-        if overview_rows.is_empty() {
-            return;
+    /// clock (known: the grid, and so every finished minute, comes only
+    /// from the first pairing); one it cannot place becomes a gap in
+    /// `report`, never a silent hole in the bars.
+    fn feed_overview(&mut self, rows: &[ArchiveRow], report: &mut HistoryReport) {
+        let minutes = overview_minutes(rows, &self.clock);
+        debug_assert!(
+            self.clock.is_known() || minutes.placed.is_empty() && minutes.unplaced.is_empty(),
+            "a minute was finished before the boot was paired with UTC"
+        );
+        if !minutes.placed.is_empty() {
+            self.overview.feed(minutes.placed);
         }
-        if let Some(minutes) = tier_minutes(&overview_rows, &self.clock) {
-            self.overview.feed(minutes);
+        for gap in minutes.unplaced {
+            let noted = self.writer.record_gap(gap);
+            report.new_gaps.extend(noted.new_gaps);
+            report.gaps_added = report.gaps_added.saturating_add(noted.gaps_added);
         }
     }
 
     /// Queues the report's finished rows and condenses it for the state.
     fn outcome(&mut self, mut report: HistoryReport) -> HistoryOutcome {
         let rows = std::mem::take(&mut report.archive_rows);
-        self.feed_overview(&rows);
+        self.feed_overview(&rows, &mut report);
         let archive_rows_dropped = if self.archive_enabled {
             self.archive.enqueue(rows)
         } else {
@@ -147,6 +151,8 @@ impl HistoryIngest for HistoryRecorder {
 
     /// The first pairing fixes the boot's minutes; a later step keeps them
     /// (finished rows are never cut again) and only moves their UTC stamps.
+    /// This is the only way to the grid, so a finished minute always has
+    /// its place on the wall clock.
     fn observe_wall_clock(&mut self, boot_ns: u64, utc_ns: i128) {
         if !self.clock.is_known() {
             self.writer
@@ -462,6 +468,38 @@ mod tests {
         cancelled.cancel();
         assert!(read(u64::MAX, &cancelled).is_err());
         assert!(read(0, &CancelFlag::new()).is_err(), "past its deadline");
+    }
+
+    /// A finished Overview minute the wall clock cannot place (here: its
+    /// UTC is past what an Overview bucket holds) is never dropped in
+    /// silence: it is reported as a gap of its series.
+    #[test]
+    fn an_overview_minute_that_cannot_be_placed_is_reported_as_a_gap() {
+        let (mut history, _ledger) = history(false);
+        let minute = i128::from(MINUTE);
+        let past_the_buckets = (i128::from(i64::MAX) / minute + 1) * minute;
+        history.recorder.observe_wall_clock(0, past_the_buckets);
+        for second in 0..70 {
+            history
+                .recorder
+                .ingest(one_gauge(second, 40.0), second * SECOND, second + 1);
+        }
+        let outcome = history.recorder.maintain(2 * MINUTE);
+        let unplaced: Vec<&GapRecord> = outcome
+            .new_gaps
+            .iter()
+            .filter(|gap| gap.reason == "overview_unplaced")
+            .collect();
+        assert_eq!(unplaced.len(), 1, "{:?}", outcome.new_gaps);
+        assert_eq!(
+            (unplaced[0].start_boot_ns, unplaced[0].end_boot_ns),
+            (0, MINUTE)
+        );
+        assert_eq!(
+            unplaced[0].key,
+            Some(metric_key("gpu:0", ids::GPU_TEMPERATURE, "gpu"))
+        );
+        assert_eq!(outcome.gaps_added, 1);
     }
 
     #[test]

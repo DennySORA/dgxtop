@@ -5,8 +5,11 @@
 //! pieces of two. Only the Overview series in their
 //! canonical unit count (units never mix); a minute without time held
 //! is a gap and adds nothing. Bridges (counter intervals across minutes)
-//! are left out: the Overview series are gauges.
+//! are left out: the Overview series are gauges. A minute the wall clock
+//! cannot place is lost Overview time and comes back as a gap, never
+//! dropped in silence.
 
+use dgxtop_core::canonical::GapRecord;
 use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::metric::descriptor;
 use dgxtop_core::overview_history::{OverviewBucket, is_overview_series};
@@ -17,28 +20,37 @@ use crate::output::ArchiveRow;
 use crate::segment::SegmentMeta;
 use crate::wall_clock::WallClock;
 
-/// The Overview minutes among `rows`; `None` while no boot-to-UTC pairing
-/// is known (the rows wait).
-pub(crate) fn tier_minutes(rows: &[ArchiveRow], clock: &WallClock) -> Option<Vec<TierMinute>> {
-    if !clock.is_known() {
-        return None;
-    }
-    Some(
-        rows.iter()
-            .filter_map(|row| tier_minute(row, clock))
-            .collect(),
-    )
+/// Gap reason of a finished Overview minute the wall clock could not place.
+pub(crate) const UNPLACED_REASON: &str = "overview_unplaced";
+
+/// The Overview minutes among a batch of finished rows.
+#[derive(Debug, Default)]
+pub(crate) struct OverviewMinutes {
+    /// Placed on the wall clock, for the sizes.
+    pub placed: Vec<TierMinute>,
+    /// Those that could not be placed (no pairing yet, or a UTC an
+    /// Overview bucket cannot hold), as gaps of their series.
+    pub unplaced: Vec<GapRecord>,
 }
 
-/// Whether a row is a minute of an Overview series (worth keeping until
-/// it can be placed on the wall clock).
-pub(crate) fn is_overview_row(row: &ArchiveRow) -> bool {
-    match row {
-        ArchiveRow::GaugeBucket { segment, .. } | ArchiveRow::CounterBucket { segment, .. } => {
-            is_overview_segment(segment)
+/// Sorts the Overview minutes among `rows` into placed and unplaced ones;
+/// rows of other series, bridges, gaps and minutes without time held are
+/// not Overview minutes.
+pub(crate) fn overview_minutes<'r>(
+    rows: impl IntoIterator<Item = &'r ArchiveRow>,
+    clock: &WallClock,
+) -> OverviewMinutes {
+    let mut minutes = OverviewMinutes::default();
+    for row in rows {
+        let Some(minute) = OverviewRow::of(row) else {
+            continue;
+        };
+        match minute.place(clock) {
+            Some(placed) => minutes.placed.push(placed),
+            None => minutes.unplaced.push(minute.as_gap()),
         }
-        ArchiveRow::Bridge { .. } | ArchiveRow::Gap(_) => false,
     }
+    minutes
 }
 
 fn is_overview_segment(segment: &SegmentMeta) -> bool {
@@ -47,56 +59,83 @@ fn is_overview_segment(segment: &SegmentMeta) -> bool {
         && descriptor(metric).is_some_and(|known| known.unit == segment.unit)
 }
 
-fn tier_minute(row: &ArchiveRow, clock: &WallClock) -> Option<TierMinute> {
-    let (segment, bucket) = match row {
-        ArchiveRow::GaugeBucket {
-            segment,
-            bucket,
-            end_ns,
-        } => {
-            let start = filed_utc_minute(clock, *end_ns)?;
-            (
+/// One finished minute of an Overview series, still on the boot clock.
+struct OverviewRow<'r> {
+    segment: &'r SegmentMeta,
+    start_ns: u64,
+    end_ns: u64,
+    /// Its UTC start is set once it is placed.
+    bucket: OverviewBucket,
+}
+
+impl<'r> OverviewRow<'r> {
+    fn of(row: &'r ArchiveRow) -> Option<Self> {
+        let (segment, start_ns, end_ns, bucket) = match row {
+            ArchiveRow::GaugeBucket {
                 segment,
+                bucket,
+                end_ns,
+            } => (
+                segment,
+                bucket.start_ns,
+                *end_ns,
                 OverviewBucket::gauge(
-                    start,
+                    0,
                     bucket.covered_ns,
                     bucket.weighted_sum,
                     (bucket.minimum, bucket.maximum),
                     bucket.sample_count,
                 ),
-            )
-        }
-        ArchiveRow::CounterBucket {
-            segment,
-            bucket,
-            end_ns,
-        } => {
-            let start = filed_utc_minute(clock, *end_ns)?;
-            (
+            ),
+            ArchiveRow::CounterBucket {
                 segment,
+                bucket,
+                end_ns,
+            } => (
+                segment,
+                bucket.start_ns,
+                *end_ns,
                 OverviewBucket::counter(
-                    start,
+                    0,
                     bucket.covered_ns,
                     bucket.total.integral(),
                     bucket.interval_count,
                 ),
-            )
-        }
-        ArchiveRow::Bridge { .. } | ArchiveRow::Gap(_) => return None,
-    };
-    if bucket.is_empty() || !is_overview_segment(segment) {
-        return None;
+            ),
+            ArchiveRow::Bridge { .. } | ArchiveRow::Gap(_) => return None,
+        };
+        (!bucket.is_empty() && is_overview_segment(segment)).then_some(Self {
+            segment,
+            start_ns,
+            end_ns,
+            bucket,
+        })
     }
-    Some(TierMinute {
-        series: SeriesInEveryBoot::from(&segment.key),
-        key: segment.key.clone(),
-        bucket,
-    })
-}
 
-/// The UTC minute a minute ending at boot `end_ns` is filed under.
-fn filed_utc_minute(clock: &WallClock, end_ns: u64) -> Option<i64> {
-    i64::try_from(utc_minute_ending_near(clock.utc_of(end_ns)?)).ok()
+    /// The minute on the wall clock, filed under the UTC minute it ends
+    /// nearest.
+    fn place(&self, clock: &WallClock) -> Option<TierMinute> {
+        let start = i64::try_from(utc_minute_ending_near(clock.utc_of(self.end_ns)?)).ok()?;
+        Some(TierMinute {
+            series: SeriesInEveryBoot::from(&self.segment.key),
+            key: self.segment.key.clone(),
+            bucket: OverviewBucket {
+                start_utc_ns: start,
+                ..self.bucket
+            },
+        })
+    }
+
+    fn as_gap(&self) -> GapRecord {
+        GapRecord {
+            key: Some(self.segment.key.clone()),
+            adapter_id: None,
+            start_boot_ns: self.start_ns,
+            end_boot_ns: self.end_ns,
+            reason: UNPLACED_REASON.to_owned(),
+            affected_count: 1,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -173,12 +212,17 @@ mod tests {
                 BUCKET_NS,
             ),
         ];
-        assert!(
-            tier_minutes(&rows, &WallClock::default()).is_none(),
-            "no pairing yet"
-        );
-        assert!(is_overview_row(&rows[0]) && !is_overview_row(&rows[1]));
-        let minutes = tier_minutes(&rows, &clock()).unwrap();
+        let unpaired = overview_minutes(&rows, &WallClock::default());
+        assert!(unpaired.placed.is_empty(), "no pairing yet");
+        let lost: Vec<(u64, u64, &str)> = unpaired
+            .unplaced
+            .iter()
+            .map(|gap| (gap.start_boot_ns, gap.end_boot_ns, gap.reason.as_str()))
+            .collect();
+        assert_eq!(lost, vec![(BUCKET_NS, 2 * BUCKET_NS, UNPLACED_REASON)]);
+        let placed = overview_minutes(&rows, &clock());
+        assert!(placed.unplaced.is_empty());
+        let minutes = placed.placed;
         assert_eq!(minutes.len(), 1);
         let minute = &minutes[0];
         let expected = i64::try_from(UTC_AT_BOOT).unwrap() + i64::try_from(BUCKET_NS).unwrap();
@@ -212,7 +256,7 @@ mod tests {
         let starts = [0, grid.phase_ns(), grid.phase_ns() + BUCKET_NS];
         let rows: Vec<ArchiveRow> = starts.iter().map(|start| row(*start)).collect();
         clock.observe(10 * second, boot_utc + i128::from(10 * second) - 1_000_000);
-        let minutes = tier_minutes(&rows, &clock).unwrap();
+        let minutes = overview_minutes(&rows, &clock).placed;
         let minute = i64::try_from(BUCKET_NS).unwrap();
         let first = i64::try_from(UTC_AT_BOOT).unwrap();
         let filed: Vec<i64> = minutes.iter().map(|m| m.bucket.start_utc_ns).collect();
@@ -234,7 +278,7 @@ mod tests {
             bucket,
             end_ns: BUCKET_NS,
         };
-        let minutes = tier_minutes(&[row], &clock()).unwrap();
+        let minutes = overview_minutes(&[row], &clock()).placed;
         assert_eq!(
             (minutes[0].bucket.total, minutes[0].bucket.total_exact),
             (700, true)
