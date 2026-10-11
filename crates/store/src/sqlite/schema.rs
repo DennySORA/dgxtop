@@ -79,7 +79,9 @@ impl SchemaKind {
     /// none, is deleted and created afresh at the next start.
     pub const fn format_version(self) -> u16 {
         match self {
-            Self::Audit | Self::History | Self::ProcessHistory | Self::HistoryTiers => 1,
+            Self::Audit | Self::History | Self::ProcessHistory => 1,
+            // 2: `tier_series.last_utc_ns` and its index dropped (D-95).
+            Self::HistoryTiers => 2,
         }
     }
 
@@ -123,7 +125,7 @@ impl SchemaKind {
                 "idx_process_runs_seen",
                 "idx_process_buckets_time",
             ],
-            Self::HistoryTiers => &["tier_series", "tier_buckets", "idx_tier_series_last"],
+            Self::HistoryTiers => &["tier_series", "tier_buckets"],
         }
     }
 }

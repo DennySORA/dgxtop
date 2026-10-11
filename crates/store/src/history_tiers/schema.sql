@@ -1,6 +1,7 @@
 -- dgxtop Overview History tiers (D-82): each Overview series' closed
 -- buckets of every bar size, the latest 300 of each (series, size). Not
--- part of the sealed spec; dgxtop's own version 1.
+-- part of the sealed spec; dgxtop's own version 1, format 2 (D-85: format 1
+-- also had the unused `last_utc_ns` column, D-95).
 PRAGMA foreign_keys = ON;
 BEGIN IMMEDIATE;
 
@@ -11,10 +12,6 @@ CREATE TABLE IF NOT EXISTS tier_series (
     entity_id TEXT NOT NULL,
     metric_id TEXT NOT NULL,
     scope TEXT NOT NULL,
-    -- The latest bucket start written. Nothing reads it since the history
-    -- decides which series go (D-95); kept so that files of this format
-    -- stay usable (a format change recreates the file, D-85).
-    last_utc_ns INTEGER NOT NULL,
     UNIQUE (host_id, entity_id, metric_id, scope)
 ) STRICT;
 
@@ -35,8 +32,6 @@ CREATE TABLE IF NOT EXISTS tier_buckets (
     total TEXT CHECK (total IS NULL OR length(total) BETWEEN 1 AND 20),
     PRIMARY KEY (series_id, tier, start_utc_ns)
 ) STRICT, WITHOUT ROWID;
-
-CREATE INDEX IF NOT EXISTS idx_tier_series_last ON tier_series (last_utc_ns);
 
 PRAGMA user_version = 1;
 COMMIT;

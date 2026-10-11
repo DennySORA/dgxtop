@@ -102,14 +102,16 @@ fn stored_tier(tier: Tier) -> Option<i64> {
     (tier != Tier::Recent).then(|| tier.code())
 }
 
+/// The series' id, adding it when new. The no-op update is there because
+/// `DO NOTHING` returns no row for a series already stored.
 fn upsert_series(transaction: &Transaction<'_>, row: &TierRow) -> rusqlite::Result<i64> {
     let series = &row.series;
     transaction
         .prepare_cached(
-            "INSERT INTO tier_series (host_id, entity_id, metric_id, scope, last_utc_ns) \
-             VALUES (?1, ?2, ?3, ?4, ?5) \
+            "INSERT INTO tier_series (host_id, entity_id, metric_id, scope) \
+             VALUES (?1, ?2, ?3, ?4) \
              ON CONFLICT (host_id, entity_id, metric_id, scope) DO UPDATE SET \
-             last_utc_ns = max(last_utc_ns, excluded.last_utc_ns) \
+             host_id = excluded.host_id \
              RETURNING series_id",
         )?
         .query_row(
@@ -118,7 +120,6 @@ fn upsert_series(transaction: &Transaction<'_>, row: &TierRow) -> rusqlite::Resu
                 series.entity_id.as_str(),
                 series.metric_id.as_str(),
                 series.scope.as_str(),
-                row.bucket.start_utc_ns,
             ],
             |found| found.get(0),
         )
@@ -155,11 +156,15 @@ fn insert_bucket(
     Ok(())
 }
 
-/// Every series with its buckets, each size oldest first. A series whose
-/// identity no longer parses is left out (kept on disk).
+/// Every series with its buckets, in identity order (the order the unique
+/// index gave before it was asked for), each size oldest first. A series
+/// whose identity no longer parses is left out (kept on disk).
 pub(super) fn load(connection: &mut Connection) -> Result<Vec<StoredTierSeries>, DatabaseFailure> {
     let mut statement = connection
-        .prepare("SELECT series_id, host_id, entity_id, metric_id, scope FROM tier_series")
+        .prepare(
+            "SELECT series_id, host_id, entity_id, metric_id, scope FROM tier_series \
+             ORDER BY host_id, entity_id, metric_id, scope",
+        )
         .map_err(DatabaseFailure::statement("history_tiers.load"))?;
     let failed = DatabaseFailure::statement("history_tiers.load");
     let series: Vec<(i64, SeriesInEveryBoot)> = statement
