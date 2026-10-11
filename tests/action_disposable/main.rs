@@ -13,10 +13,10 @@
 //! state lives in private temporary directories.
 //!
 //! Evidence per scenario: the command results and projected actions view a
-//! frontend sees; the Manager's event log; a journal of control-thread
-//! hand-overs, audit commits, adapter calls and every pidfd system call
-//! (spies that delegate to the real code unchanged); the child's own exit
-//! status; and the audit database read back through the store's public API.
+//! frontend sees; a journal of control-thread hand-overs, audit commits,
+//! adapter calls and every pidfd system call (spies that delegate to the
+//! real code unchanged); the child's own exit status; and the audit
+//! database read back through the store's public API.
 
 // Test helpers may unwrap: a broken fixture must fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

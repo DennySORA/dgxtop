@@ -1,26 +1,32 @@
-//! Ports between the six components.
+//! Ports between the crates of the D-79 architecture. Every implementation
+//! crate depends only on `dgxtop-core` (the history also on the pure
+//! `dgxtop-compression`); only the composition root (`dgxtop`) wires the
+//! concrete types behind these traits.
 //!
-//! * Telemetry: `TelemetryPort` (adapters, inside adapter hosts) is read-only.
-//! * Action: `ProcessActionPort` is a separate trait; only the Manager's
-//!   ProcessService ever receives one.
-//! * Process history (D-76): `ProcessProbe` (read-only, beside the
-//!   adapters) and `ProcessHistoryStore`; the history's process actor takes
-//!   `ProcessHistoryInput`s and publishes through `ProcessHistoryReader`
-//!   (to the Manager) and `ProcessMemoryReader` (to the history's readers,
-//!   which join it with the memory charts' bars, D-99) (D-79).
-//! * Collectors are pure (`Collector::collect`).
-//! * State (D-79): `StoreWriter` (the state actor only), `SnapshotReader`
-//!   and `TrendReader` (the short trends it fills at commit, D-99).
-//! * History (D-79): `HistoryIngest`, through which the live state hands
-//!   each commit to the history, and `OverviewReader` (D-82), through
-//!   which the Manager reads it (D-90); `HistoryTierStore` keeps the
-//!   Overview's sizes.
-//! * Store: `ConfigRepository`, `AuditRepository`, `ArchiveSink`,
-//!   `ArchiveReader` (D-51), `HistoryTierStore` (D-82).
+//! * Adapters: `TelemetryPort` (read-only, inside adapter hosts) and
+//!   `ProcessProbe` (the followed GPU processes, D-76); `ProcessActionPort`
+//!   is a separate trait that only the Manager's ProcessService receives.
+//! * Collectors: pure `Collector::collect` (state in, state out) and
+//!   `ProbeDeriver` (the probe readings' rates, D-79).
+//! * State: `StoreWriter` (the state actor only), `SnapshotReader` and
+//!   `TrendReader` (the short trends it fills at commit, D-99); the
+//!   Manager reaches the actor with `StateJob`s.
+//! * History: `HistoryIngest`, through which the state hands each commit
+//!   to the history, `OverviewReader` (D-82, D-90), through which the
+//!   Manager reads it, and, from the history's process actor,
+//!   `ProcessHistoryReader` (to the Manager) and `ProcessMemoryReader` (to
+//!   the history's readers, which join it with the memory charts' bars,
+//!   D-99); it takes `ProcessHistoryInput`s.
+//! * Store (SQLite and files only): `ConfigRepository`, `AuditRepository`,
+//!   `ArchiveSink`, `ArchiveReader` (D-51), `HistoryTierStore` (the
+//!   Overview's sizes, D-82) and `ProcessHistoryStore` (D-76); each
+//!   executes what its owner decided (D-94, D-95, D-96).
 //! * Runtime: `Dispatch<J>` submits jobs to fixed workers without blocking;
-//!   results come back as `IngestionCompletion` / `ControlCompletion`.
+//!   results come back as `IngestionCompletion` / `ControlCompletion`;
+//!   `Logger` is the bounded file log.
 //! * UI: `SessionPort` (commands, projections, results) and
-//!   `TerminalTransport` (non-blocking output owned by the runtime).
+//!   `TerminalTransport` / `InputGate` (non-blocking terminal I/O owned by
+//!   the runtime).
 
 use std::collections::BTreeSet;
 use std::fmt;

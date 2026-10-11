@@ -1,7 +1,7 @@
 //! A real `Manager` on its own control thread, driven only through its
-//! public surface: the `SessionHandle` (commands, results, projections), the
-//! shutdown trigger and the event feed. Ports default to inert capturing
-//! fakes; each scenario swaps in the real workers it exercises.
+//! public surface: the `SessionHandle` (commands, results, projections) and
+//! the shutdown trigger. Ports default to inert capturing fakes; each
+//! scenario swaps in the real workers it exercises.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};

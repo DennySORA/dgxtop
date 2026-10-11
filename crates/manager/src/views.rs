@@ -2,14 +2,17 @@
 //! (UI.md §3, AT13).
 //!
 //! `UpdateViewSession` semantics follow `dgxtop_core::commands::CommandBody`:
-//! * `processes`: `selected_process` is the selection, `selected_entity_id`
-//!   a GPU filter (`gpu:<uuid>`), `filter` a name filter (≤ 256 bytes);
+//! * `overview`: it holds the process table (D-36), so `selected_process`
+//!   is the selection, `selected_entity_id` a GPU filter (`gpu:<uuid>`) and
+//!   `filter` a name filter (≤ 256 bytes);
 //! * `gpu_detail`: `selected_entity_id` is the shown GPU;
-//! * `history` / `sources`: `selected_entity_id` is a series selector
-//!   (`metric_id|scope|entity_id`); `filter` is the history window token or
-//!   the sources text filter; in `history`, `selected_process` is the run
-//!   the Process History tab opened (D-76), of any boot, never validated
-//!   against the live table.
+//! * `history`: `selected_entity_id` is a series selector
+//!   (`metric_id|scope|entity_id`), `selected_process` the run the Process
+//!   History tab opened (D-76), of any boot, never validated against the
+//!   live table; it takes no `filter`, its bar sizes are `overview_bar` and
+//!   `process_bar` (D-80);
+//! * the Processes, Sources and Actions views were removed (D-91) and are
+//!   refused.
 //!
 //! Stale-frame rule: every published projection has a `frame_revision`; a
 //! session remembers the last [`STALE_FRAME_WINDOW`] revisions it was sent.

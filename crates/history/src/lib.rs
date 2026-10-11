@@ -1,48 +1,42 @@
 //! # dgxtop-history
 //!
 //! The history of dgxtop (D-79): it takes what the state committed, keeps
-//! each series' recent samples in memory, decides what is
-//! saved and for how long, answers the Manager's history reads (through
-//! the Overview's sizes only, D-90), and follows GPU process runs (D-76).
-//! Compression is the compression component's; the SQLite files are the
+//! each series' recent steps in memory, decides what is saved and for how
+//! long, answers the Manager's reads and follows GPU process runs (D-76).
+//! The compression is `dgxtop-compression`'s; the SQLite files are the
 //! store's, reached through ports.
 //!
-//! Bounded canonical history (`STORAGE.md` §2–4). Per series (`MetricKey`):
-//! raw gauge steps and exact counter intervals kept apart in fixed-width
-//! chunked logs (`raw_history_seconds`), segments cut on
-//! source/generation/policy/kind changes, and a merged gap index. Minute
-//! rollups (covered time, time-weighted sum, min/max, sample count, exact
-//! `u128` counter totals) and counter bridges for intervals crossing a
-//! minute boundary are cut from the raw data once the finalization horizon
-//! passes and handed on as finished rows, to the Overview's sizes and the
-//! archive; the series keeps none of them (D-90). Raw history lives in the
-//! `raw_history` partition, segments and gaps in the `aggregates`
-//! partition; when a partition is full the oldest data is evicted (raw
-//! already handed on first, else raw by boot time before the minutes are
-//! known, recorded as an `evicted` gap; the oldest gaps of the aggregates,
-//! reported as truncation).
-//!
-//! The state feeds it through the `HistoryIngest` port ([`HistoryRecorder`])
-//! inside each commit, so history never lags the snapshot; the Manager reads
-//! it through `OverviewReader` ([`HistoryIndex`]): the bars and window
-//! statistics of the Overview's sizes, with the minutes not finalized yet
-//! cut from the raw steps, each chart's window totals and, for a memory
-//! chart, the tracked processes' parts from the process actor's record
-//! (D-99); the archive receives the finished rows as
-//! `ArchiveJournal`s drained from the recorder. The bounded query engine
-//! over the raw steps and minutes (`HistoryReader`) is removed (D-90).
-//!
-//! The Overview series are also kept in every bar size ([`OverviewTiers`],
-//! D-82), fed by the same finished minutes, kept on disk through the store
-//! port and compressed from the archive at startup, so the Overview has no
-//! age limit from the archive.
-//!
-//! The GPU processes' runs and memory are its process actor's
-//! ([`ProcessHistory`]): the Manager hands it the committed process tables
-//! with the snapshot and catalog they came with, and reads the model it
-//! publishes ([`PublishedProcessHistory`]) through `ProcessHistoryReader`;
-//! the history's readers join its `ProcessMemoryReader` record with the
-//! memory charts' bars (D-99).
+//! * Ingest: the state feeds it through the `HistoryIngest` port
+//!   ([`HistoryRecorder`]) inside each commit, so the history never lags
+//!   the snapshot. Per series (`MetricKey`, `STORAGE.md` §2–4) raw gauge
+//!   steps and exact counter intervals are kept apart in fixed-width
+//!   chunked logs (`raw_history_seconds`), segments are cut on
+//!   source/generation/policy/kind changes and gaps merged into one index.
+//! * Minutes: once the finalization horizon passes, minute rollups
+//!   (covered time, time-weighted sum, min/max, sample count, exact `u128`
+//!   counter totals) and the counter bridges of intervals crossing a minute
+//!   boundary are cut from the raw steps and handed on as finished rows, to
+//!   the Overview's sizes and to the archive (`ArchiveJournal`s drained from
+//!   the recorder); the series keeps none of them (D-90).
+//! * Memory: raw steps live in the `raw_history` partition, segments and
+//!   gaps in `aggregates`; a full partition evicts its oldest data (raw
+//!   already handed on first, else raw by boot time before its minutes are
+//!   known, recorded as an `evicted` gap; the oldest gaps of the aggregates,
+//!   reported as truncation).
+//! * Overview sizes ([`OverviewTiers`], D-82): every Overview series in
+//!   every bar size, fed by the same finished minutes, kept on disk through
+//!   the store port and compressed from the archive at startup, so the
+//!   Overview has no age limit from the archive.
+//! * Reads: the Manager reads through `OverviewReader` ([`HistoryIndex`]):
+//!   the bars and window statistics of the Overview's sizes, the minutes not
+//!   finalized yet cut from the raw steps, each chart's window totals and,
+//!   for a memory chart, the tracked processes' parts (D-99).
+//! * Processes ([`ProcessHistory`]): the process actor keeps the GPU
+//!   processes' runs and memory; the Manager hands it the committed process
+//!   tables with the snapshot and catalog they came with and reads the model
+//!   it publishes ([`PublishedProcessHistory`]) through
+//!   `ProcessHistoryReader`; the history's readers join its
+//!   `ProcessMemoryReader` record with the memory charts' bars (D-99).
 
 #![forbid(unsafe_code)]
 
