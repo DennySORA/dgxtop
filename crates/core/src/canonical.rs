@@ -20,6 +20,10 @@ use crate::observation::{Capability, EntityRecord, Observation, SourceDescriptor
 use crate::ports::IngressBatch;
 use crate::quality::{Freshness, Namespace, Quality, ReadStatus, SampleKind, SelectionState};
 
+pub mod index;
+
+pub use index::{SampleIndex, SampleIndexCache};
+
 /// Canonical schema version.
 pub const CANONICAL_SCHEMA_VERSION: u32 = 1;
 /// Maximum candidate ids recorded per canonical value (schema `maxItems`).
@@ -741,9 +745,17 @@ pub struct ImmutableSnapshot {
     pub collector_states: BTreeMap<CollectorId, (u64, Arc<CollectorState>)>,
     pub health: StoreHealth,
     pub recent_gaps: Arc<Vec<GapRecord>>,
+    /// The revision's live index; read it through [`ImmutableSnapshot::index`].
+    pub sample_index: SampleIndexCache,
 }
 
 impl ImmutableSnapshot {
+    /// Every committed sample by `(metric, entity, scope)`: built by the
+    /// first reader of this revision and shared by every later one (D-84).
+    pub fn index(&self) -> &SampleIndex {
+        self.sample_index.get_or_build(&self.domains)
+    }
+
     /// Looks up a committed sample across domains.
     pub fn sample(&self, key: &MetricKey) -> Option<&SnapshotEntry> {
         self.domains

@@ -137,11 +137,6 @@ impl SampleBuilder {
         self
     }
 
-    pub(crate) fn revision(mut self, revision: u64) -> Self {
-        self.entry.sample.snapshot_revision = revision;
-        self
-    }
-
     pub(crate) fn build(self) -> SnapshotEntry {
         self.entry
     }
@@ -527,6 +522,9 @@ impl Fixture {
 
     fn domain(&mut self, collector: &str) -> &mut DomainSnapshot {
         let id = collector_id(collector).unwrap();
+        // A published snapshot is never edited; this hand-built one is, so
+        // an index a reader already built would no longer match it.
+        self.snapshot.sample_index = dgxtop_core::canonical::SampleIndexCache::default();
         Arc::make_mut(self.snapshot.domains.entry(id).or_default())
     }
 }

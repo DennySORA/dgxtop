@@ -34,7 +34,7 @@ use std::sync::Arc;
 use dgxtop_core::budget::{ByteLedger, BytePermit, Partition};
 use dgxtop_core::canonical::{
     AckStatus, ArchiveState, CollectionBatch, CollectorState, CommitGuard, DomainSnapshot,
-    GapRecord, ImmutableSnapshot, ProcessTable, StoreAck, StoreHealth,
+    GapRecord, ImmutableSnapshot, ProcessTable, SampleIndexCache, StoreAck, StoreHealth,
 };
 use dgxtop_core::config::{SamplingConfig, StoreConfig};
 use dgxtop_core::identity::{CollectorId, MetricKey};
@@ -536,6 +536,9 @@ impl StateWriter {
             collector_states,
             health: self.health(),
             recent_gaps,
+            // Built by the first reader: most revisions of a cycle are
+            // superseded before a frame reads them (D-83, D-84).
+            sample_index: SampleIndexCache::default(),
         });
         self.retained.track(&snapshot, frame);
         self.current = Arc::clone(&snapshot);
