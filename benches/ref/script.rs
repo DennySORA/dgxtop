@@ -23,6 +23,7 @@ use dgxtop_core::commands::{
 };
 use dgxtop_core::identity::{EntityId, ProcessKey, SessionId};
 use dgxtop_core::ports::SessionPort;
+use dgxtop_core::tiers::BarSize;
 use dgxtop_core::view::ViewModel;
 use dgxtop_manager::SessionHandle;
 use uuid::Uuid;
@@ -38,7 +39,14 @@ const RESULT_POLL: Duration = Duration::from_micros(500);
 pub const STALL_AFTER: Duration = Duration::from_secs(5);
 /// Steps of one script cycle (10 s at 10 Hz).
 const CYCLE_STEPS: u64 = 100;
-const HISTORY_WINDOWS: [&str; 5] = ["5m", "1h", "6h", "12h", "24h"];
+/// The Overview History's bar sizes the script cycles through (D-80).
+const HISTORY_BAR_SIZES: [BarSize; 5] = [
+    BarSize::FiveMinutes,
+    BarSize::OneHour,
+    BarSize::SixHours,
+    BarSize::TwelveHours,
+    BarSize::OneDay,
+];
 const SORTS: [SortKey; 5] = [
     SortKey::GpuMemory,
     SortKey::GpuUtil,
@@ -203,6 +211,7 @@ struct ViewChoice {
     filter: String,
     sort: SortKey,
     ascending: bool,
+    overview_bar: Option<BarSize>,
 }
 
 impl ViewChoice {
@@ -214,6 +223,7 @@ impl ViewChoice {
             filter: String::new(),
             sort: SortKey::GpuMemory,
             ascending: false,
+            overview_bar: None,
         }
     }
 
@@ -226,7 +236,7 @@ impl ViewChoice {
             sort: self.sort,
             ascending: self.ascending,
             frame_revision,
-            overview_bar: None,
+            overview_bar: self.overview_bar,
             process_bar: None,
         }
     }
@@ -293,12 +303,12 @@ fn sources(step: u64) -> ViewChoice {
     }
 }
 
-/// One window per cycle over every chart of the view (D-46); the rest of
-/// the 3 s dwell repeats the same state (idempotent, no re-query), as a user
-/// reading the charts would.
+/// One bar size per cycle over every chart of the view (D-46, D-80); the
+/// rest of the 3 s dwell repeats the same state (idempotent, no re-query),
+/// as a user reading the charts would.
 fn history(cycle: u64) -> ViewChoice {
     ViewChoice {
-        filter: cyclic(&HISTORY_WINDOWS, cycle).unwrap_or("1h").to_owned(),
+        overview_bar: cyclic(&HISTORY_BAR_SIZES, cycle),
         ..ViewChoice::plain(ViewKind::History)
     }
 }

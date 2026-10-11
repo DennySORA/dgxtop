@@ -426,7 +426,7 @@ fn the_memory_legend_scrolls_apart_from_the_process_selection() {
     );
 }
 
-/// ←/→ switch the history window in History and the GPU in the GPU view:
+/// ←/→ switch the history bar size in History and the GPU in the GPU view:
 /// one key, the action of the page it is pressed on (D-70).
 #[test]
 fn arrows_act_on_the_page_they_are_pressed_on() {
@@ -434,11 +434,11 @@ fn arrows_act_on_the_page_they_are_pressed_on() {
     let arrow = |code: KeyCode| crossterm::event::KeyEvent::new(code, KeyModifiers::NONE);
     assert_eq!(
         resolve(&arrow(KeyCode::Right), ModeKind::Normal, ViewKind::History),
-        Some(KeyAction::NextHistoryWindow)
+        Some(KeyAction::NextHistoryBarSize)
     );
     assert_eq!(
         resolve(&arrow(KeyCode::Left), ModeKind::Normal, ViewKind::History),
-        Some(KeyAction::PreviousHistoryWindow)
+        Some(KeyAction::PreviousHistoryBarSize)
     );
     assert_eq!(
         resolve(
