@@ -118,7 +118,15 @@ CI は [`spec/dgxtop-v2/tools/check_boundaries.py`](../spec/dgxtop-v2/tools/chec
 
 ## インストール
 
-x86_64 または aarch64 の Linux（glibc）。GPU の値には NVIDIA ドライバ（NVML）が必要で、ない場合もそれ以外は動作します。ソースからビルドします（`rust-toolchain.toml` で Rust 1.92.0 に固定）：
+x86_64 または aarch64 の Linux で、glibc 2.35 以降（Ubuntu 22.04、Debian 12 以降）。DGX Spark も含みます。WSL 2 では Linux 版が動きます。GPU には Windows 側の NVIDIA ドライバが必要で、CPU の温度と電力は通常取得できません。WSL 1、musl、macOS、Windows には対応していません。GPU の値には NVIDIA ドライバ（NVML）が必要で、ない場合もそれ以外は動作します。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
+```
+
+`install.sh` は CPU に合ったビルドを選び、`SHA256SUMS` とアーカイブ構成を検証して `dgxtop --version --verbose` を実行し、`~/.local/bin/dgxtop` をアトミックに置き換え、以前のバイナリを `dgxtop.previous` として残します（`./install.sh --rollback` で戻せます）。特定のリリースを入れるには、`bash` の後ろに `-s -- --version v2.0.0` を付けます。v2.0.0 より前のリリースは以前の v1 実装です。
+
+ソースからビルドすることもできます（`rust-toolchain.toml` で Rust 1.92.0 に固定）：
 
 ```bash
 git clone https://github.com/DennySORA/dgxtop.git
@@ -126,8 +134,6 @@ cd dgxtop
 cargo build --release --locked
 ./target/release/dgxtop
 ```
-
-v2 の最初のリリースはまだタグ付けされていません。GitHub の最新リリース（v0.2.5）は以前の v1 実装です。v2 のリリース後は、`install.sh` が GNU ビルドをダウンロードし、`SHA256SUMS` とアーカイブ構成を検証して `dgxtop --version --verbose` を実行し、バイナリをアトミックに置き換え、以前のものを `dgxtop.previous` として残します（`./install.sh --rollback` で戻せます）。
 
 ## 使い方
 
@@ -180,13 +186,13 @@ just e2e       # 要求時のみのエンドツーエンド：PTY セッショ�
 just hardware  # 実際の procfs/sysfs/NVML でのハードウェアテスト（pidfd は使い捨ての子プロセスのみ）
 ```
 
-フォーマット、lint、テストスイート（x86_64 で 1,373 件、aarch64 で 1,372 件）、依存境界、ハードウェアテストは、Debian 13 のワークステーション（RTX 5080 + RTX 3060）と DGX Spark（GB10）の両方で通っています。ログと SHA-256 は [`docs/validation/evidence/`](validation/evidence/) にあります。[`docs/validation/VALIDATION.md`](validation/VALIDATION.md) は 40 件の受け入れケースを追跡しています（現在 12 PASS、24 NOT_RUN、4 BLOCKED）。3 × 30 分のベンチマーク、72 時間のソーク、タグ付きリリースの実行はまだなので、検証済みと呼べるプラットフォームはなく、仕様の性能値は目標のままです。
+フォーマット、lint、テストスイート（x86_64 で 1,373 件、aarch64 で 1,372 件）、依存境界、ハードウェアテストは、Debian 13 のワークステーション（RTX 5080 + RTX 3060）と DGX Spark（GB10）の両方で通っています。ログと SHA-256 は [`docs/validation/evidence/`](validation/evidence/) にあります。[`docs/validation/VALIDATION.md`](validation/VALIDATION.md) は 40 件の受け入れケースを追跡しています（現在 12 PASS、24 NOT_RUN、4 BLOCKED）。3 × 30 分のベンチマークと 72 時間のソークはまだで、リリースの実行も検証の証拠として記録されていないため、検証済みと呼べるプラットフォームはなく、仕様の性能値は目標のままです。
 
 ## ドキュメント
 
 - [設計ノート（英語）](https://dennysora.me/en/projects/tools/dgxtop/)：アーキテクチャとその背景にある考え方（[繁體中文](https://dennysora.me/zh-hant/projects/tools/dgxtop/)）。
 - [`spec/dgxtop-v2/`](../spec/dgxtop-v2/README.md)：仕様（繁体字中国語）。
-- [`docs/design/DECISIONS.md`](design/DECISIONS.md)：実装上の決定 D-01〜D-60。
+- [`docs/design/DECISIONS.md`](design/DECISIONS.md)：実装上の決定 D-01〜D-61。
 - [`docs/design/history-redesign.md`](design/history-redesign.md)：履歴ビューの設計分析。
 
 ## ライセンス

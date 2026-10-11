@@ -513,7 +513,7 @@ dependencies = [
 
 [[package]]
 name = "dgxtop"
-version = "0.2.0"
+version = "2.0.0"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -536,7 +536,7 @@ dependencies = [
 
 [[package]]
 name = "dgxtop-adapters"
-version = "0.2.0"
+version = "2.0.0"
 dependencies = [
  "dgxtop-core",
  "libc",
@@ -551,7 +551,7 @@ dependencies = [
 
 [[package]]
 name = "dgxtop-collectors"
-version = "0.2.0"
+version = "2.0.0"
 dependencies = [
  "dgxtop-core",
  "proptest",
@@ -562,7 +562,7 @@ dependencies = [
 
 [[package]]
 name = "dgxtop-core"
-version = "0.2.0"
+version = "2.0.0"
 dependencies = [
  "proptest",
  "serde",
@@ -574,7 +574,7 @@ dependencies = [
 
 [[package]]
 name = "dgxtop-manager"
-version = "0.2.0"
+version = "2.0.0"
 dependencies = [
  "crossbeam-channel",
  "dgxtop-core",
@@ -587,7 +587,7 @@ dependencies = [
 
 [[package]]
 name = "dgxtop-runtime"
-version = "0.2.0"
+version = "2.0.0"
 dependencies = [
  "crossbeam-channel",
  "dgxtop-core",
@@ -603,7 +603,7 @@ dependencies = [
 
 [[package]]
 name = "dgxtop-store"
-version = "0.2.0"
+version = "2.0.0"
 dependencies = [
  "dgxtop-core",
  "libc",
@@ -619,7 +619,7 @@ dependencies = [
 
 [[package]]
 name = "dgxtop-ui"
-version = "0.2.0"
+version = "2.0.0"
 dependencies = [
  "crossterm",
  "dgxtop-core",

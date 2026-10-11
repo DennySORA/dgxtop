@@ -141,8 +141,21 @@ boundary in CI.
 
 ## Install
 
-Linux on x86_64 or aarch64 with glibc. GPU metrics need the NVIDIA driver (NVML); without it,
-everything else still works. Build from source (Rust 1.92.0 is pinned by `rust-toolchain.toml`):
+Linux on x86_64 or aarch64 with glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and later), DGX Spark
+included. WSL 2 runs the Linux build: GPUs need the NVIDIA driver on Windows, and CPU temperature
+and power are usually not available there. WSL 1, musl, macOS and Windows are not supported. GPU
+metrics need the NVIDIA driver (NVML); without it, everything else still works.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
+```
+
+`install.sh` picks the build for your CPU, verifies `SHA256SUMS` and the archive layout, runs
+`dgxtop --version --verbose`, then atomically replaces `~/.local/bin/dgxtop` and keeps the previous
+binary as `dgxtop.previous` (`./install.sh --rollback` restores it). For a specific release, append
+`-s -- --version v2.0.0` to `bash`. Releases before v2.0.0 are the earlier v1 program.
+
+Or build from source (Rust 1.92.0 is pinned by `rust-toolchain.toml`):
 
 ```bash
 git clone https://github.com/DennySORA/dgxtop.git
@@ -150,11 +163,6 @@ cd dgxtop
 cargo build --release --locked
 ./target/release/dgxtop
 ```
-
-The first v2 release has not been tagged yet; the latest GitHub release (v0.2.5) is the earlier
-v1 implementation. Once a v2 release exists, `install.sh` downloads its GNU build, verifies
-`SHA256SUMS` and the archive layout, runs `dgxtop --version --verbose`, then atomically replaces the
-binary and keeps the previous one as `dgxtop.previous` (`./install.sh --rollback` restores it).
 
 ## Usage
 
@@ -218,16 +226,16 @@ Format, lint, the test suite (1,373 tests on x86_64, 1,372 on aarch64), the depe
 and the hardware suites pass on a Debian 13 workstation (RTX 5080 + RTX 3060) and on a DGX Spark
 (GB10). Their logs and SHA-256 hashes are in [`docs/validation/evidence/`](docs/validation/evidence/).
 [`docs/validation/VALIDATION.md`](docs/validation/VALIDATION.md) tracks the 40 acceptance cases
-(currently 12 PASS, 24 NOT_RUN, 4 BLOCKED). The 3 × 30-minute benchmark runs, the 72-hour soak and a
-tagged release run are still missing, so no platform is called validated, and the performance numbers
-in the specification remain targets.
+(currently 12 PASS, 24 NOT_RUN, 4 BLOCKED). The 3 × 30-minute benchmark runs and the 72-hour soak are
+still missing, and the release run is not yet recorded as evidence, so no platform is called validated,
+and the performance numbers in the specification remain targets.
 
 ## Documentation
 
 - [Design notes](https://dennysora.me/en/projects/tools/dgxtop/): the architecture and the ideas
   behind it ([繁體中文](https://dennysora.me/zh-hant/projects/tools/dgxtop/)).
 - [`spec/dgxtop-v2/`](spec/dgxtop-v2/README.md): the specification (Traditional Chinese).
-- [`docs/design/DECISIONS.md`](docs/design/DECISIONS.md): implementation decisions D-01 to D-60.
+- [`docs/design/DECISIONS.md`](docs/design/DECISIONS.md): implementation decisions D-01 to D-61.
 - [`docs/design/history-redesign.md`](docs/design/history-redesign.md): how the history view was
   designed.
 

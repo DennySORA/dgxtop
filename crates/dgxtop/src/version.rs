@@ -32,7 +32,7 @@ pub struct RuntimeFacts {
     pub sqlite_gate_ok: bool,
 }
 
-/// One-line version (`dgxtop 0.2.0`).
+/// One-line version (`dgxtop 2.0.0`).
 pub fn short(build: &BuildInfo) -> String {
     format!("dgxtop {}", build.version)
 }

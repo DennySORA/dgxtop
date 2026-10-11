@@ -118,7 +118,15 @@ CI 以 [`spec/dgxtop-v2/tools/check_boundaries.py`](../spec/dgxtop-v2/tools/chec
 
 ## 安裝
 
-支援 x86_64 或 aarch64 的 Linux（glibc）。GPU 指標需要 NVIDIA 驅動（NVML）；沒有驅動時其他功能照常運作。從原始碼建置（`rust-toolchain.toml` 固定 Rust 1.92.0）：
+支援 x86_64 或 aarch64 的 Linux，glibc 2.35 以上（Ubuntu 22.04、Debian 12 及更新版本），包括 DGX Spark。WSL 2 可以執行 Linux 版：GPU 需要在 Windows 安裝 NVIDIA 驅動，CPU 溫度與功耗通常讀不到。不支援 WSL 1、musl、macOS 與 Windows。GPU 指標需要 NVIDIA 驅動（NVML）；沒有驅動時其他功能照常運作。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
+```
+
+`install.sh` 會依 CPU 選擇對應的版本、驗證 `SHA256SUMS` 與壓縮檔結構、執行 `dgxtop --version --verbose`，再以原子方式替換 `~/.local/bin/dgxtop`，並把舊版保留為 `dgxtop.previous`（用 `./install.sh --rollback` 還原）。要安裝特定版本，在 `bash` 後面加上 `-s -- --version v2.0.0`。v2.0.0 之前的 release 是先前的 v1 程式。
+
+也可以從原始碼建置（`rust-toolchain.toml` 固定 Rust 1.92.0）：
 
 ```bash
 git clone https://github.com/DennySORA/dgxtop.git
@@ -126,8 +134,6 @@ cd dgxtop
 cargo build --release --locked
 ./target/release/dgxtop
 ```
-
-第一個 v2 release 還沒有發佈；GitHub 上最新的 release（v0.2.5）是先前的 v1 實作。v2 release 發佈後，`install.sh` 會下載 GNU 版本、驗證 `SHA256SUMS` 與壓縮檔結構、執行 `dgxtop --version --verbose`，再以原子方式替換執行檔，並把舊版保留為 `dgxtop.previous`（用 `./install.sh --rollback` 還原）。
 
 ## 使用方式
 
@@ -180,13 +186,13 @@ just e2e       # 依需求執行的端對端測試：PTY 會話、故障注入�
 just hardware  # 在真實 procfs/sysfs/NVML 上的硬體測試（pidfd 只用可拋棄的子程序）
 ```
 
-格式、lint、測試套件（x86_64 上 1,373 項、aarch64 上 1,372 項）、依賴邊界與硬體測試，在 Debian 13 工作站（RTX 5080 + RTX 3060）與 DGX Spark（GB10）上都通過，紀錄與 SHA-256 在 [`docs/validation/evidence/`](validation/evidence/)。[`docs/validation/VALIDATION.md`](validation/VALIDATION.md) 追蹤 40 項驗收案例（目前 12 PASS、24 NOT_RUN、4 BLOCKED）。3 × 30 分鐘的效能基準、72 小時 soak 與正式 release 的執行都還沒做，所以沒有任何平台被宣稱為已驗收，規格裡的效能數字仍是目標。
+格式、lint、測試套件（x86_64 上 1,373 項、aarch64 上 1,372 項）、依賴邊界與硬體測試，在 Debian 13 工作站（RTX 5080 + RTX 3060）與 DGX Spark（GB10）上都通過，紀錄與 SHA-256 在 [`docs/validation/evidence/`](validation/evidence/)。[`docs/validation/VALIDATION.md`](validation/VALIDATION.md) 追蹤 40 項驗收案例（目前 12 PASS、24 NOT_RUN、4 BLOCKED）。3 × 30 分鐘的效能基準與 72 小時 soak 都還沒做，release 的執行也還沒記錄成驗收證據，所以沒有任何平台被宣稱為已驗收，規格裡的效能數字仍是目標。
 
 ## 文件
 
 - [設計說明](https://dennysora.me/zh-hant/projects/tools/dgxtop/)：架構與背後的想法（[English](https://dennysora.me/en/projects/tools/dgxtop/)）。
 - [`spec/dgxtop-v2/`](../spec/dgxtop-v2/README.md)：規格。
-- [`docs/design/DECISIONS.md`](design/DECISIONS.md)：實作決策 D-01 到 D-60。
+- [`docs/design/DECISIONS.md`](design/DECISIONS.md)：實作決策 D-01 到 D-61。
 - [`docs/design/history-redesign.md`](design/history-redesign.md)：歷史畫面的設計分析。
 
 ## 授權
