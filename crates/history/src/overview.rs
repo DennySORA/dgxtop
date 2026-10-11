@@ -142,14 +142,25 @@ impl StoreLink {
     }
 
     /// Sends a startup job, holding it while the queue is full.
-    fn send(&mut self, job: HistoryTierJob) {
+    fn send(&mut self, book: &mut TierBook, job: HistoryTierJob) {
         match self.port.try_dispatch(job.clone()) {
             Ok(()) => {}
             Err(DispatchError::Busy) => self.held = Some(job),
-            Err(error) => {
-                self.healthy = false;
-                self.issue = Some(format!("history tiers store stopped: {error}"));
-            }
+            Err(error) => self.stop(book, &error),
+        }
+    }
+
+    /// The store actor is gone: no answer will come, so the startup is
+    /// over and every series still waiting for it is fed live (none
+    /// backfilled, so the archive is never pruned for them).
+    fn stop(&mut self, book: &mut TierBook, error: &DispatchError) {
+        self.healthy = false;
+        self.issue = Some(format!("history tiers store stopped: {error}"));
+        self.held = None;
+        if !matches!(self.phase, Phase::Done) {
+            self.phase = Phase::Done;
+            self.let_go.clear();
+            book.release(false);
         }
     }
 }
@@ -192,7 +203,8 @@ impl OverviewTiers {
         run_start_utc_ns: i64,
     ) {
         let mut inner = self.lock();
-        inner.book.keep_on_disk();
+        let Inner { book, link: slot } = &mut *inner;
+        book.keep_on_disk();
         let mut link = StoreLink {
             port,
             host_id,
@@ -208,8 +220,8 @@ impl OverviewTiers {
             eviction_prunes: Vec::new(),
             let_go: BTreeSet::new(),
         };
-        link.send(HistoryTierJob::Load);
-        inner.link = Some(link);
+        link.send(book, HistoryTierJob::Load);
+        *slot = Some(link);
     }
 
     /// What a store job did.
@@ -330,11 +342,14 @@ fn loaded(
         Err(error) => link.fail(&error),
     }
     link.phase = Phase::Listing;
-    link.send(HistoryTierJob::ListArchived(ArchivedSeriesList {
-        host_id: link.host_id.clone(),
-        metric_ids: OVERVIEW_METRICS.iter().map(|id| (*id).to_owned()).collect(),
-        before_utc_ns: link.run_start_utc_ns,
-    }));
+    link.send(
+        book,
+        HistoryTierJob::ListArchived(ArchivedSeriesList {
+            host_id: link.host_id.clone(),
+            metric_ids: OVERVIEW_METRICS.iter().map(|id| (*id).to_owned()).collect(),
+            before_utc_ns: link.run_start_utc_ns,
+        }),
+    );
 }
 
 fn listed(
@@ -394,7 +409,7 @@ fn archived_read(
                     if let Phase::Backfilling { reading, .. } = &mut link.phase {
                         *reading = Some((series, false));
                     }
-                    link.send(HistoryTierJob::ReadArchived(next));
+                    link.send(book, HistoryTierJob::ReadArchived(next));
                     return;
                 }
                 None => book.finish(&series, true, true),
@@ -427,13 +442,13 @@ fn next_backfill(book: &mut TierBook, link: &mut StoreLink) {
         max_minutes: ARCHIVE_PAGE_MINUTES,
     };
     *reading = Some((series, true));
-    link.send(HistoryTierJob::ReadArchived(read));
+    link.send(book, HistoryTierJob::ReadArchived(read));
 }
 
 /// Sends a held startup job, then the closed buckets collected.
 fn flush(book: &mut TierBook, link: &mut StoreLink) {
     if let Some(job) = link.held.take() {
-        link.send(job);
+        link.send(book, job);
         if link.held.is_some() {
             return;
         }
@@ -460,10 +475,7 @@ fn flush(book: &mut TierBook, link: &mut StoreLink) {
                     Some("history tiers store fell behind; oldest buckets dropped".to_owned());
             }
         }
-        Err(error) => {
-            link.healthy = false;
-            link.issue = Some(format!("history tiers store stopped: {error}"));
-        }
+        Err(error) => link.stop(book, &error),
     }
 }
 

@@ -669,3 +669,65 @@ fn a_series_that_comes_back_has_a_new_epoch() {
     assert_ne!(back, before, "the comeback is a new past");
     assert_ne!(back, gone);
 }
+
+/// A store port that stops taking jobs once it is stopped.
+#[derive(Clone, Default)]
+struct StoppingPort {
+    jobs: CapturingDispatch<HistoryTierJob>,
+    closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl StoppingPort {
+    fn stop(&self) {
+        self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl Dispatch<HistoryTierJob> for StoppingPort {
+    fn try_dispatch(&self, job: HistoryTierJob) -> Result<(), DispatchError> {
+        if self.closed.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(DispatchError::Closed);
+        }
+        self.jobs.try_dispatch(job)
+    }
+}
+
+/// The startup ends when the store actor stops, at any step: the series
+/// waiting for it are fed live from then on (nothing stays waiting), and
+/// the archive is not pruned.
+#[test]
+fn the_startup_ends_when_the_store_stops() {
+    let window = (MIDNIGHT - HOUR, MIDNIGHT + 2 * HOUR);
+    for step in ["load", "list", "read"] {
+        let tiers = OverviewTiers::new();
+        let port = StoppingPort::default();
+        if step == "load" {
+            port.stop();
+        }
+        tiers.attach_store(Box::new(port.clone()), host_id("test-host"), MIDNIGHT);
+        tiers.feed(vec![live(0)]);
+        if step != "load" {
+            assert_eq!(port.jobs.take(), vec![HistoryTierJob::Load], "{step}");
+            if step == "read" {
+                tiers.on_store(HistoryTierCompletion::Loaded(Ok(Vec::new())));
+                port.jobs.take();
+            }
+            port.stop();
+            let answer = if step == "list" {
+                HistoryTierCompletion::Loaded(Ok(Vec::new()))
+            } else {
+                HistoryTierCompletion::Listed(Ok(vec![power()]))
+            };
+            tiers.on_store(answer);
+        }
+        tiers.feed(vec![live(1)]);
+        tiers.with_book(|book| {
+            let held = book.tiers_of(&power()).map_or(0, |tiers| tiers.len());
+            assert!(held > 0, "{step}: the series is fed live");
+        });
+        let bars = tiers.bars(&power(), Tier::OneHour, window, &[]);
+        assert_ne!(bars.settled_through_utc_ns, i64::MIN, "{step}: settled");
+        assert!(bars.store_issue.is_some(), "{step}: the stop is shown");
+        assert!(tiers.take_prunes(0).is_empty(), "{step}: nothing pruned");
+    }
+}
