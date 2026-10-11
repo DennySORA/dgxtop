@@ -334,6 +334,11 @@ impl ControlCore {
             actions: self.process.view_for(session_id, now_ns),
             history: self.history.view(session_id),
             trends: self.trends.book(),
+            process_memory: &self.process_memory,
+            boot_to_utc_ns: self
+                .clock
+                .now_utc_ns()
+                .saturating_sub(i128::from(self.clock.now_boot_ns())),
             facts: &self.facts,
             enabled_modules: &inputs.enabled_modules,
             archive: self.archive.status(),

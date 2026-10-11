@@ -528,8 +528,12 @@ impl ControlCore {
         match self.ingestion.on_committed(ack, now) {
             CommitOutcome::Committed(batch) => {
                 let snapshot = self.ingestion.snapshots().latest();
-                self.trends
-                    .record(&snapshot, &unified_gpus(&self.catalog.snapshot()));
+                self.process_memory.record(&snapshot.process_table);
+                self.trends.record(
+                    &snapshot,
+                    &unified_gpus(&self.catalog.snapshot()),
+                    &self.process_memory,
+                );
                 self.pending_commit_ns.get_or_insert(now);
                 self.events.emit(
                     now,

@@ -4,9 +4,10 @@
 //!   panel of several the strip's label and its scale;
 //! - the plot: each column the mean over its time in block glyphs, colored
 //!   by its share of the scale (or for a rate by its direction, as on the
-//!   overview); a dotted base where nothing was recorded, so a gap never
-//!   reads as zero. Peaks are not drawn (D-57): the legend gives the
-//!   window's peak;
+//!   overview), a memory chart's tracked processes stacked at its foot in
+//!   their colors (D-64); a dotted base where nothing was recorded, so a
+//!   gap never reads as zero. Peaks are not drawn (D-57): the legend gives
+//!   the window's peak;
 //! - the legend: the value now, the mean and the peak over the window (and
 //!   for power the energy), as many as the strip has rows.
 
@@ -156,7 +157,27 @@ fn render_plot(
         Paint::Write => theme.warning,
         Paint::Transmit => theme.accent,
     };
-    let mut sparkline = GapSparkline::new(&means, Style::new().fg(color)).max(strip.scale);
+    let part_columns: Vec<Vec<Option<f64>>> = strip
+        .chart
+        .parts
+        .iter()
+        .map(|part| grid_columns(&part.means, plot.width))
+        .collect();
+    let parts = strip
+        .chart
+        .parts
+        .iter()
+        .zip(&part_columns)
+        .map(|(part, columns)| {
+            (
+                columns.as_slice(),
+                Style::new().fg(theme.process_color(part.slot)),
+            )
+        })
+        .collect();
+    let mut sparkline = GapSparkline::new(&means, Style::new().fg(color))
+        .max(strip.scale)
+        .parts(parts);
     if strip.paint == Paint::Levels {
         sparkline = sparkline.level_colors(theme);
     }
@@ -321,6 +342,41 @@ pub(super) fn columns_of(
         .collect()
 }
 
+/// `width` columns of an even grid of `cells` over the same window: per
+/// column the mean of the cells it overlaps, weighted by the overlap;
+/// `None` where no overlapped cell has a value.
+pub(super) fn grid_columns(cells: &[Option<f64>], width: u16) -> Vec<Option<f64>> {
+    let count = u64::try_from(cells.len()).unwrap_or(u64::MAX);
+    let columns = u64::from(width);
+    if count == 0 {
+        return vec![None; usize::from(width)];
+    }
+    (0..columns)
+        .map(|column| {
+            // Column and cell edges in units of 1 / (count × columns).
+            let (start, end) = (column * count, (column + 1) * count);
+            let (first, last) = (start / columns, ((end - 1) / columns).min(count - 1));
+            let mut sum = 0.0;
+            let mut weight = 0.0;
+            for cell in first..=last {
+                let Some(mean) = usize::try_from(cell)
+                    .ok()
+                    .and_then(|cell| cells.get(cell).copied().flatten())
+                    .filter(|mean| mean.is_finite())
+                else {
+                    continue;
+                };
+                let overlap = end.min((cell + 1) * columns) - start.max(cell * columns);
+                #[allow(clippy::cast_precision_loss)]
+                let overlap = overlap as f64;
+                sum += mean * overlap;
+                weight += overlap;
+            }
+            (weight > 0.0).then(|| sum / weight)
+        })
+        .collect()
+}
+
 /// The tallest column any of `strips` draws in a plot `width` columns
 /// wide: the shared scale of a rate pair, so its heights compare and its
 /// busiest stretch reaches the top.
@@ -378,8 +434,9 @@ pub(super) fn strip_text(strip: &Strip<'_>) -> String {
 mod tests {
     use super::*;
     use crate::modules::history::panels::panels;
-    use crate::test_fixtures::{HISTORY_END, display_context, history_view};
+    use crate::test_fixtures::{GIB, HISTORY_END, display_context, history_view};
     use dgxtop_core::history::HistoryMethod;
+    use dgxtop_core::view::HistoryPart;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -449,6 +506,77 @@ mod tests {
             vec![Some(7.0), Some(7.0), None, None, None, None, None, None]
         );
         assert_eq!(columns_of(&points, (0, 0), 4), Vec::new());
+    }
+
+    /// A part's even grid maps onto any number of columns by overlap, a
+    /// cell without a value leaving the columns only it covers blank.
+    #[test]
+    fn a_part_grid_maps_onto_the_plot_columns() {
+        let cells = [Some(2.0), Some(4.0), None, Some(8.0)];
+        assert_eq!(
+            grid_columns(&cells, 2),
+            vec![Some(3.0), Some(8.0)],
+            "two cells a column; the gap only narrows the weight"
+        );
+        assert_eq!(
+            grid_columns(&cells, 8),
+            vec![
+                Some(2.0),
+                Some(2.0),
+                Some(4.0),
+                Some(4.0),
+                None,
+                None,
+                Some(8.0),
+                Some(8.0)
+            ]
+        );
+        assert_eq!(grid_columns(&cells, 3)[0], Some(2.0 * 0.75 + 4.0 * 0.25));
+        assert_eq!(grid_columns(&[], 2), vec![None, None]);
+    }
+
+    /// A memory strip stacks its tracked processes at the foot of each
+    /// column in their colors.
+    #[test]
+    fn a_memory_strip_draws_its_processes_in_their_colors() {
+        let context = display_context();
+        let mut history = history_view();
+        let memory = history
+            .charts
+            .iter_mut()
+            .find(|chart| chart.kind == HistoryChartKind::GpuMemory)
+            .unwrap();
+        memory.points = (0..60)
+            .map(|minute| point(minute * 60, (minute + 1) * 60, Some(40.0 * GIB), None))
+            .map(|mut point| {
+                point.start_utc_ns += HISTORY_END - 3_600 * SECOND;
+                point.end_utc_ns += HISTORY_END - 3_600 * SECOND;
+                point
+            })
+            .collect();
+        memory.parts = vec![HistoryPart {
+            slot: 2,
+            means: vec![Some(30.0 * GIB); 60],
+        }];
+        let panels = panels(&history);
+        let strip = panels
+            .iter()
+            .find(|panel| panel.title == "GPU memory")
+            .and_then(|panel| panel.strips.first())
+            .unwrap();
+        let rows = draw(strip, true, (84, 3));
+        let mut terminal = Terminal::new(TestBackend::new(84, 3)).unwrap();
+        terminal
+            .draw(|frame| render_strip(frame, frame.area(), (strip, true), hour(), &context))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let x = HISTORY_GUTTER_COLUMNS + 5;
+        assert_eq!(
+            buffer[(x, 2)].fg,
+            context.theme.process_color(2),
+            "{rows:#?}"
+        );
+        assert_ne!(buffer[(x, 0)].fg, context.theme.process_color(2));
     }
 
     #[test]

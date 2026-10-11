@@ -4,17 +4,20 @@
 //! what its processes hold, against the system RAM), the temperature on a
 //! fixed 0–100 °C scale and the power against the enforced limit. The
 //! overview shows the first two, the utilization's history under its
-//! gauge; the GPU view shows all four, live only.
+//! gauge; the GPU view shows all four, live only. The memory bar shows what
+//! each tracked process holds in its color (D-64), the rest of the memory
+//! in use in the color of the bar's level.
 
-use dgxtop_core::view::{GpuCard, MetricCell, Trend};
+use dgxtop_core::view::{GpuCard, MetricCell, ProcessShare, Trend};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use super::facts::{has_value, reported};
 use crate::format::{display_width, format_value, pad_left, value_text};
 use crate::modules::common::{BarRow, RowCursor, render_bar_row, render_chart, under_bar};
+use crate::modules::process_memory::share_segments;
 use crate::registry::DisplayContext;
-use crate::widgets::Gauge;
+use crate::widgets::{Gauge, Segment, StackedBar};
 
 /// Fixed top of the temperature scale, so small changes stay small.
 const TEMPERATURE_SCALE_C: f64 = 100.0;
@@ -32,6 +35,8 @@ pub(super) struct GpuReading<'a> {
     trend: &'a Trend,
     /// Top of the bar's and the chart's scale.
     max: Option<f64>,
+    /// What each tracked process holds of the value (the memory bar).
+    shares: &'a [ProcessShare],
 }
 
 impl GpuReading<'_> {
@@ -79,6 +84,7 @@ fn utilization(card: &GpuCard) -> GpuReading<'_> {
         value: value_text(&card.utilization),
         trend: &card.utilization_trend,
         max: Some(100.0),
+        shares: &[],
     }
 }
 
@@ -92,6 +98,7 @@ fn memory(card: &GpuCard) -> GpuReading<'_> {
             value: with_total(&card.process_allocated, Some(&card.system_ram_total)),
             trend: &card.memory_trend,
             max: card.system_ram_total.value_f64(),
+            shares: &card.process_memory,
         };
     }
     GpuReading {
@@ -100,6 +107,7 @@ fn memory(card: &GpuCard) -> GpuReading<'_> {
         value: with_total(&card.framebuffer_used, Some(&card.framebuffer_total)),
         trend: &card.memory_trend,
         max: card.framebuffer_total.value_f64(),
+        shares: &card.process_memory,
     }
 }
 
@@ -110,6 +118,7 @@ fn temperature(card: &GpuCard) -> GpuReading<'_> {
         value: value_text(&card.temperature),
         trend: &card.temperature_trend,
         max: Some(TEMPERATURE_SCALE_C),
+        shares: &[],
     }
 }
 
@@ -123,6 +132,7 @@ fn power(card: &GpuCard) -> GpuReading<'_> {
             value: with_total(&card.power_draw, Some(&card.power_limit)),
             trend: &card.power_trend,
             max: card.power_limit.value_f64(),
+            shares: &[],
         };
     }
     let peak = card
@@ -148,6 +158,7 @@ fn power(card: &GpuCard) -> GpuReading<'_> {
         value,
         trend: &card.power_trend,
         max: peak,
+        shares: &[],
     }
 }
 
@@ -185,7 +196,12 @@ pub(super) fn render_bar(
         },
         context,
     );
-    frame.render_widget(Gauge::new(ratio, "", &context.theme), gauge);
+    match bar_segments(reading, context) {
+        Some(segments) => {
+            frame.render_widget(StackedBar::new(&segments, context.theme.gauge_track), gauge)
+        }
+        None => frame.render_widget(Gauge::new(ratio, "", &context.theme), gauge),
+    }
     if let Some(chart) = rows.rest() {
         render_chart(
             frame,
@@ -195,6 +211,24 @@ pub(super) fn render_bar(
             context,
         );
     }
+}
+
+/// The memory bar's segments when a tracked process holds some of it: each
+/// process in its color, then the rest of the value in the color of the
+/// bar's level; `None` for a plain gauge.
+fn bar_segments(reading: &GpuReading<'_>, context: &DisplayContext) -> Option<Vec<Segment>> {
+    if reading.shares.is_empty() {
+        return None;
+    }
+    let scale = reading.max.filter(|max| *max > 0.0)?;
+    let current = reading.current.value_f64()?.clamp(0.0, scale);
+    let (mut segments, covered) = share_segments(reading.shares, scale, current, context);
+    let ratio = current / scale;
+    segments.push(Segment {
+        fraction: ratio - covered / scale,
+        color: context.theme.level_color(ratio),
+    });
+    Some(segments)
 }
 
 #[cfg(test)]
@@ -247,6 +281,51 @@ mod tests {
             (no_total.value.as_str(), no_total.ratio()),
             ("12.3 GiB", None)
         );
+    }
+
+    /// A GPU's memory bar shows each tracked process's part in its color,
+    /// the rest of the memory in use in the bar's level color (D-64); the
+    /// other bars stay plain gauges.
+    #[test]
+    fn the_memory_bar_shows_each_tracked_process_in_its_color() {
+        let context = crate::test_fixtures::display_context();
+        let theme = &context.theme;
+        let mut card = gpu_view().cards.remove(1);
+        let share = |slot: u8, gib: u64| ProcessShare {
+            slot,
+            pid: 7,
+            name: "job".into(),
+            bytes: gib << 30,
+        };
+        // 10 GiB of 64 GiB: 6 and 3 GiB tracked, 1 GiB other.
+        card.process_memory = vec![share(2, 6), share(0, 3)];
+        let [utilization, memory] = overview_readings(&card);
+        assert!(bar_segments(&utilization, &context).is_none());
+        let width = 5 + 64 + 1 + 19;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 1)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_bar(
+                    frame,
+                    Rect::new(0, 0, width, 1),
+                    &memory,
+                    (19, 19),
+                    &context,
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let colors: Vec<_> = (5..69).map(|x| buffer[(x, 0)].fg).collect();
+        let mut expected = vec![theme.process_color(2); 6];
+        expected.extend([theme.process_color(0); 3]);
+        expected.push(theme.level_color(10.0 / 64.0));
+        expected.extend([theme.gauge_track; 54]);
+        assert_eq!(colors, expected);
+        // Without a scale there is no bar to split.
+        card.system_ram_total = missing(CanonicalUnit::Bytes, CellState::Unavailable);
+        let [_, unscaled] = overview_readings(&card);
+        assert!(bar_segments(&unscaled, &context).is_none());
     }
 
     #[test]

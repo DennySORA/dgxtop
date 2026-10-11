@@ -1,14 +1,17 @@
 //! Memory module projection: system RAM and swap (never GPU framebuffer),
-//! plus the RAM held by GPU allocations when a GPU shares system RAM.
+//! plus the RAM held by GPU allocations when a GPU shares system RAM, and
+//! of it the part each tracked GPU process holds (D-64).
 
 use dgxtop_core::metric::{Scalar, ids};
 use dgxtop_core::naming::entity;
 use dgxtop_core::quality::SampleKind;
-use dgxtop_core::view::{CellState, MemoryView, MetricCell, Trend};
+use dgxtop_core::view::{CellState, MemoryView, MetricCell, ProcessShare, ProcessTrend, Trend};
 
+use super::ProcessMemoryBook;
 use super::gpu_directory::GpuDirectory;
+use super::process_parts::{process_shares, unified_gpus};
 use super::reader::MetricReader;
-use crate::ingestion::trends::gpu_resident_key;
+use crate::ingestion::trends::{gpu_resident_key, process_share_key};
 
 /// Source label of the summed GPU allocations: only processes the driver
 /// lists are counted, so driver-internal memory is not included.
@@ -17,6 +20,7 @@ const GPU_RESIDENT_SOURCE: &str = "GPU processes visible to the driver";
 pub(crate) fn build_memory_view(
     reader: &MetricReader<'_>,
     directory: &GpuDirectory<'_>,
+    processes: &ProcessMemoryBook,
     trend_width: usize,
 ) -> MemoryView {
     let cell = |metric: &str| reader.cell(metric, entity::MEMORY, entity::SCOPE_SYSTEM);
@@ -36,7 +40,54 @@ pub(crate) fn build_memory_view(
             trend_width,
         ),
         gpu_resident_trend: gpu_resident_trend(reader, directory, trend_width),
+        gpu_processes: unified_process_shares(directory, processes),
+        gpu_process_trends: process_trends(reader, directory, processes, trend_width),
     }
+}
+
+/// What each tracked process holds on the unified-memory GPUs now; none
+/// without such a GPU (a discrete GPU's memory is not RAM).
+fn unified_process_shares(
+    directory: &GpuDirectory<'_>,
+    processes: &ProcessMemoryBook,
+) -> Vec<ProcessShare> {
+    let unified = unified_gpus(directory);
+    if unified.is_empty() {
+        return Vec::new();
+    }
+    process_shares(processes, |gpu| unified.contains(gpu))
+}
+
+/// Each tracked process's part of the used chart, recorded beside
+/// `memory.used`; a process without a point there is left out.
+fn process_trends(
+    reader: &MetricReader<'_>,
+    directory: &GpuDirectory<'_>,
+    processes: &ProcessMemoryBook,
+    width: usize,
+) -> Vec<ProcessTrend> {
+    if !directory.gpus().iter().any(|gpu| gpu.has_unified_memory()) {
+        return Vec::new();
+    }
+    processes
+        .tracked()
+        .into_iter()
+        .filter_map(|process| {
+            let trend = reader.trend_beside(
+                (ids::MEMORY_USED, entity::MEMORY, entity::SCOPE_SYSTEM),
+                |used| process_share_key(used, process.key),
+                width,
+            );
+            trend
+                .points
+                .iter()
+                .any(Option::is_some)
+                .then_some(ProcessTrend {
+                    slot: process.slot,
+                    trend,
+                })
+        })
+        .collect()
 }
 
 /// What unified-memory GPUs held beside each point of `memory.used`
@@ -119,7 +170,9 @@ fn summed(cells: &[MetricCell]) -> Option<Scalar> {
 mod tests {
     use super::*;
     use crate::presentation::index::SampleIndex;
-    use crate::presentation::testkit::{Fixture, NOW, entity_record, sample};
+    use crate::presentation::testkit::{
+        Fixture, NOW, entity_record, gpu_link, process_key, process_row, sample,
+    };
     use dgxtop_core::naming::attributes;
     use dgxtop_core::observation::EntityKind;
 
@@ -146,7 +199,7 @@ mod tests {
         let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
         let index = SampleIndex::new(&fixture.snapshot);
         let directory = GpuDirectory::new(&fixture.catalog, &index);
-        build_memory_view(&reader, &directory, 30).gpu_resident
+        build_memory_view(&reader, &directory, &fixture.process_memory, 30).gpu_resident
     }
 
     #[test]
@@ -191,7 +244,7 @@ mod tests {
         let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
         let index = SampleIndex::new(&fixture.snapshot);
         let directory = GpuDirectory::new(&fixture.catalog, &index);
-        let view = build_memory_view(&reader, &directory, 30);
+        let view = build_memory_view(&reader, &directory, &fixture.process_memory, 30);
         assert_eq!(view.used_trend.points, vec![Some(8.0)]);
         assert_eq!(view.gpu_resident_trend.points, vec![Some(6.0)]);
         // Without a unified GPU the chart has no share.
@@ -200,11 +253,60 @@ mod tests {
         let index = SampleIndex::new(&plain.snapshot);
         let directory = GpuDirectory::new(&plain.catalog, &index);
         assert!(
-            build_memory_view(&reader, &directory, 30)
+            build_memory_view(&reader, &directory, &plain.process_memory, 30)
                 .gpu_resident_trend
                 .points
                 .is_empty()
         );
+    }
+
+    /// The bar and the chart split the RAM unified GPUs hold by tracked
+    /// process (D-64): what each holds there now, and its points recorded
+    /// beside `memory.used`. A discrete GPU's processes hold no RAM.
+    #[test]
+    fn the_unified_share_is_split_by_tracked_process() {
+        let mut fixture = Fixture::new();
+        add_gpu(&mut fixture, UNIFIED_A, "0", Some("unified"));
+        add_gpu(&mut fixture, DISCRETE, "2", Some("dedicated"));
+        fixture.add(
+            "memory",
+            sample("memory.used", "memory", "system").u64(8 << 30),
+        );
+        let mut train = process_row(1, "train");
+        train.gpu = vec![gpu_link(UNIFIED_A, None, Some(6 << 30))];
+        let mut render = process_row(2, "render");
+        render.gpu = vec![gpu_link(DISCRETE, None, Some(1 << 30))];
+        fixture.set_processes(vec![train, render]);
+        let mut table = fixture.snapshot.process_table.as_ref().clone();
+        table.cycle_id = 1;
+        table.read_finished_boot_ns = 1;
+        fixture.process_memory.record(&table);
+        let used = fixture
+            .snapshot
+            .domains
+            .values()
+            .flat_map(|domain| domain.samples.keys())
+            .find(|key| key.metric_id.as_str() == "memory.used")
+            .unwrap()
+            .clone();
+        let part = process_share_key(&used, &process_key(1, 1000)).unwrap();
+        fixture.trends.push(&part, Some(6.0));
+        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
+        let index = SampleIndex::new(&fixture.snapshot);
+        let directory = GpuDirectory::new(&fixture.catalog, &index);
+        let view = build_memory_view(&reader, &directory, &fixture.process_memory, 30);
+        let shares: Vec<(u8, &str, u64)> = view
+            .gpu_processes
+            .iter()
+            .map(|share| (share.slot, share.name.as_str(), share.bytes))
+            .collect();
+        assert_eq!(shares, vec![(0, "train", 6 << 30)]);
+        let parts: Vec<(u8, Vec<Option<f64>>)> = view
+            .gpu_process_trends
+            .iter()
+            .map(|part| (part.slot, part.trend.points.clone()))
+            .collect();
+        assert_eq!(parts, vec![(0, vec![Some(6.0)])]);
     }
 
     #[test]
@@ -247,7 +349,7 @@ mod tests {
         let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
         let index = SampleIndex::new(&fixture.snapshot);
         let directory = GpuDirectory::new(&fixture.catalog, &index);
-        let view = build_memory_view(&reader, &directory, 30);
+        let view = build_memory_view(&reader, &directory, &fixture.process_memory, 30);
         assert_eq!(view.total.value.unwrap().as_u64(), Some(128 << 30));
         assert_eq!(view.swap_total.value_f64(), Some(0.0));
         assert_eq!(view.cached.state, CellState::ReadFailed);

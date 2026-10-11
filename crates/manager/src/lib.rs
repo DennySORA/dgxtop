@@ -26,6 +26,7 @@ mod overload;
 mod policy;
 pub mod presentation;
 mod process;
+mod process_memory;
 mod projection;
 mod results;
 mod scheduler;

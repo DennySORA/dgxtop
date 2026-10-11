@@ -101,6 +101,9 @@ fn for_each_trend(modules: &mut ModuleViews, mut apply: impl FnMut(&mut Trend) -
         let memory = Arc::make_mut(memory);
         changed |= apply(&mut memory.used_trend);
         changed |= apply(&mut memory.gpu_resident_trend);
+        for part in &mut memory.gpu_process_trends {
+            changed |= apply(&mut part.trend);
+        }
     }
     if let Some(gpu) = modules.gpu.as_mut() {
         for card in &mut Arc::make_mut(gpu).cards {
@@ -170,8 +173,27 @@ fn halve_history(modules: &mut ModuleViews, _: &BudgetHints) -> bool {
             chart.display_downsampled = true;
             changed |= chart.points.len() < length;
         }
+        for part in &mut chart.parts {
+            if part.means.len() > MIN_HISTORY_POINTS {
+                part.means = halve_cells(&part.means);
+                changed = true;
+            }
+        }
     }
     changed
+}
+
+/// Merges each pair of a part's cells: the mean of what both recorded.
+fn halve_cells(means: &[Option<f64>]) -> Vec<Option<f64>> {
+    means
+        .chunks(2)
+        .map(|pair| {
+            let known: Vec<f64> = pair.iter().flatten().copied().collect();
+            #[allow(clippy::cast_precision_loss)]
+            let count = known.len() as f64;
+            (!known.is_empty()).then(|| known.iter().sum::<f64>() / count)
+        })
+        .collect()
 }
 
 /// Halves the metric window around the selected series and the
@@ -253,7 +275,7 @@ fn strip_gpu_details(modules: &mut ModuleViews, _: &BudgetHints) -> bool {
 mod tests {
     use super::*;
     use dgxtop_core::metric::CanonicalUnit;
-    use dgxtop_core::view::{CellState, MemoryView, MetricCell};
+    use dgxtop_core::view::{CellState, MemoryView, MetricCell, ProcessTrend};
 
     fn trend(points: usize) -> Trend {
         Trend {
@@ -274,6 +296,15 @@ mod tests {
         assert!(!halve(&mut short));
         assert!(clear(&mut short));
         assert!(!clear(&mut short));
+    }
+
+    /// A part's cells merge in pairs, as the charts' points do; a pair
+    /// without a recorded cell stays unknown.
+    #[test]
+    fn halving_a_part_merges_its_cells_in_pairs() {
+        let means = [Some(2.0), Some(4.0), None, None, Some(6.0)];
+        assert_eq!(halve_cells(&means), vec![Some(3.0), None, Some(6.0)]);
+        assert_eq!(halve_cells(&[Some(1.0), None]), vec![Some(1.0)]);
     }
 
     #[test]
@@ -297,11 +328,17 @@ mod tests {
             gpu_resident: None,
             used_trend: trend(64),
             gpu_resident_trend: trend(64),
+            gpu_processes: Vec::new(),
+            gpu_process_trends: vec![ProcessTrend {
+                slot: 0,
+                trend: trend(64),
+            }],
         }));
         assert!(halve_trends(&mut modules, &hints));
         let memory = modules.memory.as_ref().unwrap();
         assert_eq!(memory.used_trend.points.len(), 32);
         assert_eq!(memory.gpu_resident_trend.points.len(), 32);
+        assert_eq!(memory.gpu_process_trends[0].trend.points.len(), 32);
         assert!(clear_trends(&mut modules, &hints));
     }
 }

@@ -10,11 +10,14 @@
 //!   over its strips ([`strip`]): a gutter with the scale, block columns of
 //!   the window, a legend with the value now, the mean and the peak;
 //! - the time axis under each column of panels ([`axis`]);
-//! - the GPUs' long-term table over 1 h to 24 h ([`stats`]).
+//! - the GPUs' long-term table over 1 h to 24 h ([`stats`]);
+//! - the tracked GPU processes over the window, in the colors of their
+//!   parts of the memory charts ([`processes`], D-64).
 
 mod axis;
 mod layout;
 mod panels;
+mod processes;
 mod stats;
 mod strip;
 
@@ -26,6 +29,7 @@ use ratatui::text::{Line, Span};
 use self::axis::render_axis;
 use self::layout::{HistoryLayout, plan};
 use self::panels::{Panel, Strip, panels};
+use self::processes::{process_labels, render_processes, table_rows};
 use self::stats::{
     GpuStats, gpu_stats, nanos_to_seconds, recorded_text, render_gpu_stats, stats_labels,
 };
@@ -110,12 +114,19 @@ fn render_history(
         .map(|panel| saturate_u16(panel.strips.len()))
         .collect();
     let block_rows: Vec<u16> = blocks.iter().map(GpuStats::rows).collect();
-    let layout = plan(inner.width, inner.height, &strips, &block_rows);
+    let layout = plan(
+        inner.width,
+        inner.height,
+        &strips,
+        (&block_rows, table_rows(history)),
+    );
+    let shown_processes = usize::from(layout.process_rows.saturating_sub(1));
     let mut rows = RowCursor::new(inner);
     if let Some(row) = rows.next_row() {
         let hidden = Hidden {
             panels: layout.hidden_panels,
             gpus: blocks.len() - layout.table_blocks,
+            processes: history.processes.len().saturating_sub(shown_processes),
         };
         render_window_bar(frame, row, history, hidden, context);
     }
@@ -182,6 +193,12 @@ fn render_history(
         render_gpu_stats(frame, table, shown, context);
     }
     for label in stats_labels(shown) {
+        output.label(label);
+    }
+    if let Some(table) = rows.take(layout.process_rows) {
+        render_processes(frame, table, history, context);
+    }
+    for label in process_labels(history).into_iter().take(shown_processes) {
         output.label(label);
     }
 }
@@ -269,31 +286,38 @@ fn render_axes(
 struct Hidden {
     panels: usize,
     gpus: usize,
+    processes: usize,
 }
 
 impl Hidden {
     /// What did not fit, longest first: `+2 panels · +1 GPU's long-term
-    /// statistics on a taller terminal`, then shorter forms, the panels
-    /// before the statistics.
+    /// statistics · +1 GPU process on a taller terminal`, then shorter
+    /// forms, the panels before the statistics before the processes.
     fn notes(self) -> Vec<String> {
-        let panels = match self.panels {
+        let counted = |count: usize, one: &str, many: &str| match count {
             0 => None,
-            1 => Some("+1 panel".to_owned()),
-            panels => Some(format!("+{panels} panels")),
+            1 => Some(format!("+1 {one}")),
+            count => Some(format!("+{count} {many}")),
         };
-        let gpus = match self.gpus {
-            0 => None,
-            1 => Some("+1 GPU's long-term statistics".to_owned()),
-            gpus => Some(format!("+{gpus} GPUs' long-term statistics")),
-        };
-        let both: Vec<String> = panels.iter().chain(gpus.iter()).cloned().collect();
+        let parts: Vec<String> = [
+            counted(self.panels, "panel", "panels"),
+            counted(
+                self.gpus,
+                "GPU's long-term statistics",
+                "GPUs' long-term statistics",
+            ),
+            counted(self.processes, "GPU process", "GPU processes"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         let mut notes = Vec::new();
-        if !both.is_empty() {
-            notes.push(format!("{} on a taller terminal", both.join(" · ")));
+        if !parts.is_empty() {
+            notes.push(format!("{} on a taller terminal", parts.join(" · ")));
         }
-        if let Some(first) = panels.or(gpus) {
+        if let Some(first) = parts.first() {
             notes.push(format!("{first} on a taller terminal"));
-            notes.push(first);
+            notes.push(first.clone());
         }
         notes.dedup();
         notes
@@ -431,7 +455,11 @@ mod tests {
         let recorded = Some("recorded 5h 12m of 24h".to_owned());
         assert_eq!(
             bar_notes(
-                Hidden { panels: 0, gpus: 0 },
+                Hidden {
+                    panels: 0,
+                    gpus: 0,
+                    processes: 0
+                },
                 recorded,
                 why_partly(&DiskHistory::On)
             )[0],

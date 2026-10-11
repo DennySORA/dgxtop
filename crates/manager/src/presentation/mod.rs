@@ -21,6 +21,7 @@ mod memory;
 mod network;
 mod ordering;
 mod plan;
+mod process_parts;
 mod processes;
 mod reader;
 mod settings;
@@ -34,6 +35,8 @@ pub use cell::build_metric_cell;
 pub(crate) use history_charts::history_charts;
 pub use plan::visible_modules;
 pub use processes::PROCESS_OVERSCAN_ROWS;
+
+pub use crate::process_memory::ProcessMemoryBook;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
@@ -83,6 +86,11 @@ impl TrendBook {
             points.pop_front();
         }
         points.push_back(value.filter(|number| number.is_finite()));
+    }
+
+    /// Whether a series has points.
+    pub fn contains(&self, key: &MetricKey) -> bool {
+        self.series.contains_key(key)
     }
 
     /// Drops series that are no longer wanted (bounded key set).
@@ -157,6 +165,11 @@ pub struct PresentationContext<'a> {
     /// Built by the HistoryService for this session.
     pub history: Arc<HistoryView>,
     pub trends: &'a TrendBook,
+    /// GPU processes' colors and memory over time (D-64).
+    pub process_memory: &'a ProcessMemoryBook,
+    /// Wall clock minus boot clock when the projection is built: places the
+    /// process memory record on the history view's time axis.
+    pub boot_to_utc_ns: i128,
     pub facts: &'a HostFacts,
     /// Module ids enabled in the effective configuration.
     pub enabled_modules: &'a [String],
@@ -227,6 +240,7 @@ pub fn build_view_model_measured(context: &PresentationContext<'_>) -> (ViewMode
     let inputs = ModuleInputs {
         reader: &reader,
         directory: &directory,
+        process_memory: context.process_memory,
         layout,
         visible_process_rows,
     };
@@ -261,6 +275,7 @@ pub fn build_view_model_measured(context: &PresentationContext<'_>) -> (ViewMode
 struct ModuleInputs<'a> {
     reader: &'a MetricReader<'a>,
     directory: &'a GpuDirectory<'a>,
+    process_memory: &'a ProcessMemoryBook,
     layout: ViewportLayout,
     visible_process_rows: usize,
 }
@@ -290,6 +305,7 @@ fn build_modules(
         modules.memory = Some(Arc::new(memory::build_memory_view(
             reader,
             inputs.directory,
+            inputs.process_memory,
             layout.chart_points(),
         )));
     }
@@ -311,13 +327,20 @@ fn build_modules(
             &context.snapshot.process_table,
             context.session,
             inputs.directory,
+            inputs.process_memory,
             inputs.visible_process_rows,
         )));
     }
     if plan.shows(plan::HISTORY) {
-        modules.history = Some(history::history_for_display(
-            &context.history,
-            layout.history_chart_points(),
+        let charts = history::history_for_display(&context.history, layout.history_chart_points());
+        modules.history = Some(process_parts::with_process_parts(
+            charts,
+            &process_parts::ProcessHistoryInputs {
+                book: inputs.process_memory,
+                directory: inputs.directory,
+                boot_to_utc_ns: context.boot_to_utc_ns,
+                cells: layout.history_chart_points(),
+            },
         ));
     }
     if plan.shows(plan::SOURCES) {
@@ -373,6 +396,7 @@ fn build_gpu(context: &PresentationContext<'_>, inputs: &ModuleInputs<'_>) -> Gp
     gpu::build_gpu_view(
         inputs.reader,
         inputs.directory,
+        inputs.process_memory,
         context.session.selected_entity_id.as_ref(),
         environment,
         widths,

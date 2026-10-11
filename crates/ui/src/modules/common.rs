@@ -22,7 +22,7 @@ use crate::registry::{
     Slot, Topic,
 };
 use crate::theme::ThemePalette;
-use crate::widgets::{GapSparkline, Gauge};
+use crate::widgets::{GapSparkline, Gauge, Part};
 
 /// Upper bound of accessibility labels per module render.
 pub(crate) const MAX_LABELS: usize = 64;
@@ -401,19 +401,17 @@ pub(crate) fn render_chart(
     max: Option<f64>,
     context: &DisplayContext,
 ) {
-    render_chart_with_part(frame, area, points, None, max, context);
+    render_chart_with_parts(frame, area, points, Vec::new(), max, context);
 }
 
-/// A part of each chart point and the style it is drawn in.
-pub(crate) type ChartPart<'a> = (&'a [Option<f64>], Style);
-
-/// [`render_chart`] with a part of each point (the RAM GPUs hold of the used
-/// RAM) drawn at the bottom of its column in the part's style.
-pub(crate) fn render_chart_with_part(
+/// [`render_chart`] with parts of each point (what each GPU process holds
+/// of the used RAM, D-64) stacked from the foot of its column, each in its
+/// style.
+pub(crate) fn render_chart_with_parts(
     frame: &mut Frame<'_>,
     area: Rect,
     points: &[Option<f64>],
-    part: Option<ChartPart<'_>>,
+    parts: Vec<Part<'_>>,
     max: Option<f64>,
     context: &DisplayContext,
 ) {
@@ -430,12 +428,10 @@ pub(crate) fn render_chart_with_part(
         );
         return;
     }
-    let mut sparkline = GapSparkline::new(points, Style::new())
+    let sparkline = GapSparkline::new(points, Style::new())
         .max(max)
-        .level_colors(&context.theme);
-    if let Some((part, style)) = part {
-        sparkline = sparkline.part(part, style);
-    }
+        .level_colors(&context.theme)
+        .parts(parts);
     frame.render_widget(sparkline, area);
 }
 

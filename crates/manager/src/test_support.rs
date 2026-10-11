@@ -8,15 +8,15 @@ use crate::setup::{ManagerInboxes, ManagerPorts, ManagerSetup};
 use dgxtop_core::action::{ActionOp, AuditCompletion, AuditOp, PersistenceKind, PersistenceStatus};
 use dgxtop_core::budget::{ByteLedger, Partition, QueueGate};
 use dgxtop_core::canonical::{
-    CanonicalSample, CollectionBatch, CollectionPlan, CollectorState, DomainSnapshot,
-    ImmutableSnapshot, SnapshotEntry,
+    CanonicalSample, CollectionBatch, CollectionPlan, CollectorState, DomainSnapshot, GpuUsageKind,
+    ImmutableSnapshot, ProcessGpuLink, ProcessRow, ProcessTable, SnapshotEntry,
 };
 use dgxtop_core::commands::{CommandBody, CommandEnvelope, CommandRejection, CommandResult};
 use dgxtop_core::config::{Config, ValueOrigin};
 use dgxtop_core::diagnostics::Diagnostics;
-use dgxtop_core::identity::PidNamespace;
 use dgxtop_core::identity::{AdapterId, CollectorId};
 use dgxtop_core::identity::{EntityId, MetricKey, OriginIdentity, ProfileId};
+use dgxtop_core::identity::{Pid, PidNamespace, ProcessKey};
 use dgxtop_core::metric::NativeUnit;
 use dgxtop_core::metric::{CanonicalUnit, Scalar};
 use dgxtop_core::naming::is_replay_adapter;
@@ -239,6 +239,52 @@ pub(crate) fn ingress_page(
         batch_of(adapter, group, cycle_id, observations),
         None,
     ))
+}
+
+/// The key of test process `pid`.
+pub(crate) fn test_process_key(pid: i64) -> ProcessKey {
+    ProcessKey {
+        host_id: host_id("host-test"),
+        boot_id: boot_id("boot-test"),
+        pid_namespace: PidNamespace::new("pid:[4026531836]").unwrap(),
+        pid: Pid::new(pid).unwrap(),
+        start_time_ticks: 7,
+    }
+}
+
+/// Process `pid` holding the bytes of `held` on each of its GPUs (`None`:
+/// a GPU it uses without a known figure).
+pub(crate) fn gpu_process(pid: i64, name: &str, held: &[(&str, Option<u64>)]) -> ProcessRow {
+    ProcessRow {
+        key: test_process_key(pid),
+        name: name.to_owned(),
+        uid: Some(1000),
+        state: Some('R'),
+        cpu_percent: None,
+        rss_bytes: None,
+        missing_reason: None,
+        gpu: held
+            .iter()
+            .map(|(gpu, bytes)| ProcessGpuLink {
+                gpu_entity_id: entity_id(gpu),
+                usage: GpuUsageKind::Compute,
+                utilization_percent: None,
+                memory_bytes: *bytes,
+            })
+            .collect(),
+        sample_kind: SampleKind::Measured,
+        read_finished_boot_ns: 0,
+    }
+}
+
+/// The process table of collection `cycle`, read at `read_ns`.
+pub(crate) fn process_table(cycle: u64, read_ns: u64, rows: Vec<ProcessRow>) -> ProcessTable {
+    ProcessTable {
+        rows,
+        cycle_id: cycle,
+        read_finished_boot_ns: read_ns,
+        ..ProcessTable::default()
+    }
 }
 
 /// A committed sample of `key` (no value means "unavailable").

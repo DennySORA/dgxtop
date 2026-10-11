@@ -53,7 +53,8 @@ use dgxtop_core::view::{
     HostState, HostStatus, IntervalView, OverloadState, SessionState, ViewModel,
 };
 use dgxtop_manager::presentation::{
-    HostFacts, PresentationContext, SettingsInputs, TrendBook, build_view_model_measured,
+    HostFacts, PresentationContext, ProcessMemoryBook, SettingsInputs, TrendBook,
+    build_view_model_measured,
 };
 use dgxtop_store::hot::{HotStore, HotStoreWriter, SharedSnapshot};
 use dgxtop_ui::terminal::GatedInput;
@@ -193,12 +194,13 @@ fn run() -> BenchResult<PathBuf> {
 }
 
 /// The replay pipeline committing into a real (replay-namespace) hot store,
-/// plus the Manager-equivalent sparkline feed.
+/// plus the Manager-equivalent sparkline feed and process memory record.
 struct SnapshotWorld {
     pipeline: ReplayPipeline,
     writer: HotStoreWriter,
     snapshots: SharedSnapshot,
     trends: TrendFeed,
+    process_memory: ProcessMemoryBook,
     rejections: BTreeMap<String, u64>,
 }
 
@@ -224,6 +226,7 @@ impl SnapshotWorld {
             writer,
             snapshots,
             trends: TrendFeed::new(u64::from(config.sampling.interval_ms)),
+            process_memory: ProcessMemoryBook::new(u64::from(config.sampling.interval_ms)),
             rejections: BTreeMap::new(),
         })
     }
@@ -257,7 +260,9 @@ impl SnapshotWorld {
             }
         }
         self.writer.maintain(now);
-        self.trends.record(&self.snapshots.latest());
+        let snapshot = self.snapshots.latest();
+        self.process_memory.record(&snapshot.process_table);
+        self.trends.record(&snapshot);
     }
 }
 
@@ -455,6 +460,8 @@ impl StaticInputs {
             actions: Arc::clone(&self.actions),
             history: Arc::clone(&self.history),
             trends: &world.trends.book,
+            process_memory: &world.process_memory,
+            boot_to_utc_ns: 0,
             facts: &self.facts,
             enabled_modules: &self.config.viewer.enabled_modules,
             archive: None,
@@ -541,6 +548,7 @@ fn history_view(snapshot: &ImmutableSnapshot, now_ns: u64) -> HistoryView {
                 display_downsampled: true,
                 pending: false,
                 error: None,
+                parts: Vec::new(),
             });
         }
     }
@@ -551,6 +559,7 @@ fn history_view(snapshot: &ImmutableSnapshot, now_ns: u64) -> HistoryView {
         end_utc_ns: now_ns,
         charts,
         summaries: Vec::new(),
+        processes: Vec::new(),
         disk: DiskHistory::Off,
         error: None,
     }

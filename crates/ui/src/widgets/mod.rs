@@ -1,5 +1,5 @@
 //! Small custom widgets: labeled gauge (with `n/a` when missing), gap-aware
-//! block sparkline (level colors, dimmed peaks) for every chart, and a
+//! block sparkline (level colors, stacked parts) for every chart, and a
 //! segmented bar for shares of one whole. Bars stand three quarters of a
 //! row high (D-52).
 
@@ -9,5 +9,5 @@ mod sparkline;
 mod stacked_bar;
 
 pub use gauge::Gauge;
-pub use sparkline::GapSparkline;
+pub use sparkline::{GapSparkline, Part};
 pub use stacked_bar::{Segment, StackedBar};

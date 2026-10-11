@@ -25,7 +25,7 @@ use dgxtop_core::view::{
 };
 
 use super::cell::canonical_unit_of;
-use super::{HostFacts, PresentationContext, SettingsInputs, TrendBook};
+use super::{HostFacts, PresentationContext, ProcessMemoryBook, SettingsInputs, TrendBook};
 
 /// Boot-clock "now" of every fixture.
 pub(crate) const NOW: u64 = 100_000_000_000;
@@ -348,6 +348,7 @@ pub(crate) fn empty_history() -> HistoryView {
         end_utc_ns: 300_000_000_000,
         charts: Vec::new(),
         summaries: Vec::new(),
+        processes: Vec::new(),
         disk: DiskHistory::Off,
         error: None,
     }
@@ -370,6 +371,7 @@ pub(crate) fn history_chart(points: Vec<HistoryPointView>) -> HistoryChartView {
         display_downsampled: false,
         pending: false,
         error: None,
+        parts: Vec::new(),
     }
 }
 
@@ -393,6 +395,9 @@ pub(crate) struct Fixture {
     pub(crate) actions: Arc<ActionsView>,
     pub(crate) history: Arc<HistoryView>,
     pub(crate) trends: TrendBook,
+    pub(crate) process_memory: ProcessMemoryBook,
+    /// Wall clock minus boot clock (0: the history's times are boot times).
+    pub(crate) boot_to_utc_ns: i128,
     pub(crate) facts: HostFacts,
     pub(crate) enabled_modules: Vec<String>,
     pub(crate) now_boot_ns: u64,
@@ -438,6 +443,8 @@ impl Fixture {
             actions: Arc::new(empty_actions()),
             history: Arc::new(empty_history()),
             trends: TrendBook::new(120, 1000),
+            process_memory: ProcessMemoryBook::new(1000),
+            boot_to_utc_ns: 0,
             facts: HostFacts {
                 host_name: "dgx-test".to_owned(),
                 version: "0.2.0".to_owned(),
@@ -471,6 +478,8 @@ impl Fixture {
             actions: Arc::clone(&self.actions),
             history: Arc::clone(&self.history),
             trends: &self.trends,
+            process_memory: &self.process_memory,
+            boot_to_utc_ns: self.boot_to_utc_ns,
             facts: &self.facts,
             enabled_modules: &self.enabled_modules,
             archive: self.archive_status.as_ref(),

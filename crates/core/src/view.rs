@@ -129,6 +129,31 @@ pub struct Trend {
     pub step_ms: u64,
 }
 
+/// GPU processes that get a color of their own (D-64): the ones holding the
+/// most GPU memory. The Viewer's process palette has this many colors; any
+/// further process counts among the other processes.
+pub const PROCESS_COLOR_SLOTS: usize = 4;
+
+/// What one GPU process holds of a memory bar now (D-64). `slot`
+/// (`0..PROCESS_COLOR_SLOTS`) picks its color and stays with the process
+/// while it is tracked, so it has the same color on every bar, chart and
+/// table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcessShare {
+    pub slot: u8,
+    pub pid: i32,
+    pub name: String,
+    pub bytes: u64,
+}
+
+/// A tracked GPU process's part of every point of a trend, aligned with
+/// the trend at its newest end (D-64); `None` where the process held none.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcessTrend {
+    pub slot: u8,
+    pub trend: Trend,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CoreView {
     pub core_id: String,
@@ -222,6 +247,9 @@ pub struct GpuCard {
     /// Used framebuffer bytes, or on a unified-memory GPU the RAM its
     /// processes hold (the VRAM chart, D-40).
     pub memory_trend: Trend,
+    /// What each tracked process holds on this GPU now, in slot order
+    /// (D-64): the colored parts of the memory bar.
+    pub process_memory: Vec<ProcessShare>,
 }
 
 /// What the GPU view shows of one GPU beyond its card (D-48): its
@@ -294,6 +322,11 @@ pub struct MemoryView {
     /// What unified-memory GPUs held at each point of `used_trend`; empty
     /// when no GPU shares system RAM.
     pub gpu_resident_trend: Trend,
+    /// What each tracked process holds of `gpu_resident` now, in slot order
+    /// (D-64); the rest of `gpu_resident` is other GPU processes.
+    pub gpu_processes: Vec<ProcessShare>,
+    /// Each tracked process's part of the points of `used_trend`.
+    pub gpu_process_trends: Vec<ProcessTrend>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -379,6 +412,9 @@ pub struct ProcessRowView {
     pub rss_bytes: Option<u64>,
     pub missing_reason: Option<String>,
     pub gpus: Vec<ProcessGpuView>,
+    /// The process's color slot when it is tracked (D-64), so the table
+    /// names the colors of the memory bars and charts.
+    pub color_slot: Option<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -509,6 +545,37 @@ pub struct HistoryChartView {
     pub display_downsampled: bool,
     pub pending: bool,
     pub error: Option<String>,
+    /// The tracked processes' parts of a memory chart, in slot order
+    /// (D-64); empty for other charts.
+    pub parts: Vec<HistoryPart>,
+}
+
+/// A tracked process's part of a history chart (D-64): its mean in each
+/// cell of an even grid over the view's window. A time it was not listed
+/// counts as 0; `None` where no process list was recorded (before this run).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HistoryPart {
+    pub slot: u8,
+    pub means: Vec<Option<f64>>,
+}
+
+/// What a tracked process held on one GPU over the history view's window
+/// (D-64), recorded while dgxtop runs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HistoryProcessView {
+    pub slot: u8,
+    pub pid: i32,
+    pub name: String,
+    /// `GPU 0`.
+    pub gpu_label: String,
+    pub unit: CanonicalUnit,
+    /// Time-weighted mean over the time the process was listed.
+    pub mean: Option<f64>,
+    pub peak: Option<f64>,
+    /// Time the process was listed in the window.
+    pub listed_ns: u64,
+    /// Listed in the newest process list.
+    pub running: bool,
 }
 
 /// Where the history before this run comes from (D-51).
@@ -536,6 +603,9 @@ pub struct HistoryView {
     pub charts: Vec<HistoryChartView>,
     /// Each GPU's statistics over the last 1 h, 6 h, 12 h and 24 h (D-48).
     pub summaries: Vec<HistoryWindowSummary>,
+    /// The tracked processes on each GPU over the window, largest mean
+    /// first (D-64).
+    pub processes: Vec<HistoryProcessView>,
     pub disk: DiskHistory,
     /// Why there is nothing to chart (no history service, no series yet).
     pub error: Option<String>,

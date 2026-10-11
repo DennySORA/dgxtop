@@ -3,7 +3,7 @@
 //! text, so a monochrome terminal loses nothing semantically.
 
 use dgxtop_core::config::Theme;
-use dgxtop_core::view::BannerLevel;
+use dgxtop_core::view::{BannerLevel, PROCESS_COLOR_SLOTS};
 use ratatui::style::{Color, Modifier, Style};
 
 use crate::format::CellTone;
@@ -12,6 +12,20 @@ use crate::format::CellTone;
 const MID_LEVEL: f64 = 0.70;
 /// Ratio above which gauges switch to the "high" color.
 const HIGH_LEVEL: f64 = 0.90;
+
+/// Colors of the tracked GPU processes, in slot order (D-64), the same in
+/// every theme: orchid, blue, violet, plum. Validated as a categorical set
+/// on each theme's background: every pair stays apart for full color vision
+/// and under protanopia and deuteranopia (OKLab ΔE ≥ 15.5 / ≥ 8.5), each
+/// stays as far from the gauge levels, the track and the gray of other
+/// processes, and each holds 3:1 contrast. Their hues avoid green, amber
+/// and red, which say how full a bar is.
+const PROCESS_COLORS: [Color; PROCESS_COLOR_SLOTS] = [
+    Color::Rgb(0xcc, 0x5a, 0xcb),
+    Color::Rgb(0x2c, 0x91, 0xf4),
+    Color::Rgb(0x73, 0x4a, 0xd2),
+    Color::Rgb(0x97, 0x50, 0x7b),
+];
 
 /// Resolved colors of one theme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,6 +179,19 @@ impl ThemePalette {
         }
     }
 
+    /// Color of tracked GPU process `slot` (D-64).
+    pub fn process_color(&self, slot: u8) -> Color {
+        PROCESS_COLORS
+            .get(usize::from(slot))
+            .copied()
+            .unwrap_or_else(|| self.other_processes_color())
+    }
+
+    /// GPU processes without a color of their own.
+    pub fn other_processes_color(&self) -> Color {
+        self.text_dim
+    }
+
     /// Style of a formatted cell; the tone text itself carries the meaning.
     pub fn tone_style(&self, tone: CellTone) -> Style {
         match tone {
@@ -262,6 +289,23 @@ mod tests {
         assert_eq!(palette.level_color(0.1), palette.gauge_low);
         assert_eq!(palette.level_color(0.75), palette.gauge_mid);
         assert_eq!(palette.level_color(0.95), palette.gauge_high);
+    }
+
+    /// A process keeps one color in every theme; a slot past the palette
+    /// is drawn like the other processes, never as a level color.
+    #[test]
+    fn process_colors_are_fixed_and_never_a_level() {
+        for theme in [Theme::Dark, Theme::Cyan, Theme::Green, Theme::Amber] {
+            let palette = ThemePalette::for_theme(theme);
+            let colors: Vec<Color> = (0..4).map(|slot| palette.process_color(slot)).collect();
+            assert_eq!(colors, PROCESS_COLORS.to_vec());
+            assert_eq!(palette.process_color(4), palette.other_processes_color());
+            for color in colors {
+                assert!(
+                    ![palette.gauge_low, palette.gauge_mid, palette.gauge_high].contains(&color)
+                );
+            }
+        }
     }
 
     #[test]

@@ -2,9 +2,10 @@
 //!
 //! Columns (GPU first): PID, USER, GPU, TYPE (compute `C`, graphics `G` or
 //! both, as `nvidia-smi` prints them, D-54), GPU util, GPU memory, CPU%,
-//! RSS, NAME. Rows are identified by `ProcessKey`; the selected row is
-//! marked with `▶` (not only by color) and published as the only `K` hit
-//! target.
+//! RSS, NAME. A tracked process's name follows a `■` in its color (D-64),
+//! so the table names the colors of the memory bars and charts. Rows are
+//! identified by `ProcessKey`; the selected row is marked with `▶` (not
+//! only by color) and published as the only `K` hit target.
 
 use dgxtop_core::canonical::GpuUsageKind;
 use dgxtop_core::identity::EntityId;
@@ -14,8 +15,8 @@ use ratatui::layout::Rect;
 
 use super::ModuleBuildError;
 use super::common::{
-    ColumnSpec, ManifestSpec, Output, RowCursor, TableCell, build_manifest, draw_table_header,
-    draw_table_row, fit_columns, message, no_data, panel,
+    ColumnSpec, FittedColumn, ManifestSpec, Output, RowCursor, TableCell, build_manifest,
+    draw_table_header, draw_table_row, fit_columns, message, no_data, panel,
 };
 use crate::format::{
     NOT_AVAILABLE, clean, format_optional_bytes, format_optional_percent, truncate_to_width,
@@ -27,9 +28,13 @@ use crate::registry::{
 };
 
 const SELECTION_MARKER: &str = "▶";
+/// A tracked process's color, before its name (D-64).
+const COLOR_SWATCH: &str = "■";
+/// Position of the swatch column in [`COLUMNS`].
+const SWATCH_COLUMN: usize = 9;
 
 /// Reference order (D-38): identity, GPU use, host use, then the name.
-const COLUMNS: [ColumnSpec; 10] = [
+const COLUMNS: [ColumnSpec; 11] = [
     ColumnSpec::left("", 1, 255),
     ColumnSpec::right("PID", 7, 98),
     ColumnSpec::left("USER", 8, 40).prefer(10),
@@ -39,6 +44,7 @@ const COLUMNS: [ColumnSpec; 10] = [
     ColumnSpec::right("GPU MEM", 9, 70).prefer(19),
     ColumnSpec::right("CPU%", 6, 80),
     ColumnSpec::right("RSS", 9, 60),
+    ColumnSpec::left("", 1, 97),
     ColumnSpec::left("NAME", 10, 96).flexible().prefer(24),
 ];
 
@@ -137,6 +143,9 @@ impl DisplayModule for ProcessesModule {
             let style = selected.then(|| context.theme.selected_row_style());
             let cells = row_cells(row, selected, filter, context);
             draw_table_row(frame.buffer_mut(), rect, &columns, &cells, style);
+            if selected {
+                keep_swatch_color(frame, rect, &columns, &cells[SWATCH_COLUMN]);
+            }
             let control = if selected {
                 controls::PROCESS_ROW_SELECTED
             } else {
@@ -286,7 +295,7 @@ fn row_cells(
     selected: bool,
     filter: Option<&EntityId>,
     context: &DisplayContext,
-) -> [TableCell; 10] {
+) -> [TableCell; 11] {
     let palette = &context.theme;
     let gpus = gpu_entries(row, filter);
     let marker = if selected { SELECTION_MARKER } else { "" };
@@ -314,8 +323,40 @@ fn row_cells(
         numeric(joined(&gpus, |gpu| format_optional_bytes(gpu.memory_bytes))),
         numeric(format_optional_percent(row.cpu_percent)),
         numeric(format_optional_bytes(row.rss_bytes)),
+        swatch_cell(row, context),
         TableCell::new(clean(&row.name), palette.text_style()),
     ]
+}
+
+/// `■` in the process's color when it is tracked, else nothing.
+fn swatch_cell(row: &ProcessRowView, context: &DisplayContext) -> TableCell {
+    match row.color_slot {
+        Some(slot) => TableCell::new(
+            COLOR_SWATCH,
+            ratatui::style::Style::new().fg(context.theme.process_color(slot)),
+        ),
+        None => TableCell::new("", context.theme.text_style()),
+    }
+}
+
+/// The selected row's style recolors its cells; the swatch keeps the color
+/// it names.
+fn keep_swatch_color(
+    frame: &mut Frame<'_>,
+    row: Rect,
+    columns: &[FittedColumn],
+    swatch: &TableCell,
+) {
+    let (Some(column), Some(color)) = (
+        columns.iter().find(|column| column.spec == SWATCH_COLUMN),
+        swatch.style.fg,
+    ) else {
+        return;
+    };
+    let x = row.x.saturating_add(column.x);
+    if x < row.right() && !swatch.text.is_empty() {
+        frame.buffer_mut()[(x, row.y)].set_fg(color);
+    }
 }
 
 fn row_label(row: &ProcessRowView, selected: bool, filter: Option<&EntityId>) -> String {
@@ -451,6 +492,42 @@ mod tests {
         let first_gpu = multi.gpus[0].gpu_entity_id.clone();
         assert_eq!(gpu_entries(multi, Some(&first_gpu)).len(), 1);
         assert_eq!(joined(&[], |_| String::new()), "none");
+    }
+
+    /// A tracked process's name follows a swatch in its color, also on the
+    /// selected row; an untracked one has none.
+    #[test]
+    fn a_tracked_process_names_its_color_before_its_name() {
+        let context = test_fixtures::display_context();
+        let mut view = test_fixtures::processes_view(2, 0, 2);
+        view.rows[0].color_slot = Some(1);
+        let cells = row_cells(&view.rows[0], true, None, &context);
+        assert_eq!(cells[SWATCH_COLUMN].text, COLOR_SWATCH);
+        assert_eq!(
+            cells[SWATCH_COLUMN].style.fg,
+            Some(context.theme.process_color(1))
+        );
+        assert_eq!(
+            row_cells(&view.rows[1], false, None, &context)[SWATCH_COLUMN].text,
+            ""
+        );
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 6)).unwrap();
+        let mut model = test_fixtures::view_model(dgxtop_core::commands::ViewKind::Overview, 1);
+        model.modules.processes = Some(std::sync::Arc::new(view));
+        terminal
+            .draw(|frame| {
+                ProcessesModule::new()
+                    .unwrap()
+                    .render(&context, &model, frame.area(), frame);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let swatch = (0..120)
+            .find(|x| buffer[(*x, 2)].symbol() == COLOR_SWATCH)
+            .expect("the selected row draws its swatch");
+        assert_eq!(buffer[(swatch, 2)].fg, context.theme.process_color(1));
+        assert_eq!(buffer[(swatch, 2)].bg, context.theme.highlight_background);
     }
 
     #[test]

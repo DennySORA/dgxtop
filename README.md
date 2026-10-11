@@ -60,14 +60,17 @@ GPUs first, shows the whole machine around them, and keeps the history.
   A value the GPU does not report gets no row.
 - **GPU processes.** Every process using a GPU, with its GPU, type (compute or graphics), GPU
   memory, CPU and RAM. Filter by GPU or name, sort by any column, and stop a process after a
-  confirmation.
+  confirmation. The four processes holding the most GPU memory each get a color: their parts of
+  the memory and VRAM bars and charts use it, and so does the marker beside their names.
 - **History.** Charts from 5 minutes to 24 hours on one time axis:
   - CPU, memory, disks and network;
   - each GPU's utilization, memory, temperature and power;
   - now, average and maximum for every chart;
-  - each GPU's last 1, 6, 12 and 24 hours, with the energy it used.
+  - each GPU's last 1, 6, 12 and 24 hours, with the energy it used;
+  - each colored process's part of the memory charts, with its average and peak memory.
 
-  History is saved on disk for 7 days and survives restarts and reboots.
+  History is saved on disk for 7 days and survives restarts and reboots. The per-process parts are
+  kept in memory, for as long as dgxtop runs.
 - **The whole machine.** CPU usage per core, CPU temperature and power where the hardware reports
   them, memory and swap, disk throughput and filesystem capacity, network throughput.
 - **Made for DGX Spark.** The GB10 shares memory with the CPU: dgxtop shows how much system RAM GPU

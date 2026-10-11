@@ -23,6 +23,7 @@ use dgxtop_core::diagnostics::{Diagnostics, names};
 use dgxtop_core::errors::ResultCode;
 use dgxtop_core::event::{CompletionStatus, EventKind};
 use dgxtop_core::identity::{BootId, HostId, SessionId};
+use dgxtop_core::naming::{self, adapters, groups};
 use dgxtop_core::ports::{LogLevel, Logger};
 use dgxtop_core::text::sanitize_display;
 use uuid::Uuid;
@@ -39,7 +40,7 @@ use crate::ingestion::trends::TrendRecorder;
 use crate::ingestion::{IngestionPorts, IngestionService, IngestionSettings, collection_limits};
 use crate::overload::OverloadController;
 use crate::policy::QualityPolicyService;
-use crate::presentation::HostFacts;
+use crate::presentation::{HostFacts, ProcessMemoryBook};
 use crate::process::{ActionIdentity, Now, ProcessPorts, ProcessService};
 use crate::projection::PresentationService;
 use crate::results::ResultCache;
@@ -113,6 +114,7 @@ pub(crate) struct ControlCore {
     scheduler: SamplingScheduler,
     ingestion: IngestionService,
     trends: TrendRecorder,
+    process_memory: ProcessMemoryBook,
     history: HistoryService,
     config: ConfigurationService,
     process: ProcessService,
@@ -145,9 +147,11 @@ impl ControlCore {
         let now = ports.clock.now_boot_ns();
         let effective = setup.effective_config.clone();
         let scheduler = SamplingScheduler::new(ports.adapters, &setup.adapters, &effective, now);
-        let policy =
-            QualityPolicyService::new(&effective, scheduler.effective_periods(), setup.namespace);
         let fast_ms = scheduler.effective_fast_interval_ms();
+        let periods = scheduler.effective_periods();
+        let process_ms = process_list_period_ms(&periods).unwrap_or(u64::from(fast_ms));
+        let process_memory = ProcessMemoryBook::new(process_ms);
+        let policy = QualityPolicyService::new(&effective, periods, setup.namespace);
         let ingestion = IngestionService::new(
             IngestionPorts {
                 collectors: ports.collectors,
@@ -210,6 +214,7 @@ impl ControlCore {
             events: EventRecorder::new(setup.boot_id.clone(), EVENT_LOG_CAPACITY),
             hosts: HostTable::new(&setup.adapters),
             trends: TrendRecorder::new(u64::from(fast_ms)),
+            process_memory,
             sessions: ViewSessionService::new(effective.viewer.max_sessions),
             presentation: PresentationService::new(
                 ports.ledger.clone(),
@@ -444,11 +449,23 @@ impl ControlCore {
         }
     }
 
-    /// Re-publishes the policy after period or quality changes.
+    /// Re-publishes the policy after period or quality changes; new periods
+    /// also set how long a process table's values hold in the process
+    /// memory record.
     fn refresh_policy(&mut self) {
         let periods = self.scheduler.effective_periods();
+        if let Some(process_ms) = process_list_period_ms(&periods) {
+            self.process_memory.set_interval(process_ms);
+        }
         self.policy.update(self.config.effective(), periods);
     }
+}
+
+/// The period of the procfs process group, which rebuilds the process table.
+fn process_list_period_ms(periods: &BTreeMap<String, u32>) -> Option<u64> {
+    periods
+        .get(&naming::period_key(adapters::PROCFS, groups::PROCESS))
+        .map(|period| u64::from(*period))
 }
 
 fn completion_status(status: CommandStatus) -> CompletionStatus {

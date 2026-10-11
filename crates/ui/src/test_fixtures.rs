@@ -277,6 +277,7 @@ fn gpu_card(index: u32) -> GpuCard {
         temperature_trend: trend(vec![Some(70.0), Some(71.0)]),
         power_trend: trend(vec![Some(120.0), Some(121.0)]),
         memory_trend: trend(vec![Some(11.0 * GIB), Some(12.3 * GIB)]),
+        process_memory: Vec::new(),
     }
 }
 
@@ -430,6 +431,8 @@ pub(crate) fn memory_view() -> MemoryView {
         gpu_resident: Some(ok(10.0 * GIB, CanonicalUnit::Bytes)),
         used_trend: trend(vec![Some(12.0 * GIB), Some(12.3 * GIB)]),
         gpu_resident_trend: trend(vec![Some(9.5 * GIB), Some(10.0 * GIB)]),
+        gpu_processes: Vec::new(),
+        gpu_process_trends: Vec::new(),
     }
 }
 
@@ -534,6 +537,7 @@ pub(crate) fn processes_view(count: usize, window_start: u32, total_rows: u32) -
                     None
                 },
                 gpus,
+                color_slot: None,
             }
         })
         .collect::<Vec<_>>();
@@ -598,6 +602,7 @@ pub(crate) fn history_view() -> HistoryView {
             display_downsampled: true,
             pending: false,
             error: None,
+            parts: Vec::new(),
         };
     let mut cpu = chart(
         HistoryChartKind::CpuUtilization,
@@ -764,6 +769,7 @@ pub(crate) fn history_view() -> HistoryView {
             ),
         ],
         summaries: gpu_window_stats(),
+        processes: Vec::new(),
         disk: DiskHistory::On,
         error: None,
     }

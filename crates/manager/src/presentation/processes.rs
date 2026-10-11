@@ -13,6 +13,7 @@ use dgxtop_core::view::{
     OVERVIEW_GPU_ROWS, ProcessGpuView, ProcessRowView, ProcessesView, SessionState,
 };
 
+use super::ProcessMemoryBook;
 use super::gpu_directory::{GpuDirectory, is_gpu_entity};
 use super::labels::{TextNeedle, filter_text, note_text};
 
@@ -91,6 +92,7 @@ pub(crate) fn build_processes_view(
     table: &ProcessTable,
     session: &SessionState,
     directory: &GpuDirectory<'_>,
+    colors: &ProcessMemoryBook,
     visible_rows: usize,
 ) -> ProcessesView {
     let gpu_filter = gpu_filter(session, directory);
@@ -116,7 +118,7 @@ pub(crate) fn build_processes_view(
         .get(window.start..window.end)
         .unwrap_or_default()
         .iter()
-        .map(|row| row_view(row, directory))
+        .map(|row| row_view(row, directory, colors))
         .collect();
     ProcessesView {
         rows,
@@ -222,15 +224,24 @@ fn gpu_utilization(row: &ProcessRow) -> Option<f64> {
         .max_by(f64::total_cmp)
 }
 
-fn row_view(row: &ProcessRow, directory: &GpuDirectory<'_>) -> ProcessRowView {
-    let name = sanitize_display(&row.name, MAX_BASENAME_BYTES);
+/// A process name as the views show it.
+pub(crate) fn display_name(name: &str) -> String {
+    let name = sanitize_display(name, MAX_BASENAME_BYTES);
+    if name.is_empty() {
+        UNNAMED_PROCESS.to_owned()
+    } else {
+        name
+    }
+}
+
+fn row_view(
+    row: &ProcessRow,
+    directory: &GpuDirectory<'_>,
+    colors: &ProcessMemoryBook,
+) -> ProcessRowView {
     ProcessRowView {
         key: row.key.clone(),
-        name: if name.is_empty() {
-            UNNAMED_PROCESS.to_owned()
-        } else {
-            name
-        },
+        name: display_name(&row.name),
         user: row
             .uid
             .map_or_else(|| UNKNOWN_USER.to_owned(), |uid| uid.to_string()),
@@ -250,6 +261,7 @@ fn row_view(row: &ProcessRow, directory: &GpuDirectory<'_>) -> ProcessRowView {
                 memory_bytes: link.memory_bytes,
             })
             .collect(),
+        color_slot: colors.slot_of(&row.key),
     }
 }
 
@@ -273,6 +285,7 @@ mod tests {
             &fixture.snapshot.process_table,
             &fixture.session,
             &directory,
+            &fixture.process_memory,
             visible,
         )
     }
@@ -288,6 +301,30 @@ mod tests {
             ));
         }
         fixture
+    }
+
+    /// A tracked process's row names its color slot (D-64), so the table
+    /// says which process each color of the memory bars is; a process
+    /// without known GPU memory has none.
+    #[test]
+    fn tracked_rows_carry_their_color_slot() {
+        let mut fixture = with_gpus();
+        let mut train = process_row(1, "train");
+        train.gpu = vec![gpu_link(GPU_A, None, Some(8 << 30))];
+        let mut idle = process_row(2, "idle");
+        idle.gpu = vec![gpu_link(GPU_B, None, None)];
+        fixture.set_processes(vec![train, idle]);
+        let mut table = fixture.snapshot.process_table.as_ref().clone();
+        table.cycle_id = 1;
+        table.read_finished_boot_ns = 1;
+        fixture.process_memory.record(&table);
+        let view = build(&fixture, 10);
+        let slots: Vec<(&str, Option<u8>)> = view
+            .rows
+            .iter()
+            .map(|row| (row.name.as_str(), row.color_slot))
+            .collect();
+        assert_eq!(slots, vec![("train", Some(0)), ("idle", None)]);
     }
 
     /// GPU processes (each has one association with GPU A).

@@ -9,6 +9,7 @@ mod gpu;
 mod history;
 mod memory;
 mod network;
+mod process_memory;
 mod processes;
 mod settings;
 mod sources;
