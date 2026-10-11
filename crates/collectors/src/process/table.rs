@@ -420,8 +420,7 @@ fn tree_node(key: &ProcessKey, sample: &HostSample<'_>) -> Option<(i64, TreeNode
     let own_ticks = sample
         .ticks
         .and_then(|record| record.observation.value)
-        .and_then(Scalar::as_u64)
-        .unwrap_or(0);
+        .and_then(Scalar::as_u64);
     let node = TreeNode {
         parent: stat.ppid?,
         own_ticks,
@@ -444,34 +443,41 @@ fn attach_descendants(
         let Some(usage) = tree.usage_of(i64::from(row.key.pid.get())) else {
             continue;
         };
-        let now = (usage.cpu_ticks, row.read_finished_boot_ns);
+        let now = usage
+            .cpu_ticks
+            .map(|ticks| (ticks, row.read_finished_boot_ns));
         let before = session
             .committed_process(&row.key)
             .and_then(|base| base.descendant_ticks);
         row.descendants = Some(descendants_of(usage, before, now, clk_tck));
+        // An unknown total keeps the last known one as the next base.
         if let Some(base) = session.next_processes_mut().get_mut(&row.key) {
-            base.descendant_ticks = Some(now);
+            base.descendant_ticks = now.or(before);
         }
     }
 }
 
 /// The descendants' count and memory as read, and their CPU since
-/// `before` as percent of one core. Their time drops when one leaves the
-/// tree unreaped (a daemon, an orphan): that table gives no rate, and the
-/// next one counts from it.
+/// `before` as percent of one core; `now` is `None` when their time is
+/// unknown. Their time drops when one leaves the tree unreaped (a daemon,
+/// an orphan): that table gives no rate, and the next one counts from it.
 fn descendants_of(
     usage: DescendantUsage,
     before: Option<(u64, u64)>,
-    (ticks, at): (u64, u64),
+    now: Option<(u64, u64)>,
     clk_tck: Option<u64>,
 ) -> ProcessDescendants {
     #[allow(clippy::cast_precision_loss)]
-    let cpu_percent = before.and_then(|(before_ticks, before_at)| {
-        let spent = ticks.checked_sub(before_ticks)?;
-        let elapsed = at.checked_sub(before_at).filter(|elapsed| *elapsed > 0)?;
-        let per_second = clk_tck.filter(|ticks| *ticks > 0)?;
-        Some(spent as f64 * 100.0 * NANOS_PER_SECOND as f64 / per_second as f64 / elapsed as f64)
-    });
+    let cpu_percent = before
+        .zip(now)
+        .and_then(|((before_ticks, before_at), (ticks, at))| {
+            let spent = ticks.checked_sub(before_ticks)?;
+            let elapsed = at.checked_sub(before_at).filter(|elapsed| *elapsed > 0)?;
+            let per_second = clk_tck.filter(|ticks| *ticks > 0)?;
+            Some(
+                spent as f64 * 100.0 * NANOS_PER_SECOND as f64 / per_second as f64 / elapsed as f64,
+            )
+        });
     ProcessDescendants {
         processes: usage.processes,
         cpu_percent,

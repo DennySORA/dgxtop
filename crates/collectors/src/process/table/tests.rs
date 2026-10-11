@@ -819,11 +819,11 @@ fn an_unknown_memory_is_no_descendants_memory() {
 fn descendants_cpu_needs_the_clock_ticks() {
     let usage = DescendantUsage {
         processes: 4,
-        cpu_ticks: 100,
+        cpu_ticks: Some(100),
         rss_bytes: None,
     };
     let before = Some((0, SECOND));
-    let now = (100, 2 * SECOND);
+    let now = Some((100, 2 * SECOND));
     assert_eq!(
         descendants_of(usage, before, now, Some(100)).cpu_percent,
         Some(100.0)
@@ -853,4 +853,34 @@ fn a_replay_has_no_descendants() {
     );
     assert!(!row(&batch, 42).gpu.is_empty());
     assert_eq!(row(&batch, 42).descendants, None);
+}
+
+/// A descendant whose ticks could not be read once makes that table's
+/// descendants' CPU unknown, and the next table counts from the last known
+/// total: never from a total that counted the failed read as zero.
+#[test]
+fn a_failed_descendant_tick_read_gives_no_spike() {
+    let collector = ProcessCollector::new().unwrap();
+    let cycle = |procfs: Vec<Observation>, second: u64, after: Option<&CollectionBatch>| {
+        let mut builder =
+            plan(procfs, on_gpu(42, second * SECOND), second * SECOND + 1).cycle(second);
+        if let Some(previous) = after {
+            builder = builder.after(previous);
+        }
+        collect(&collector, &builder.build())
+    };
+    let first = cycle(training(SECOND, 1_000), 1, None);
+    let mut failed = training(2 * SECOND, 0);
+    failed[2].value = None;
+    failed[2].read_status = ReadStatus::Error;
+    failed[2]
+        .reason_codes
+        .insert(0, "CPU_TICKS_OVERFLOW".to_owned());
+    let second = cycle(failed, 2, Some(&first));
+    let unknown = row(&second, 42).descendants.unwrap();
+    assert_eq!(unknown.cpu_percent, None, "a total with an unread child");
+    assert_eq!(unknown.processes, 3);
+    let third = cycle(training(3 * SECOND, 1_010), 3, Some(&second));
+    // 10 ticks in 2 s at 100 a second, counted from the first table.
+    assert_eq!(row(&third, 42).descendants.unwrap().cpu_percent, Some(5.0));
 }
