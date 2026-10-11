@@ -26,6 +26,7 @@
 
 mod book;
 mod budget;
+mod issues;
 mod reader;
 pub(crate) mod rows;
 
@@ -42,10 +43,11 @@ use dgxtop_core::overview_history::{
     HistoryTierJob, OVERVIEW_METRICS, OverviewBars, OverviewBucket, StoredTierSeries, TierJournal,
     TierRow, TierStoreUsage, is_overview_series,
 };
-use dgxtop_core::ports::{Dispatch, DispatchError};
+use dgxtop_core::ports::{Dispatch, DispatchError, Logger};
 use dgxtop_core::tiers::{TIER_BUCKETS, Tier};
 
 use self::book::{Eviction, TierBook, TierMinute};
+use self::issues::StoreIssues;
 
 /// Archived minutes one read returns at most (two weeks of one series).
 const ARCHIVE_PAGE_MINUTES: u32 = 20_000;
@@ -125,7 +127,7 @@ struct StoreLink {
     listed: bool,
     /// Every closed bucket so far reached the store.
     healthy: bool,
-    issue: Option<String>,
+    issues: StoreIssues,
     /// The journals sent and not answered yet, oldest first (the store's
     /// one actor answers in order), each with whether it deletes series.
     appends_inflight: VecDeque<bool>,
@@ -140,9 +142,11 @@ struct StoreLink {
 }
 
 impl StoreLink {
-    fn fail(&mut self, error: &InfraError) {
+    /// A store call failed: nothing it would have held may be lost from
+    /// the archive this run.
+    fn fail(&mut self, code: &'static str, error: &InfraError) {
         self.healthy = false;
-        self.issue = Some(format!("history tiers: {error}"));
+        self.issues.infra(code, "history tiers", error);
     }
 
     /// What the cache let go: deleted from the store and the archive, and
@@ -172,8 +176,11 @@ impl StoreLink {
     /// not show it yet).
     fn give_way_for_store(&mut self, book: &mut TierBook, usage: TierStoreUsage) {
         let deleting = !self.forget.is_empty() || self.appends_inflight.contains(&true);
-        if !deleting {
-            book.give_way(budget::series_giving_way(usage, budget::STORE_BUDGET_BYTES));
+        let count = budget::series_giving_way(usage, budget::STORE_BUDGET_BYTES);
+        if !deleting && count > 0 {
+            book.give_way(count);
+            self.issues
+                .gave_way(count, usage.used_bytes, budget::STORE_BUDGET_BYTES);
         }
     }
 
@@ -183,7 +190,7 @@ impl StoreLink {
     fn keep_unsent_within_budget(&mut self, book: &mut TierBook) {
         if book.shed_unsent(budget::UNSENT_BUDGET_BYTES) {
             self.healthy = false;
-            self.issue = Some("history tiers store fell behind; oldest buckets dropped".to_owned());
+            self.issues.rows_dropped();
         }
     }
 
@@ -234,7 +241,7 @@ impl StoreLink {
     /// backfilled, so the archive is never pruned for them).
     fn stop(&mut self, book: &mut TierBook, error: &DispatchError) {
         self.healthy = false;
-        self.issue = Some(format!("history tiers store stopped: {error}"));
+        self.issues.stopped(error);
         self.held = None;
         if !matches!(self.phase, Phase::Done) {
             self.phase = Phase::Done;
@@ -271,12 +278,13 @@ impl OverviewTiers {
     /// Keeps the sizes in a store from now on: loads what it kept, then
     /// compresses the archive's minutes from before `run_start_utc_ns` of
     /// `host_id`'s series. Live minutes wait until each series' earlier
-    /// history is in.
+    /// history is in. The store's issues are logged to `logger`.
     pub fn attach_store(
         &self,
         port: Box<dyn Dispatch<HistoryTierJob>>,
         host_id: HostId,
         run_start_utc_ns: i64,
+        logger: Arc<dyn Logger>,
     ) {
         let mut inner = self.lock();
         let Inner {
@@ -291,7 +299,7 @@ impl OverviewTiers {
             held: None,
             listed: false,
             healthy: true,
-            issue: None,
+            issues: StoreIssues::new(logger),
             appends_inflight: VecDeque::new(),
             last_prune_boot_ns: None,
             forget: Vec::new(),
@@ -413,7 +421,10 @@ impl OverviewTiers {
         let inner = self.lock();
         let mut bars = inner.book.bars(series, tier, window, extra);
         bars.kept_on_disk = inner.link.is_some();
-        bars.store_issue = inner.link.as_ref().and_then(|link| link.issue.clone());
+        bars.store_issue = inner
+            .link
+            .as_ref()
+            .and_then(|link| link.issues.latest().map(str::to_owned));
         bars
     }
 
@@ -463,7 +474,7 @@ fn loaded(
                 book.restore(&series.series, &series.buckets);
             }
         }
-        Err(error) => link.fail(&error),
+        Err(error) => link.fail(issues::LOAD_FAILED, &error),
     }
     link.phase = Phase::Listing;
     link.send(
@@ -493,7 +504,8 @@ fn listed(
                 .collect()
         }
         Err(error) => {
-            link.issue = Some(format!("history archive: {error}"));
+            link.issues
+                .infra(issues::ARCHIVE_LIST_FAILED, "history archive", &error);
             VecDeque::new()
         }
     };
@@ -528,7 +540,8 @@ fn archived_read(
             book.finish(&series, true, true);
         }
         Err(error) => {
-            link.issue = Some(format!("history archive: {error}"));
+            link.issues
+                .infra(issues::ARCHIVE_READ_FAILED, "history archive", &error);
             book.finish(&series, false, !first_page);
         }
     }
@@ -579,7 +592,7 @@ fn appended(book: &mut TierBook, link: &mut StoreLink, result: Result<TierStoreU
     link.appends_inflight.pop_front();
     match result {
         Ok(usage) => link.give_way_for_store(book, usage),
-        Err(error) => link.fail(&error),
+        Err(error) => link.fail(issues::WRITE_FAILED, &error),
     }
 }
 

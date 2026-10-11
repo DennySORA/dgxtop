@@ -12,6 +12,7 @@ use dgxtop_core::overview_history::{
     ArchivePrune, ArchivedMinutes, HistoryTierCompletion, HistoryTierJob, OverviewBucket,
     StoredTierSeries, TierJournal, TierStoreUsage,
 };
+use dgxtop_core::ports::LogLevel;
 use dgxtop_core::testing::{CapturingDispatch, host_id, metric_key};
 use dgxtop_core::tiers::{TIER_BUCKETS, Tier};
 
@@ -24,6 +25,28 @@ const MINUTE: i64 = 60 * SECOND;
 const HOUR: i64 = 60 * MINUTE;
 /// Midnight UTC.
 const MIDNIGHT: i64 = 1_790_208_000 * SECOND;
+
+/// Attaches a store whose issues are logged nowhere.
+trait AttachQuietly {
+    fn attach_store_quietly(
+        &self,
+        port: Box<dyn Dispatch<HistoryTierJob>>,
+        host_id: HostId,
+        run_start_utc_ns: i64,
+    );
+}
+
+impl AttachQuietly for OverviewTiers {
+    fn attach_store_quietly(
+        &self,
+        port: Box<dyn Dispatch<HistoryTierJob>>,
+        host_id: HostId,
+        run_start_utc_ns: i64,
+    ) {
+        let logger = Arc::new(dgxtop_core::ports::NullLogger);
+        self.attach_store(port, host_id, run_start_utc_ns, logger);
+    }
+}
 
 fn power() -> SeriesInEveryBoot {
     SeriesInEveryBoot::from(&metric_key("gpu:0", "gpu.power.draw", "gpu"))
@@ -181,7 +204,7 @@ impl Run {
     /// `tiers` with a store attached, nothing answered yet.
     fn attached(tiers: OverviewTiers, run_start: i64) -> Self {
         let port = CapturingDispatch::new();
-        tiers.attach_store(Box::new(port.clone()), host_id("test-host"), run_start);
+        tiers.attach_store_quietly(Box::new(port.clone()), host_id("test-host"), run_start);
         Self { tiers, port }
     }
 
@@ -343,7 +366,7 @@ fn the_archive_is_compressed_at_startup_and_live_minutes_wait() {
         tiers: OverviewTiers::new(),
         port: CapturingDispatch::new(),
     };
-    run.tiers.attach_store(
+    run.tiers.attach_store_quietly(
         Box::new(run.port.clone()),
         host_id("test-host"),
         MIDNIGHT + earlier * MINUTE,
@@ -403,7 +426,7 @@ fn the_archive_is_pruned_only_once_everything_is_written() {
         port: CapturingDispatch::new(),
     };
     run.tiers
-        .attach_store(Box::new(run.port.clone()), host_id("test-host"), MIDNIGHT);
+        .attach_store_quietly(Box::new(run.port.clone()), host_id("test-host"), MIDNIGHT);
     assert!(
         run.tiers.take_prunes(0).is_empty(),
         "the startup is not over"
@@ -441,7 +464,7 @@ fn a_failed_load_or_a_busy_store_does_not_lose_the_archive() {
         port: CapturingDispatch::new(),
     };
     run.port.set_busy(true);
-    run.tiers.attach_store(
+    run.tiers.attach_store_quietly(
         Box::new(run.port.clone()),
         host_id("test-host"),
         MIDNIGHT + 90 * MINUTE,
@@ -615,7 +638,7 @@ fn a_series_let_go_during_the_startup_is_not_read_back() {
         .collect()
     };
     let budget = budget_of(|scratch| {
-        scratch.attach_store(
+        scratch.attach_store_quietly(
             Box::new(CapturingDispatch::new()),
             host_id("test-host"),
             run_start,
@@ -738,7 +761,7 @@ fn the_startup_ends_when_the_store_stops() {
         if step == "load" {
             port.stop();
         }
-        tiers.attach_store(Box::new(port.clone()), host_id("test-host"), MIDNIGHT);
+        tiers.attach_store_quietly(Box::new(port.clone()), host_id("test-host"), MIDNIGHT);
         tiers.feed(vec![live(0)]);
         if step != "load" {
             assert_eq!(port.jobs.take(), vec![HistoryTierJob::Load], "{step}");
@@ -904,4 +927,77 @@ fn an_archived_page_is_compressed_a_chunk_at_a_time() {
     );
     let held: u64 = days.bars.iter().map(|bar| bar.covered_ns).sum();
     assert_eq!(held, (earlier * MINUTE).unsigned_abs(), "every minute once");
+}
+
+/// The store's issues are logged under `history.overview` with their
+/// `HISTORY_TIERS_*` code and the cause's error code, each issue once while
+/// it lasts; a series let go for the store's budget is logged too.
+#[test]
+fn store_issues_are_logged_with_their_codes() {
+    let logger = Arc::new(dgxtop_core::testing::MemoryLogger::default());
+    let tiers = OverviewTiers::new();
+    let port = StoppingPort::default();
+    let shared: Arc<dyn dgxtop_core::ports::Logger> = logger.clone();
+    tiers.attach_store(
+        Box::new(port.clone()),
+        host_id("test-host"),
+        MIDNIGHT,
+        shared,
+    );
+    let unavailable = InfraError::Unavailable("locked".to_owned());
+    tiers.on_store(HistoryTierCompletion::Loaded(Err(unavailable)));
+    let gone = InfraError::Database("gone".to_owned());
+    tiers.on_store(HistoryTierCompletion::Listed(Err(gone)));
+    for _ in 0..2 {
+        let full = InfraError::DiskFull {
+            operation: "history_tiers.append",
+        };
+        tiers.on_store(HistoryTierCompletion::Appended(Err(full)));
+    }
+    for gpu in 0..3 {
+        tiers.feed(vec![gpu_minute(gpu, 10)]);
+    }
+    let over = TierStoreUsage {
+        used_bytes: STORE_BUDGET_BYTES + 1,
+        series: 3,
+    };
+    tiers.on_store(HistoryTierCompletion::Appended(Ok(over)));
+    port.stop();
+    tiers.feed((0..3).map(|index| gpu_minute(1, 11 + index)).collect());
+    let lines: Vec<(LogLevel, &str, String)> = logger.records();
+    assert!(
+        lines
+            .iter()
+            .all(|(_, target, _)| *target == "history.overview")
+    );
+    let heads: Vec<(LogLevel, String)> = lines
+        .iter()
+        .map(|(level, _, line)| {
+            let head = line.split(':').next().unwrap_or_default().to_owned();
+            (*level, head)
+        })
+        .collect();
+    assert_eq!(
+        heads,
+        vec![
+            (
+                LogLevel::Warn,
+                "HISTORY_TIERS_LOAD_FAILED [Unavailable]".to_owned()
+            ),
+            (
+                LogLevel::Warn,
+                "HISTORY_TIERS_ARCHIVE_LIST_FAILED [PersistFailed]".to_owned()
+            ),
+            (
+                LogLevel::Warn,
+                "HISTORY_TIERS_WRITE_FAILED [PersistFailed]".to_owned()
+            ),
+            (LogLevel::Info, "HISTORY_TIERS_SERIES_GAVE_WAY".to_owned()),
+            (
+                LogLevel::Error,
+                "HISTORY_TIERS_STORE_STOPPED [Unavailable]".to_owned()
+            ),
+        ],
+        "{lines:?}"
+    );
 }
