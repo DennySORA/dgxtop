@@ -85,6 +85,9 @@ pub(crate) struct Series {
     pub counter: CounterTrack,
     pub gaps: GapList,
     pub finalized_through_ns: u64,
+    /// Whether any finalization ran; until then `finalized_through_ns` is
+    /// only the creation minute and nothing before it is final.
+    finalized_any: bool,
     pub last_activity_ns: u64,
     /// Rollups were shortened because the aggregates partition was full.
     pub capacity_truncated: bool,
@@ -134,6 +137,7 @@ impl Series {
             },
             gaps: GapList::new(ledger, MAX_SERIES_GAPS),
             finalized_through_ns: floor_bucket(first_time_ns),
+            finalized_any: false,
             last_activity_ns: now_ns,
             capacity_truncated: false,
             _overhead: overhead,
@@ -149,6 +153,15 @@ impl Series {
             return Err(DropReason::OutOfOrder);
         }
         Ok(())
+    }
+
+    /// Lets an interval that started before the series' first sample in (a
+    /// batch applies its gauge first, which would otherwise make an interval
+    /// ending on that minute boundary look late) while no minute is final.
+    pub(crate) fn reach_back_to(&mut self, time_ns: u64) {
+        if !self.finalized_any {
+            self.finalized_through_ns = self.finalized_through_ns.min(floor_bucket(time_ns));
+        }
     }
 
     /// Whether a counter interval may be appended without double counting.
@@ -307,6 +320,7 @@ impl Series {
             }
         }
         self.finalized_through_ns = finalization.target_ns;
+        self.finalized_any = true;
         lost
     }
 
@@ -696,6 +710,31 @@ mod tests {
             Err(DropReason::Late)
         );
         assert!(series.admit_interval(59 * SECOND, 61 * SECOND).is_ok());
+    }
+
+    #[test]
+    fn interval_before_the_creation_minute_is_admitted_until_a_minute_is_final() {
+        let ledger = ByteLedger::for_memory_limit_mib(64);
+        let key = metric_key("netif:ns:2", ids::NET_RX_BPS, "interface");
+        let descriptor = descriptor(ids::NET_RX_BPS).unwrap();
+        let mut series = Series::new(key, descriptor, 60 * SECOND, 60 * SECOND, &ledger).unwrap();
+        let start = 58 * SECOND + 581_000_000;
+        assert_eq!(
+            series.admit_interval(start, 60 * SECOND),
+            Err(DropReason::Late)
+        );
+        series.reach_back_to(start);
+        assert_eq!(series.finalized_through_ns, 0);
+        assert!(series.admit_interval(start, 60 * SECOND).is_ok());
+
+        let plan = series.plan_finalization(120 * SECOND).unwrap();
+        series.commit_finalization(plan, false, &mut HistoryReport::default());
+        series.reach_back_to(start);
+        assert_eq!(series.finalized_through_ns, 120 * SECOND);
+        assert_eq!(
+            series.admit_interval(start, 60 * SECOND),
+            Err(DropReason::Late)
+        );
     }
 
     #[test]

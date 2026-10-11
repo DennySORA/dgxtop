@@ -287,10 +287,9 @@ impl HistoryState {
             kind,
             report,
         )?;
-        let admitted = self
-            .slots
-            .get(handle)?
-            .admit_interval(append.start_ns, append.end_ns);
+        let series = self.slots.get_mut(handle)?;
+        series.reach_back_to(append.start_ns);
+        let admitted = series.admit_interval(append.start_ns, append.end_ns);
         if let Err(reason) = admitted {
             record_drop(report, kind, reason);
             return None;

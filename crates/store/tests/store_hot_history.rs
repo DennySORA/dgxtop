@@ -432,3 +432,33 @@ fn at27_boundary_without_raw_is_a_boundary_gap_never_proportional() {
         .unwrap();
     assert_eq!(value_u64(&exact.points[0]), (31..=120).sum::<u64>());
 }
+
+#[test]
+fn at27_interval_ending_on_a_minute_boundary_is_counted_in_the_total() {
+    let mut harness = Harness::new();
+    let key = rx_key("netif:ns:2");
+    let first = 58 * SECOND + 581 * MILLI;
+    let boundary = MINUTE;
+    let last = MINUTE + 100 * MILLI;
+    harness.commit(
+        vec![gauge(&key, 1.0, boundary)],
+        vec![interval(&key, first, boundary, 1)],
+        boundary,
+    );
+    harness.commit(
+        vec![gauge(&key, 1.0, last)],
+        vec![interval(&key, boundary, last, 0)],
+        last,
+    );
+    let result = harness
+        .query(&key, (first, last), ONE_CELL_MS, HistoryStat::Total, 10)
+        .unwrap();
+    assert_well_formed(&result);
+    let data = result
+        .points
+        .iter()
+        .find(|point| point.value.is_some())
+        .unwrap_or_else(|| panic!("no data point in {result:?}"));
+    assert_eq!(value_u64(data), 1);
+    assert_eq!(result.covered_ns, last - first);
+}
