@@ -504,11 +504,21 @@ mod tests {
     use dgxtop_core::testing::FakeClock;
     use dgxtop_core::tiers::Tier;
 
+    use dgxtop_history::HistoryIndex;
+    use dgxtop_state::SharedSnapshot;
+
     use crate::live_store::LiveStore;
 
     const HOUR_NS: u64 = 3_600 * NANOS_PER_SECOND;
 
-    fn preloaded(series: usize, span_ns: u64) -> (LiveStore, HistoryFeeder, PreloadReport, u64) {
+    /// The readers of a preloaded store; its writer stays alive with it.
+    struct Preloaded {
+        _writer: StateWriter,
+        snapshots: SharedSnapshot,
+        history: HistoryIndex,
+    }
+
+    fn preloaded(series: usize, span_ns: u64) -> (Preloaded, HistoryFeeder, PreloadReport, u64) {
         let host = HostId::new("h").unwrap();
         let boot = BootId::new("bench-manual-boot").unwrap();
         preloaded_keys(synthetic_keys(&host, &boot, series).unwrap(), span_ns)
@@ -517,24 +527,30 @@ mod tests {
     fn preloaded_keys(
         keys: Vec<MetricKey>,
         span_ns: u64,
-    ) -> (LiveStore, HistoryFeeder, PreloadReport, u64) {
+    ) -> (Preloaded, HistoryFeeder, PreloadReport, u64) {
         let config = Config::defaults().unwrap();
-        let mut store = LiveStore::new(
+        let (mut writer, snapshots, history) = LiveStore::new(
             &config.store,
             &config.sampling,
             ByteLedger::for_memory_limit_mib(256),
             Namespace::Live,
             false,
-        );
+        )
+        .into_parts();
         let count = keys.len();
         let mut feeder =
             HistoryFeeder::new(history_series(keys, count), 9, &config.sampling).unwrap();
         let end = 30 * HOUR_NS;
         let report = feeder.preload(
-            &mut store.writer,
+            &mut writer,
             PreloadShape::reference().with_span(span_ns),
             end,
         );
+        let store = Preloaded {
+            _writer: writer,
+            snapshots,
+            history,
+        };
         (store, feeder, report, end)
     }
 
@@ -555,7 +571,7 @@ mod tests {
     }
 
     fn windows(
-        store: &LiveStore,
+        store: &Preloaded,
         key: &MetricKey,
         spans_ns: Vec<u64>,
         end: u64,

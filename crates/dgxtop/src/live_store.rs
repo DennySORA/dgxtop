@@ -15,9 +15,9 @@ use dgxtop_state::{LiveState, SharedSnapshot, StateWriter};
 /// history workers.
 #[derive(Debug)]
 pub struct LiveStore {
-    pub writer: StateWriter,
-    pub snapshots: SharedSnapshot,
-    pub history: HistoryIndex,
+    writer: StateWriter,
+    snapshots: SharedSnapshot,
+    history: HistoryIndex,
 }
 
 impl LiveStore {
