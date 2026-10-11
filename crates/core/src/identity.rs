@@ -105,11 +105,6 @@ macro_rules! bounded_identity {
         }
 
         impl $name {
-            /// Minimum accepted length in bytes.
-            pub const MIN_BYTES: usize = $min;
-            /// Maximum accepted length in bytes.
-            pub const MAX_BYTES: usize = $max;
-
             /// Validates length and rejects control characters.
             pub fn new(value: impl Into<String>) -> Result<Self, IdentityError> {
                 let value = value.into();

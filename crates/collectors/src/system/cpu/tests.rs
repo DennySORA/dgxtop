@@ -88,12 +88,9 @@ fn two_cycles(
 }
 
 #[test]
-fn breakdown_follows_the_formulas_and_never_adds_guest() {
-    let mut first = stat_line(None, [100, 10, 50, 800, 20, 5, 5, 10], SECOND);
-    let mut second = stat_line(None, [160, 20, 70, 1000, 40, 10, 10, 20], 2 * SECOND);
-    // Guest time is already inside user/nice: it must not be added again.
-    first.push(tick(None, ids::CPU_TIME_GUEST, 1_000, SECOND));
-    second.push(tick(None, ids::CPU_TIME_GUEST, 9_000, 2 * SECOND));
+fn breakdown_follows_the_formulas() {
+    let first = stat_line(None, [100, 10, 50, 800, 20, 5, 5, 10], SECOND);
+    let second = stat_line(None, [160, 20, 70, 1000, 40, 10, 10, 20], 2 * SECOND);
     let (warmup, batch) = two_cycles(first, second);
     let warm = value_of(&warmup, &utilization_key(None, ids::CPU_UTILIZATION_TOTAL)).unwrap();
     assert_eq!(warm.value, None);

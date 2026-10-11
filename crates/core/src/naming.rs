@@ -275,7 +275,6 @@ pub mod entity {
     pub const SCOPE_INTERFACE: &str = "interface";
     pub const SCOPE_PROCESS: &str = "process";
     pub const SCOPE_SENSOR: &str = "sensor";
-    pub const SCOPE_PLATFORM: &str = "platform";
     /// Scopes of `gpu.temperature.threshold` and `gpu.pcie.link.maximum`.
     pub const SCOPE_SLOWDOWN: &str = "slowdown";
     pub const SCOPE_SHUTDOWN: &str = "shutdown";
@@ -321,11 +320,6 @@ pub mod entity {
     /// Per-physical-core temperature scope inside a package.
     pub fn scope_physical_core(core: u32) -> Result<Scope, IdentityError> {
         scope(format!("core:{core}"))
-    }
-
-    /// CPU cluster power component (e.g. GB10 `cpu_p`/`cpu_e`).
-    pub fn scope_cluster(name: &str) -> Result<Scope, IdentityError> {
-        scope(format!("cluster:{name}"))
     }
 
     /// GPU identified by UUID (never by enumeration index).

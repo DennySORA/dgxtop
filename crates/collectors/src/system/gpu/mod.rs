@@ -2,8 +2,8 @@
 //! explicit normalization (mW -> W, mJ -> J), cumulative energy with exact
 //! `CounterInterval`s, ECC/retired counts, and the per-GPU sum of visible
 //! process allocations. PCIe readings with an unverified unit stay without a
-//! value; the memory bandwidth estimate is never produced (no validated
-//! model, never busy% x peak).
+//! value. No memory bandwidth is ever estimated from busy% x peak (D-11):
+//! the catalog has no such metric.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,7 +24,6 @@ use crate::shared::context::{self, CollectorSpec, Record, Route, Session};
 use crate::shared::counter_inputs::{self, Step};
 use crate::shared::formulas::{self, Selections};
 use crate::shared::gpu_processes::{self, GpuProcesses, PROCESS_GPU_METRICS};
-use crate::shared::output::Subject;
 use crate::shared::reasons;
 use crate::shared::values::{self, Evidence};
 
@@ -33,7 +32,7 @@ fn accepts(metric: &MetricDescriptor) -> bool {
 }
 
 fn retains(_route: &Route<'_>, metric: &MetricDescriptor) -> bool {
-    metric.id != ids::GPU_MEMORY_BANDWIDTH_ESTIMATED && metric.id != ids::PROCESS_GPU_UTILIZATION
+    metric.id != ids::PROCESS_GPU_UTILIZATION
 }
 
 static SPEC: CollectorSpec = CollectorSpec {
@@ -48,7 +47,6 @@ fn is_pass_through(metric_id: &str) -> bool {
         metric.domain == Domain::Gpu
             && metric.role == MetricRole::Canonical
             && metric.id != ids::GPU_MEMORY_PROCESS_ALLOCATED
-            && metric.id != ids::GPU_MEMORY_BANDWIDTH_ESTIMATED
     })
 }
 
@@ -81,27 +79,10 @@ impl Collector for GpuCollector {
 }
 
 fn collect_gpu(session: &mut Session<'_>) {
-    refuse_bandwidth_estimates(session);
     emit_energy_intervals(session);
     let mut selections = Selections::new();
     formulas::publish_pending(session, is_pass_through, &mut selections);
     publish_process_allocations(session);
-}
-
-/// No validated model exists, so no estimate is fabricated from busy% x peak.
-fn refuse_bandwidth_estimates(session: &mut Session<'_>) {
-    for key in
-        session.pending_keys(|key| key.metric_id.as_str() == ids::GPU_MEMORY_BANDWIDTH_ESTIMATED)
-    {
-        session.failure(
-            reasons::NO_VALIDATED_MODEL,
-            &format!(
-                "{}: memory bandwidth estimate not produced",
-                key.series_selector()
-            ),
-            Subject::key(key),
-        );
-    }
 }
 
 /// Exact energy deltas (mJ -> J) for window totals; a backend reset or a

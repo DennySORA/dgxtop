@@ -741,8 +741,6 @@ pub mod ids {
     pub const CPU_TIME_IRQ: &str = "cpu.time.irq";
     pub const CPU_TIME_SOFTIRQ: &str = "cpu.time.softirq";
     pub const CPU_TIME_STEAL: &str = "cpu.time.steal";
-    pub const CPU_TIME_GUEST: &str = "cpu.time.guest";
-    pub const CPU_TIME_GUEST_NICE: &str = "cpu.time.guest_nice";
     /// CPU cluster power component (e.g. GB10 `cpu_p`/`cpu_e`); summed only by a profile formula.
     pub const CPU_POWER_CLUSTER: &str = "cpu.power.cluster";
     pub const CPU_ENERGY_PACKAGE: &str = "cpu.energy.package";
@@ -794,7 +792,6 @@ pub mod ids {
     pub const GPU_ENCODER_UTILIZATION: &str = "gpu.encoder.utilization";
     pub const GPU_DECODER_UTILIZATION: &str = "gpu.decoder.utilization";
     pub const GPU_NVLINK_ACTIVE: &str = "gpu.nvlink.active";
-    pub const GPU_MEMORY_BANDWIDTH_ESTIMATED: &str = "gpu.memory.bandwidth.estimated";
     /// Performance state, 0 (maximum performance) to 15 (minimum).
     pub const GPU_PERFORMANCE_STATE: &str = "gpu.performance_state";
     /// Why the clocks are held below their target, as the bits of
@@ -866,7 +863,6 @@ pub mod ids {
     pub const NET_TX_BYTES: &str = "network.tx.bytes";
 
     // Process
-    pub const PROCESS_CPU_PERCENT: &str = "process.cpu.percent";
     pub const PROCESS_RSS: &str = "process.rss";
     pub const PROCESS_GPU_UTILIZATION: &str = "process.gpu.utilization";
     pub const PROCESS_GPU_MEMORY: &str = "process.gpu.memory_allocated";
@@ -1125,24 +1121,6 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         Cpu,
         false,
         "steal ticks"
-    ),
-    descriptor!(
-        ids::CPU_TIME_GUEST,
-        Count,
-        Raw,
-        Counter,
-        Cpu,
-        false,
-        "guest ticks"
-    ),
-    descriptor!(
-        ids::CPU_TIME_GUEST_NICE,
-        Count,
-        Raw,
-        Counter,
-        Cpu,
-        false,
-        "guest nice ticks"
     ),
     descriptor!(
         ids::CPU_POWER_CLUSTER,
@@ -1504,15 +1482,6 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         Gpu,
         false,
         "NVLink active links"
-    ),
-    descriptor!(
-        ids::GPU_MEMORY_BANDWIDTH_ESTIMATED,
-        BytesPerSecond,
-        Canonical,
-        Gauge,
-        Gpu,
-        false,
-        "Memory bandwidth (estimated)"
     ),
     descriptor!(
         ids::GPU_PERFORMANCE_STATE,
@@ -1927,15 +1896,6 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         Network,
         false,
         "TX bytes"
-    ),
-    descriptor!(
-        ids::PROCESS_CPU_PERCENT,
-        Percent,
-        Canonical,
-        Gauge,
-        Process,
-        false,
-        "Process CPU"
     ),
     descriptor!(
         ids::PROCESS_RSS,

@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use dgxtop_core::clock::TimeProvider;
-use dgxtop_core::identity::{BootId, EntityId, HostId, MetricId, MetricKey, Scope};
+use dgxtop_core::identity::{BootId, EntityId, HostId, MetricId, MetricKey};
 use dgxtop_core::metric::{Scalar, ids};
 use dgxtop_core::naming;
 use dgxtop_core::observation::{Observation, ReadPlan};
@@ -419,7 +419,7 @@ fn process_key(
         read.boot_id.clone(),
         entity,
         MetricId::new(metric_id)?,
-        Scope::new(channel.scope(uuid))?,
+        channel.scope(uuid)?,
     ))
 }
 
