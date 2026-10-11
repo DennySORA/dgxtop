@@ -911,3 +911,49 @@ fn an_unread_rss_keeps_the_adapters_reason() {
         Some(dgxtop_core::process_stat::RSS_PARSE_ERROR)
     );
 }
+
+/// A compact record whose source is not admitted (here an ineligible
+/// quality) gives the row none of its tags: no RSS, no owner.
+#[test]
+fn a_rejected_compact_record_gives_no_tagged_values() {
+    let mut record = host(9, 1, 0, 3, SECOND).remove(0);
+    record.quality = Quality::Suspect;
+    let collector = ProcessCollector::new().unwrap();
+    let batch = collect(&collector, &plan(vec![record], vec![], SECOND + 1).build());
+    let process = row(&batch, 9);
+    assert_eq!(process.rss_bytes, None);
+    assert_eq!(process.uid, None);
+    assert_eq!(process.cpu_percent, None);
+    assert!(process.missing_reason.is_some());
+}
+
+/// A compact record of another namespace (a replay's in a live table)
+/// makes no row at all.
+#[test]
+fn a_compact_record_of_another_namespace_makes_no_row() {
+    let mut record = host(9, 1, 0, 3, SECOND).remove(0);
+    record.sample_kind = SampleKind::Replay;
+    let collector = ProcessCollector::new().unwrap();
+    let batch = collect(&collector, &plan(vec![record], vec![], SECOND + 1).build());
+    assert!(rows(&batch).is_empty());
+}
+
+/// RSS read longer ago than its freshness window is stale, not shown.
+#[test]
+fn a_stale_compact_record_shows_no_rss() {
+    let collector = ProcessCollector::new().unwrap();
+    let batch = collect(
+        &collector,
+        &plan(host(9, 1, 0, 3, SECOND), vec![], 600 * SECOND).build(),
+    );
+    assert_eq!(row(&batch, 9).rss_bytes, None);
+    let fresh = collect(
+        &collector,
+        &plan(host(9, 1, 0, 3, SECOND), vec![], SECOND + 1).build(),
+    );
+    assert_eq!(
+        row(&fresh, 9).rss_bytes,
+        Some(3 * 1024),
+        "the same read, fresh"
+    );
+}
