@@ -198,6 +198,16 @@ pub struct TierJournal {
     pub keep_latest: u32,
 }
 
+/// What the tiers store holds after an append, for the history's byte
+/// budget (D-95): the store itself never lets a series go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TierStoreUsage {
+    /// Bytes of the database pages in use.
+    pub used_bytes: u64,
+    /// Series it holds.
+    pub series: u64,
+}
+
 /// The series of `metric_ids` the archive holds minutes of in earlier
 /// runs: segments of `host_id` in their metric's canonical unit, started
 /// before `before_utc_ns` (this run's own minutes reach the history live).
@@ -251,7 +261,7 @@ pub enum HistoryTierJob {
 #[derive(Debug, Clone, PartialEq)]
 pub enum HistoryTierCompletion {
     Loaded(Result<Vec<StoredTierSeries>, InfraError>),
-    Appended(Result<(), InfraError>),
+    Appended(Result<TierStoreUsage, InfraError>),
     Listed(Result<Vec<SeriesInEveryBoot>, InfraError>),
     ArchivedRead {
         read: ArchivedMinutesRead,

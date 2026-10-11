@@ -10,12 +10,13 @@ use dgxtop_core::errors::InfraError;
 use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::overview_history::{
     ArchivePrune, ArchivedMinutes, HistoryTierCompletion, HistoryTierJob, OverviewBucket,
-    StoredTierSeries, TierJournal,
+    StoredTierSeries, TierJournal, TierStoreUsage,
 };
 use dgxtop_core::testing::{CapturingDispatch, host_id, metric_key};
 use dgxtop_core::tiers::{TIER_BUCKETS, Tier};
 
-use super::book::{MAX_SERIES_BYTES, MAX_TIER_SERIES, TierMinute};
+use super::book::TierMinute;
+use super::budget::STORE_BUDGET_BYTES;
 use super::*;
 
 const SECOND: i64 = 1_000_000_000;
@@ -125,7 +126,7 @@ impl Disk {
                         self.tiers.remove(&(tier, *start));
                     }
                 }
-                HistoryTierCompletion::Appended(Ok(()))
+                HistoryTierCompletion::Appended(Ok(TierStoreUsage::default()))
             }
             HistoryTierJob::ListArchived(list) => {
                 let listed = (!self.archive.is_empty()
@@ -172,12 +173,16 @@ struct Run {
 
 impl Run {
     fn start(disk: &mut Disk, run_start: i64) -> Self {
-        let tiers = OverviewTiers::new();
-        let port = CapturingDispatch::new();
-        tiers.attach_store(Box::new(port.clone()), host_id("test-host"), run_start);
-        let run = Self { tiers, port };
+        let run = Self::attached(OverviewTiers::new(), run_start);
         run.settle(disk);
         run
+    }
+
+    /// `tiers` with a store attached, nothing answered yet.
+    fn attached(tiers: OverviewTiers, run_start: i64) -> Self {
+        let port = CapturingDispatch::new();
+        tiers.attach_store(Box::new(port.clone()), host_id("test-host"), run_start);
+        Self { tiers, port }
     }
 
     /// Runs every job the history sent, and what they lead to.
@@ -465,30 +470,46 @@ fn a_failed_load_or_a_busy_store_does_not_lose_the_archive() {
     );
 }
 
-/// Every series full stays within 40 MiB.
-const _: () = assert!(MAX_SERIES_BYTES * MAX_TIER_SERIES <= 40 * 1024 * 1024);
+/// A cache budget that holds exactly what `build` leaves in a cache.
+fn budget_of(build: impl FnOnce(&OverviewTiers)) -> usize {
+    let scratch = OverviewTiers::new();
+    build(&scratch);
+    scratch.with_book(TierBook::bytes)
+}
 
-/// The cache is bounded: past its series the one fed longest ago goes.
+/// The cache is bounded by bytes (D-95): past its budget the series given
+/// a minute longest ago goes, and what is left fits.
 #[test]
 fn the_cache_is_bounded() {
-    let tiers = OverviewTiers::new();
-    for gpu in 0..=MAX_TIER_SERIES {
-        let key = metric_key(&format!("gpu:{gpu}"), "gpu.power.draw", "gpu");
-        let bucket = minute(i64::try_from(gpu).unwrap());
-        tiers.feed(vec![TierMinute {
-            series: SeriesInEveryBoot::from(&key),
-            key,
-            bucket,
-        }]);
-    }
+    let feed = |tiers: &OverviewTiers, gpus: std::ops::RangeInclusive<usize>| {
+        for gpu in gpus {
+            tiers.feed(vec![gpu_minute(gpu, i64::try_from(gpu).unwrap())]);
+        }
+    };
+    let budget = budget_of(|scratch| feed(scratch, 1..=3));
+    let tiers = OverviewTiers::with_cache_budget(budget);
+    feed(&tiers, 0..=3);
     tiers.with_book(|book| {
-        assert_eq!(book.len(), MAX_TIER_SERIES);
-        let oldest = SeriesInEveryBoot::from(&metric_key("gpu:0", "gpu.power.draw", "gpu"));
+        assert_eq!(book.len(), 3);
         assert!(
-            book.entry_of(&oldest).is_none(),
+            book.entry_of(&gpu_series(0)).is_none(),
             "the one fed longest ago went"
         );
+        assert!(book.bytes() <= budget);
     });
+}
+
+/// The default budget holds every Overview series of a large host (eight
+/// GPUs, a dozen disks and interfaces) at a day of minutes each.
+#[test]
+fn the_default_budget_holds_a_large_host() {
+    let tiers = OverviewTiers::new();
+    let gpus = 8 * 5 + 2 + 12 * 2 + 12 * 2;
+    for gpu in 0..gpus {
+        let day: Vec<TierMinute> = (0..24 * 60).map(|index| gpu_minute(gpu, index)).collect();
+        tiers.feed(day);
+    }
+    tiers.with_book(|book| assert_eq!(book.len(), gpus, "{} bytes", book.bytes()));
 }
 
 fn gpu_series(gpu: usize) -> SeriesInEveryBoot {
@@ -521,16 +542,20 @@ fn appends(jobs: &[HistoryTierJob]) -> Vec<&TierJournal> {
 #[test]
 fn an_evicted_series_is_deleted_everywhere_and_comes_back_fresh() {
     let mut disk = Disk::default();
-    let run = Run::start(&mut disk, MIDNIGHT);
+    let feed_before_eviction = |tiers: &OverviewTiers| {
+        tiers.feed((0..3).map(|index| gpu_minute(0, index)).collect());
+        for gpu in 1..4 {
+            tiers.feed(vec![gpu_minute(gpu, 10)]);
+        }
+    };
+    let budget = budget_of(feed_before_eviction);
+    let run = Run::attached(OverviewTiers::with_cache_budget(budget), MIDNIGHT);
+    run.settle(&mut disk);
     run.port.set_busy(true);
-    run.tiers
-        .feed((0..3).map(|index| gpu_minute(0, index)).collect());
-    for gpu in 1..MAX_TIER_SERIES {
-        run.tiers.feed(vec![gpu_minute(gpu, 10)]);
-    }
+    feed_before_eviction(&run.tiers);
     assert!(run.port.is_empty(), "the store is busy");
     run.port.set_busy(false);
-    run.tiers.feed(vec![gpu_minute(MAX_TIER_SERIES, 10)]);
+    run.tiers.feed(vec![gpu_minute(4, 10)]);
     let jobs = run.port.take();
     let sent = appends(&jobs);
     assert_eq!(sent.len(), 1);
@@ -549,7 +574,9 @@ fn an_evicted_series_is_deleted_everywhere_and_comes_back_fresh() {
         "deleted from the archive although a write is in flight"
     );
     assert!(run.tiers.take_prunes(0).is_empty(), "asked once");
-    run.tiers.on_store(HistoryTierCompletion::Appended(Ok(())));
+    run.tiers.on_store(HistoryTierCompletion::Appended(Ok(
+        TierStoreUsage::default(),
+    )));
     assert!(
         appends(&run.port.take()).is_empty(),
         "nothing left to forget"
@@ -580,21 +607,28 @@ fn an_evicted_series_is_deleted_everywhere_and_comes_back_fresh() {
 #[test]
 fn a_series_let_go_during_the_startup_is_not_read_back() {
     let run_start = MIDNIGHT + 4 * HOUR;
-    let run = Run {
-        tiers: OverviewTiers::new(),
-        port: CapturingDispatch::new(),
-    };
-    run.tiers
-        .attach_store(Box::new(run.port.clone()), host_id("test-host"), run_start);
-    assert_eq!(run.port.take(), vec![HistoryTierJob::Load]);
-    let stored = (0..=MAX_TIER_SERIES)
-        .map(|gpu| StoredTierSeries {
+    let stored = |gpus: std::ops::RangeInclusive<usize>| {
+        gpus.map(|gpu| StoredTierSeries {
             series: gpu_series(gpu),
             buckets: vec![(Tier::OneMinute, minute(i64::try_from(gpu).unwrap()))],
         })
-        .collect();
+        .collect()
+    };
+    let budget = budget_of(|scratch| {
+        scratch.attach_store(
+            Box::new(CapturingDispatch::new()),
+            host_id("test-host"),
+            run_start,
+        );
+        // What is left once the load pushed one out and a new series took
+        // the place of another.
+        scratch.on_store(HistoryTierCompletion::Loaded(Ok(stored(2..=4))));
+        scratch.feed(vec![gpu_minute(500, 200)]);
+    });
+    let run = Run::attached(OverviewTiers::with_cache_budget(budget), run_start);
+    assert_eq!(run.port.take(), vec![HistoryTierJob::Load]);
     run.tiers
-        .on_store(HistoryTierCompletion::Loaded(Ok(stored)));
+        .on_store(HistoryTierCompletion::Loaded(Ok(stored(0..=4))));
     let jobs = run.port.take();
     assert!(matches!(jobs[0], HistoryTierJob::ListArchived(_)));
     assert_eq!(appends(&jobs)[0].forget, vec![gpu_series(0)]);
@@ -652,15 +686,15 @@ fn a_series_let_go_during_the_startup_is_not_read_back() {
 /// old one are read again (without a store, and after the startup).
 #[test]
 fn a_series_that_comes_back_has_a_new_epoch() {
-    let tiers = OverviewTiers::new();
+    let tiers = OverviewTiers::with_cache_budget(budget_of(|scratch| {
+        scratch.feed(vec![gpu_minute(0, 0)]);
+    }));
     let window = (MIDNIGHT - 24 * HOUR, MIDNIGHT + 24 * HOUR);
     let epoch =
         |tiers: &OverviewTiers| tiers.bars(&gpu_series(0), Tier::OneHour, window, &[]).epoch;
     tiers.feed(vec![gpu_minute(0, 0)]);
     let before = epoch(&tiers);
-    for gpu in 1..=MAX_TIER_SERIES {
-        tiers.feed(vec![gpu_minute(gpu, 10)]);
-    }
+    tiers.feed(vec![gpu_minute(1, 10)]);
     tiers.with_book(|book| assert!(book.entry_of(&gpu_series(0)).is_none()));
     let gone = epoch(&tiers);
     assert_ne!(gone, before, "the series let go is not the one cached");
@@ -730,4 +764,48 @@ fn the_startup_ends_when_the_store_stops() {
         assert!(bars.store_issue.is_some(), "{step}: the stop is shown");
         assert!(tiers.take_prunes(0).is_empty(), "{step}: nothing pruned");
     }
+}
+
+/// Past the store's budget (D-95) the series given a minute longest ago
+/// give way through the cache's eviction: the next journal deletes it and
+/// the archive its minutes. No more go while that deletion is unanswered
+/// (its usage would not show it yet), nor once the store is within budget.
+#[test]
+fn the_store_budget_lets_the_series_seen_longest_ago_go() {
+    let mut disk = Disk::default();
+    let run = Run::start(&mut disk, MIDNIGHT);
+    run.tiers
+        .feed((0..3).map(|index| gpu_minute(0, index)).collect());
+    run.tiers.feed(vec![gpu_minute(1, 10)]);
+    run.tiers.feed(vec![gpu_minute(2, 11)]);
+    run.tiers.feed(vec![gpu_minute(1, 11)]);
+    assert_eq!(appends(&run.port.take()).len(), 2, "two journals in flight");
+    let over = TierStoreUsage {
+        used_bytes: STORE_BUDGET_BYTES + 1,
+        series: 3,
+    };
+    run.tiers
+        .on_store(HistoryTierCompletion::Appended(Ok(over)));
+    let jobs = run.port.take();
+    let sent = appends(&jobs);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].forget, vec![gpu_series(0)]);
+    run.tiers
+        .on_store(HistoryTierCompletion::Appended(Ok(over)));
+    run.tiers
+        .with_book(|book| assert_eq!(book.len(), 2, "the deletion is unanswered"));
+    assert!(appends(&run.port.take()).is_empty());
+    let within = TierStoreUsage {
+        used_bytes: STORE_BUDGET_BYTES,
+        series: 2,
+    };
+    run.tiers
+        .on_store(HistoryTierCompletion::Appended(Ok(within)));
+    run.tiers
+        .with_book(|book| assert_eq!(book.len(), 2, "within budget"));
+    let prunes = run.tiers.take_prunes(0);
+    assert!(
+        prunes.iter().any(|prune| prune.series == gpu_series(0)),
+        "deleted from the archive too: {prunes:?}"
+    );
 }

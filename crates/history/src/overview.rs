@@ -20,9 +20,12 @@
 //! back: the store deletes it with the next journal, the archive its
 //! minutes with the next archive journal (whatever the store's state),
 //! and its archived minutes are not compressed if the startup is still
-//! reading them.
+//! reading them. The history alone decides which series go (D-95): the
+//! cache and the store each have a byte budget ([`budget`]), and the store
+//! never deletes a series on its own.
 
 mod book;
+mod budget;
 mod reader;
 pub(crate) mod rows;
 
@@ -37,7 +40,7 @@ use dgxtop_core::identity::{HostId, MetricKey};
 use dgxtop_core::overview_history::{
     ArchivePrune, ArchivedMinutes, ArchivedMinutesRead, ArchivedSeriesList, HistoryTierCompletion,
     HistoryTierJob, OVERVIEW_METRICS, OverviewBars, OverviewBucket, StoredTierSeries, TierJournal,
-    TierRow, is_overview_series,
+    TierRow, TierStoreUsage, is_overview_series,
 };
 use dgxtop_core::ports::{Dispatch, DispatchError};
 use dgxtop_core::tiers::{TIER_BUCKETS, Tier};
@@ -102,7 +105,9 @@ struct StoreLink {
     /// Every closed bucket so far reached the store.
     healthy: bool,
     issue: Option<String>,
-    appends_inflight: u32,
+    /// The journals sent and not answered yet, oldest first (the store's
+    /// one actor answers in order), each with whether it deletes series.
+    appends_inflight: VecDeque<bool>,
     last_prune_boot_ns: Option<u64>,
     /// Series the cache let go that the store is still to delete.
     forget: Vec<SeriesInEveryBoot>,
@@ -138,6 +143,16 @@ impl StoreLink {
                 queue.retain(|series| *series != eviction.series);
             }
             self.let_go.insert(eviction.series);
+        }
+    }
+
+    /// Past the store's budget the series given a minute longest ago give
+    /// way, never while a deletion is still unanswered (the usage would
+    /// not show it yet).
+    fn give_way_for_store(&mut self, book: &mut TierBook, usage: TierStoreUsage) {
+        let deleting = !self.forget.is_empty() || self.appends_inflight.contains(&true);
+        if !deleting {
+            book.give_way(budget::series_giving_way(usage, budget::STORE_BUDGET_BYTES));
         }
     }
 
@@ -214,7 +229,7 @@ impl OverviewTiers {
             listed: false,
             healthy: true,
             issue: None,
-            appends_inflight: 0,
+            appends_inflight: VecDeque::new(),
             last_prune_boot_ns: None,
             forget: Vec::new(),
             eviction_prunes: Vec::new(),
@@ -238,12 +253,14 @@ impl OverviewTiers {
                 archived_read(book, link, &read, result);
             }
             HistoryTierCompletion::Appended(result) => {
-                link.appends_inflight = link.appends_inflight.saturating_sub(1);
-                if let Err(error) = result {
-                    link.fail(&error);
+                link.appends_inflight.pop_front();
+                match result {
+                    Ok(usage) => link.give_way_for_store(book, usage),
+                    Err(error) => link.fail(&error),
                 }
             }
         }
+        book.keep_within_budget();
         link.forget(book.take_evictions());
         flush(book, link);
     }
@@ -256,6 +273,7 @@ impl OverviewTiers {
         for minute in minutes {
             book.feed(minute);
         }
+        book.keep_within_budget();
         match link.as_mut() {
             Some(link) => {
                 link.forget(book.take_evictions());
@@ -278,7 +296,7 @@ impl OverviewTiers {
         let settled = link.healthy
             && matches!(link.phase, Phase::Done)
             && link.held.is_none()
-            && link.appends_inflight == 0
+            && link.appends_inflight.is_empty()
             && book.unsent_len() == 0;
         let due = link
             .last_prune_boot_ns
@@ -320,6 +338,17 @@ impl OverviewTiers {
     /// This boot's key of a series.
     pub(crate) fn key_of(&self, series: &SeriesInEveryBoot) -> Option<MetricKey> {
         self.lock().book.key_of(series)
+    }
+
+    /// Without a store, with a cache of `budget_bytes`.
+    #[cfg(test)]
+    fn with_cache_budget(budget_bytes: usize) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Inner {
+                book: TierBook::with_budget(budget_bytes),
+                link: None,
+            })),
+        }
     }
 
     #[cfg(test)]
@@ -464,8 +493,8 @@ fn flush(book: &mut TierBook, link: &mut StoreLink) {
     };
     match link.port.try_dispatch(HistoryTierJob::Append(journal)) {
         Ok(()) => {
+            link.appends_inflight.push_back(!link.forget.is_empty());
             link.forget.clear();
-            link.appends_inflight = link.appends_inflight.saturating_add(1);
         }
         Err(DispatchError::Busy) => {
             book.return_unsent(rows);

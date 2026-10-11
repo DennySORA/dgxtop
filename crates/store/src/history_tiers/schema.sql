@@ -11,8 +11,9 @@ CREATE TABLE IF NOT EXISTS tier_series (
     entity_id TEXT NOT NULL,
     metric_id TEXT NOT NULL,
     scope TEXT NOT NULL,
-    -- The latest bucket start written: past the size limit the series
-    -- written longest ago give way.
+    -- The latest bucket start written. Nothing reads it since the history
+    -- decides which series go (D-95); kept so that files of this format
+    -- stay usable (a format change recreates the file, D-85).
     last_utc_ns INTEGER NOT NULL,
     UNIQUE (host_id, entity_id, metric_id, scope)
 ) STRICT;

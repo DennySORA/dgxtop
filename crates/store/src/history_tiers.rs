@@ -10,13 +10,20 @@
 //! its reason and the history goes on in memory. A failed call maps like
 //! every partition's (`sqlite::Writer`): corruption stops the
 //! database until the next start recreates it.
-//! No series expires by age: past [`MAX_USED_BYTES`] the series written
-//! longest ago give way.
+//!
+//! Nothing here decides what is kept (D-95): the history's journal says
+//! which series go, and each append returns the pages in use and the
+//! series held for the history's byte budget. The one bound of the store's
+//! own is the small database's page cap (`max_page_count`): a write past it
+//! fails with `DiskFull` and deletes nothing. No `CapacityPolicy::admit`
+//! runs before a write: the database is best effort and reserves room for
+//! no outcome, so admission would protect nothing the page cap does not
+//! refuse already, and the history's budget lets series go below it.
 
 mod database;
 
 use dgxtop_core::errors::InfraError;
-use dgxtop_core::overview_history::{StoredTierSeries, TierJournal};
+use dgxtop_core::overview_history::{StoredTierSeries, TierJournal, TierStoreUsage};
 use dgxtop_core::ports::HistoryTierStore;
 use rusqlite::Connection;
 use std::path::Path;
@@ -26,18 +33,11 @@ use crate::sqlite::{
     DatabaseFailure, SchemaKind, VersionGate, Writer, ensure_sqlite_version, open_small_database,
 };
 
-const MIB: u64 = 1024 * 1024;
-/// The pages in use past which the series written longest ago give way:
-/// room for the WAL below the 64 MiB of a small database. A full series
-/// (every size at 300 buckets) takes about a quarter of a megabyte.
-const MAX_USED_BYTES: u64 = 48 * MIB;
-
 /// The tiers database in dgxtop's state directory.
 #[derive(Debug)]
 pub struct SqliteHistoryTiers {
     database: Writer,
     recreated: Option<String>,
-    max_used_bytes: u64,
 }
 
 impl SqliteHistoryTiers {
@@ -53,7 +53,6 @@ impl SqliteHistoryTiers {
         Self {
             database,
             recreated,
-            max_used_bytes: MAX_USED_BYTES,
         }
     }
 
@@ -78,12 +77,6 @@ impl SqliteHistoryTiers {
         let result = call(self.connection()?);
         result.map_err(|failure| self.database.fail(&failure))
     }
-
-    #[cfg(test)]
-    fn with_max_used_bytes(mut self, bytes: u64) -> Self {
-        self.max_used_bytes = bytes;
-        self
-    }
 }
 
 impl HistoryTierStore for SqliteHistoryTiers {
@@ -91,12 +84,8 @@ impl HistoryTierStore for SqliteHistoryTiers {
         self.with_database(database::load)
     }
 
-    fn append(&mut self, journal: &TierJournal) -> Result<(), InfraError> {
-        let max_used_bytes = self.max_used_bytes;
-        self.with_database(|connection| {
-            database::append(connection, journal)?;
-            database::retain(connection, max_used_bytes)
-        })
+    fn append(&mut self, journal: &TierJournal) -> Result<TierStoreUsage, InfraError> {
+        self.with_database(|connection| database::append(connection, journal))
     }
 }
 
