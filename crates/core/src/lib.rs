@@ -29,6 +29,7 @@ pub mod naming;
 pub mod observation;
 pub mod ports;
 pub mod process_history;
+pub mod process_model;
 pub mod process_probe;
 pub mod process_stat;
 pub mod quality;

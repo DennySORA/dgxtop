@@ -4,7 +4,9 @@
 //! * Action: `ProcessActionPort` is a separate trait; only the Manager's
 //!   ProcessService ever receives one.
 //! * Process history (D-76): `ProcessProbe` (read-only, beside the
-//!   adapters) and `ProcessHistoryStore`.
+//!   adapters) and `ProcessHistoryStore`; the history's process actor takes
+//!   `ProcessHistoryInput`s and publishes through `ProcessHistoryReader` and
+//!   `ProcessMemoryReader` (D-79).
 //! * Collectors are pure (`Collector::collect`).
 //! * State (D-79): `StoreWriter` (HotStore actor only) and `SnapshotReader`.
 //! * History (D-79): `HistoryIngest`, through which the live state hands
@@ -16,6 +18,7 @@
 //! * UI: `SessionPort` (commands, projections, results) and
 //!   `TerminalTransport` (non-blocking output owned by the runtime).
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -40,13 +43,16 @@ use crate::commands::{CommandEnvelope, CommandRejection, CommandResult};
 use crate::config::{Config, ConfigError, ValidationIssue};
 use crate::errors::{ErrorDetail, InfraError};
 use crate::history::{ArchiveQuery, ArchiveResult, HistoryQuery, HistoryResult};
-use crate::identity::{AdapterId, CollectorId, MetricKey, ProcessKey, SessionId, SourceId};
+use crate::identity::{
+    AdapterId, CollectorId, EntityId, MetricKey, ProcessKey, SessionId, SourceId,
+};
 use crate::observation::{
     AdapterHealth, AdapterManifest, CatalogDelta, DiscoverRequest, ObservationBatch, ReadPlan,
 };
 use crate::process_history::{
     ProcessHistoryJournal, ProcessHistoryLoad, RecentHistory, RunBucketRow,
 };
+use crate::process_model::{MemoryPart, ProcessHistoryModel, ProcessTableSample, RunRequest};
 use crate::process_probe::{ProbeReading, ProbeReport, ProbeState, ProbeTarget};
 use crate::view::{HostStatus, ViewModel};
 
@@ -528,6 +534,45 @@ pub enum ProcessHistoryCompletion {
         key: ProcessKey,
         result: Result<Vec<RunBucketRow>, InfraError>,
     },
+}
+
+/// What the history's process actor takes (D-79): from the Manager the
+/// committed tables, the commits between them, the signals dgxtop sent and
+/// the runs sessions show; from the probe and the stores what they did.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProcessHistoryInput {
+    /// A committed process table new since the last one handed over.
+    Table(Box<ProcessTableSample>),
+    /// A commit without a new table: a finished probe is followed by the
+    /// next one, and the writes leave when due.
+    Tick,
+    Probe(ProbeReport),
+    Store(ProcessHistoryCompletion),
+    /// dgxtop sent `signal` to `key` (D-71).
+    Signal {
+        key: ProcessKey,
+        signal: Signal,
+    },
+    /// A session shows this run.
+    Show(RunRequest),
+    /// At shutdown: whatever is left goes to the stores.
+    Flush,
+}
+
+/// The read model of the GPU process runs and colors (D-79), published by
+/// the history's process actor.
+pub trait ProcessHistoryReader: Send + Sync {
+    fn latest(&self) -> Arc<ProcessHistoryModel>;
+}
+
+/// What each tracked GPU process held over time (D-64), for the parts of
+/// the history's memory charts.
+pub trait ProcessMemoryReader: Send + Sync {
+    /// Each tracked process's part of a chart of the GPUs in `gpus`, in
+    /// each of `cells` even cells of `window` (boot clock), in color order;
+    /// a process that held nothing there is left out.
+    fn parts(&self, gpus: &BTreeSet<EntityId>, window: (u64, u64), cells: usize)
+    -> Vec<MemoryPart>;
 }
 
 /// Non-blocking job submission to a fixed worker.
