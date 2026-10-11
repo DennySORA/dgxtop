@@ -6,11 +6,11 @@
 //! * Process history (D-76): `ProcessProbe` (read-only, beside the
 //!   adapters) and `ProcessHistoryStore`.
 //! * Collectors are pure (`Collector::collect`).
-//! * Store: `StoreWriter` (HotStore actor only), `SnapshotReader`,
-//!   `HistoryReader`, `ConfigRepository`, `AuditRepository`, `ArchiveSink`,
-//!   `ArchiveReader` (D-51).
+//! * State (D-79): `StoreWriter` (HotStore actor only) and `SnapshotReader`.
 //! * History (D-79): `HistoryIngest`, through which the live state hands
 //!   each commit to the history, and `HistoryReader`.
+//! * Store: `ConfigRepository`, `AuditRepository`, `ArchiveSink`,
+//!   `ArchiveReader` (D-51).
 //! * Runtime: `Dispatch<J>` submits jobs to fixed workers without blocking;
 //!   results come back as `IngestionCompletion` / `ControlCompletion`.
 //! * UI: `SessionPort` (commands, projections, results) and
@@ -70,7 +70,7 @@ pub trait Collector: Send + Sync {
     fn collect(&self, plan: &CollectionPlan) -> CollectionBatch;
 }
 
-/// Single writer of the hot store (HotStore actor only).
+/// Single writer of the live state (HotStore actor only).
 pub trait StoreWriter: Send {
     /// Validates epoch/base/namespace/units, then commits samples, history and
     /// collector state atomically, or rejects the whole batch.

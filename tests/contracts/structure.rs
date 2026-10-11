@@ -127,6 +127,37 @@ fn core_and_the_viewer_carry_no_system_or_driver_dependencies() {
 }
 
 #[test]
+fn the_store_keeps_only_sqlite_and_file_modules() {
+    // D-79: the live state and the in-memory history are their own crates;
+    // the store only executes SQLite and file I/O.
+    let library = read("crates/store/src/lib.rs");
+    let modules: Vec<&str> = library
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("pub mod "))
+        .map(|rest| rest.trim_end_matches(';'))
+        .collect();
+    assert_eq!(
+        modules,
+        [
+            "archive",
+            "audit",
+            "config",
+            "fs",
+            "lock",
+            "paths",
+            "process_history",
+            "sqlite"
+        ]
+    );
+    assert!(
+        !library
+            .lines()
+            .any(|line| line.trim_start().starts_with("mod ")),
+        "crates/store/src/lib.rs declares a private module"
+    );
+}
+
+#[test]
 fn collectors_manager_and_viewer_never_touch_files_processes_or_sockets() {
     // Collectors only compute, the Manager reaches I/O through ports, and the
     // Controller/Viewer only translate input and draw (AT01, AT05, AT11);
