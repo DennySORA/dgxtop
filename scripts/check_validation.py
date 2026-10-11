@@ -14,7 +14,10 @@ Rules (spec/dgxtop-v2/ACCEPTANCE.md: PASS needs evidence; written code is not PA
   PASS section appears as a passing test in one of the logs its row cites;
 - a cited test that starts with a workspace crate name resolves in that crate:
   `crate/target::...` names one of its test targets, `crate::module::...` one of its
-  library's top-level modules (so a test that moved to another crate is caught).
+  library's top-level modules (so a test that moved to another crate is caught);
+- every test cited in any section is still defined in the workspace's sources (a Rust
+  `fn` or a Python `def` of that name), so a deleted or renamed test cannot stay cited
+  because an old log still lists it; removed behaviour is a row with no test.
 
 Only local files are read. Exit status 0 means every rule held.
 """
@@ -31,6 +34,9 @@ BACKTICKED = re.compile(r"`([^`]+)`")
 RUST_PASS = re.compile(r"^test (\S+) \.\.\. ok(?: \(\d+ ms\))?$")
 PYTHON_PASS = re.compile(r"^(test\w*) \([\w.]+\) \.\.\. ok$")
 EXIT_LINE = re.compile(r"^# exit_code: (-?\d+)$", re.MULTILINE)
+DEFINITION = re.compile(r"\b(?:fn|def)\s+(\w+)")
+# Where cited tests are defined.
+SOURCE_DIRECTORIES = ("crates", "tests", "benches", "scripts")
 
 
 def table_rows(text: str, heading: str) -> list[list[str]]:
@@ -148,6 +154,27 @@ def unresolved_path(identifier: str, crates: dict[str, Crate]) -> str | None:
     return f"{name} has no module {module}"
 
 
+def defined_functions(root: Path) -> set[str]:
+    """Names of every Rust `fn` and Python `def` in the workspace's sources."""
+    names = set()
+    for directory in SOURCE_DIRECTORIES:
+        for path in sorted((root / directory).rglob("*")):
+            if path.suffix in {".rs", ".py"} and path.is_file():
+                names.update(DEFINITION.findall(path.read_text(encoding="utf-8", errors="replace")))
+    return names
+
+
+def stale_citations(bodies: dict[str, str], defined: set[str]) -> list[str]:
+    """Cited tests whose functions no source defines any more."""
+    problems = []
+    for identifier, body in sorted(bodies.items()):
+        for test in cited_tests(body):
+            missing = [name for name in test_names(test) if name not in defined]
+            if missing:
+                problems.append(f"{identifier}: {test} names no test in the sources ({', '.join(missing)})")
+    return problems
+
+
 def check(document: Path, evidence_dir: Path, workspace: Path | None = None) -> list[str]:
     text = document.read_text(encoding="utf-8")
     problems = []
@@ -196,6 +223,8 @@ def check(document: Path, evidence_dir: Path, workspace: Path | None = None) -> 
             reason = unresolved_path(test, crates)
             if reason:
                 problems.append(f"{identifier}: {test} does not resolve ({reason})")
+    if workspace:
+        problems.extend(stale_citations(bodies, defined_functions(workspace)))
     for identifier, (status, cited) in sorted(seen.items()):
         if status not in STATUSES:
             problems.append(f"{identifier}: status {status!r} is not one of {sorted(STATUSES)}")
