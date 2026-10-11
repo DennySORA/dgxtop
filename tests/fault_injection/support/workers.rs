@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use crossbeam_channel::Sender;
 use dgxtop::control_ops::{run_action_op, run_audit_op};
+use dgxtop::store_actor::run_store_job;
 use dgxtop_core::action::{
     ActionError, ActionHandle, ActionOp, AuditOp, CapabilityContext, DurableReceipt,
     ExitObservation, PersistenceStatus, PreparedProcess, Signal, SignalOutcome, VerifiedIdentity,
@@ -24,7 +25,7 @@ use dgxtop_core::identity::ProcessKey;
 use dgxtop_core::ports::{
     ArchiveJournal, ArchiveReceipt, ArchiveSink, AuditRepository, Collector, ConfigJob,
     ConfigRepository, ControlCompletion, Dispatch, HistoryJob, IngestionCompletion, OverviewReader,
-    ProcessActionPort, StoreJob, StoreWriter,
+    ProcessActionPort, StoreJob,
 };
 use dgxtop_manager::ManagerInboxes;
 use dgxtop_runtime::queues::{PoolHandle, StopReport, spawn_actor, spawn_pool};
@@ -442,16 +443,8 @@ pub fn spawn_store_worker(
         STORE_MAILBOX,
         writer,
         move |writer: &mut StateWriter, job: StoreJob| {
-            match job {
-                StoreJob::Commit { batch, guard } => {
-                    let ack = writer.commit_collection(*batch, &guard, clock.now_boot_ns());
-                    completions.ingestion(IngestionCompletion::Committed(ack));
-                }
-                StoreJob::Gap(gap) => writer.record_gap(gap),
-                StoreJob::Maintain => {
-                    writer.observe_wall_clock(clock.now_boot_ns(), clock.now_utc_ns());
-                    writer.maintain(clock.now_boot_ns());
-                }
+            if let Some(ack) = run_store_job(writer, job, clock.as_ref()) {
+                completions.ingestion(IngestionCompletion::Committed(ack));
             }
             if let Some(archive) = &archive
                 && let Some(journal) = writer.take_archive_journal(archive_bytes)

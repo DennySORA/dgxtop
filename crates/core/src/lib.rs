@@ -37,6 +37,7 @@ pub mod quality;
 pub mod sampling;
 pub mod shared_text;
 pub mod text;
+pub mod tiers;
 pub mod view;
 pub mod wire;
 

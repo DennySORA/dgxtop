@@ -236,6 +236,10 @@ impl ControlCore {
     fn periodic(&mut self, now_ns: u64) {
         if now_ns >= self.timers.next_maintain_ns {
             self.timers.next_maintain_ns = now_ns.saturating_add(MAINTAIN_NS);
+            if self.ingestion.retry_sampling().is_err() {
+                self.diagnostics
+                    .increment(names::QUEUE_DROPPED_TOTAL, "store_sampling_busy", 1);
+            }
             if self.ingestion.request_maintenance().is_err() {
                 self.diagnostics
                     .increment(names::QUEUE_DROPPED_TOTAL, "store_maintenance_busy", 1);

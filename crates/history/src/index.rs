@@ -100,10 +100,6 @@ impl HistoryWriter {
         self.write().record_external_gap(gap)
     }
 
-    pub(crate) fn shed_raw(&self, now_ns: u64, keep_ns: u64) -> HistoryReport {
-        self.write().shed_raw(now_ns, keep_ns)
-    }
-
     /// Called only from the recorder's first boot-to-UTC pairing (the
     /// recorder owns this writer), so minutes are never finished before
     /// the wall clock can place them.

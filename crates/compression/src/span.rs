@@ -5,9 +5,8 @@
 //! mean, peak and energy are exact merges of what the sizes hold, and stay
 //! right after the finer sizes (or the archive's minutes) let old time go.
 
-use dgxtop_core::process_history::Tier;
+use dgxtop_core::tiers::Tier;
 
-use crate::bars::step_of;
 use crate::bucket::Bucket;
 use crate::series::TieredSeries;
 
@@ -15,24 +14,37 @@ use crate::series::TieredSeries;
 /// takes the coarsest size whose bucket starts there, ends by `end` and is
 /// still held; time no size holds at a minute's start is skipped to the
 /// next minute (a window's start before the finest size's reach is cut to
-/// the next boundary a coarser size holds).
-pub fn merged_between<B: Bucket>(series: &TieredSeries<B>, (start, end): (i64, i64)) -> B {
+/// the next boundary a coarser size holds). The `extra` minutes (ones the
+/// series was not given yet) whose minute starts in the window join it.
+pub fn merged_between<'a, B: Bucket + 'a>(
+    series: &TieredSeries<B>,
+    (start, end): (i64, i64),
+    extra: impl IntoIterator<Item = &'a B>,
+) -> B {
     let shift = series.shift_ns();
     let mut merged = B::new(start);
     let mut cursor = start;
     while cursor < end {
         let fitting = Tier::ALL.into_iter().rev().find(|tier| {
             tier.align(cursor, shift) == cursor
-                && cursor.saturating_add(step_of(*tier)) <= end
+                && cursor.saturating_add(tier.step_i64()) <= end
                 && series.holds(*tier, cursor)
         });
         let Some(tier) = fitting else {
             let minute = Tier::OneMinute;
-            cursor = minute.align(cursor, shift).saturating_add(step_of(minute));
+            cursor = minute
+                .align(cursor, shift)
+                .saturating_add(minute.step_i64());
             continue;
         };
         take_bucket_at(series, tier, cursor, &mut merged);
-        cursor = cursor.saturating_add(step_of(tier));
+        cursor = cursor.saturating_add(tier.step_i64());
+    }
+    for minute in extra {
+        let at = Tier::OneMinute.align(minute.start_utc_ns(), shift);
+        if at >= start && at < end {
+            merged.merge(minute);
+        }
     }
     merged
 }
@@ -128,7 +140,7 @@ mod tests {
         let end = MIDNIGHT + minutes * MINUTE;
         // A day back, on a five-minute boundary the five minutes still hold.
         let start = end - 24 * HOUR - 2 * MINUTE;
-        let merged = merged_between(&series, (start, end));
+        let merged = merged_between(&series, (start, end), std::iter::empty());
         assert_eq!(merged.start_utc_ns, start);
         let from = (start - MIDNIGHT) / MINUTE;
         assert_same(&merged, &brute_force(from, minutes));
@@ -142,17 +154,38 @@ mod tests {
         let series = fed(minutes, 0);
         let end = MIDNIGHT + minutes * MINUTE;
         let start = end - 24 * HOUR - 3 * MINUTE;
-        let merged = merged_between(&series, (start, end));
+        let merged = merged_between(&series, (start, end), std::iter::empty());
         let from = (start - MIDNIGHT) / MINUTE;
         // The five minutes reach back to minutes - 1500; the start's
         // minute is not on their boundary, so the window begins at the
         // next one.
         let next_five = (from + 4) / 5 * 5;
         assert_same(&merged, &brute_force(next_five, minutes));
-        let wide = merged_between(&series, (MIDNIGHT - 10 * HOUR, end + HOUR));
+        let wide = merged_between(
+            &series,
+            (MIDNIGHT - 10 * HOUR, end + HOUR),
+            std::iter::empty(),
+        );
         assert_eq!(wide.covered_ns, brute_force(0, minutes).covered_ns);
-        let empty = merged_between(&TieredSeries::<OverviewBucket>::new(0), (0, HOUR));
+        let empty = merged_between(
+            &TieredSeries::<OverviewBucket>::new(0),
+            (0, HOUR),
+            std::iter::empty(),
+        );
         assert!(empty.is_empty());
+    }
+
+    /// Minutes the series was not given yet join the window they start in,
+    /// once each; the ones outside it are left out.
+    #[test]
+    fn extra_minutes_join_the_window_they_start_in() {
+        let series = fed(60, 0);
+        let window = (MIDNIGHT, MIDNIGHT + 62 * MINUTE);
+        let extra = [minute_bucket(60), minute_bucket(61), minute_bucket(62)];
+        let merged = merged_between(&series, window, extra.iter());
+        assert_same(&merged, &brute_force(0, 62));
+        let none = merged_between(&TieredSeries::new(0), window, extra.iter());
+        assert_same(&none, &brute_force(60, 62));
     }
 
     /// Windows follow the local clock: at UTC+8 the hour buckets start on
@@ -163,7 +196,11 @@ mod tests {
         let minutes = 10 * 60;
         let series = fed(minutes, shift);
         let local_hour = Tier::OneHour.align(MIDNIGHT + 4 * HOUR, shift);
-        let merged = merged_between(&series, (local_hour, local_hour + 2 * HOUR));
+        let merged = merged_between(
+            &series,
+            (local_hour, local_hour + 2 * HOUR),
+            std::iter::empty(),
+        );
         let from = (local_hour - MIDNIGHT) / MINUTE;
         assert_same(&merged, &brute_force(from, from + 120));
     }

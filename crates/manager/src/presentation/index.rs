@@ -10,15 +10,15 @@ use dgxtop_core::identity::{BootId, EntityId, HostId, MetricId, MetricKey, Scope
 
 /// Committed samples ordered by metric, then entity, then scope.
 #[derive(Clone, Copy)]
-pub(crate) struct SampleIndex<'a> {
+pub(crate) struct SnapshotLookup<'a> {
     shared: &'a canonical::SampleIndex,
 }
 
-fn entries(slice: &[Arc<SnapshotEntry>]) -> Vec<&SnapshotEntry> {
-    slice.iter().map(Arc::as_ref).collect()
+fn entries(slice: &[Arc<SnapshotEntry>]) -> impl Iterator<Item = &SnapshotEntry> {
+    slice.iter().map(Arc::as_ref)
 }
 
-impl<'a> SampleIndex<'a> {
+impl<'a> SnapshotLookup<'a> {
     pub(crate) fn new(snapshot: &'a ImmutableSnapshot) -> Self {
         Self {
             shared: snapshot.index(),
@@ -40,11 +40,18 @@ impl<'a> SampleIndex<'a> {
         self.shared.find(metric, entity, preferred_scope)
     }
 
-    pub(crate) fn entries_of_metric(&self, metric: &str) -> Vec<&'a SnapshotEntry> {
+    pub(crate) fn entries_of_metric(
+        &self,
+        metric: &str,
+    ) -> impl Iterator<Item = &'a SnapshotEntry> + use<'a> {
         entries(self.shared.entries_of_metric(metric))
     }
 
-    pub(crate) fn entries_of_entity(&self, metric: &str, entity: &str) -> Vec<&'a SnapshotEntry> {
+    pub(crate) fn entries_of_entity(
+        &self,
+        metric: &str,
+        entity: &str,
+    ) -> impl Iterator<Item = &'a SnapshotEntry> + use<'a> {
         entries(self.shared.entries_of_entity(metric, entity))
     }
 
@@ -80,7 +87,7 @@ pub(crate) struct KeyResolver {
 impl KeyResolver {
     /// Committed samples name the live host/boot best; the catalog is the
     /// fallback before the first commit.
-    pub(crate) fn new(catalog: &CatalogSnapshot, index: &SampleIndex<'_>) -> Self {
+    pub(crate) fn new(catalog: &CatalogSnapshot, index: &SnapshotLookup<'_>) -> Self {
         let from_samples = index
             .any_key()
             .map(|key| (key.host_id.clone(), key.boot_id.clone()));
@@ -136,15 +143,15 @@ mod tests {
     #[test]
     fn lookups_by_coordinates_and_metric_ranges() {
         let fixture = fixture();
-        let index = SampleIndex::new(&fixture.snapshot);
+        let index = SnapshotLookup::new(&fixture.snapshot);
         assert!(index.get("cpu.utilization.total", "cpu", "host").is_some());
         assert!(
             index
                 .get("cpu.utilization.total", "cpu", "core:0")
                 .is_none()
         );
-        assert_eq!(index.entries_of_metric("cpu.utilization.total").len(), 3);
-        assert!(index.entries_of_metric("memory.used").is_empty());
+        assert_eq!(index.entries_of_metric("cpu.utilization.total").count(), 3);
+        assert!(index.entries_of_metric("memory.used").next().is_none());
         let fan = index.find("gpu.fan.speed", "gpu:GPU-a", "gpu").unwrap();
         assert_eq!(fan.sample.key.scope.as_str(), "fan:0");
         let cores = index.entities_reporting(&["cpu.utilization.total"], "cpu.core.");
@@ -158,7 +165,7 @@ mod tests {
         let fixture = fixture();
         let frame = MetricReaderProbe::of(&fixture);
         let history_tab = MetricReaderProbe::of(&fixture);
-        let run_inputs = SampleIndex::new(&fixture.snapshot);
+        let run_inputs = SnapshotLookup::new(&fixture.snapshot);
         assert!(std::ptr::eq(frame, history_tab));
         assert!(std::ptr::eq(frame, run_inputs.shared));
         assert!(std::ptr::eq(frame, fixture.snapshot.index()));
@@ -182,13 +189,13 @@ mod tests {
     #[test]
     fn key_resolver_prefers_samples_then_catalog() {
         let fixture = fixture();
-        let index = SampleIndex::new(&fixture.snapshot);
+        let index = SnapshotLookup::new(&fixture.snapshot);
         let resolver = KeyResolver::new(&fixture.catalog, &index);
         let key = resolver.key("memory.used", "memory", "system").unwrap();
         assert_eq!(key.host_id.as_str(), "test-host");
 
         let empty = Fixture::new();
-        let empty_index = SampleIndex::new(&empty.snapshot);
+        let empty_index = SnapshotLookup::new(&empty.snapshot);
         let mut catalog = CatalogSnapshot::default();
         assert!(
             KeyResolver::new(&catalog, &empty_index)

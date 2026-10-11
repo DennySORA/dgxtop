@@ -131,6 +131,63 @@ class CheckValidationTests(unittest.TestCase):
         self.assertNotIn("hung_host_is_restarted", passing, "a failed run is not a pass")
         self.assertNotIn("suffix_with_more_text", passing, "only the duration suffix is accepted")
 
+    def workspace(self) -> Path:
+        """A two-crate workspace: a library with modules, a crate with test targets."""
+        root = self.root / "workspace"
+        library = root / "crates/core"
+        (library / "src/budget").mkdir(parents=True)
+        (library / "Cargo.toml").write_text('[package]\nname = "dgxtop-core"\n')
+        (library / "src/lib.rs").write_text("pub mod budget;\npub mod clock;\n#[cfg(test)]\nmod tests {}\n")
+        (library / "src/budget/mod.rs").write_text("")
+        (library / "src/clock.rs").write_text("")
+        root_crate = root / "crates/dgxtop"
+        (root_crate / "tests").mkdir(parents=True)
+        (root_crate / "src").mkdir()
+        (root_crate / "src/lib.rs").write_text("")
+        (root_crate / "Cargo.toml").write_text(
+            '[package]\nname = "dgxtop"\nautotests = false\n\n[[test]]\nname = "store_hot_commit"\npath = "x.rs"\n'
+        )
+        (root_crate / "tests/ignored.rs").write_text("")
+        store = root / "crates/store"
+        (store / "tests").mkdir(parents=True)
+        (store / "Cargo.toml").write_text('[package]\nname = "dgxtop-store"\n')
+        (store / "tests/store_persist_config.rs").write_text("")
+        return root
+
+    def test_cited_paths_resolve_in_their_crates(self) -> None:
+        crates = check_validation.workspace_crates(self.workspace())
+        resolves = [
+            "dgxtop-core::budget::tests::a",
+            "dgxtop-core::clock::tests::{a, b}",
+            "dgxtop-core::tests::a",
+            "dgxtop/store_hot_commit::a",
+            "dgxtop-store/store_persist_config::a",
+            "action_disposable::at10::a",
+            "scripts/test_tools.py::ToolsTests::test_a",
+        ]
+        for identifier in resolves:
+            self.assertIsNone(check_validation.unresolved_path(identifier, crates), identifier)
+        self.assertEqual(
+            check_validation.unresolved_path("dgxtop-store/store_hot_commit::a", crates),
+            "dgxtop-store has no test target store_hot_commit",
+        )
+        self.assertEqual(
+            check_validation.unresolved_path("dgxtop/ignored::a", crates),
+            "dgxtop has no test target ignored",
+            "autotests = false: only declared targets",
+        )
+        self.assertEqual(
+            check_validation.unresolved_path("dgxtop-core::query::tests::a", crates),
+            "dgxtop-core has no module query",
+        )
+
+    def test_a_moved_test_is_reported_in_any_section(self) -> None:
+        self.tests["AT17"] = "`dgxtop-core::query::tests::moved`"
+        document = self.write()
+        problems = "\n".join(check_validation.check(document, self.evidence, self.workspace()))
+        self.assertIn("AT17: dgxtop-core::query::tests::moved does not resolve (dgxtop-core has no module query)", problems)
+        self.assertNotIn("does not resolve", "\n".join(check_validation.check(document, self.evidence)))
+
     def test_every_case_needs_a_section(self) -> None:
         document = self.write()
         document.write_text(document.read_text().replace("### AT17 — title", "### Something else"))

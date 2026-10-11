@@ -1007,8 +1007,8 @@ pub(crate) fn view_model(view: ViewKind, frame_revision: u64) -> ViewModel {
             filter: String::new(),
             sort: SortKey::GpuMemory,
             ascending: false,
-            overview_bar: dgxtop_core::process_history::BarSize::OneMinute,
-            process_bar: dgxtop_core::process_history::BarSize::Auto,
+            overview_bar: dgxtop_core::tiers::BarSize::OneMinute,
+            process_bar: dgxtop_core::tiers::BarSize::Auto,
         },
         modules: full_modules(false),
         banners: Vec::new(),
@@ -1025,7 +1025,8 @@ pub(crate) const RUNS_UTC: i64 = 1_791_072_000_000_000_000;
 /// running for 2 h in color 0.
 pub(crate) fn process_history_view() -> dgxtop_core::view::ProcessHistoryView {
     use dgxtop_core::action::Signal;
-    use dgxtop_core::process_history::{BarSize, EndCause, RunDetails, RunEnd, RunInfo, RunMetric};
+    use dgxtop_core::process_history::{EndCause, RunDetails, RunEnd, RunInfo, RunMetric};
+    use dgxtop_core::tiers::BarSize;
     use dgxtop_core::view::{
         HistoryPointView, ProcessHistoryView, RunChartView, RunDetailView, RunRowView,
     };

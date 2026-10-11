@@ -109,12 +109,6 @@ fn at05_stale_epoch_rejects_the_whole_batch_and_changes_nothing() {
     assert_eq!(ack.committed_revision, 1);
     assert_eq!(ack.state_revision, 1);
 
-    // An announced epoch makes guards expecting another epoch stale too.
-    harness.writer.set_epoch(3);
-    harness.epoch = 2;
-    let ack = harness.commit(vec![gauge(&key, 98.0, 3 * SECOND)], vec![], 3 * SECOND);
-    assert_eq!(ack.status, AckStatus::RejectedStaleEpoch);
-
     let after = harness.snapshots.latest();
     assert!(
         Arc::ptr_eq(&before, &after),
@@ -122,9 +116,9 @@ fn at05_stale_epoch_rejects_the_whole_batch_and_changes_nothing() {
     );
     assert_eq!(raw_point_count(&harness, &key, 10 * SECOND), history_before);
     assert_eq!(after.collector_state(&harness.collector).0, 1);
-    assert_eq!(harness.snapshots.counters().rejected_batches_total, 2);
+    assert_eq!(harness.snapshots.counters().rejected_batches_total, 1);
 
-    // Once the batch uses the announced epoch it commits; older epochs then stay stale.
+    // A newer epoch commits; older epochs then stay stale.
     harness.epoch = 3;
     assert_eq!(
         harness
@@ -133,7 +127,6 @@ fn at05_stale_epoch_rejects_the_whole_batch_and_changes_nothing() {
         AckStatus::Committed
     );
     harness.epoch = 2;
-    harness.writer.set_epoch(2);
     let ack = harness.commit(vec![gauge(&key, 52.0, 5 * SECOND)], vec![], 5 * SECOND);
     assert_eq!(ack.status, AckStatus::RejectedStaleEpoch);
 }

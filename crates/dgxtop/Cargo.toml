@@ -26,7 +26,6 @@ dgxtop-adapters.workspace = true
 dgxtop-collectors.workspace = true
 dgxtop-state.workspace = true
 dgxtop-history.workspace = true
-dgxtop-compression.workspace = true
 dgxtop-store.workspace = true
 dgxtop-manager.workspace = true
 dgxtop-ui.workspace = true

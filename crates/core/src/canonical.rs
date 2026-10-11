@@ -602,7 +602,8 @@ pub struct CollectionBatch {
     pub canonical: Vec<CanonicalValue>,
     pub explanations: Vec<Explanation>,
     pub counter_intervals: Vec<CounterInterval>,
-    /// Raw batches consumed (shared, not copied) for candidate retention.
+    /// Raw batches consumed (shared, not copied): the state reads their
+    /// source periods and drops them at commit (D-84).
     pub inputs: Vec<Arc<IngressBatch>>,
     pub process_table: Option<ProcessTable>,
     /// Replacement state; becomes the base only after a successful Ack.

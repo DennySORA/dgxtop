@@ -2,9 +2,9 @@
 //! actor, and what it waits for.
 
 use dgxtop_core::ports::ProcessHistoryInput;
-use dgxtop_core::process_history::BarSize;
 use dgxtop_core::process_model::{ProcessHistoryModel, RunRequest, WriteProgress};
 use dgxtop_core::testing::{gpu_process, process_table};
+use dgxtop_core::tiers::BarSize;
 
 use super::*;
 

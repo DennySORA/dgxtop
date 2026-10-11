@@ -197,3 +197,107 @@ pub(crate) fn gaps_bytes(gaps: &[GapRecord]) -> u64 {
     let heap: usize = gaps.iter().map(|gap| gap.reason.capacity()).sum();
     bytes(gaps.len().saturating_mul(size_of::<GapRecord>()) + heap).saturating_add(ARC_HEADER_BYTES)
 }
+
+#[cfg(test)]
+mod tests {
+    use dgxtop_core::canonical::CollectorState;
+    use dgxtop_core::identity::CollectorId;
+    use dgxtop_core::metric::{CanonicalUnit, Scalar, ids};
+    use dgxtop_core::quality::{Freshness, Quality, SampleKind, SelectionState};
+    use dgxtop_core::testing::{metric_key, source_id};
+
+    use super::*;
+
+    fn value(entity: &str, reasons: usize) -> CanonicalValue {
+        CanonicalValue {
+            key: metric_key(entity, ids::GPU_TEMPERATURE, "gpu"),
+            cycle_id: 1,
+            source_id: Some(source_id("nvml:0:temp")),
+            source_generation: Some(1),
+            unit: CanonicalUnit::DegC,
+            value: Some(Scalar::from_f64(50.0).unwrap()),
+            sample_kind: SampleKind::Measured,
+            selection_state: SelectionState::Selected,
+            quality: Quality::Verified,
+            freshness: Freshness::Fresh,
+            measurement_freshness: Freshness::Unknown,
+            observed_boot_ns: None,
+            read_finished_boot_ns: 1,
+            policy_revision: 1,
+            candidate_source_ids: vec![source_id("nvml:0:temp")],
+            reason_codes: vec!["reason".to_owned(); reasons],
+            eligible_for_history: true,
+        }
+    }
+
+    fn batch(values: Vec<CanonicalValue>) -> CollectionBatch {
+        CollectionBatch {
+            batch_id: uuid::Uuid::nil(),
+            collector_id: CollectorId::new("gpu").unwrap(),
+            cycle_id: 1,
+            epoch: 1,
+            config_revision: 1,
+            catalog_revision: 1,
+            policy_revision: 1,
+            state_base_revision: 0,
+            canonical: values,
+            explanations: Vec::new(),
+            counter_intervals: Vec::new(),
+            inputs: Vec::new(),
+            process_table: None,
+            next_state: CollectorState::default(),
+            failures: Vec::new(),
+            events: Vec::new(),
+        }
+    }
+
+    fn gap(reason: &str) -> GapRecord {
+        GapRecord {
+            key: None,
+            adapter_id: None,
+            start_boot_ns: 0,
+            end_boot_ns: 1,
+            reason: reason.to_owned(),
+            affected_count: 1,
+        }
+    }
+
+    /// Admission reserves before building, so an estimate never falls
+    /// below the structure's own size and grows with what it holds.
+    #[test]
+    fn estimates_cover_their_structures_and_grow_with_their_contents() {
+        let empty = domain_upper_bound(None, &batch(Vec::new()));
+        assert!(empty >= bytes(size_of::<DomainSnapshot>()));
+        let one = domain_upper_bound(None, &batch(vec![value("gpu:0", 0)]));
+        let two = domain_upper_bound(None, &batch(vec![value("gpu:0", 0), value("gpu:1", 0)]));
+        assert!(empty < one && one < two);
+        assert!(one >= empty + bytes(size_of::<SnapshotEntry>()));
+        let reasons = domain_upper_bound(None, &batch(vec![value("gpu:0", 4)]));
+        assert!(reasons > one, "reason codes are counted");
+        let longer = domain_upper_bound(None, &batch(vec![value("gpu:0-with-a-long-id", 0)]));
+        assert!(longer > one, "key strings are counted");
+        let on_previous = domain_upper_bound(Some(10_000), &batch(vec![value("gpu:0", 0)]));
+        assert_eq!(
+            on_previous,
+            10_000 + (one - empty),
+            "the previous domain is the base"
+        );
+        assert!(domain_bytes(&DomainSnapshot::default()) >= bytes(size_of::<DomainSnapshot>()));
+    }
+
+    #[test]
+    fn frame_state_and_gap_estimates_are_monotonic() {
+        assert!(frame_bytes(0, 0) >= bytes(size_of::<ImmutableSnapshot>()));
+        assert!(frame_bytes(1, 0) > frame_bytes(0, 0));
+        assert!(frame_bytes(1, 1) > frame_bytes(1, 0));
+        assert_eq!(frame_bytes(usize::MAX, usize::MAX), u64::MAX, "saturates");
+        let state = CollectorState::default();
+        assert!(collector_state_bytes(&state) >= bytes(size_of::<CollectorState>()));
+        assert!(gaps_bytes(&[]) >= ARC_HEADER_BYTES);
+        assert!(gaps_bytes(&[gap("stale")]) > gaps_bytes(&[]));
+        assert!(gaps_bytes(&[gap("a much longer reason")]) > gaps_bytes(&[gap("stale")]));
+        assert!(gaps_bytes(&[gap("stale"), gap("stale")]) > gaps_bytes(&[gap("stale")]));
+        let table = ProcessTable::default();
+        assert!(process_table_bytes(&table) >= bytes(size_of::<ProcessTable>()));
+    }
+}

@@ -39,7 +39,7 @@ use dgxtop_core::overview_history::{
     OverviewAnswer, OverviewBars, OverviewBucket, OverviewRequest,
 };
 use dgxtop_core::ports::{CancelFlag, Dispatch, DispatchError, HistoryJob};
-use dgxtop_core::process_history::{BarSize, Tier};
+use dgxtop_core::tiers::{BarSize, Tier};
 use dgxtop_core::view::{
     DiskHistory, HistoryChartKind, HistoryChartView, HistoryPointView, HistoryView,
     HistoryWindowSummary, SessionState, history_plot_columns,
@@ -128,7 +128,7 @@ impl BarGrid {
     }
 
     fn step_ns(self) -> i64 {
-        i64::try_from(self.tier().step_ns()).unwrap_or(i64::MAX)
+        self.tier().step_i64()
     }
 
     fn span_ns(self) -> u64 {
@@ -139,12 +139,8 @@ impl BarGrid {
 
     /// `[start, end)` at `utc_ns`: the bars ending with the one holding it.
     fn window_at(self, utc_ns: i64, shift_ns: i64) -> (i64, i64) {
-        let end = self
-            .tier()
-            .align(utc_ns, shift_ns)
-            .saturating_add(self.step_ns());
-        let span = i64::try_from(self.span_ns()).unwrap_or(i64::MAX);
-        (end.saturating_sub(span), end)
+        self.tier()
+            .window_ending_at(utc_ns, shift_ns, i64::from(self.columns))
     }
 
     fn refresh_ms(self) -> u64 {

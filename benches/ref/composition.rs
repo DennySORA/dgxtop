@@ -24,6 +24,7 @@ use dgxtop::audit_unavailable::UnavailableAudit;
 use dgxtop::control_ops::{run_action_op, run_audit_op};
 use dgxtop::live_store::LiveStore;
 use dgxtop::startup::{real_filesystem, value_origins};
+use dgxtop::store_actor::run_store_job;
 use dgxtop::version::BuildInfo;
 use dgxtop_collectors::process::ProcessProbeDeriver;
 use dgxtop_collectors::registry::default_collectors;
@@ -42,7 +43,7 @@ use dgxtop_core::overview_history::{OverviewAnswer, OverviewRequest};
 use dgxtop_core::ports::{
     AuditRepository, CancelFlag, Collector, ConfigJob, ConfigRepository, ControlCompletion,
     Dispatch, DispatchError, HistoryJob, IngestionCompletion, LogLevel, Logger, OverviewReader,
-    ProcessActionPort, ProcessHistoryInput, ProcessHistoryReader, StoreJob, StoreWriter,
+    ProcessActionPort, ProcessHistoryInput, ProcessHistoryReader, StoreJob,
 };
 use dgxtop_core::quality::Namespace;
 use dgxtop_history::{ProcessHistory, ProcessHistoryPorts, ProcessHistorySettings};
@@ -475,17 +476,14 @@ impl Wiring {
             "hot-store",
             64,
             writer,
-            move |writer: &mut StateWriter, job: StoreJob| match job {
-                StoreJob::Commit { batch, guard } => {
-                    let reads = reads_of(&batch);
-                    let ack = writer.commit_collection(*batch, &guard, clock.now_boot_ns());
+            move |writer: &mut StateWriter, job: StoreJob| {
+                let reads = match &job {
+                    StoreJob::Commit { batch, .. } => reads_of(batch),
+                    _ => Vec::new(),
+                };
+                if let Some(ack) = run_store_job(writer, job, clock.as_ref()) {
                     probes.on_commit(&reads, &ack);
                     completions.ingestion(IngestionCompletion::Committed(ack));
-                }
-                StoreJob::Gap(gap) => writer.record_gap(gap),
-                StoreJob::Maintain => {
-                    writer.observe_wall_clock(clock.now_boot_ns(), clock.now_utc_ns());
-                    writer.maintain(clock.now_boot_ns());
                 }
             },
         )

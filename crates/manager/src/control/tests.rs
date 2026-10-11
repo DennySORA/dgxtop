@@ -283,6 +283,70 @@ fn at22_at08_late_reply_of_the_old_epoch_is_dropped_after_a_config_change() {
     assert_eq!((memory.configured_ms, memory.effective_ms), (2000, 2000));
 }
 
+/// Applies a durable `SetSamplingInterval` of `interval_ms`.
+fn apply_interval(harness: &mut Harness, interval_ms: u32) {
+    let request = harness
+        .submit(CommandBody::SetSamplingInterval {
+            interval_ms,
+            expected_config_revision: 1,
+        })
+        .unwrap();
+    harness.settle();
+    harness.ports.config.take();
+    harness.control(ControlCompletion::Config {
+        request_id: request,
+        result: Ok(PersistReceipt {
+            revision: 2,
+            sha256: "0".repeat(64),
+            path: "/x".into(),
+        }),
+    });
+    harness.settle();
+    assert!(harness.result_for(request).code.is_ok());
+}
+
+/// The sampling configurations the store was told to apply.
+fn applied_samplings(harness: &Harness) -> Vec<u32> {
+    harness
+        .ports
+        .store
+        .take()
+        .into_iter()
+        .filter_map(|job| match job {
+            StoreJob::ApplySampling(sampling) => Some(sampling.interval_ms),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The state keeps its own sampling timing (stale windows, the history's
+/// finalize grace), so a durable interval change must reach it.
+#[test]
+fn a_sampling_change_is_sent_to_the_state() {
+    let mut harness = ready_harness(HarnessOptions::default());
+    harness.ports.store.take();
+    apply_interval(&mut harness, 2000);
+    assert_eq!(applied_samplings(&harness), vec![2000]);
+}
+
+/// A busy store must not lose the change: the state would keep the old
+/// timing for the rest of the run.
+#[test]
+fn a_sampling_change_refused_by_a_busy_store_is_sent_again() {
+    let mut harness = ready_harness(HarnessOptions::default());
+    harness.ports.store.take();
+    harness.ports.store.set_busy(true);
+    apply_interval(&mut harness, 2000);
+    assert!(applied_samplings(&harness).is_empty());
+    harness.ports.store.set_busy(false);
+    harness.ports.clock.advance_ms(1_100);
+    harness.settle();
+    assert_eq!(applied_samplings(&harness), vec![2000]);
+    harness.ports.clock.advance_ms(1_100);
+    harness.settle();
+    assert!(applied_samplings(&harness).is_empty(), "sent once");
+}
+
 #[test]
 fn at22_host_restart_drops_the_request_records_a_gap_and_rediscovers() {
     let mut harness = ready_harness(HarnessOptions::default());

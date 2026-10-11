@@ -7,10 +7,10 @@ use dgxtop_core::view::{MetricCell, Trend};
 
 use super::TrendBook;
 use super::cell::{build_metric_cell, missing_cell};
-use super::index::{KeyResolver, SampleIndex};
+use super::index::{KeyResolver, SnapshotLookup};
 
 pub(crate) struct MetricReader<'a> {
-    index: SampleIndex<'a>,
+    index: SnapshotLookup<'a>,
     keys: KeyResolver,
     snapshot: &'a ImmutableSnapshot,
     catalog: &'a CatalogSnapshot,
@@ -25,7 +25,7 @@ impl<'a> MetricReader<'a> {
         trends: &'a TrendBook,
         now_boot_ns: u64,
     ) -> Self {
-        let index = SampleIndex::new(snapshot);
+        let index = SnapshotLookup::new(snapshot);
         let keys = KeyResolver::new(catalog, &index);
         Self {
             index,
@@ -37,7 +37,7 @@ impl<'a> MetricReader<'a> {
         }
     }
 
-    pub(crate) fn index(&self) -> &SampleIndex<'a> {
+    pub(crate) fn index(&self) -> &SnapshotLookup<'a> {
         &self.index
     }
 

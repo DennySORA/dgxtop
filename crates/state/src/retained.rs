@@ -1,6 +1,6 @@
 //! Accounting of published `Arc` allocations by liveness.
 //!
-//! The store keeps only the latest snapshot, but a slow reader may still
+//! The state keeps only the latest snapshot, but a slow reader may still
 //! hold an older one. Each published allocation is tracked through a `Weak`
 //! next to the permit reserved before it was built; the permit is released
 //! only once no reader holds the allocation any more, so retired snapshots
@@ -33,11 +33,9 @@ impl RetainedAllocations {
     }
 
     /// Releases the permits of allocations nobody holds any more.
-    pub(crate) fn sweep(&mut self) -> usize {
-        let before = self.tracked.len();
+    pub(crate) fn sweep(&mut self) {
         self.tracked
             .retain(|tracked| tracked.allocation.strong_count() > 0);
-        before - self.tracked.len()
     }
 
     #[cfg(test)]
@@ -62,10 +60,11 @@ mod tests {
         );
         let reader = Arc::clone(&snapshot);
         drop(snapshot);
-        assert_eq!(retained.sweep(), 0);
+        retained.sweep();
+        assert_eq!(retained.live(), 1);
         assert_eq!(ledger.used(Partition::HotState), 100);
         drop(reader);
-        assert_eq!(retained.sweep(), 1);
+        retained.sweep();
         assert_eq!(ledger.used(Partition::HotState), 0);
         assert_eq!(retained.live(), 0);
     }

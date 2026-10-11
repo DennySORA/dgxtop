@@ -6,6 +6,7 @@
 
 use dgxtop_core::overview_history::OverviewBucket;
 use dgxtop_core::process_history::RunBucket;
+use dgxtop_core::tiers::Tier;
 
 /// A span of time's merged samples, of any size.
 pub trait Bucket: Copy {
@@ -61,6 +62,26 @@ pub(crate) fn merged_at<B: Bucket>(start_utc_ns: i64, bucket: &B) -> B {
     let mut fresh = B::new(start_utc_ns);
     fresh.merge(bucket);
     fresh
+}
+
+/// Merges each of `pieces` into the bucket of `tier` holding it (its
+/// boundaries moved by `shift_ns`), keeping `groups` in time order; a piece
+/// whose bucket is not there yet starts it. The one regrouping every
+/// coarser view of finer buckets uses: resuming, backfilling and bars.
+pub(crate) fn regroup_into<'a, B: Bucket + 'a>(
+    groups: &mut Vec<B>,
+    tier: Tier,
+    shift_ns: i64,
+    pieces: impl IntoIterator<Item = &'a B>,
+) {
+    for piece in pieces {
+        let start = tier.align(piece.start_utc_ns(), shift_ns);
+        let position = groups.partition_point(|group| group.start_utc_ns() < start);
+        match groups.get_mut(position) {
+            Some(group) if group.start_utc_ns() == start => group.merge(piece),
+            _ => groups.insert(position, merged_at(start, piece)),
+        }
+    }
 }
 
 /// A test bucket that only counts samples, to show the algorithm needs

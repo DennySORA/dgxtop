@@ -337,7 +337,6 @@ fn fan_cells(reader: &MetricReader<'_>, entity_id: &str) -> Vec<LabeledCell> {
     let mut fans: Vec<(u32, LabeledCell)> = reader
         .index()
         .entries_of_entity(ids::GPU_FAN_SPEED, entity_id)
-        .into_iter()
         .filter_map(|entry| {
             let fan: u32 = entry
                 .sample
@@ -399,7 +398,7 @@ fn unavailable_reason(no_cards: bool, environment: GpuEnvironment<'_>) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presentation::index::SampleIndex;
+    use crate::presentation::index::SnapshotLookup;
     use crate::presentation::testkit::{
         Fixture, NOW, candidate, entity_record, explanation_for, host_status, sample,
     };
@@ -434,7 +433,7 @@ mod tests {
         environment: GpuEnvironment<'_>,
     ) -> GpuView {
         let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
-        let index = SampleIndex::new(&fixture.snapshot);
+        let index = SnapshotLookup::new(&fixture.snapshot);
         let directory = GpuDirectory::new(&fixture.catalog, &index);
         let requested = requested.map(|id| EntityId::new(id).unwrap());
         build_gpu_view(

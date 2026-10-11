@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use dgxtop_core::commands::{CommandBody, SortKey, ViewKind};
 use dgxtop_core::identity::{EntityId, ProcessKey};
-use dgxtop_core::process_history::BarSize;
+use dgxtop_core::tiers::BarSize;
 use dgxtop_core::view::{SessionState, ViewModel};
 
 /// A sent draft no projection has reflected is dropped after this long.

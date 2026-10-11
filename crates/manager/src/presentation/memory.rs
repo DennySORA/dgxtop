@@ -168,7 +168,7 @@ fn summed(cells: &[MetricCell]) -> Option<Scalar> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presentation::index::SampleIndex;
+    use crate::presentation::index::SnapshotLookup;
     use crate::presentation::testkit::{
         Fixture, NOW, entity_record, gpu_link, process_key, process_row, sample,
     };
@@ -198,7 +198,7 @@ mod tests {
 
     fn resident(fixture: &Fixture) -> Option<MetricCell> {
         let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
-        let index = SampleIndex::new(&fixture.snapshot);
+        let index = SnapshotLookup::new(&fixture.snapshot);
         let directory = GpuDirectory::new(&fixture.catalog, &index);
         build_memory_view(&reader, &directory, &fixture.processes.tracked, 30).gpu_resident
     }
@@ -243,7 +243,7 @@ mod tests {
         fixture.trends.push(&used, Some(8.0));
         fixture.trends.push(&share, Some(6.0));
         let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
-        let index = SampleIndex::new(&fixture.snapshot);
+        let index = SnapshotLookup::new(&fixture.snapshot);
         let directory = GpuDirectory::new(&fixture.catalog, &index);
         let view = build_memory_view(&reader, &directory, &fixture.processes.tracked, 30);
         assert_eq!(view.used_trend.points, vec![Some(8.0)]);
@@ -251,7 +251,7 @@ mod tests {
         // Without a unified GPU the chart has no share.
         let plain = Fixture::new();
         let reader = MetricReader::new(&plain.snapshot, &plain.catalog, &plain.trends, NOW);
-        let index = SampleIndex::new(&plain.snapshot);
+        let index = SnapshotLookup::new(&plain.snapshot);
         let directory = GpuDirectory::new(&plain.catalog, &index);
         assert!(
             build_memory_view(&reader, &directory, &plain.processes.tracked, 30)
@@ -306,7 +306,7 @@ mod tests {
         let part = process_share_key(&used, &process_key(1, 1000)).unwrap();
         fixture.trends.push(&part, Some(6.0));
         let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
-        let index = SampleIndex::new(&fixture.snapshot);
+        let index = SnapshotLookup::new(&fixture.snapshot);
         let directory = GpuDirectory::new(&fixture.catalog, &index);
         let view = build_memory_view(&reader, &directory, &fixture.processes.tracked, 30);
         let shares: Vec<(u8, &str, u64)> = view
@@ -361,7 +361,7 @@ mod tests {
                 .reason("TIMEOUT"),
         );
         let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
-        let index = SampleIndex::new(&fixture.snapshot);
+        let index = SnapshotLookup::new(&fixture.snapshot);
         let directory = GpuDirectory::new(&fixture.catalog, &index);
         let view = build_memory_view(&reader, &directory, &fixture.processes.tracked, 30);
         assert_eq!(view.total.value.unwrap().as_u64(), Some(128 << 30));

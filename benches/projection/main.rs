@@ -467,8 +467,8 @@ impl StaticInputs {
             },
             sort: SortKey::GpuMemory,
             ascending: false,
-            overview_bar: dgxtop_core::process_history::BarSize::OneMinute,
-            process_bar: dgxtop_core::process_history::BarSize::Auto,
+            overview_bar: dgxtop_core::tiers::BarSize::OneMinute,
+            process_bar: dgxtop_core::tiers::BarSize::Auto,
         }
     }
 

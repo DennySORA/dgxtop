@@ -21,7 +21,7 @@ mod runs;
 mod stats;
 mod strip;
 
-use dgxtop_core::process_history::BarSize;
+use dgxtop_core::tiers::BarSize;
 use dgxtop_core::view::{DiskHistory, HISTORY_GUTTER_COLUMNS, HistoryView, ViewModel};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -573,7 +573,7 @@ mod tests {
                 opened: None,
                 kept_on_disk: true,
                 utc_offset_s: 0,
-                bar: dgxtop_core::process_history::BarSize::Auto,
+                bar: dgxtop_core::tiers::BarSize::Auto,
                 cpu_scale: None,
             }),
             1,

@@ -9,8 +9,9 @@ use dgxtop_core::action::Signal;
 use dgxtop_core::identity::{BootId, HostId, Pid, PidNamespace, ProcessKey};
 use dgxtop_core::process_history::{
     Aggregate, EndCause, MAX_LISTED_RUNS, ProcessHistoryJournal, RUN_METRICS, RunBucket,
-    RunBucketRow, RunDetails, RunEnd, RunInfo, Tier,
+    RunBucketRow, RunDetails, RunEnd, RunInfo,
 };
+use dgxtop_core::tiers::Tier;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
 use crate::sqlite::{

@@ -199,12 +199,7 @@ impl Harness {
     }
 
     /// The bar sizes of the last UpdateViewSession (D-80).
-    fn last_bars(
-        &self,
-    ) -> (
-        dgxtop_core::process_history::BarSize,
-        dgxtop_core::process_history::BarSize,
-    ) {
+    fn last_bars(&self) -> (dgxtop_core::tiers::BarSize, dgxtop_core::tiers::BarSize) {
         self.submitted()
             .into_iter()
             .rev()
@@ -531,7 +526,7 @@ fn the_cursor_follows_the_selected_run_when_the_list_moves() {
 /// run's (D-77); the session's filter keeps both.
 #[test]
 fn w_steps_the_window_or_an_opened_runs_bar_size() {
-    use dgxtop_core::process_history::BarSize;
+    use dgxtop_core::tiers::BarSize;
     let mut harness = Harness::new(ViewKind::History);
     let bars = |harness: &Harness| harness.last_bars();
     harness.keys(&[key('w')]);

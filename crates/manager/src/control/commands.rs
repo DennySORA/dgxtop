@@ -7,7 +7,7 @@ use dgxtop_core::action::Signal;
 use dgxtop_core::commands::{CommandBody, CommandEnvelope, CommandResult};
 use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::identity::{ProcessKey, SessionId};
-use dgxtop_core::process_history::BarSize;
+use dgxtop_core::tiers::BarSize;
 use uuid::Uuid;
 
 use super::{ControlCore, Route};

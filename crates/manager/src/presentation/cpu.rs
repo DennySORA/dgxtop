@@ -224,7 +224,7 @@ fn power_rows(reader: &MetricReader<'_>) -> Vec<LabeledCell> {
 /// One labeled row per reported scope ("package 0", "SoC", "platform"),
 /// ordered by scope kind then numeric id; duplicates name their entity.
 fn labeled_rows(reader: &MetricReader<'_>, metric: &str) -> Vec<LabeledCell> {
-    let mut entries = reader.index().entries_of_metric(metric);
+    let mut entries: Vec<_> = reader.index().entries_of_metric(metric).collect();
     entries.sort_by_cached_key(|entry| scope_order(entry));
     let mut scope_counts: BTreeMap<&str, usize> = BTreeMap::new();
     for entry in &entries {

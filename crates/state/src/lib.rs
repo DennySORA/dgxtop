@@ -40,7 +40,7 @@ use dgxtop_core::config::{SamplingConfig, StoreConfig};
 use dgxtop_core::identity::{CollectorId, MetricKey};
 use dgxtop_core::metric::Domain;
 use dgxtop_core::ports::{
-    ArchiveJournal, HistoryAppends, HistoryIngest, HistoryOutcome, IngressBatch, StoreWriter,
+    ArchiveJournal, HistoryAppends, HistoryIngest, HistoryOutcome, StoreWriter,
 };
 use dgxtop_core::quality::Namespace;
 use dgxtop_core::sampling::SamplingTiming;
@@ -51,7 +51,7 @@ pub use snapshot::SharedSnapshot;
 
 use dedup::{REMEMBERED_BATCHES, Recall, RememberedBatches};
 use retained::RetainedAllocations;
-use settings::StoreSettings;
+use settings::StateSettings;
 use snapshot::RecentGaps;
 use validate::{CheckedBatch, ContentRules, DescriptorIndex, EpochState, Rejection};
 
@@ -60,8 +60,8 @@ use validate::{CheckedBatch, ContentRules, DescriptorIndex, EpochState, Rejectio
 /// `writer` belongs to the HotStore actor, `snapshots` to presentation.
 #[derive(Debug)]
 pub struct LiveState {
-    pub writer: StateWriter,
-    pub snapshots: SharedSnapshot,
+    writer: StateWriter,
+    snapshots: SharedSnapshot,
 }
 
 impl LiveState {
@@ -80,7 +80,7 @@ impl LiveState {
         history: Box<dyn HistoryIngest>,
     ) -> Self {
         let timing = SamplingTiming::from_sampling(sampling);
-        let settings = StoreSettings::new(store);
+        let settings = StateSettings::new(store);
         let initial = Arc::new(ImmutableSnapshot {
             health: StoreHealth {
                 ledger: Some(ledger.snapshot()),
@@ -118,7 +118,7 @@ impl LiveState {
         Self { writer, snapshots }
     }
 
-    /// Splits the store into its writer and snapshot reader.
+    /// Splits the state into its writer and snapshot reader.
     pub fn into_parts(self) -> (StateWriter, SharedSnapshot) {
         (self.writer, self.snapshots)
     }
@@ -144,7 +144,6 @@ struct PreparedCommit {
     process_table: Option<(ProcessTable, BytePermit)>,
     frame: BytePermit,
     appends: HistoryAppends,
-    inputs: Vec<Arc<IngressBatch>>,
     new_keys: Vec<MetricKey>,
 }
 
@@ -158,7 +157,7 @@ struct SnapshotChange {
 
 /// Write side of the live state (`StoreWriter`), owned by the HotStore actor.
 pub struct StateWriter {
-    settings: StoreSettings,
+    settings: StateSettings,
     timing: SamplingTiming,
     namespace: Namespace,
     archive_enabled: bool,
@@ -194,17 +193,6 @@ impl std::fmt::Debug for StateWriter {
 }
 
 impl StateWriter {
-    /// Tells the store the Manager's current scheduler epoch. Optional: the
-    /// commit guard alone already rejects stale epochs; once set, a guard
-    /// expecting another epoch is rejected too. Epochs only move forward.
-    pub fn set_epoch(&mut self, epoch: u64) {
-        self.epochs.announced = Some(
-            self.epochs
-                .announced
-                .map_or(epoch, |current| current.max(epoch)),
-        );
-    }
-
     /// Applies a new sampling configuration to future samples only; stored
     /// stale deadlines and totals never change.
     pub fn set_sampling(&mut self, sampling: &SamplingConfig) {
@@ -228,21 +216,6 @@ impl StateWriter {
             return None;
         }
         self.history.take_archive_journal(max_bytes)
-    }
-
-    /// Store counters as of now.
-    pub fn counters(&self) -> StoreCounters {
-        self.counters
-    }
-
-    /// Sheds droppable data under memory pressure (overload `throttled`):
-    /// raw history beyond half its retention (minutes that already have
-    /// rollups).
-    pub fn relieve_pressure(&mut self, now_boot_ns: u64) {
-        let now = self.advance_clock(now_boot_ns);
-        let outcome = self.history.shed_raw(now, self.settings.raw_history_ns / 2);
-        self.absorb_history(outcome);
-        self.publish_now(SnapshotChange::default(), now);
     }
 
     fn advance_clock(&mut self, now_boot_ns: u64) -> u64 {
@@ -380,6 +353,9 @@ impl StateWriter {
         let state_revision = batch.state_base_revision.saturating_add(1);
         let periods = ingest::source_periods(&batch.inputs, &self.timing);
         let appends = ingest::history_appends(&batch, &checked, &periods, &self.timing);
+        // The raw input batches are needed only for their periods: left in
+        // `batch`, they are dropped when this returns, releasing their
+        // ingress bytes before the publish (D-84).
         let CollectionBatch {
             batch_id,
             collector_id,
@@ -387,7 +363,6 @@ impl StateWriter {
             epoch,
             canonical,
             explanations,
-            inputs,
             process_table,
             mut next_state,
             ..
@@ -418,7 +393,6 @@ impl StateWriter {
             process_table: process_table.zip(admission.process_table),
             frame: admission.frame,
             appends,
-            inputs,
             new_keys: checked.new_keys,
         }
     }
@@ -436,15 +410,11 @@ impl StateWriter {
             process_table,
             frame,
             appends,
-            inputs,
             new_keys,
         } = prepared;
         let outcome = self.history.ingest(appends, now, revision);
         self.counters.count_gaps(outcome.gaps_added);
         self.absorb_history(outcome);
-        // The raw batches are evidence only until the commit: dropping them
-        // here releases their ingress bytes before the publish (D-84).
-        drop(inputs);
         for key in new_keys {
             self.key_owners.insert(key, collector_id.clone());
         }

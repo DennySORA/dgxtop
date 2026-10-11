@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check docs/validation/VALIDATION.md against its evidence logs (AT40).
 
-Usage: scripts/check_validation.py [VALIDATION.md] [EVIDENCE_DIR]
+Usage: scripts/check_validation.py [VALIDATION.md] [EVIDENCE_DIR] [WORKSPACE]
 
 Rules (spec/dgxtop-v2/ACCEPTANCE.md: PASS needs evidence; written code is not PASS):
 - the status table lists AT01..AT40 exactly once each, nothing else, and only the
@@ -11,13 +11,17 @@ Rules (spec/dgxtop-v2/ACCEPTANCE.md: PASS needs evidence; written code is not PA
 - a PASS or FAIL row cites at least one evidence log; a PASS row cites only logs
   that exited 0;
 - every AT has a `### ATnn` section, and every test named in the `Tests` column of a
-  PASS section appears as a passing test in one of the logs its row cites.
+  PASS section appears as a passing test in one of the logs its row cites;
+- a cited test that starts with a workspace crate name resolves in that crate:
+  `crate/target::...` names one of its test targets, `crate::module::...` one of its
+  library's top-level modules (so a test that moved to another crate is caught).
 
 Only local files are read. Exit status 0 means every rule held.
 """
 import hashlib
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 STATUSES = {"PASS", "FAIL", "NOT_RUN", "BLOCKED"}
@@ -100,7 +104,51 @@ def cited_tests(section: str) -> list[str]:
     return identifiers
 
 
-def check(document: Path, evidence_dir: Path) -> list[str]:
+class Crate:
+    """What a cited test path can name in one workspace crate."""
+
+    def __init__(self, manifest: Path) -> None:
+        data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        package = data.get("package", {})
+        self.name = package.get("name", "")
+        directory = manifest.parent
+        self.targets = {target["name"] for target in data.get("test", []) if "name" in target}
+        if package.get("autotests", True):
+            self.targets |= {path.stem for path in (directory / "tests").glob("*.rs")}
+        library = directory / data.get("lib", {}).get("path", "src/lib.rs")
+        self.source = library.parent
+        self.root_text = library.read_text(encoding="utf-8") if library.is_file() else ""
+
+    def has_module(self, module: str) -> bool:
+        return (
+            (self.source / f"{module}.rs").is_file()
+            or (self.source / module / "mod.rs").is_file()
+            or re.search(rf"^\s*(?:pub(?:\([^)]*\))? )?mod {re.escape(module)}\b", self.root_text, re.MULTILINE)
+            is not None
+        )
+
+
+def workspace_crates(root: Path) -> dict[str, Crate]:
+    crates = (Crate(manifest) for manifest in sorted(root.glob("crates/*/Cargo.toml")))
+    return {crate.name: crate for crate in crates if crate.name}
+
+
+def unresolved_path(identifier: str, crates: dict[str, Crate]) -> str | None:
+    """Why `identifier`'s crate prefix does not resolve; `None` when it does or names no crate."""
+    head, _, rest = identifier.partition("::")
+    name, _, target = head.partition("/")
+    crate = crates.get(name)
+    if crate is None:
+        return None
+    if target:
+        return None if target in crate.targets else f"{name} has no test target {target}"
+    module = re.split(r"::|\{", rest)[0].strip()
+    if not module or crate.has_module(module):
+        return None
+    return f"{name} has no module {module}"
+
+
+def check(document: Path, evidence_dir: Path, workspace: Path | None = None) -> list[str]:
     text = document.read_text(encoding="utf-8")
     problems = []
     logs = {}
@@ -142,6 +190,12 @@ def check(document: Path, evidence_dir: Path) -> list[str]:
     for identifier in sorted(set(seen) - set(EXPECTED_IDS)):
         problems.append(f"{identifier}: not an acceptance case of the specification")
     bodies = sections(text)
+    crates = workspace_crates(workspace) if workspace else {}
+    for identifier, body in sorted(bodies.items()):
+        for test in cited_tests(body):
+            reason = unresolved_path(test, crates)
+            if reason:
+                problems.append(f"{identifier}: {test} does not resolve ({reason})")
     for identifier, (status, cited) in sorted(seen.items()):
         if status not in STATUSES:
             problems.append(f"{identifier}: status {status!r} is not one of {sorted(STATUSES)}")
@@ -170,7 +224,9 @@ def main(arguments: list[str]) -> int:
     root = Path(__file__).resolve().parents[1]
     document = Path(arguments[0]) if arguments else root / "docs/validation/VALIDATION.md"
     evidence_dir = Path(arguments[1]) if len(arguments) > 1 else document.parent / "evidence"
-    problems = check(document, evidence_dir)
+    # A document given explicitly resolves its paths only in a given workspace.
+    workspace = Path(arguments[2]) if len(arguments) > 2 else (None if arguments else root)
+    problems = check(document, evidence_dir, workspace)
     for problem in problems:
         print(f"check_validation: {problem}", file=sys.stderr)
     if not problems:

@@ -19,7 +19,7 @@ use dgxtop_compression::{TieredSeries, bars_in, merged_between};
 use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::identity::MetricKey;
 use dgxtop_core::overview_history::{ArchivePrune, OverviewBars, OverviewBucket, TierRow};
-use dgxtop_core::process_history::Tier;
+use dgxtop_core::tiers::Tier;
 
 /// Series the cache holds at most: the host's charts and every GPU's,
 /// disk's and interface's with room to spare.
@@ -27,7 +27,7 @@ pub(crate) const MAX_TIER_SERIES: usize = 160;
 /// The most one series holds: every size full, plus what each fills.
 #[cfg(test)]
 pub(crate) const MAX_SERIES_BYTES: usize = (Tier::ALL.len() - 1)
-    * (dgxtop_core::process_history::TIER_BUCKETS + 1)
+    * (dgxtop_core::tiers::TIER_BUCKETS + 1)
     * std::mem::size_of::<OverviewBucket>();
 /// Live minutes a series keeps while its earlier history is being read.
 pub(crate) const MAX_PENDING_MINUTES: usize = 240;
@@ -89,7 +89,7 @@ impl TierEntry {
         let waiting = self.pending.back().map_or(i64::MIN, |minute| {
             Tier::OneMinute
                 .align(minute.start_utc_ns, shift_ns)
-                .saturating_add(minute_ns())
+                .saturating_add(Tier::OneMinute.step_i64())
         });
         let held = self.minutes_through_utc_ns().unwrap_or(i64::MIN);
         self.fed_through_utc_ns.max(waiting).max(held)
@@ -97,15 +97,12 @@ impl TierEntry {
 
     /// The end of the latest minute the minutes size holds, if any.
     pub(crate) fn minutes_through_utc_ns(&self) -> Option<i64> {
-        self.tiers
-            .buckets(Tier::OneMinute)
-            .last()
-            .map(|minute| minute.start_utc_ns.saturating_add(minute_ns()))
+        self.tiers.buckets(Tier::OneMinute).last().map(|minute| {
+            minute
+                .start_utc_ns
+                .saturating_add(Tier::OneMinute.step_i64())
+        })
     }
-}
-
-fn minute_ns() -> i64 {
-    i64::try_from(Tier::OneMinute.step_ns()).unwrap_or(i64::MAX)
 }
 
 /// Every Overview series' sizes.
@@ -250,7 +247,7 @@ impl TierBook {
         let start = Tier::OneMinute.align(minute.start_utc_ns, self.shift_ns);
         entry.fed_through_utc_ns = entry
             .fed_through_utc_ns
-            .max(start.saturating_add(minute_ns()));
+            .max(start.saturating_add(Tier::OneMinute.step_i64()));
         self.collect(series, closed);
     }
 
@@ -274,7 +271,7 @@ impl TierBook {
     ) {
         let entry = self.entry(series);
         for (tier, bucket) in buckets {
-            entry.tiers.restore(*tier, *bucket, false);
+            entry.tiers.restore_closed(*tier, *bucket);
         }
         if let Some(through) = entry.minutes_through_utc_ns() {
             entry.fed_through_utc_ns = entry.fed_through_utc_ns.max(through);
@@ -381,18 +378,12 @@ impl TierBook {
             return OverviewBars {
                 epoch: 0,
                 settled_through_utc_ns: i64::MIN,
-                bars: merge_extra(Vec::new(), tier, self.shift_ns, window, extra),
+                bars: bars_in(&TieredSeries::new(self.shift_ns), tier, window, extra),
                 kept_on_disk: false,
                 store_issue: None,
             };
         };
-        let bars = bars_in(&entry.tiers, tier, window);
-        let waiting: Vec<OverviewBucket> = entry
-            .pending
-            .iter()
-            .chain(self.after_fed(entry, extra))
-            .copied()
-            .collect();
+        let waiting = entry.pending.iter().chain(self.after_fed(entry, extra));
         OverviewBars {
             epoch: entry.epoch,
             settled_through_utc_ns: if entry.ready {
@@ -400,7 +391,7 @@ impl TierBook {
             } else {
                 i64::MIN
             },
-            bars: merge_extra(bars, tier, self.shift_ns, window, &waiting),
+            bars: bars_in(&entry.tiers, tier, window, waiting),
             kept_on_disk: false,
             store_issue: None,
         }
@@ -416,25 +407,22 @@ impl TierBook {
         extra: &[OverviewBucket],
     ) -> Vec<OverviewBucket> {
         let entry = self.entries.get(series);
+        let empty = TieredSeries::new(self.shift_ns);
         spans_ns
             .iter()
             .map(|span| {
-                let start = end.saturating_sub(i64::try_from(*span).unwrap_or(i64::MAX));
-                let mut merged = entry.map_or_else(
-                    || OverviewBucket::new(start),
-                    |entry| merged_between(&entry.tiers, (start, end)),
+                let window = (
+                    end.saturating_sub(i64::try_from(*span).unwrap_or(i64::MAX)),
+                    end,
                 );
-                let pending = entry.into_iter().flat_map(|entry| entry.pending.iter());
-                let unfinalized = entry.map_or(extra.iter().collect::<Vec<_>>(), |entry| {
-                    self.after_fed(entry, extra).collect()
-                });
-                for minute in pending.chain(unfinalized) {
-                    let at = Tier::OneMinute.align(minute.start_utc_ns, self.shift_ns);
-                    if at >= start && at < end {
-                        merged.merge(minute);
-                    }
+                match entry {
+                    Some(entry) => merged_between(
+                        &entry.tiers,
+                        window,
+                        entry.pending.iter().chain(self.after_fed(entry, extra)),
+                    ),
+                    None => merged_between(&empty, window, extra),
                 }
-                merged
             })
             .collect()
     }
@@ -464,31 +452,4 @@ impl TierBook {
     ) -> Option<&TieredSeries<OverviewBucket>> {
         self.entries.get(series).map(|entry| &entry.tiers)
     }
-}
-
-/// `bars` with each extra minute merged into the bar of `tier` holding it
-/// (a new bar where none was), in time order, the window kept.
-fn merge_extra(
-    mut bars: Vec<OverviewBucket>,
-    tier: Tier,
-    shift_ns: i64,
-    (start, end): (i64, i64),
-    extra: &[OverviewBucket],
-) -> Vec<OverviewBucket> {
-    for minute in extra.iter().filter(|minute| !minute.is_empty()) {
-        let at = tier.align(minute.start_utc_ns, shift_ns);
-        if at < start || at >= end {
-            continue;
-        }
-        let position = bars.partition_point(|bar| bar.start_utc_ns < at);
-        match bars.get_mut(position) {
-            Some(bar) if bar.start_utc_ns == at => bar.merge(minute),
-            _ => {
-                let mut bar = OverviewBucket::new(at);
-                bar.merge(minute);
-                bars.insert(position, bar);
-            }
-        }
-    }
-    bars
 }

@@ -160,6 +160,14 @@ impl ControlCore {
             let fast = self.scheduler.effective_fast_interval_ms();
             self.trends.set_step(u64::from(fast));
             self.history.set_raw_interval(fast);
+            if self
+                .ingestion
+                .apply_sampling(effective.sampling.clone())
+                .is_err()
+            {
+                self.diagnostics
+                    .increment(names::QUEUE_DROPPED_TOTAL, "store_sampling_busy", 1);
+            }
         } else {
             self.scheduler.set_config_revision(effective.revision);
         }

@@ -41,7 +41,7 @@ use crate::canonical::{
 };
 use crate::clock::TimeProvider;
 use crate::commands::{CommandEnvelope, CommandRejection, CommandResult};
-use crate::config::{Config, ConfigError, ValidationIssue};
+use crate::config::{Config, ConfigError, SamplingConfig, ValidationIssue};
 use crate::errors::{ErrorDetail, InfraError};
 use crate::history::{HistoryQuery, HistoryResult};
 use crate::identity::{
@@ -258,9 +258,6 @@ pub trait HistoryIngest: Send {
     fn record_gap(&mut self, gap: GapRecord) -> HistoryOutcome;
     /// Retention, finalization, eviction and gap settlement.
     fn maintain(&mut self, now_boot_ns: u64) -> HistoryOutcome;
-    /// Overload relief: drops raw history older than `keep_ns` (only
-    /// minutes that already have rollups).
-    fn shed_raw(&mut self, now_boot_ns: u64, keep_ns: u64) -> HistoryOutcome;
     /// The snapshot revision queries and journals report; follows every publish.
     fn set_revision(&mut self, revision: u64);
     /// Applies a new finalization horizon to future minutes only.
@@ -641,6 +638,9 @@ pub enum StoreJob {
     },
     Gap(GapRecord),
     Maintain,
+    /// A durable sampling change: future samples use its periods and the
+    /// history its finalize grace (stored deadlines never change).
+    ApplySampling(SamplingConfig),
 }
 
 /// One Overview History read of a session's history view (D-82).
