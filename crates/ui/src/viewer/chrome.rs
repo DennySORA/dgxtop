@@ -19,9 +19,9 @@ use crate::format::{
     clean, display_width, format_age, format_interval_ms, format_span_seconds, truncate_to_width,
 };
 use crate::num::saturate_u16;
-use crate::registry::{HitTarget, controls};
+use crate::registry::HitTarget;
 use crate::theme::ThemePalette;
-use crate::views::{OFFERED_VIEWS, tab_number};
+use crate::views::{OFFERED_TABS, Tab};
 
 const SEPARATOR: &str = " │ ";
 /// Footer hints that close the row, in this order.
@@ -75,8 +75,9 @@ fn segments_line(segments: Vec<Segment>, separator: &'static str, style: Style) 
     Line::from(spans)
 }
 
-/// Gap between the header's right-aligned facts.
-const HEADER_GAP: &str = "  ";
+/// Between the header's right-aligned facts: the footer's separator
+/// (D-66).
+const HEADER_GAP: &str = SEPARATOR;
 /// A projection older than this many sampling intervals is flagged.
 const OLD_PROJECTION_INTERVALS: u64 = 3;
 /// Floor of the old-projection threshold.
@@ -87,7 +88,8 @@ const DRIVER_VERSION_KEY: &str = "driver_version";
 /// What the header row shows besides the projection.
 pub struct HeaderInput<'a> {
     pub model: &'a ViewModel,
-    pub view: ViewKind,
+    /// The tab shown; `None` for a hidden view.
+    pub tab: Option<Tab>,
     /// Draw the tabs in this row (the wide tiers).
     pub show_tabs: bool,
     pub projection_age_ms: u64,
@@ -134,7 +136,7 @@ pub fn render_header(
             .saturating_sub(x)
             .saturating_sub(saturate_u16(reserved));
         let tabs = Rect::new(x, area.y, tab_width, 1);
-        x = draw_tabs(frame, tabs, input.view, palette, input.chrome_id, hit_map);
+        x = draw_tabs(frame, tabs, input.tab, palette, input.chrome_id, hit_map);
     }
     let room = usize::from(area.right().saturating_sub(x).saturating_sub(1));
     let line = segments_line(
@@ -252,7 +254,7 @@ fn projection_is_old(age_ms: u64, interval_ms: u32) -> bool {
 fn draw_tabs(
     frame: &mut Frame<'_>,
     area: Rect,
-    current: ViewKind,
+    current: Option<Tab>,
     palette: &ThemePalette,
     chrome_id: Option<&ModuleId>,
     hit_map: &mut HitMap,
@@ -260,16 +262,16 @@ fn draw_tabs(
     if area.is_empty() {
         return area.x;
     }
-    let full: Vec<String> = OFFERED_VIEWS
+    let full: Vec<String> = OFFERED_TABS
         .iter()
         .enumerate()
-        .map(|(index, view)| format!(" {} {} ", index + 1, view.title()))
+        .map(|(index, tab)| format!(" {} {} ", index + 1, tab.title()))
         .collect();
     let total: usize = full.iter().map(|label| display_width(label) + 1).sum();
     let compact = total > usize::from(area.width);
     let mut x = area.x;
-    for (index, view) in OFFERED_VIEWS.iter().enumerate() {
-        let active = *view == current;
+    for (index, tab) in OFFERED_TABS.iter().enumerate() {
+        let active = Some(*tab) == current;
         let label = if compact && !active {
             format!(" {} ", index + 1)
         } else {
@@ -293,7 +295,7 @@ fn draw_tabs(
                 HitTarget {
                     frame_revision: hit_map.frame_revision(),
                     module_id: module_id.clone(),
-                    control_id: controls::tab(*view),
+                    control_id: tab.control_id(),
                     entity_id: None,
                     process_key: None,
                     rect: Rect::new(x, area.y, width, 1),
@@ -324,24 +326,25 @@ pub fn interval_text(model: &ViewModel) -> String {
 pub fn render_selector(
     frame: &mut Frame<'_>,
     area: Rect,
-    current: ViewKind,
+    current: Option<Tab>,
     palette: &ThemePalette,
 ) {
     if area.is_empty() {
         return;
     }
-    let position = tab_number(current).unwrap_or(1);
+    let tab = current.unwrap_or(Tab::Overview);
     let line = Line::from(vec![
         Span::styled(
             format!(
-                " ◀ {position}/{} {} ▶",
-                OFFERED_VIEWS.len(),
-                current.title()
+                " ◀ {}/{} {} ▶",
+                tab.number(),
+                OFFERED_TABS.len(),
+                tab.title()
             ),
             palette.title_style(),
         ),
         Span::styled(
-            format!("  Tab/Shift-Tab · 1-{}", OFFERED_VIEWS.len()),
+            format!("  Tab/Shift-Tab · 1-{}", OFFERED_TABS.len()),
             palette.muted_style(),
         ),
     ]);

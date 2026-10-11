@@ -9,7 +9,9 @@ mod facts;
 mod readings;
 mod view;
 
-use dgxtop_core::view::{GpuCard, GpuView, OVERVIEW_GPU_CHART_ROWS, OVERVIEW_GPU_ROWS, ViewModel};
+use dgxtop_core::view::{
+    GpuCard, GpuView, OVERVIEW_GPU_CHART_ROWS, OVERVIEW_GPU_ROWS, ViewModel, overview_gpus_rows,
+};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -20,8 +22,8 @@ use self::readings::{OVERVIEW_READINGS, overview_readings, render_bar};
 use super::ModuleBuildError;
 use super::common::{
     ManifestSpec, Output, RowCursor, build_manifest, cell_label, cell_spans, draw_line,
-    fraction_ratio, gap, gauge_row, labeled_cell, message, no_data, panel, percent_ratio,
-    render_chart, split_columns,
+    fraction_ratio, gauge_row, labeled_cell, message, no_data, panel, percent_ratio, render_chart,
+    separator, split_columns,
 };
 use crate::format::{CellDetail, clean, display_width, value_text};
 use crate::num::saturate_u16;
@@ -74,7 +76,7 @@ impl DisplayModule for GpuModule {
         }
         let reason = u16::from(gpu.unavailable_reason.is_some());
         let count = saturate_u16(gpu.cards.len());
-        Some(2 + reason + count.saturating_mul(OVERVIEW_GPU_ROWS))
+        Some(2 + reason + overview_gpus_rows(count))
     }
 
     fn render(
@@ -111,7 +113,8 @@ impl DisplayModule for GpuModule {
 }
 
 impl GpuModule {
-    /// The overview GPU panel (module docs); a panel too short for the
+    /// The overview GPU panel (module docs): a gray divider between two GPUs
+    /// when the panel has the rows for it (D-66); a panel too short for the
     /// gauges falls back to one compact row per GPU.
     fn render_overview(
         &self,
@@ -134,7 +137,14 @@ impl GpuModule {
             return;
         }
         let widths = ReadingWidths::of(gpu);
-        for card in &gpu.cards {
+        let dividers = rows.remaining() >= overview_gpus_rows(saturate_u16(count));
+        for (index, card) in gpu.cards.iter().enumerate() {
+            if index > 0
+                && dividers
+                && let Some(row) = rows.next_row()
+            {
+                draw_divider(frame, row, context);
+            }
             let Some(block) = rows.take(OVERVIEW_GPU_ROWS) else {
                 break;
             };
@@ -243,6 +253,17 @@ impl GpuModule {
     }
 }
 
+/// `────` across `row` in gray, between two GPUs.
+fn draw_divider(frame: &mut Frame<'_>, row: Rect, context: &DisplayContext) {
+    frame.buffer_mut().set_stringn(
+        row.x,
+        row.y,
+        "─".repeat(usize::from(row.width)),
+        usize::from(row.width),
+        context.theme.muted_style(),
+    );
+}
+
 /// One GPU in the overview (D-43): the headline, the utilization bar with
 /// its chart under it, and the memory bar (VRAM, or the RAM a unified GPU's
 /// processes hold), which has no chart.
@@ -297,22 +318,21 @@ impl ReadingWidths {
     }
 }
 
-/// `GPU 0  NVIDIA GB10  71°C  ⚡120 W / 250 W  1980 MHz  fan 45%`.
+/// `GPU 0 │ NVIDIA GB10 │ 71°C │ ⚡120 W / 250 W │ 1980 MHz │ fan 45%`
+/// (D-66).
 fn overview_headline(card: &GpuCard, context: &DisplayContext) -> Line<'static> {
     let mut spans = vec![
-        Span::styled(
-            format!("{}  ", clean(&card.label)),
-            context.theme.title_style(),
-        ),
+        Span::styled(clean(&card.label), context.theme.title_style()),
+        separator(context),
         Span::styled(clean(&card.name), context.theme.text_style()),
-        gap(context),
+        separator(context),
     ];
     spans.extend(cell_spans(&card.temperature, CellDetail::GLANCE, context));
-    spans.push(gap(context));
+    spans.push(separator(context));
     spans.push(Span::styled("⚡", Style::new().fg(context.theme.warning)));
     spans.extend(power_spans(card, context));
     if let Some(clock) = card.clocks.first() {
-        spans.push(gap(context));
+        spans.push(separator(context));
         spans.extend(cell_spans(&clock.cell, CellDetail::GLANCE, context));
     }
     spans.extend(fan_spans(card, context));
@@ -329,12 +349,12 @@ fn power_spans(card: &GpuCard, context: &DisplayContext) -> Vec<Span<'static>> {
     spans
 }
 
-/// `  fan 45%`; nothing when the GPU reports no fan.
+/// ` │ fan 45%`; nothing when the GPU reports no fan.
 fn fan_spans(card: &GpuCard, context: &DisplayContext) -> Vec<Span<'static>> {
     if !reported(&card.fan) {
         return Vec::new();
     }
-    let mut spans = vec![gap(context)];
+    let mut spans = vec![separator(context)];
     spans.extend(labeled_cell("fan", &card.fan, CellDetail::GLANCE, context));
     spans
 }
@@ -406,15 +426,13 @@ fn render_card(frame: &mut Frame<'_>, area: Rect, card: &GpuCard, context: &Disp
 
 fn card_headline(card: &GpuCard, context: &DisplayContext) -> Line<'static> {
     let mut spans = vec![
-        Span::styled(
-            format!("{} ", clean(&card.label)),
-            context.theme.title_style(),
-        ),
+        Span::styled(clean(&card.label), context.theme.title_style()),
+        separator(context),
         Span::styled(clean(&card.name), context.theme.text_style()),
-        gap(context),
+        separator(context),
     ];
     spans.extend(cell_spans(&card.temperature, CellDetail::GLANCE, context));
-    spans.push(gap(context));
+    spans.push(separator(context));
     spans.extend(power_spans(card, context));
     spans.extend(fan_spans(card, context));
     Line::from(spans)
@@ -490,6 +508,67 @@ mod tests {
             assert!(headline.contains("120 W / 250 W"), "{headline}");
             assert!(headline.contains("fan 45"), "{headline}");
         }
+    }
+
+    /// A gray line sets two GPUs apart when the panel has the row for it
+    /// (D-66); a panel a row short drops the line, never a GPU's rows.
+    #[test]
+    fn a_gray_line_sets_two_gpus_apart() {
+        let context = display_context();
+        let model = crate::test_fixtures::view_model(dgxtop_core::commands::ViewKind::Overview, 1);
+        let module = GpuModule::new().unwrap();
+        let rows = module.preferred_rows(&model, 120, Slot::Overview).unwrap();
+        let draw = |height: u16| -> Vec<String> {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    module.render(&context, &model, frame.area(), frame);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..height)
+                .map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect())
+                .collect()
+        };
+        let headline = |lines: &[String], label: &str| {
+            lines
+                .iter()
+                .position(|line| line.contains(&format!("{label} │")))
+                .unwrap_or_else(|| panic!("{label}:\n{}", lines.join("\n")))
+        };
+        let lines = draw(rows);
+        let (first, second) = (headline(&lines, "GPU 0"), headline(&lines, "GPU 1"));
+        let divider = second - 1;
+        assert_eq!(divider, first + usize::from(OVERVIEW_GPU_ROWS));
+        assert!(
+            lines[divider]
+                .trim_matches('│')
+                .chars()
+                .all(|symbol| symbol == '─'),
+            "{}",
+            lines.join("\n")
+        );
+        let x = lines[divider]
+            .chars()
+            .position(|symbol| symbol == '─')
+            .unwrap();
+        let cell = {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, rows)).unwrap();
+            terminal
+                .draw(|frame| {
+                    module.render(&context, &model, frame.area(), frame);
+                })
+                .unwrap();
+            terminal.backend().buffer()
+                [(u16::try_from(x).unwrap(), u16::try_from(divider).unwrap())]
+                .clone()
+        };
+        assert_eq!(Some(cell.fg), context.theme.muted_style().fg, "gray");
+        let short = draw(rows - 1);
+        let (first, second) = (headline(&short, "GPU 0"), headline(&short, "GPU 1"));
+        assert_eq!(second, first + usize::from(OVERVIEW_GPU_ROWS), "no line");
     }
 
     /// A value that failed to read is still shown with its state: only what

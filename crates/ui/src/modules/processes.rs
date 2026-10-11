@@ -1,11 +1,12 @@
 //! Processes module: the projection's visible window of the process table.
 //!
-//! Columns (GPU first): PID, USER, GPU, TYPE (compute `C`, graphics `G` or
-//! both, as `nvidia-smi` prints them, D-54), GPU util, GPU memory, CPU%,
-//! RSS, NAME. A tracked process's name follows a `■` in its color (D-64),
-//! so the table names the colors of the memory bars and charts. Rows are
-//! identified by `ProcessKey`; the selected row is marked with `▶` (not
-//! only by color) and published as the only `K` hit target.
+//! Columns (D-66): GPU, PID, USER, TYPE (compute `C`, graphics `G` or both,
+//! as `nvidia-smi` prints them, D-54), CPU%, GPU util, GPU memory, CPU
+//! memory (the resident set), NAME, set apart by `│` and as wide as the
+//! drawn rows need. A tracked process's name follows a `■` in its color
+//! (D-64), so the table names the colors of the memory bars and charts.
+//! Rows are identified by `ProcessKey`; the selected row is marked with `▶`
+//! (not only by color) and published as the only `K` hit target.
 
 use dgxtop_core::canonical::GpuUsageKind;
 use dgxtop_core::identity::EntityId;
@@ -16,10 +17,12 @@ use ratatui::layout::Rect;
 use super::ModuleBuildError;
 use super::common::{
     ColumnSpec, FittedColumn, ManifestSpec, Output, RowCursor, TableCell, build_manifest,
-    draw_table_header, draw_table_row, fit_columns, message, no_data, panel,
+    draw_column_separators, draw_table_header, draw_table_row, fit_separated_columns, message,
+    no_data, panel, panel_with_keys,
 };
 use crate::format::{
-    NOT_AVAILABLE, clean, format_optional_bytes, format_optional_percent, truncate_to_width,
+    NOT_AVAILABLE, clean, display_width, format_optional_bytes, format_optional_percent,
+    truncate_to_width,
 };
 use crate::num::saturate_u16;
 use crate::registry::{
@@ -28,24 +31,29 @@ use crate::registry::{
 };
 
 const SELECTION_MARKER: &str = "▶";
+/// The keys acting on this table, at the right of its title (D-70).
+const PROCESS_KEYS: &str =
+    "j/k/↑/↓ select · s sort · r reverse · g GPU filter · / filter · K terminate · F9 kill";
 /// A tracked process's color, before its name (D-64).
 const COLOR_SWATCH: &str = "■";
 /// Position of the swatch column in [`COLUMNS`].
 const SWATCH_COLUMN: usize = 9;
 
-/// Reference order (D-38): identity, GPU use, host use, then the name.
+/// The GPU first (D-66), then identity, type and CPU use, GPU use, the
+/// memory on the CPU side and the name. Minimum widths fit one GPU's
+/// values; [`fitted_columns`] widens a column to what the rows show.
 const COLUMNS: [ColumnSpec; 11] = [
     ColumnSpec::left("", 1, 255),
+    ColumnSpec::left("GPU", 3, 100).attached(),
     ColumnSpec::right("PID", 7, 98),
-    ColumnSpec::left("USER", 8, 40).prefer(10),
-    ColumnSpec::left("GPU", 4, 100).prefer(7),
-    ColumnSpec::left("TYPE", 4, 45).prefer(5),
-    ColumnSpec::right("GPU%", 6, 85).prefer(12),
-    ColumnSpec::right("GPU MEM", 9, 70).prefer(19),
-    ColumnSpec::right("CPU%", 6, 80),
-    ColumnSpec::right("RSS", 9, 60),
+    ColumnSpec::left("USER", 4, 40),
+    ColumnSpec::left("TYPE", 4, 45),
+    ColumnSpec::right("CPU%", 5, 80),
+    ColumnSpec::right("GPU%", 5, 85),
+    ColumnSpec::right("GPU MEM", 8, 70),
+    ColumnSpec::right("CPU MEM", 8, 60),
     ColumnSpec::left("", 1, 97),
-    ColumnSpec::left("NAME", 10, 96).flexible().prefer(24),
+    ColumnSpec::left("NAME", 10, 96).flexible().attached(),
 ];
 
 pub struct ProcessesModule {
@@ -83,7 +91,10 @@ impl DisplayModule for ProcessesModule {
         let rows = model.modules.processes.as_deref().map_or(1, |view| {
             usize::try_from(view.total_rows).unwrap_or(usize::MAX)
         });
-        Some(saturate_u16(rows.max(1)).saturating_add(4))
+        // Borders, header, its rule, the status line and the rows a blank
+        // row apart (D-72).
+        let rows = saturate_u16(rows.max(1));
+        Some(rows.saturating_mul(2).saturating_sub(1).saturating_add(5))
     }
 
     fn render(
@@ -106,7 +117,13 @@ impl DisplayModule for ProcessesModule {
             return output.finish();
         };
         let overview = context.slot == Slot::Overview;
-        let inner = panel(frame, area, &title_text(view, overview), context);
+        let inner = panel_with_keys(
+            frame,
+            area,
+            &title_text(view, overview),
+            PROCESS_KEYS,
+            context,
+        );
         output.label(format!(
             "processes: {} rows, sort {} {}",
             view.total_rows,
@@ -126,23 +143,54 @@ impl DisplayModule for ProcessesModule {
             return output.finish();
         }
         let table = TableLayout::new(inner);
-        let columns = fit_columns(&COLUMNS, table.body.width.saturating_sub(1));
+        // A blank row between two processes while all of them fit so, else
+        // one row each (D-72).
+        let spaced = view.rows.len().saturating_mul(2).saturating_sub(1)
+            <= usize::from(table.body.height)
+            && view.rows.len() > 1;
+        let capacity = if spaced {
+            table.body.height.saturating_add(1) / 2
+        } else {
+            table.body.height
+        };
+        let window = DisplayWindow::new(view, capacity);
+        let filter = view.gpu_filter.as_ref().map(|(id, _)| id);
+        let drawn: Vec<(&ProcessRowView, bool, [TableCell; 11])> = view
+            .rows
+            .iter()
+            .skip(window.offset)
+            .take(window.count)
+            .map(|row| {
+                let selected = view.selected.as_ref() == Some(&row.key);
+                (row, selected, row_cells(row, selected, filter, context))
+            })
+            .collect();
+        let specs = fitted_columns(drawn.iter().map(|(_, _, cells)| cells));
+        let columns = fit_separated_columns(&specs, table.body.width.saturating_sub(1));
+        let buffer = frame.buffer_mut();
         draw_table_header(
-            frame.buffer_mut(),
+            buffer,
             table.header,
-            &COLUMNS,
+            &specs,
             &columns,
             context.theme.header_style(),
         );
-        let window = DisplayWindow::new(view, table.body.height);
-        let filter = view.gpu_filter.as_ref().map(|(id, _)| id);
+        draw_column_separators(buffer, table.header, &columns, context.theme.muted_style());
+        if let Some(rule) = table.rule {
+            draw_header_rule(buffer, rule, &columns, context);
+        }
         let mut cursor = RowCursor::new(table.body);
-        for row in view.rows.iter().skip(window.offset).take(window.count) {
+        for (index, (row, selected, cells)) in drawn.into_iter().enumerate() {
+            if spaced && index > 0 {
+                cursor.next_row();
+            }
             let Some(rect) = cursor.next_row() else { break };
-            let selected = view.selected.as_ref() == Some(&row.key);
             let style = selected.then(|| context.theme.selected_row_style());
-            let cells = row_cells(row, selected, filter, context);
             draw_table_row(frame.buffer_mut(), rect, &columns, &cells, style);
+            let separator = style.map_or(context.theme.muted_style(), |row| {
+                context.theme.muted_style().patch(row)
+            });
+            draw_column_separators(frame.buffer_mut(), rect, &columns, separator);
             if selected {
                 keep_swatch_color(frame, rect, &columns, &cells[SWATCH_COLUMN]);
             }
@@ -169,9 +217,11 @@ impl DisplayModule for ProcessesModule {
     }
 }
 
-/// Header, body and optional status row of the table area.
+/// Header, the rule under it, body and optional status row of the table
+/// area.
 struct TableLayout {
     header: Rect,
+    rule: Option<Rect>,
     body: Rect,
     status: Option<Rect>,
 }
@@ -180,6 +230,8 @@ impl TableLayout {
     fn new(inner: Rect) -> Self {
         let mut rows = RowCursor::new(inner);
         let header = rows.next_row().unwrap_or_default();
+        // The rule needs a row besides the header, a process and the status.
+        let rule = (inner.height >= 4).then(|| rows.next_row()).flatten();
         let status_rows = u16::from(inner.height >= 4);
         let body = rows
             .take(rows.remaining().saturating_sub(status_rows))
@@ -187,8 +239,33 @@ impl TableLayout {
         let status = rows.next_row();
         Self {
             header,
+            rule,
             body,
             status,
+        }
+    }
+}
+
+/// A gray `────┼────` under the header that sets it apart from the rows,
+/// crossing each column separator (D-72).
+fn draw_header_rule(
+    buffer: &mut ratatui::buffer::Buffer,
+    rule: Rect,
+    columns: &[FittedColumn],
+    context: &DisplayContext,
+) {
+    let style = context.theme.muted_style();
+    buffer.set_stringn(
+        rule.x,
+        rule.y,
+        "─".repeat(usize::from(rule.width)),
+        usize::from(rule.width),
+        style,
+    );
+    for column in columns.iter().filter(|column| column.separated) {
+        let x = rule.x.saturating_add(column.x).saturating_sub(2);
+        if x < rule.right() {
+            buffer.set_stringn(x, rule.y, "┼", 1, style);
         }
     }
 }
@@ -290,6 +367,22 @@ fn short_gpu_label(label: &str) -> String {
         .map_or_else(|| label.clone(), str::to_owned)
 }
 
+/// [`COLUMNS`] with each column's preferred width grown to its title and
+/// the widest of its `rows`' cells (a process on several GPUs lists a value
+/// for each).
+fn fitted_columns<'a>(rows: impl Iterator<Item = &'a [TableCell; 11]>) -> [ColumnSpec; 11] {
+    let mut specs = COLUMNS;
+    for cells in rows {
+        for (spec, cell) in specs.iter_mut().zip(cells) {
+            spec.preferred = spec.preferred.max(saturate_u16(display_width(&cell.text)));
+        }
+    }
+    for spec in &mut specs {
+        spec.preferred = spec.preferred.max(saturate_u16(display_width(spec.title)));
+    }
+    specs
+}
+
 fn row_cells(
     row: &ProcessRowView,
     selected: bool,
@@ -310,18 +403,18 @@ fn row_cells(
     };
     [
         TableCell::new(marker, palette.title_style()),
-        TableCell::new(row.key.pid.to_string(), palette.label_style()),
-        TableCell::new(clean(&row.user), palette.label_style()),
         TableCell::new(
             joined(&gpus, |gpu| short_gpu_label(&gpu.gpu_label)),
             palette.secondary_style(),
         ),
+        TableCell::new(row.key.pid.to_string(), palette.label_style()),
+        TableCell::new(clean(&row.user), palette.label_style()),
         numeric(joined(&gpus, |gpu| usage_code(gpu.usage).to_owned())),
+        numeric(format_optional_percent(row.cpu_percent)),
         numeric(joined(&gpus, |gpu| {
             format_optional_percent(gpu.utilization_percent)
         })),
         numeric(joined(&gpus, |gpu| format_optional_bytes(gpu.memory_bytes))),
-        numeric(format_optional_percent(row.cpu_percent)),
         numeric(format_optional_bytes(row.rss_bytes)),
         swatch_cell(row, context),
         TableCell::new(clean(&row.name), palette.text_style()),
@@ -362,7 +455,7 @@ fn keep_swatch_color(
 fn row_label(row: &ProcessRowView, selected: bool, filter: Option<&EntityId>) -> String {
     let gpus = gpu_entries(row, filter);
     format!(
-        "{}process pid {} {} gpu {} type {} gpu util {} gpu mem {} cpu {} rss {}",
+        "{}process pid {} {} gpu {} type {} gpu util {} gpu mem {} cpu {} cpu mem {}",
         if selected { "selected " } else { "" },
         row.key.pid,
         clean(&row.name),
@@ -524,10 +617,118 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         let swatch = (0..120)
-            .find(|x| buffer[(*x, 2)].symbol() == COLOR_SWATCH)
+            .find(|x| buffer[(*x, 3)].symbol() == COLOR_SWATCH)
             .expect("the selected row draws its swatch");
-        assert_eq!(buffer[(swatch, 2)].fg, context.theme.process_color(1));
-        assert_eq!(buffer[(swatch, 2)].bg, context.theme.highlight_background);
+        assert_eq!(buffer[(swatch, 3)].fg, context.theme.process_color(1));
+        assert_eq!(buffer[(swatch, 3)].bg, context.theme.highlight_background);
+    }
+
+    /// The GPU leads (D-66), CPU% follows the type, the host memory is
+    /// `CPU MEM`; columns are as wide as what they show and set apart by
+    /// `│`, the swatch kept beside its name.
+    #[test]
+    fn the_table_leads_with_the_gpu_and_sets_its_columns_apart() {
+        let context = test_fixtures::display_context();
+        let view = test_fixtures::processes_view(2, 0, 2);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 6)).unwrap();
+        let mut model = test_fixtures::view_model(dgxtop_core::commands::ViewKind::Overview, 1);
+        model.modules.processes = Some(std::sync::Arc::new(view));
+        terminal
+            .draw(|frame| {
+                ProcessesModule::new()
+                    .unwrap()
+                    .render(&context, &model, frame.area(), frame);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = |y: u16| -> String { (0..120).map(|x| buffer[(x, y)].symbol()).collect() };
+        let header = row(1);
+        let titles = [
+            "GPU ", "PID", "USER", "TYPE", "CPU%", "GPU%", "GPU MEM", "CPU MEM", "NAME",
+        ];
+        let at: Vec<usize> = titles
+            .iter()
+            .map(|title| {
+                header
+                    .find(title)
+                    .unwrap_or_else(|| panic!("{title}: {header}"))
+            })
+            .collect();
+        assert!(at.windows(2).all(|pair| pair[0] < pair[1]), "{header}");
+        assert!(!header.contains("RSS"), "{header}");
+        assert_eq!(header.matches(" │ ").count(), 8, "{header}");
+        let first = row(3);
+        assert!(
+            row(2).contains("─┼─"),
+            "the rule under the header: {}",
+            row(2)
+        );
+        let bars = |line: &str| -> Vec<usize> {
+            line.chars()
+                .enumerate()
+                .filter(|(_, symbol)| *symbol == '│')
+                .map(|(x, _)| x)
+                .collect()
+        };
+        assert_eq!(bars(&header), bars(&first), "aligned:\n{header}\n{first}");
+        assert!(
+            first.contains("▶ 0,1 │    4242 │ 1000 │ C,C+G │ 12.5% │ "),
+            "{first}"
+        );
+        assert!(
+            first.contains(" │ 45.0%,n/a │ 10.0 GiB,2.0 GiB │ "),
+            "{first}"
+        );
+        assert!(
+            first.contains(" │   python3 "),
+            "no swatch, then the name: {first}"
+        );
+    }
+
+    /// A gray rule sets the header apart, and while every process fits so a
+    /// blank row sets each apart; with more, one row each (D-72).
+    #[test]
+    fn rows_stand_a_row_apart_while_they_all_fit() {
+        let context = test_fixtures::display_context();
+        let draw = |count: usize, height: u16| -> Vec<String> {
+            let view = test_fixtures::processes_view(count, 0, u32::try_from(count).unwrap());
+            let mut model = test_fixtures::view_model(dgxtop_core::commands::ViewKind::Overview, 1);
+            model.modules.processes = Some(std::sync::Arc::new(view));
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    ProcessesModule::new()
+                        .unwrap()
+                        .render(&context, &model, frame.area(), frame);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..height)
+                .map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect())
+                .collect()
+        };
+        let rows_of = |lines: &[String]| -> Vec<usize> {
+            lines
+                .iter()
+                .enumerate()
+                .filter(|(_, line)| line.contains("│ 1000 │"))
+                .map(|(y, _)| y)
+                .collect()
+        };
+        // Three processes in a body of six rows: a blank row between each.
+        let spaced = draw(3, 10);
+        assert!(spaced[2].contains("─┼─"), "{}", spaced.join("\n"));
+        assert_eq!(rows_of(&spaced), vec![3, 5, 7], "{}", spaced.join("\n"));
+        // Six processes in the same body of five rows: one row each.
+        let packed = draw(6, 10);
+        assert_eq!(
+            rows_of(&packed),
+            vec![3, 4, 5, 6, 7],
+            "{}",
+            packed.join("\n")
+        );
     }
 
     #[test]

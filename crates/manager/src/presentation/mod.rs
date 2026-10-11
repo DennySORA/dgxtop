@@ -396,7 +396,6 @@ fn build_gpu(context: &PresentationContext<'_>, inputs: &ModuleInputs<'_>) -> Gp
     gpu::build_gpu_view(
         inputs.reader,
         inputs.directory,
-        inputs.process_memory,
         context.session.selected_entity_id.as_ref(),
         environment,
         widths,

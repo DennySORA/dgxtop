@@ -162,14 +162,59 @@ pub(crate) fn panel(
     title: &str,
     context: &DisplayContext,
 ) -> Rect {
-    let block = Block::default()
+    panel_with_keys(frame, area, title, "", context)
+}
+
+/// ` (k action · …) `: each key bright in the accent color, its action in
+/// text color, the brackets and dots muted (D-70). `keys` is `key action`
+/// items joined by ` · `.
+fn key_spans(keys: &str, context: &DisplayContext) -> Vec<Span<'static>> {
+    let theme = &context.theme;
+    let key_style = Style::new()
+        .fg(theme.accent)
+        .add_modifier(ratatui::style::Modifier::BOLD);
+    let mut spans = vec![Span::styled(" (", theme.muted_style())];
+    for (index, item) in keys.split(KEY_SEPARATOR).enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(KEY_SEPARATOR, theme.muted_style()));
+        }
+        let (key, action) = item.split_once(' ').unwrap_or((item, ""));
+        spans.push(Span::styled(key.to_owned(), key_style));
+        if !action.is_empty() {
+            spans.push(Span::styled(format!(" {action}"), theme.text_style()));
+        }
+    }
+    spans.push(Span::styled(") ", theme.muted_style()));
+    spans
+}
+
+/// Between the items of a panel's keys.
+const KEY_SEPARATOR: &str = " · ";
+
+/// [`panel`] with the keys that act on it, `(k action · …)`, at the right
+/// of its title row (D-70), so a key is shown where it acts; left out when
+/// they would crowd the title, which says what the panel shows.
+pub(crate) fn panel_with_keys(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: &str,
+    keys: &str,
+    context: &DisplayContext,
+) -> Rect {
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(context.theme.border_style(false))
         .title(Line::from(Span::styled(
             format!(" {title} "),
-            context.theme.title_style(),
+            context.theme.section_title_style(title),
         )));
+    let title_width = display_width(title) + 2;
+    let keys_width = display_width(keys) + 4;
+    let fits = usize::from(area.width) >= title_width + keys_width + 4;
+    if !keys.is_empty() && fits {
+        block = block.title(Line::from(key_spans(keys, context)).right_aligned());
+    }
     let inner = block.inner(area);
     frame.render_widget(block, area);
     inner
@@ -243,6 +288,12 @@ pub(crate) fn cell_label(label: &str, cell: &MetricCell, context: &DisplayContex
 /// Separator span between items on one line.
 pub(crate) fn gap(context: &DisplayContext) -> Span<'static> {
     Span::styled("  ", context.theme.muted_style())
+}
+
+/// ` │ ` between the parts of a line that say different things (D-66),
+/// the glyph the footer sets its keys apart with.
+pub(crate) fn separator(context: &DisplayContext) -> Span<'static> {
+    Span::styled(" │ ", context.theme.muted_style())
 }
 
 /// Percent cell as a 0..=1 ratio.
@@ -401,17 +452,19 @@ pub(crate) fn render_chart(
     max: Option<f64>,
     context: &DisplayContext,
 ) {
-    render_chart_with_parts(frame, area, points, Vec::new(), max, context);
+    render_chart_with_parts(frame, area, points, (Vec::new(), None), max, context);
 }
 
 /// [`render_chart`] with parts of each point (what each GPU process holds
 /// of the used RAM, D-64) stacked from the foot of its column, each in its
 /// style.
+/// `whole` colors what the parts leave of each column; `None` colors it by
+/// level.
 pub(crate) fn render_chart_with_parts(
     frame: &mut Frame<'_>,
     area: Rect,
     points: &[Option<f64>],
-    parts: Vec<Part<'_>>,
+    (parts, whole): (Vec<Part<'_>>, Option<Color>),
     max: Option<f64>,
     context: &DisplayContext,
 ) {
@@ -428,10 +481,12 @@ pub(crate) fn render_chart_with_parts(
         );
         return;
     }
-    let sparkline = GapSparkline::new(points, Style::new())
-        .max(max)
-        .level_colors(&context.theme)
-        .parts(parts);
+    let sparkline = match whole {
+        Some(color) => GapSparkline::new(points, Style::new().fg(color)),
+        None => GapSparkline::new(points, Style::new()).level_colors(&context.theme),
+    }
+    .max(max)
+    .parts(parts);
     frame.render_widget(sparkline, area);
 }
 
@@ -469,23 +524,25 @@ pub(crate) fn measuring_context(model: &ViewModel, slot: Slot) -> DisplayContext
         slot,
         projection_age_ms: 0,
         expanded: false,
+        scroll: 0,
+        tab: 0,
     }
 }
 
-/// `first` and `second` on one line, a gap apart, when both fit `width`;
-/// otherwise each on its own line.
+/// `first` and `second` on one line, set apart by a [`separator`], when
+/// both fit `width`; otherwise each on its own line.
 pub(crate) fn join_if_fits(
     first: Line<'static>,
     second: Line<'static>,
     width: u16,
     context: &DisplayContext,
 ) -> Vec<Line<'static>> {
-    let joined = first.width() + display_width(&gap(context).content) + second.width();
+    let joined = first.width() + display_width(&separator(context).content) + second.width();
     if joined > usize::from(width) {
         return vec![first, second];
     }
     let mut spans = first.spans;
-    spans.push(gap(context));
+    spans.push(separator(context));
     spans.extend(second.spans);
     vec![Line::from(spans)]
 }
@@ -624,6 +681,9 @@ pub(crate) struct ColumnSpec {
     pub priority: u8,
     pub flex: bool,
     pub align: Align,
+    /// One space after the column before it, never a separator between
+    /// them: a marker and what it marks.
+    pub attached: bool,
 }
 
 impl ColumnSpec {
@@ -635,6 +695,7 @@ impl ColumnSpec {
             priority,
             flex: false,
             align: Align::Left,
+            attached: false,
         }
     }
 
@@ -646,7 +707,13 @@ impl ColumnSpec {
             priority,
             flex: false,
             align: Align::Right,
+            attached: false,
         }
+    }
+
+    pub const fn attached(mut self) -> Self {
+        self.attached = true;
+        self
     }
 
     pub const fn flexible(mut self) -> Self {
@@ -667,21 +734,53 @@ pub(crate) struct FittedColumn {
     pub x: u16,
     pub width: u16,
     pub align: Align,
+    /// A `│` goes in the gap before it ([`fit_separated_columns`]).
+    pub separated: bool,
 }
 
 const COLUMN_SPACING: u16 = 1;
+/// The gap ` │ ` between separated columns.
+const SEPARATED_SPACING: u16 = 3;
+const COLUMN_SEPARATOR: &str = "│";
 /// Columns below this priority are optional: they give way when a more
 /// important column cannot reach its preferred width.
 const OPTIONAL_PRIORITY: u8 = 50;
+
+/// How far apart a table's columns are set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Spacing {
+    Space,
+    Separator,
+}
+
+impl Spacing {
+    /// The gap before `spec` when a column comes before it.
+    fn before(self, spec: &ColumnSpec) -> u16 {
+        match self {
+            Self::Separator if !spec.attached => SEPARATED_SPACING,
+            _ => COLUMN_SPACING,
+        }
+    }
+}
 
 /// Keeps the highest-priority columns that fit, in display order. Leftover
 /// width first grows fixed columns toward their preferred width (by
 /// priority), then flexible ones, and the remainder goes to flexible columns
 /// (or the last column).
 pub(crate) fn fit_columns(specs: &[ColumnSpec], available: u16) -> Vec<FittedColumn> {
-    let mut chosen = choose_columns(specs, available);
+    fit_spaced_columns(specs, available, Spacing::Space)
+}
+
+/// [`fit_columns`] with ` │ ` between the columns, attached ones aside;
+/// [`draw_column_separators`] draws the `│`.
+pub(crate) fn fit_separated_columns(specs: &[ColumnSpec], available: u16) -> Vec<FittedColumn> {
+    fit_spaced_columns(specs, available, Spacing::Separator)
+}
+
+fn fit_spaced_columns(specs: &[ColumnSpec], available: u16, spacing: Spacing) -> Vec<FittedColumn> {
+    let mut chosen = choose_columns(specs, available, spacing);
     loop {
-        let widths = grow_columns(specs, &chosen, available);
+        let widths = grow_columns(specs, &chosen, available, spacing);
         let starved = chosen.iter().zip(&widths).any(|(index, width)| {
             let spec = &specs[*index];
             spec.priority >= OPTIONAL_PRIORITY && *width < spec.preferred
@@ -696,20 +795,24 @@ pub(crate) fn fit_columns(specs: &[ColumnSpec], available: u16) -> Vec<FittedCol
             (true, Some(position)) => {
                 chosen.remove(position);
             }
-            _ => return position_columns(specs, &chosen, &widths),
+            _ => return position_columns(specs, &chosen, &widths, spacing),
         }
     }
 }
 
 /// Indices (display order) of the columns whose minimum widths fit.
-fn choose_columns(specs: &[ColumnSpec], available: u16) -> Vec<usize> {
+fn choose_columns(specs: &[ColumnSpec], available: u16, spacing: Spacing) -> Vec<usize> {
     let mut by_priority: Vec<usize> = (0..specs.len()).collect();
     by_priority.sort_by(|a, b| specs[*b].priority.cmp(&specs[*a].priority).then(a.cmp(b)));
     let mut chosen = vec![false; specs.len()];
     let mut used = 0u16;
     for index in by_priority {
-        let spacing = if used == 0 { 0 } else { COLUMN_SPACING };
-        let needed = specs[index].min_width.saturating_add(spacing);
+        let gap = if used == 0 {
+            0
+        } else {
+            spacing.before(&specs[index])
+        };
+        let needed = specs[index].min_width.saturating_add(gap);
         if used.saturating_add(needed) <= available {
             used = used.saturating_add(needed);
             chosen[index] = true;
@@ -718,12 +821,19 @@ fn choose_columns(specs: &[ColumnSpec], available: u16) -> Vec<usize> {
     (0..specs.len()).filter(|index| chosen[*index]).collect()
 }
 
-fn grow_columns(specs: &[ColumnSpec], chosen: &[usize], available: u16) -> Vec<u16> {
+fn grow_columns(
+    specs: &[ColumnSpec],
+    chosen: &[usize],
+    available: u16,
+    spacing: Spacing,
+) -> Vec<u16> {
     let mut widths: Vec<u16> = chosen.iter().map(|index| specs[*index].min_width).collect();
-    let spacing = COLUMN_SPACING.saturating_mul(saturate_u16(chosen.len().saturating_sub(1)));
+    let gaps = chosen.iter().skip(1).fold(0u16, |sum, index| {
+        sum.saturating_add(spacing.before(&specs[*index]))
+    });
     let used = widths
         .iter()
-        .fold(spacing, |sum, width| sum.saturating_add(*width));
+        .fold(gaps, |sum, width| sum.saturating_add(*width));
     let mut leftover = available.saturating_sub(used);
     let mut growth_order: Vec<usize> = (0..chosen.len()).collect();
     growth_order.sort_by(|a, b| {
@@ -762,19 +872,30 @@ fn grow_columns(specs: &[ColumnSpec], chosen: &[usize], available: u16) -> Vec<u
     widths
 }
 
-fn position_columns(specs: &[ColumnSpec], chosen: &[usize], widths: &[u16]) -> Vec<FittedColumn> {
+fn position_columns(
+    specs: &[ColumnSpec],
+    chosen: &[usize],
+    widths: &[u16],
+    spacing: Spacing,
+) -> Vec<FittedColumn> {
     let mut x = 0u16;
     chosen
         .iter()
         .zip(widths)
-        .map(|(index, width)| {
+        .enumerate()
+        .map(|(position, (index, width))| {
+            let spec = &specs[*index];
+            if position > 0 {
+                x = x.saturating_add(spacing.before(spec));
+            }
             let column = FittedColumn {
                 spec: *index,
                 x,
                 width: *width,
-                align: specs[*index].align,
+                align: spec.align,
+                separated: position > 0 && spacing.before(spec) == SEPARATED_SPACING,
             };
-            x = x.saturating_add(*width).saturating_add(COLUMN_SPACING);
+            x = x.saturating_add(*width);
             column
         })
         .collect()
@@ -839,6 +960,21 @@ pub(crate) fn draw_table_row(
         if let Some(cell) = cells.get(column.spec) {
             let style = row_style.map_or(cell.style, |row| cell.style.patch(row));
             draw_aligned(buffer, row, column, &cell.text, style);
+        }
+    }
+}
+
+/// The `│` in the gap before each separated column on `row`.
+pub(crate) fn draw_column_separators(
+    buffer: &mut Buffer,
+    row: Rect,
+    columns: &[FittedColumn],
+    style: Style,
+) {
+    for column in columns.iter().filter(|column| column.separated) {
+        let x = row.x.saturating_add(column.x).saturating_sub(2);
+        if x < row.right() && row.height > 0 {
+            buffer.set_stringn(x, row.y, COLUMN_SEPARATOR, 1, style);
         }
     }
 }
@@ -959,6 +1095,64 @@ mod tests {
         let write_row = row_text(&buffer, 1);
         assert!(write_row.contains("no trend data"), "{write_row:?}");
         assert!(!write_row.contains("peak"), "{write_row:?}");
+    }
+
+    /// Separated columns sit ` │ ` apart, an attached one a space after the
+    /// column before it, and the `│` goes in the middle of each gap.
+    #[test]
+    fn separated_columns_are_set_apart_by_a_bar() {
+        let specs = [
+            ColumnSpec::left("", 1, 90),
+            ColumnSpec::left("ab", 2, 80).attached(),
+            ColumnSpec::right("cde", 3, 70),
+            ColumnSpec::left("f", 1, 60).flexible(),
+        ];
+        let columns = fit_separated_columns(&specs, 20);
+        let at: Vec<(u16, u16, bool)> = columns
+            .iter()
+            .map(|column| (column.x, column.width, column.separated))
+            .collect();
+        assert_eq!(
+            at,
+            vec![(0, 1, false), (2, 2, false), (7, 3, true), (13, 7, true)]
+        );
+        let plain = fit_columns(&specs, 20);
+        assert_eq!(plain[2].x, 5, "one space apart");
+        assert!(plain.iter().all(|column| !column.separated));
+        let buffer = render_area(20, 1, |frame, area| {
+            draw_table_header(frame.buffer_mut(), area, &specs, &columns, Style::new());
+            draw_column_separators(frame.buffer_mut(), area, &columns, Style::new());
+        });
+        assert_eq!(row_text(&buffer, 0), "  ab │ cde │ f      ");
+    }
+
+    /// A panel's keys: each key bright in the accent color, its action in
+    /// text color, brackets and dots muted (D-70).
+    #[test]
+    fn panel_keys_light_the_key_and_name_its_action() {
+        let context = display_context();
+        let spans = key_spans("j/k select · F9 kill", &context);
+        let parts: Vec<(&str, Style)> = spans
+            .iter()
+            .map(|span| (span.content.as_ref(), span.style))
+            .collect();
+        let key = Style::new()
+            .fg(context.theme.accent)
+            .add_modifier(ratatui::style::Modifier::BOLD);
+        let muted = context.theme.muted_style();
+        let text = context.theme.text_style();
+        assert_eq!(
+            parts,
+            vec![
+                (" (", muted),
+                ("j/k", key),
+                (" select", text),
+                (" · ", muted),
+                ("F9", key),
+                (" kill", text),
+                (") ", muted),
+            ]
+        );
     }
 
     #[test]

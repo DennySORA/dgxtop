@@ -168,13 +168,20 @@ fn overview_follows_the_reference_layout_and_keeps_every_module_visible_when_wid
     }
     for text in [
         "GPUs  2x",
-        "GPU 0  NVIDIA GB10",
-        "GPU 1  NVIDIA GB10",
+        "GPU 0 │ NVIDIA GB10 │",
+        "GPU 1 │ NVIDIA GB10 │",
+        // Parts that say different things are set apart (D-66).
+        "68°C │ 45.2 W · estimated │ 3000 MHz",
+        "RAM 12.3 GiB / 64.0 GiB │ ■ OS 2.3 GiB",
+        "[GPU] ■ other 10.0 GiB",
+        "spark-01 │ 2x GPU │",
         // Each GPU's memory row (D-40, D-41): the discrete GPU's VRAM, the
         // unified GPU's share of the system RAM.
         "12.3 GiB / 80.0 GiB",
         "10.0 GiB / 64.0 GiB",
-        "CPU ▸ click or c: cores · Grace ARM Neoverse-V2",
+        "CPU ▸ Grace ARM Neoverse-V2",
+        "(c/click cores)",
+        "(j/k/↑/↓ select · s sort · r reverse · g GPU filter · / filter · K terminate · F9 kill)",
         "45.3%",
         "Memory · shared with GPU",
         "Disk I/O [nvme0n1]",
@@ -201,7 +208,7 @@ fn overview_follows_the_reference_layout_and_keeps_every_module_visible_when_wid
     );
     // CPU and memory side by side on top, then the GPUs, then disk and
     // network side by side, then the GPU processes down to the footer.
-    let cpu_top = row_index(&rendered, "· Grace ARM Neoverse-V2");
+    let cpu_top = row_index(&rendered, "CPU ▸ Grace ARM Neoverse-V2");
     assert_eq!(cpu_top, row_index(&rendered, "Memory · shared with GPU"));
     // Memory is the wider of the two (D-40).
     let top = &rendered.rows[cpu_top];
@@ -225,10 +232,13 @@ fn overview_follows_the_reference_layout_and_keeps_every_module_visible_when_wid
         rendered.text()
     );
     let bars = &rendered.rows[cpu_top + 2];
-    // Each bar stands three quarters of a row high (D-52).
+    // Each bar stands three quarters of a row high (D-52); on a RAM shared
+    // with a GPU the GPU legend takes the row above the used bar (D-69).
+    assert!(bars.starts_with("│util ▆"), "{bars}");
     assert!(
-        bars.starts_with("│util ▆") && bars.contains("│used ▆"),
-        "{bars}"
+        rendered.rows[cpu_top + 3].contains("│used ▆"),
+        "{}",
+        rendered.text()
     );
     assert!(
         chart_under(&rendered, cpu_top + 2, 3),
@@ -287,7 +297,7 @@ fn processes_view_follows_the_reference_columns_and_marks_the_selection() {
             .unwrap_or_else(|| panic!("{size:?}\n{}", rendered.text()));
         let pid = header.find("PID").unwrap();
         if let Some(gpu) = header.find("GPU") {
-            assert!(pid < gpu, "{size:?}: {header}");
+            assert!(gpu < pid, "{size:?}: the GPU leads (D-66): {header}");
         }
         assert!(rendered.contains("▶"), "{size:?}\n{}", rendered.text());
         assert!(rendered.contains("4242"), "{size:?}\n{}", rendered.text());
@@ -300,7 +310,7 @@ fn processes_view_follows_the_reference_columns_and_marks_the_selection() {
         "GPU%",
         "GPU MEM",
         "CPU%",
-        "RSS",
+        "CPU MEM",
         "python3",
         "0,1",
         "45.0%,n/a",
@@ -416,7 +426,9 @@ fn history_says_when_it_loads_fails_is_partly_recorded_or_has_no_series() {
     model.modules.history = Some(Arc::new(history.clone()));
     let short = render(&model, (100, 10));
     assert!(
-        short.contains("+7 panels on a taller terminal · recorded 12m of 1h"),
+        // The keys moved to the title (D-70), so the bar has room for the
+        // fuller note.
+        short.contains("+7 panels · +2 GPUs' long-term statistics on a taller terminal"),
         "{}",
         short.text()
     );
@@ -599,7 +611,7 @@ fn header_shows_the_host_and_warnings_and_the_footer_the_interval() {
     model.header.effective_interval_ms = 2000;
     model.header.overload = OverloadState::Throttled;
     model.header.read_only = true;
-    let rendered = render(&model, (160, 50));
+    let rendered = render(&model, (200, 50));
     let header = &rendered.rows[0];
     for text in [
         "DGXTOP",
@@ -668,8 +680,8 @@ fn tabs_and_rows_produce_hit_targets_with_the_frame_revision() {
     let rendered = render(&model(ViewKind::Processes), (160, 50));
     let map = &rendered.report.hit_map;
     assert_eq!(map.frame_revision(), 7);
-    for view in crate::views::OFFERED_VIEWS {
-        assert_eq!(map.count(controls::tab(view)), 1, "{view:?}");
+    for tab in crate::views::OFFERED_TABS {
+        assert_eq!(map.count(tab.control_id()), 1, "{tab:?}");
     }
     for hidden in [ViewKind::Sources, ViewKind::Processes] {
         assert_eq!(
@@ -822,7 +834,7 @@ fn a_panicking_module_is_isolated_as_a_module_error() {
         rendered.text()
     );
     assert!(
-        rendered.contains("· Grace ARM Neoverse-V2"),
+        rendered.contains("CPU ▸ Grace ARM Neoverse-V2"),
         "other modules keep rendering\n{}",
         rendered.text()
     );

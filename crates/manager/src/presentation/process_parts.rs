@@ -74,7 +74,13 @@ pub(crate) fn with_process_parts(
     }
     let window = boot_window(&history, inputs.boot_to_utc_ns);
     let unified = unified_gpus(inputs.directory);
-    let processes = window_summaries(&tracked, inputs, window);
+    let scales: Vec<(EntityId, Option<f64>)> = history
+        .charts
+        .iter()
+        .filter(|chart| chart.kind == HistoryChartKind::GpuMemory)
+        .map(|chart| (chart.series.entity_id.clone(), chart.scale_max))
+        .collect();
+    let processes = window_summaries(&tracked, inputs, window, &scales);
     if processes.is_empty() {
         return history;
     }
@@ -133,6 +139,7 @@ fn window_summaries(
     tracked: &[TrackedProcess<'_>],
     inputs: &ProcessHistoryInputs<'_>,
     window: (u64, u64),
+    scales: &[(EntityId, Option<f64>)],
 ) -> Vec<HistoryProcessView> {
     let mut summaries: Vec<HistoryProcessView> = tracked
         .iter()
@@ -154,6 +161,16 @@ fn window_summaries(
                         peak: held.peak.map(bytes_value),
                         listed_ns: held.covered_ns,
                         running: process.is_listed(),
+                        means: inputs.book.part_means(
+                            process.key,
+                            |id| id == gpu,
+                            window,
+                            inputs.cells,
+                        ),
+                        scale_max: scales
+                            .iter()
+                            .find(|(id, _)| id == gpu)
+                            .and_then(|(_, scale)| *scale),
                     })
                 })
         })

@@ -21,15 +21,18 @@ mod processes;
 mod stats;
 mod strip;
 
-use dgxtop_core::view::{DiskHistory, HISTORY_GUTTER_COLUMNS, HistoryView, ViewModel};
+use dgxtop_core::view::{
+    DiskHistory, HISTORY_GUTTER_COLUMNS, HistoryChartKind, HistoryChartView, HistoryPointView,
+    HistoryProcessView, HistoryView, ViewModel,
+};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 
 use self::axis::render_axis;
 use self::layout::{HistoryLayout, plan};
-use self::panels::{Panel, Strip, panels};
-use self::processes::{process_labels, render_processes, table_rows};
+use self::panels::{Paint, Panel, Strip, panels};
+use self::processes::{process_labels, render_processes};
 use self::stats::{
     GpuStats, gpu_stats, nanos_to_seconds, recorded_text, render_gpu_stats, stats_labels,
 };
@@ -37,13 +40,16 @@ use self::strip::{Window, plot_width, render_strip, strip_text, tallest_column};
 use super::ModuleBuildError;
 use super::common::{
     ManifestSpec, Output, RowCursor, build_manifest, draw_caption, draw_line, gap, message,
-    no_data, panel,
+    no_data, panel_with_keys,
 };
 use crate::format::{CellTone, clean, display_width, format_span_ns};
 use crate::num::saturate_u16;
 use crate::registry::{
     DisplayContext, DisplayModule, DisplayModuleManifest, RenderOutput, Slot, Topic,
 };
+
+/// Module id of the History view, whose pages `p` switches (D-72).
+pub const HISTORY_MODULE_ID: &str = "history";
 
 /// Windows `w` and `W` step through, in order.
 const WINDOWS: [&str; 5] = ["5m", "1h", "6h", "12h", "24h"];
@@ -58,7 +64,7 @@ impl HistoryModule {
     pub fn new() -> Result<Self, ModuleBuildError> {
         Ok(Self {
             manifest: build_manifest(ManifestSpec {
-                id: "history",
+                id: HISTORY_MODULE_ID,
                 title: "History of the overview charts",
                 topics: &[Topic::History, Topic::Sources],
                 min_columns: 40,
@@ -83,7 +89,12 @@ impl DisplayModule for HistoryModule {
         frame: &mut Frame<'_>,
     ) -> RenderOutput {
         let mut output = Output::default();
-        let inner = panel(frame, area, "History", context);
+        let (title, keys) = match context.tab {
+            0 => ("Overview History", WINDOW_KEYS),
+            1 => ("Process History", PROCESS_LIST_KEYS),
+            _ => ("Process History · process", PROCESS_DETAIL_KEYS),
+        };
+        let inner = panel_with_keys(frame, area, title, keys, context);
         let Some(history) = model.modules.history.as_deref() else {
             message(
                 frame,
@@ -94,7 +105,11 @@ impl DisplayModule for HistoryModule {
             output.label("history: no data");
             return output.finish();
         };
-        render_history(frame, inner, history, context, &mut output);
+        if context.tab == 0 {
+            render_history(frame, inner, history, context, &mut output);
+        } else {
+            render_process_pages(frame, inner, history, context, &mut output);
+        }
         output.finish()
     }
 }
@@ -114,19 +129,14 @@ fn render_history(
         .map(|panel| saturate_u16(panel.strips.len()))
         .collect();
     let block_rows: Vec<u16> = blocks.iter().map(GpuStats::rows).collect();
-    let layout = plan(
-        inner.width,
-        inner.height,
-        &strips,
-        (&block_rows, table_rows(history)),
-    );
-    let shown_processes = usize::from(layout.process_rows.saturating_sub(1));
+    // The GPU processes have a tab of their own (D-75).
+    let layout = plan(inner.width, inner.height, &strips, (&block_rows, 0));
     let mut rows = RowCursor::new(inner);
     if let Some(row) = rows.next_row() {
         let hidden = Hidden {
             panels: layout.hidden_panels,
             gpus: blocks.len() - layout.table_blocks,
-            processes: history.processes.len().saturating_sub(shown_processes),
+            processes: 0,
         };
         render_window_bar(frame, row, history, hidden, context);
     }
@@ -195,12 +205,191 @@ fn render_history(
     for label in stats_labels(shown) {
         output.label(label);
     }
-    if let Some(table) = rows.take(layout.process_rows) {
-        render_processes(frame, table, history, context);
+}
+
+/// The process pages (D-72): the window bar, then the GPU processes of the
+/// window as a table to choose from (`tab` 1) or the chosen one's figures
+/// and memory chart (`tab` 2). The context's scroll is the cursor.
+fn render_process_pages(
+    frame: &mut Frame<'_>,
+    inner: Rect,
+    history: &HistoryView,
+    context: &DisplayContext,
+    output: &mut Output,
+) {
+    let mut rows = RowCursor::new(inner);
+    if let Some(row) = rows.next_row() {
+        let none = Hidden {
+            panels: 0,
+            gpus: 0,
+            processes: 0,
+        };
+        render_window_bar(frame, row, history, none, context);
     }
-    for label in process_labels(history).into_iter().take(shown_processes) {
+    if history.processes.is_empty() {
+        if let Some(body) = rows.rest() {
+            message(
+                frame,
+                body,
+                "no GPU process was recorded in this window",
+                context.theme.muted_style(),
+            );
+        }
+        output.label("history: no GPU process in the window");
+        return;
+    }
+    let cursor = usize::from(context.scroll).min(history.processes.len() - 1);
+    for label in process_labels(history) {
         output.label(label);
     }
+    if context.tab == 1 {
+        if let Some(table) = rows.rest() {
+            render_processes(frame, table, history, Some(cursor), context);
+        }
+        return;
+    }
+    let process = &history.processes[cursor];
+    for line in process_detail_lines(process, history, context) {
+        let Some(row) = rows.next_row() else { return };
+        draw_line(frame.buffer_mut(), row, &line);
+    }
+    let Some(chart) = process_chart(process, history) else {
+        if let Some(body) = rows.rest() {
+            message(
+                frame,
+                body,
+                "no memory chart for this GPU",
+                context.theme.muted_style(),
+            );
+        }
+        return;
+    };
+    let panel = Panel {
+        title: format!("GPU memory · {}", clean(&process.gpu_label)),
+        strips: vec![Strip {
+            label: String::new(),
+            chart: &chart,
+            scale: process.scale_max,
+            paint: Paint::Process(process.slot),
+        }],
+    };
+    let window = Window {
+        start_ns: history.start_utc_ns,
+        end_ns: history.end_utc_ns,
+    };
+    let chart_rows = rows.remaining().saturating_sub(1);
+    if let Some(area) = rows.take(chart_rows) {
+        render_panel(
+            frame,
+            area,
+            &panel,
+            (chart_rows.saturating_sub(1), window),
+            context,
+        );
+    }
+    if let Some(axis) = rows.next_row() {
+        let span_seconds = (window.end_ns - window.start_ns) / 1_000_000_000;
+        let x = axis.x + HISTORY_GUTTER_COLUMNS;
+        render_axis(
+            frame,
+            axis,
+            (x, plot_width(axis.width)),
+            span_seconds,
+            context,
+        );
+    }
+}
+
+/// `■ PID 41 │ acme_llm.train │ GPU 0 │ running`, its figures, then its
+/// command line as last listed (D-73).
+fn process_detail_lines(
+    process: &HistoryProcessView,
+    history: &HistoryView,
+    context: &DisplayContext,
+) -> Vec<Line<'static>> {
+    let theme = &context.theme;
+    let value = |value: Option<f64>| {
+        value.map_or_else(
+            || crate::format::NOT_AVAILABLE.to_owned(),
+            |value| crate::format::format_value(value, process.unit),
+        )
+    };
+    let state = if process.running { "running" } else { "exited" };
+    let first = Line::from(vec![
+        Span::styled(
+            "■ ",
+            ratatui::style::Style::new().fg(theme.process_color(process.slot)),
+        ),
+        Span::styled(format!("PID {}", process.pid), theme.label_style()),
+        super::common::separator(context),
+        Span::styled(clean(&process.name), theme.title_style()),
+        super::common::separator(context),
+        Span::styled(clean(&process.gpu_label), theme.label_style()),
+        super::common::separator(context),
+        Span::styled(state, theme.muted_style()),
+    ]);
+    let figures = [
+        ("avg memory", value(process.mean)),
+        ("peak", value(process.peak)),
+        ("listed", recorded_text(process.listed_ns / 1_000_000_000)),
+        ("window", clean(&history.window_label)),
+    ];
+    let mut spans = Vec::new();
+    for (index, (label, text)) in figures.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(super::common::separator(context));
+        }
+        spans.push(Span::styled(format!("{label} "), theme.label_style()));
+        spans.push(Span::styled(text, theme.text_style()));
+    }
+    let command = if process.command.is_empty() {
+        crate::format::NOT_AVAILABLE.to_owned()
+    } else {
+        clean(&process.command)
+    };
+    let command_line = Line::from(vec![
+        Span::styled("command ", theme.label_style()),
+        Span::styled(command, theme.text_style()),
+    ]);
+    vec![first, Line::from(spans), command_line]
+}
+
+/// The process's memory chart: its GPU's memory chart (scale, series,
+/// legend) with the process's means for points, one per even cell of the
+/// window, the grid the means were taken on.
+fn process_chart(process: &HistoryProcessView, history: &HistoryView) -> Option<HistoryChartView> {
+    let template = history.charts.iter().find(|chart| {
+        chart.kind == HistoryChartKind::GpuMemory
+            && clean(&chart.subject).starts_with(&clean(&process.gpu_label))
+    })?;
+    let method = template.points.first()?.method;
+    let cells = u128::try_from(process.means.len().max(1)).unwrap_or(1);
+    let span = u128::from(history.end_utc_ns.saturating_sub(history.start_utc_ns));
+    let edge = |cell: usize| {
+        let offset = span * u128::try_from(cell).unwrap_or(u128::MAX) / cells;
+        history
+            .start_utc_ns
+            .saturating_add(u64::try_from(offset).unwrap_or(u64::MAX))
+    };
+    let mut chart = template.clone();
+    chart.points = process
+        .means
+        .iter()
+        .enumerate()
+        .map(|(cell, mean)| HistoryPointView {
+            start_utc_ns: edge(cell),
+            end_utc_ns: edge(cell + 1),
+            mean: *mean,
+            min: *mean,
+            max: *mean,
+            method,
+        })
+        .collect();
+    chart.mean = process.mean;
+    chart.peak = process.peak;
+    chart.parts = Vec::new();
+    chart.scale_max = process.scale_max;
+    Some(chart)
 }
 
 /// A panel's title rule, then its strips, `strip_rows` rows each.
@@ -249,7 +438,7 @@ fn title_rule(
     context: &DisplayContext,
 ) -> Line<'static> {
     let theme = &context.theme;
-    let mut spans = vec![Span::styled(clean(title), theme.title_style())];
+    let mut spans = vec![Span::styled(clean(title), theme.section_title_style(title))];
     if let Some(error) = error {
         spans.push(gap(context));
         spans.push(Span::styled(
@@ -324,7 +513,13 @@ impl Hidden {
     }
 }
 
-/// `5m [1h] 6h 12h 24h   w/W window`, then at the right what did not fit
+/// The keys acting on the view, at the right of its title (D-70).
+const WINDOW_KEYS: &str = "w/W/←/→ window";
+/// The keys of the process history's pages (D-72, D-75).
+const PROCESS_LIST_KEYS: &str = "j/k/↑/↓ select · Enter open · w/W/←/→ window";
+const PROCESS_DETAIL_KEYS: &str = "Enter back · j/k/↑/↓ next · w/W/←/→ window";
+
+/// `5m [1h] 6h 12h 24h`, then at the right what did not fit
 /// and how much of the window is recorded, as much as fits.
 fn render_window_bar(
     frame: &mut Frame<'_>,
@@ -344,8 +539,6 @@ fn render_window_bar(
         };
         spans.push(Span::styled(format!(" {window} "), style));
     }
-    spans.push(gap(context));
-    spans.push(Span::styled("w/W window", theme.muted_style()));
     let left = Line::from(spans);
     let room = usize::from(row.width).saturating_sub(left.width() + 2 * gap(context).width());
     let note = bar_notes(hidden, recorded_note(history), why_partly(&history.disk))
@@ -411,6 +604,101 @@ fn recorded_note(history: &HistoryView) -> Option<String> {
 mod tests {
     use super::*;
     use crate::test_fixtures::history_view;
+
+    fn with_processes() -> HistoryView {
+        let mut history = history_view();
+        let gib = crate::test_fixtures::GIB;
+        let cells = history.charts[0].points.len();
+        history.processes = [
+            (0_u8, 41, "acme_llm.train", 40.0, true),
+            (3, 42, "ComfyUI/main", 9.0, false),
+        ]
+        .into_iter()
+        .map(|(slot, pid, name, mean, running)| HistoryProcessView {
+            slot,
+            pid,
+            name: name.to_owned(),
+            command: format!("python -m {name} --epochs 3"),
+            gpu_label: "GPU 0".to_owned(),
+            unit: dgxtop_core::metric::CanonicalUnit::Bytes,
+            mean: Some(mean * gib),
+            peak: Some(mean * gib * 1.1),
+            listed_ns: 30 * 60 * SECOND,
+            running,
+            means: vec![Some(mean * gib); cells],
+            scale_max: Some(64.0 * gib),
+        })
+        .collect();
+        history
+    }
+
+    fn draw(history: &HistoryView, tab: u8, scroll: u16) -> Vec<String> {
+        let mut context = crate::test_fixtures::display_context();
+        context.tab = tab;
+        context.scroll = scroll;
+        let mut model =
+            crate::test_fixtures::view_model(dgxtop_core::commands::ViewKind::History, 1);
+        model.modules.history = Some(std::sync::Arc::new(history.clone()));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 24)).unwrap();
+        terminal
+            .draw(|frame| {
+                HistoryModule::new()
+                    .unwrap()
+                    .render(&context, &model, frame.area(), frame);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..24)
+            .map(|y| (0..120).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    /// The Process History tab (D-72, D-75): first the table to choose from,
+    /// then the chosen process's figures and its memory chart in its color.
+    #[test]
+    fn the_process_pages_list_then_open_a_process() {
+        let history = with_processes();
+        let list = draw(&history, 1, 1);
+        assert!(list[0].contains("Process History"), "{}", list.join("\n"));
+        assert!(list[0].contains("Enter open"), "{}", list[0]);
+        let selected = list
+            .iter()
+            .position(|line| line.contains("ComfyUI/main"))
+            .unwrap();
+        assert!(list.iter().any(|line| line.contains("acme_llm.train")));
+        assert!(selected > 0);
+        let detail = draw(&history, 2, 1);
+        let text = detail.join("\n");
+        assert!(detail[0].contains("Process History · process"), "{text}");
+        assert!(
+            text.contains("PID 42 │ ComfyUI/main │ GPU 0 │ exited"),
+            "{text}"
+        );
+        assert!(text.contains("avg memory 9.0 GiB"), "{text}");
+        assert!(
+            text.contains("command python -m ComfyUI/main --epochs 3"),
+            "{text}"
+        );
+        assert!(text.contains("GPU memory · GPU 0"), "{text}");
+        let chart = process_chart(&history.processes[1], &history).unwrap();
+        assert_eq!(chart.points.len(), history.processes[1].means.len());
+        assert!(chart.points.iter().all(|point| point.mean.is_some()));
+        assert_eq!(
+            chart.points.first().unwrap().start_utc_ns,
+            history.start_utc_ns
+        );
+        assert_eq!(chart.points.last().unwrap().end_utc_ns, history.end_utc_ns);
+        // An offset past the list opens the last process.
+        assert!(draw(&history, 2, 9).join("\n").contains("PID 42"));
+        assert!(draw(&history, 2, 0).join("\n").contains("PID 41"));
+        // No process in the window: it says so.
+        let empty = draw(&history_view(), 1, 0).join("\n");
+        assert!(
+            empty.contains("no GPU process was recorded in this window"),
+            "{empty}"
+        );
+    }
 
     #[test]
     fn a_partly_recorded_window_says_how_much_it_holds() {

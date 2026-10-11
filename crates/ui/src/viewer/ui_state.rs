@@ -2,7 +2,7 @@
 //! what must be drawn (mode, filter buffer, notices, confirmation target)
 //! and, by construction, never the confirmation token.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use dgxtop_core::action::Signal;
 use dgxtop_core::identity::{ModuleId, ProcessKey};
@@ -63,6 +63,10 @@ pub struct UiState {
     /// Collapsible modules the user expanded (presentation only; nothing is
     /// sent to the Manager).
     pub expanded: BTreeSet<ModuleId>,
+    /// How far the user scrolled each module's scrollable part (D-70).
+    pub scroll: BTreeMap<ModuleId, u16>,
+    /// Each module's inner tab (D-72), 0 when absent.
+    pub tabs: BTreeMap<ModuleId, u8>,
 }
 
 impl UiState {

@@ -166,12 +166,17 @@ impl Viewer {
             summary_lines: saturate_u16(summary::summary_lines(model, palette, area.width).len()),
             preferred_rows: &preferred,
         });
+        let history_page = ModuleId::new(crate::modules::HISTORY_MODULE_ID)
+            .ok()
+            .and_then(|history| input.ui.tabs.get(&history).copied())
+            .unwrap_or(0);
+        let tab = crate::views::Tab::of(view, history_page);
         chrome::render_header(
             frame,
             plan.header,
             &chrome::HeaderInput {
                 model,
-                view,
+                tab,
                 show_tabs: plan.tier != SizeTier::Minimal,
                 projection_age_ms: input.projection_age_ms,
                 chrome_id: self.chrome_id.as_ref(),
@@ -180,7 +185,7 @@ impl Viewer {
             &mut report.hit_map,
         );
         if let Some(selector) = plan.tabs {
-            chrome::render_selector(frame, selector, view, palette);
+            chrome::render_selector(frame, selector, tab, palette);
         }
         for (rect, block) in plan.banners.iter().zip(&banners) {
             banners::render_block(frame, *rect, block, palette);
@@ -229,6 +234,18 @@ impl Viewer {
             slot: placement.slot,
             projection_age_ms: input.projection_age_ms,
             expanded: is_expanded(input.ui, module.manifest()),
+            scroll: input
+                .ui
+                .scroll
+                .get(&module.manifest().module_id)
+                .copied()
+                .unwrap_or(0),
+            tab: input
+                .ui
+                .tabs
+                .get(&module.manifest().module_id)
+                .copied()
+                .unwrap_or(0),
         };
         let outcome =
             isolation::render_isolated(|| module.render(&context, model, placement.area, frame));

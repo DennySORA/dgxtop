@@ -20,6 +20,8 @@ pub(super) enum Paint {
     Write,
     Receive,
     Transmit,
+    /// A GPU process's own chart, in its color (D-72).
+    Process(u8),
 }
 
 /// One series of a panel.

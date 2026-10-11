@@ -35,6 +35,25 @@ const PROCESS_COLORS: [Color; PROCESS_COLOR_SLOTS] = [
     Color::Rgb(0xbc, 0x77, 0xbc),
 ];
 
+/// Title colors of the resources (D-74), bright and the same in every
+/// theme, so a resource's panels look alike on every page.
+const SECTION_COLORS: [(&str, Color); 11] = [
+    ("GPU Processes", Color::Rgb(0xff, 0x9e, 0x64)),
+    ("Processes", Color::Rgb(0xff, 0x9e, 0x64)),
+    ("CPU", Color::Rgb(0x7a, 0xa2, 0xf7)),
+    ("Memory", Color::Rgb(0x9e, 0xce, 0x6a)),
+    ("GPUs", Color::Rgb(0xe0, 0xaf, 0x68)),
+    ("GPU", Color::Rgb(0xe0, 0xaf, 0x68)),
+    ("Disk", Color::Rgb(0xbb, 0x9a, 0xf7)),
+    ("Network", Color::Rgb(0x7d, 0xcf, 0xff)),
+    ("History", Color::Rgb(0xf7, 0x76, 0x8e)),
+    ("Settings", Color::Rgb(0xc0, 0xca, 0xf5)),
+    ("Sources", Color::Rgb(0x73, 0xda, 0xca)),
+];
+
+/// See [`ThemePalette::os_memory_color`].
+const OS_MEMORY_COLOR: Color = Color::Rgb(0x5a, 0xc8, 0x78);
+
 /// Resolved colors of one theme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ThemePalette {
@@ -200,6 +219,15 @@ impl ThemePalette {
         self.text_dim
     }
 
+    /// What the system itself holds of a RAM shared with a GPU (D-69): a
+    /// green, the same in every theme, at least OKLab ΔE 17.1 from every
+    /// process color, the track and the gray (10.1 under protanopia and
+    /// deuteranopia); a shared RAM's bar has no level colors to mistake it
+    /// for.
+    pub fn os_memory_color(&self) -> Color {
+        OS_MEMORY_COLOR
+    }
+
     /// Style of a formatted cell; the tone text itself carries the meaning.
     pub fn tone_style(&self, tone: CellTone) -> Style {
         match tone {
@@ -226,6 +254,24 @@ impl ThemePalette {
                 .bg(self.warning)
                 .add_modifier(Modifier::BOLD),
         }
+    }
+
+    /// The title style of a panel or chart named `title`: its resource's
+    /// fixed bright color (D-74), told by the title's first words (`GPU
+    /// memory · GPU 0` is a GPU's); the theme's title style otherwise.
+    pub fn section_title_style(&self, title: &str) -> Style {
+        let title = title.trim_start();
+        SECTION_COLORS
+            .iter()
+            .find(|(section, _)| {
+                title
+                    .strip_prefix(section)
+                    .is_some_and(|rest| rest.is_empty() || !rest.starts_with(char::is_alphanumeric))
+            })
+            .map_or_else(
+                || self.title_style(),
+                |(_, color)| self.title_style().fg(*color),
+            )
     }
 
     pub fn title_style(&self) -> Style {
@@ -301,6 +347,62 @@ mod tests {
 
     /// A process keeps one color in every theme; a slot past the palette
     /// is drawn like the other processes, never as a level color.
+    /// A resource's titles share one fixed bright color on every page and
+    /// in every theme (D-74).
+    #[test]
+    fn a_resources_titles_share_a_fixed_color() {
+        let color = |theme: Theme, title: &str| {
+            ThemePalette::for_theme(theme).section_title_style(title).fg
+        };
+        for theme in [Theme::Dark, Theme::Cyan, Theme::Green, Theme::Amber] {
+            assert_eq!(
+                color(theme, "GPUs  1x"),
+                color(Theme::Dark, "GPU memory · GPU 0")
+            );
+            assert_eq!(
+                color(theme, "GPU 0 · NVIDIA GB10"),
+                color(Theme::Dark, "GPU utilization")
+            );
+            assert_eq!(
+                color(theme, "CPU ▸ Grace"),
+                color(Theme::Dark, "CPU utilization")
+            );
+            assert_eq!(
+                color(theme, "Memory · shared with GPU"),
+                color(Theme::Dark, "Memory used")
+            );
+            assert_eq!(
+                color(theme, "Disk I/O [nvme0n1]"),
+                color(Theme::Dark, "Disk · nvme0n1")
+            );
+        }
+        let titles = [
+            "CPU",
+            "Memory",
+            "GPUs",
+            "Disk",
+            "Network",
+            "GPU Processes",
+            "History",
+            "Settings",
+        ];
+        let colors: std::collections::BTreeSet<_> = titles
+            .iter()
+            .map(|title| format!("{:?}", color(Theme::Dark, title)))
+            .collect();
+        assert_eq!(colors.len(), titles.len(), "every resource its own color");
+        assert_ne!(
+            color(Theme::Dark, "GPU Processes"),
+            color(Theme::Dark, "GPUs")
+        );
+        // A word that only begins like a resource is no resource.
+        let palette = ThemePalette::for_theme(Theme::Dark);
+        assert_eq!(
+            palette.section_title_style("CPUs-ish"),
+            palette.title_style()
+        );
+    }
+
     #[test]
     fn process_colors_are_fixed_and_never_a_level() {
         for theme in [Theme::Dark, Theme::Cyan, Theme::Green, Theme::Amber] {

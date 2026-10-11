@@ -15,7 +15,7 @@ use super::blocks::{Block, block_text, blocks};
 use super::columns::{Arrangement, arrange, render_columns};
 use super::readings::{render_bar, status_readings};
 use crate::format::{clean, display_width};
-use crate::modules::common::{Output, RowCursor, draw_line, panel};
+use crate::modules::common::{Output, RowCursor, draw_line, panel_with_keys};
 use crate::num::saturate_u16;
 use crate::registry::{DisplayContext, DisplayModuleManifest, controls};
 
@@ -30,7 +30,7 @@ pub(super) fn render_gpu_view(
     output: &mut Output,
 ) {
     let title = format!("{} · {}", clean(&selected.label), clean(&selected.name));
-    let inner = panel(frame, area, &title, context);
+    let inner = panel_with_keys(frame, area, &title, SWITCH_KEYS, context);
     let mut rows = RowCursor::new(inner);
     let Some(selector) = rows.next_row() else {
         return;
@@ -129,8 +129,8 @@ fn hidden_blocks(titles: &[&str], width: usize) -> Option<String> {
     })
 }
 
-/// The hint after the GPU labels.
-const SWITCH_HINT: &str = "  h/l switch GPU";
+/// The keys acting on the view, at the right of its title (D-70).
+const SWITCH_KEYS: &str = "h/l/←/→ switch GPU";
 /// Between the hint and what the panel leaves out.
 const HIDDEN_GAP: &str = "   ";
 
@@ -141,10 +141,10 @@ fn selector_width(gpu: &GpuView) -> usize {
         .iter()
         .map(|card| display_width(&clean(&card.label)) + 3)
         .sum();
-    labels + display_width(SWITCH_HINT) + display_width(HIDDEN_GAP)
+    labels + display_width(HIDDEN_GAP)
 }
 
-/// `[GPU 0]  GPU 1   h/l switch GPU`, then what the panel could not show.
+/// `[GPU 0]  GPU 1`, then what the panel could not show.
 fn render_selector(
     frame: &mut Frame<'_>,
     row: Rect,
@@ -181,7 +181,7 @@ fn render_selector(
         );
         x = x.saturating_add(width).saturating_add(1);
     }
-    let mut spans = vec![Span::styled(SWITCH_HINT, context.theme.muted_style())];
+    let mut spans = Vec::new();
     if let Some(hidden) = hidden {
         spans.push(Span::raw(HIDDEN_GAP));
         spans.push(Span::styled(hidden.to_owned(), context.theme.label_style()));

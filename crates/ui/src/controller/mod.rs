@@ -16,7 +16,7 @@ mod notices;
 mod requests;
 mod session;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use crossterm::event::{
@@ -43,12 +43,14 @@ use notices::Notices;
 use requests::{PendingRequests, RequestKind};
 use session::SessionDrafts;
 
-use crate::modules::CPU_MODULE_ID;
+use crate::modules::{CPU_MODULE_ID, HISTORY_MODULE_ID, MEMORY_MODULE_ID};
 use crate::registry::controls;
 pub use crate::viewer::UiState;
 use crate::viewer::{FilterTarget, HitMap, ModeView};
 use crate::views;
 
+/// Lines a module's scrollable part may be scrolled past its start.
+const MAX_MODULE_SCROLL: u16 = 64;
 /// Page size for list views without a measured table.
 const DEFAULT_PAGE: u32 = 10;
 /// A seek toward an off-window target gives up after this long without
@@ -121,6 +123,10 @@ pub struct Controller {
     busy_notified: bool,
     /// Collapsible modules the user expanded (presentation only).
     expanded: BTreeSet<ModuleId>,
+    /// How far the user scrolled each module's scrollable part (D-70).
+    scroll: BTreeMap<ModuleId, u16>,
+    /// Each module's inner tab (D-72).
+    tabs: BTreeMap<ModuleId, u8>,
 }
 
 impl Default for Controller {
@@ -166,6 +172,8 @@ impl Controller {
             version: 0,
             busy_notified: false,
             expanded: BTreeSet::new(),
+            scroll: BTreeMap::new(),
+            tabs: BTreeMap::new(),
         }
     }
 
@@ -224,6 +232,8 @@ impl Controller {
             notices: self.notices.visible(),
             awaiting_confirmation: self.confirmation.is_awaiting(),
             expanded: self.expanded.clone(),
+            scroll: self.scroll.clone(),
+            tabs: self.tabs.clone(),
         }
     }
 
@@ -335,19 +345,20 @@ impl Controller {
                     self.navigate(movement, context);
                 }
             }
-            KeyAction::ShowView(target) => self.show_view(target, context),
+            KeyAction::ShowTab(target) => self.show_tab(target, context),
             KeyAction::NextView | KeyAction::PreviousView => {
                 // Cycle from the view already requested so Tab bursts advance.
                 let base = self
                     .drafts
                     .current(context.model, context.now)
                     .map_or(view, |fields| fields.view);
+                let current = views::Tab::of(base, self.history_page());
                 let target = if action == KeyAction::NextView {
-                    views::next_view(base)
+                    views::next_tab(current)
                 } else {
-                    views::previous_view(base)
+                    views::previous_tab(current)
                 };
-                self.show_view(target, context);
+                self.show_tab(target, context);
             }
             KeyAction::NextGpu => self.navigate_gpu(Movement::Down(1), context),
             KeyAction::PreviousGpu => self.navigate_gpu(Movement::Up(1), context),
@@ -361,7 +372,8 @@ impl Controller {
             }
             KeyAction::FasterInterval => self.change_interval(true, context, sink),
             KeyAction::SlowerInterval => self.change_interval(false, context, sink),
-            KeyAction::Terminate => self.prepare_terminate(context, sink),
+            KeyAction::Terminate => self.prepare_signal(Signal::Sigterm, context, sink),
+            KeyAction::Kill => self.prepare_signal(Signal::Sigkill, context, sink),
             KeyAction::Confirm => self.confirm(context, sink),
             KeyAction::Cancel => self.cancel(context, sink),
             KeyAction::NextHistoryWindow => self.cycle_history_window(true, context),
@@ -371,6 +383,14 @@ impl Controller {
                 if let Ok(cpu) = ModuleId::new(CPU_MODULE_ID) {
                     self.toggle_expanded(cpu);
                 }
+            }
+            KeyAction::ScrollMemoryUp | KeyAction::ScrollMemoryDown => {
+                if let Ok(memory) = ModuleId::new(MEMORY_MODULE_ID) {
+                    self.scroll_module(memory, action == KeyAction::ScrollMemoryDown);
+                }
+            }
+            KeyAction::HistoryDown | KeyAction::HistoryUp | KeyAction::HistoryOpen => {
+                self.navigate_history(action)
             }
             KeyAction::FilterApply => self.finish_filter(true, context),
             KeyAction::FilterClear => self.finish_filter(false, context),
@@ -426,6 +446,33 @@ impl Controller {
         if self.update_fields(context, change) {
             self.seek = None;
         }
+    }
+
+    /// Shows `tab`: its view and, for a history tab, its page (D-75); the
+    /// process history keeps an open process open.
+    fn show_tab(&mut self, tab: views::Tab, context: &ControllerContext<'_>) {
+        if let Ok(history) = ModuleId::new(HISTORY_MODULE_ID) {
+            let page = self.history_page();
+            match tab {
+                views::Tab::OverviewHistory => {
+                    self.tabs.insert(history, 0);
+                }
+                views::Tab::ProcessHistory if page == 0 => {
+                    self.tabs.insert(history, views::PROCESS_LIST_PAGE);
+                }
+                _ => {}
+            }
+        }
+        self.bump();
+        self.show_view(tab.view(), context);
+    }
+
+    /// The history module's page (0 the overview history).
+    fn history_page(&self) -> u8 {
+        ModuleId::new(HISTORY_MODULE_ID)
+            .ok()
+            .and_then(|history| self.tabs.get(&history).copied())
+            .unwrap_or(0)
     }
 
     fn show_view(&mut self, view: ViewKind, context: &ControllerContext<'_>) {
@@ -691,12 +738,53 @@ impl Controller {
             // never confirm or retarget anything.
             ModeKind::Confirm | ModeKind::Filter => return,
         }
-        match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) => self.click(mouse.column, mouse.row, context),
-            MouseEventKind::ScrollDown => self.navigate(Movement::Down(1), context),
-            MouseEventKind::ScrollUp => self.navigate(Movement::Up(1), context),
+        // The wheel over a module's scrollable part scrolls it; anywhere
+        // else it moves the process selection.
+        let scrollable = context
+            .hit_map
+            .hit(mouse.column, mouse.row)
+            .filter(|target| target.control_id == controls::MODULE_SCROLL)
+            .map(|target| target.module_id.clone());
+        match (mouse.kind, scrollable) {
+            (MouseEventKind::Down(MouseButton::Left), _) => {
+                self.click(mouse.column, mouse.row, context);
+            }
+            (MouseEventKind::ScrollDown, Some(module)) => self.scroll_module(module, true),
+            (MouseEventKind::ScrollUp, Some(module)) => self.scroll_module(module, false),
+            (MouseEventKind::ScrollDown, None) => self.navigate(Movement::Down(1), context),
+            (MouseEventKind::ScrollUp, None) => self.navigate(Movement::Up(1), context),
             _ => {}
         }
+    }
+
+    /// The process history (D-72, D-75): `j`/`k` move the cursor and Enter
+    /// opens or closes the process under it. Presentation only.
+    fn navigate_history(&mut self, action: KeyAction) {
+        let Ok(history) = ModuleId::new(HISTORY_MODULE_ID) else {
+            return;
+        };
+        let tab = self.tabs.get(&history).copied().unwrap_or(0);
+        match action {
+            KeyAction::HistoryOpen if tab > 0 => {
+                self.tabs.insert(history, if tab == 1 { 2 } else { 1 });
+                self.bump();
+            }
+            KeyAction::HistoryDown if tab > 0 => self.scroll_module(history, true),
+            KeyAction::HistoryUp if tab > 0 => self.scroll_module(history, false),
+            _ => {}
+        }
+    }
+
+    /// Scrolls a module's scrollable part one line (presentation only; the
+    /// module clamps the offset to what it has).
+    fn scroll_module(&mut self, module_id: ModuleId, down: bool) {
+        let offset = self.scroll.entry(module_id).or_insert(0);
+        *offset = if down {
+            offset.saturating_add(1).min(MAX_MODULE_SCROLL)
+        } else {
+            offset.saturating_sub(1)
+        };
+        self.bump();
     }
 
     /// Resolves a click through the HitMap of the frame the user saw. The
@@ -708,8 +796,8 @@ impl Controller {
         let Some(target) = context.hit_map.hit(column, row).cloned() else {
             return;
         };
-        if let Some(view) = controls::view_for_tab(target.control_id) {
-            self.show_view(view, context);
+        if let Some(tab) = views::Tab::for_control(target.control_id) {
+            self.show_tab(tab, context);
             return;
         }
         match target.control_id {
@@ -931,10 +1019,13 @@ impl Controller {
         );
     }
 
-    /// `K`: PrepareSignal(SIGTERM) for the selected process exactly as drawn
-    /// in the visible process table, with its full `ProcessKey`.
-    fn prepare_terminate<S: CommandSink + ?Sized>(
+    /// `K` (SIGTERM) and `F9` (SIGKILL, D-70): PrepareSignal for the
+    /// selected process exactly as drawn in the visible process table, with
+    /// its full `ProcessKey`; the same confirmation follows either, and the
+    /// Manager's policy decides whether SIGKILL may be sent.
+    fn prepare_signal<S: CommandSink + ?Sized>(
         &mut self,
+        signal: Signal,
         context: &ControllerContext<'_>,
         sink: &S,
     ) {
@@ -956,7 +1047,7 @@ impl Controller {
         };
         let body = CommandBody::PrepareSignal {
             target: target.clone(),
-            signal: Signal::Sigterm,
+            signal,
         };
         if let Some(request_id) = self.submit(
             body,
@@ -967,7 +1058,7 @@ impl Controller {
             sink,
         ) {
             self.confirmation
-                .begin(request_id, target, Signal::Sigterm, context.now);
+                .begin(request_id, target, signal, context.now);
             self.bump();
         }
     }

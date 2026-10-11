@@ -24,7 +24,9 @@ pub(crate) use actions::{
 pub use cpu::{CPU_MODULE_ID, CpuModule};
 pub use disk::DiskModule;
 pub use gpu::GpuModule;
+pub use history::HISTORY_MODULE_ID;
 pub use history::HistoryModule;
+pub use memory::MEMORY_MODULE_ID;
 pub use memory::MemoryModule;
 pub use network::NetworkModule;
 pub use processes::ProcessesModule;

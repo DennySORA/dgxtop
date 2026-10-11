@@ -14,14 +14,17 @@ use ratatui::text::{Line, Span};
 use super::ModuleBuildError;
 use super::common::{
     BarRow, ManifestSpec, Output, RowCursor, build_manifest, cell_label, draw_line, fraction_ratio,
-    gap, join_if_fits, measuring_context, message, no_data, panel, render_bar_row,
-    render_chart_with_parts, under_bar,
+    join_if_fits, measuring_context, message, no_data, panel, panel_with_keys, render_bar_row,
+    render_chart_with_parts, separator, under_bar,
 };
-use super::process_memory::{SWATCH, legend, other_points, share_segments, trend_parts};
+use super::process_memory::{
+    SWATCH, legend_line_count, legend_lines, other_points, share_segments, trend_parts,
+};
 use crate::format::{clean, format_bytes, format_percent, value_text};
 use crate::num::saturate_u16;
 use crate::registry::{
     DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot, Topic,
+    controls,
 };
 use crate::widgets::{Gauge, Segment, StackedBar};
 
@@ -29,6 +32,16 @@ use crate::widgets::{Gauge, Segment, StackedBar};
 const CHART_ROWS: u16 = 3;
 /// Rows of the RAM line, the used bar and its chart.
 const RAM_ROWS: u16 = 2 + CHART_ROWS;
+/// Module id of the memory panel, whose GPU legend scrolls (D-70).
+pub const MEMORY_MODULE_ID: &str = "memory";
+/// Most lines the GPU legend takes (D-69); the rest scrolls (D-70).
+const MAX_GPU_ROWS: usize = 3;
+/// Columns the legend keeps free for its scroll hint (`  ▲9 ▼9`).
+const SCROLL_HINT_WIDTH: usize = 8;
+/// The keys acting on the panel while its GPU legend scrolls (D-70).
+const SCROLL_KEYS: &str = "[/] scroll GPU";
+/// What the system itself holds of a RAM shared with a GPU.
+const OS_LABEL: &str = "OS";
 /// Value column of the used bar (`100.0%`).
 const PERCENT_WIDTH: u16 = 6;
 
@@ -40,7 +53,7 @@ impl MemoryModule {
     pub fn new() -> Result<Self, ModuleBuildError> {
         Ok(Self {
             manifest: build_manifest(ManifestSpec {
-                id: "memory",
+                id: MEMORY_MODULE_ID,
                 title: "Memory and swap",
                 topics: &[Topic::Memory],
                 min_columns: 30,
@@ -67,8 +80,10 @@ impl DisplayModule for MemoryModule {
             return Some(3);
         };
         let context = measuring_context(model, slot);
-        let swap_rows = swap_lines(memory, width.saturating_sub(2), &context).len();
-        Some(2 + RAM_ROWS + saturate_u16(swap_rows))
+        let inner = width.saturating_sub(2);
+        let swap_rows = swap_lines(memory, inner, &context).len();
+        let gpu_rows = gpu_legend_rows(memory, inner, MAX_GPU_ROWS, &context);
+        Some(2 + RAM_ROWS + saturate_u16(gpu_rows + swap_rows))
     }
 
     fn render(
@@ -90,19 +105,46 @@ impl DisplayModule for MemoryModule {
             output.label("memory: no data");
             return output.finish();
         };
-        let inner = panel(frame, area, &title(memory), context);
+        let width = area.width.saturating_sub(2);
+        let keys = if gpu_legend_rows(memory, width, usize::MAX, context) > MAX_GPU_ROWS {
+            SCROLL_KEYS
+        } else {
+            ""
+        };
+        let inner = panel_with_keys(frame, area, &title(memory), keys, context);
         let mut rows = RowCursor::new(inner);
         if let Some(row) = rows.next_row() {
-            draw_line(
-                frame.buffer_mut(),
-                row,
-                &ram_line(memory, row.width, context),
-            );
+            draw_line(frame.buffer_mut(), row, &ram_line(memory, context));
         }
-        if let Some(area) = rows.take(1 + CHART_ROWS) {
+        let swap = swap_lines(memory, inner.width, context);
+        // The bar, its chart and the swap rows keep their rows; the GPU
+        // legend takes what is left, up to its most, and scrolls (D-70).
+        let room = usize::from(rows.remaining())
+            .saturating_sub(usize::from(1 + CHART_ROWS) + swap.len())
+            .clamp(1, MAX_GPU_ROWS);
+        let legend = gpu_legend(memory, inner.width, (room, context.scroll), context);
+        if let Some(area) = rows.take(saturate_u16(legend.lines.len())) {
+            for (row, line) in (area.y..area.bottom()).zip(&legend.lines) {
+                draw_line(
+                    frame.buffer_mut(),
+                    Rect::new(area.x, row, area.width, 1),
+                    line,
+                );
+            }
+            if legend.scrolls {
+                output.target(model, &self.manifest, controls::MODULE_SCROLL, area);
+            }
+        }
+        // The chart takes the rows the panel has beyond its own, so it fills
+        // a row the CPU panel beside it made taller (D-70).
+        let chart_rows = rows
+            .remaining()
+            .saturating_sub(saturate_u16(swap.len()))
+            .max(1 + CHART_ROWS);
+        if let Some(area) = rows.take(chart_rows) {
             render_used(frame, area, memory, context);
         }
-        for line in swap_lines(memory, inner.width, context) {
+        for line in swap {
             let Some(row) = rows.next_row() else { break };
             draw_line(frame.buffer_mut(), row, &line);
         }
@@ -176,20 +218,24 @@ impl Shares {
             fraction: attributed - tracked / self.total,
             color: theme.other_processes_color(),
         });
+        let rest = if self.gpu.is_some() {
+            theme.os_memory_color()
+        } else {
+            theme.level_color(self.used)
+        };
         segments.push(Segment {
             fraction: self.used - attributed,
-            color: theme.level_color(self.used),
+            color: rest,
         });
         segments
     }
 }
 
-/// `RAM 90.0 GiB / 122 GiB  GPU 69.8 GiB  ■ train 40.0 GiB  ■ serve …`: the
-/// RAM in use and, on unified memory, what GPU processes hold of it with
-/// each tracked process (as many as fit `width`) and the other processes;
-/// `■ GPU 69.8 GiB` in gray while no process is tracked. The percentage is
-/// on the used row below.
-fn ram_line(memory: &MemoryView, width: u16, context: &DisplayContext) -> Line<'static> {
+/// `RAM 90.0 GiB / 122 GiB │ ■ OS 20.2 GiB` (D-69): the RAM in use and, on
+/// unified memory, what the system itself holds of it (the used RAM less
+/// the GPU share) in its fixed color; the GPU legend follows on its own
+/// lines. The percentage is on the used row below.
+fn ram_line(memory: &MemoryView, context: &DisplayContext) -> Line<'static> {
     let theme = &context.theme;
     let mut spans = vec![
         Span::styled("RAM ", theme.label_style()),
@@ -202,29 +248,120 @@ fn ram_line(memory: &MemoryView, width: u16, context: &DisplayContext) -> Line<'
             theme.text_style(),
         ),
     ];
-    let Some(gpu) = &memory.gpu_resident else {
-        return Line::from(spans);
-    };
-    spans.push(gap(context));
-    if memory.gpu_processes.is_empty() {
+    if let Some(host) = host_bytes(memory) {
+        spans.push(separator(context));
         spans.push(Span::styled(
             SWATCH,
-            Style::new().fg(theme.other_processes_color()),
+            Style::new().fg(theme.os_memory_color()),
         ));
-    }
-    spans.push(Span::styled("GPU ", theme.label_style()));
-    spans.push(Span::styled(value_text(gpu), theme.text_style()));
-    if !memory.gpu_processes.is_empty() {
-        let used: usize = spans.iter().map(Span::width).sum();
-        let left = usize::from(width).saturating_sub(used);
-        spans.extend(legend(
-            &memory.gpu_processes,
-            other_bytes(memory),
-            left,
-            context,
-        ));
+        spans.push(Span::styled(format!("{OS_LABEL} "), theme.label_style()));
+        spans.push(Span::styled(format_bytes(host), theme.text_style()));
     }
     Line::from(spans)
+}
+
+/// The visible lines of the GPU legend and whether more of it scrolls.
+struct GpuLegend {
+    lines: Vec<Line<'static>>,
+    scrolls: bool,
+}
+
+/// The GPU legend of a RAM shared with a GPU (D-69): the tracked processes
+/// and the other GPU processes, or all GPU memory in gray while no process
+/// is tracked, wrapped to `width`. `shown` lines from `scroll` on are drawn
+/// (D-70); `▲`/`▼` with a count end the last line while lines are hidden
+/// above or below (the panel's title names the keys).
+fn gpu_legend(
+    memory: &MemoryView,
+    width: u16,
+    (shown, scroll): (usize, u16),
+    context: &DisplayContext,
+) -> GpuLegend {
+    if memory.gpu_resident.is_none() || shown == 0 {
+        return GpuLegend {
+            lines: Vec::new(),
+            scrolls: false,
+        };
+    }
+    let hint_width = SCROLL_HINT_WIDTH.min(usize::from(width) / 3);
+    let mut all = legend_lines(
+        &memory.gpu_processes,
+        legend_other(memory),
+        usize::from(width),
+        usize::MAX,
+        context,
+    );
+    if all.len() > shown {
+        // Leave room for the hint at the end of each line.
+        all = legend_lines(
+            &memory.gpu_processes,
+            legend_other(memory),
+            usize::from(width).saturating_sub(hint_width),
+            usize::MAX,
+            context,
+        );
+    }
+    let total = all.len();
+    if total <= shown {
+        return GpuLegend {
+            lines: all,
+            scrolls: false,
+        };
+    }
+    let start = usize::from(scroll).min(total - shown);
+    let mut lines: Vec<Line<'static>> = all.into_iter().skip(start).take(shown).collect();
+    let (above, below) = (start, total - start - shown);
+    if let Some(last) = lines.last_mut() {
+        let mut hint = String::from("  ");
+        if above > 0 {
+            hint.push_str(&format!("▲{above} "));
+        }
+        if below > 0 {
+            hint.push_str(&format!("▼{below} "));
+        }
+        last.spans.push(Span::styled(
+            hint.trim_end().to_owned(),
+            context.theme.muted_style(),
+        ));
+    }
+    GpuLegend {
+        lines,
+        scrolls: true,
+    }
+}
+
+fn gpu_legend_rows(
+    memory: &MemoryView,
+    width: u16,
+    max_lines: usize,
+    context: &DisplayContext,
+) -> usize {
+    if memory.gpu_resident.is_none() {
+        return 0;
+    }
+    legend_line_count(
+        &memory.gpu_processes,
+        legend_other(memory),
+        usize::from(width),
+        max_lines,
+        context,
+    )
+}
+
+/// The GPU memory no tracked process accounts for.
+fn legend_other(memory: &MemoryView) -> Option<u64> {
+    other_bytes(memory)
+}
+
+/// What the CPU side holds of the used RAM: the used RAM less the GPU share
+/// (display arithmetic).
+fn host_bytes(memory: &MemoryView) -> Option<u64> {
+    let used = memory.used.value_f64()?;
+    let gpu = memory.gpu_resident.as_ref()?.value_f64()?;
+    let host = (used - gpu).max(0.0);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let bytes = host.round() as u64;
+    Some(bytes)
 }
 
 /// What the GPU processes without a color hold: the GPU share less the
@@ -267,7 +404,13 @@ fn render_used(frame: &mut Frame<'_>, area: Rect, memory: &MemoryView, context: 
             frame,
             under_bar(chart),
             &memory.used_trend.points,
-            parts,
+            (
+                parts,
+                memory
+                    .gpu_resident
+                    .is_some()
+                    .then(|| theme.os_memory_color()),
+            ),
             memory.total.value_f64(),
             context,
         );
@@ -335,7 +478,7 @@ fn detail_line(memory: &MemoryView, context: &DisplayContext) -> Line<'static> {
         ("avail", &memory.available, Style::new().fg(theme.success)),
     ] {
         if !spans.is_empty() {
-            spans.push(gap(context));
+            spans.push(separator(context));
         }
         spans.push(Span::styled(format!("{label} "), theme.label_style()));
         spans.push(Span::styled(value_text(cell), style));
@@ -421,10 +564,11 @@ mod tests {
         let buffer = draw_used(&view, (30, 4));
         let (right, bottom) = (buffer.area.right() - 1, buffer.area.bottom() - 1);
         assert_eq!(buffer[(right, bottom)].fg, theme.other_processes_color());
-        // Without a share the column keeps the gauge's level color.
+        // Without a share the column is what the system holds, in its fixed
+        // color (D-69).
         view.gpu_resident_trend.points.clear();
         let buffer = draw_used(&view, (30, 4));
-        assert_eq!(buffer[(right, bottom)].fg, theme.level_color(0.75));
+        assert_eq!(buffer[(right, bottom)].fg, theme.os_memory_color());
     }
 
     /// Each tracked process has its part of the bar and of every column in
@@ -462,7 +606,7 @@ mod tests {
         let mut expected = vec![theme.process_color(0); 16];
         expected.extend([theme.process_color(1); 8]);
         expected.extend([theme.other_processes_color(); 8]);
-        expected.extend([theme.level_color(0.75); 16]);
+        expected.extend([theme.os_memory_color(); 16]);
         expected.extend([theme.gauge_track; 16]);
         assert_eq!(bar, expected);
         // The newest column of the chart (four rows, 30 eighths): job0 to
@@ -475,7 +619,7 @@ mod tests {
             vec![
                 theme.process_color(0),
                 theme.process_color(1),
-                theme.level_color(0.75),
+                theme.os_memory_color(),
             ]
         );
         // job1 ends in the second row, the others fill most of the rest.
@@ -485,8 +629,10 @@ mod tests {
         assert_eq!(buffer[(x - 1, 3)].fg, theme.other_processes_color());
     }
 
+    /// The RAM line names what the system holds in its fixed color; the GPU
+    /// processes follow on lines of their own, wrapped (D-69).
     #[test]
-    fn the_ram_line_names_each_tracked_process_while_it_fits() {
+    fn the_ram_line_names_the_system_and_the_gpu_legend_wraps_below() {
         let context = crate::test_fixtures::display_context();
         let mut view = memory(bytes(48.0 * GIB), Some(bytes(32.0 * GIB)));
         let text = |line: &Line<'_>| -> String {
@@ -495,19 +641,80 @@ mod tests {
                 .map(|span| span.content.as_ref())
                 .collect()
         };
+        let legend = |view: &MemoryView, width: u16| -> Vec<String> {
+            gpu_legend(view, width, (MAX_GPU_ROWS, 0), &context)
+                .lines
+                .iter()
+                .map(text)
+                .collect()
+        };
         view.total = bytes(64.0 * GIB);
-        assert_eq!(
-            text(&ram_line(&view, 120, &context)),
-            "RAM 48.0 GiB / 64.0 GiB  ■ GPU 32.0 GiB"
-        );
+        let ram = ram_line(&view, &context);
+        assert_eq!(text(&ram), "RAM 48.0 GiB / 64.0 GiB │ ■ OS 16.0 GiB");
+        let swatch = ram
+            .spans
+            .iter()
+            .find(|span| span.content == SWATCH)
+            .unwrap();
+        assert_eq!(swatch.style.fg, Some(context.theme.os_memory_color()));
+        assert_eq!(legend(&view, 120), vec!["[GPU] ■ other 32.0 GiB"]);
         view.gpu_processes = vec![share(0, 16.0), share(1, 8.0)];
         assert_eq!(
-            text(&ram_line(&view, 120, &context)),
-            "RAM 48.0 GiB / 64.0 GiB  GPU 32.0 GiB  ■ job0 16.0 GiB  ■ job1 8.0 GiB  ■ other 8.0 GiB"
+            legend(&view, 120),
+            vec!["[GPU] ■ job0 16.0 GiB  ■ job1 8.0 GiB  ■ other 8.0 GiB"]
         );
         assert_eq!(
-            text(&ram_line(&view, 60, &context)),
-            "RAM 48.0 GiB / 64.0 GiB  GPU 32.0 GiB  ■ job0 16.0 GiB  +2"
+            legend(&view, 40),
+            vec![
+                "[GPU] ■ job0 16.0 GiB  ■ job1 8.0 GiB",
+                "      ■ other 8.0 GiB"
+            ]
         );
+        assert_eq!(gpu_legend_rows(&view, 40, MAX_GPU_ROWS, &context), 2);
+        // A discrete GPU's memory is not in the RAM: no OS part, no legend.
+        view.gpu_resident = None;
+        assert_eq!(text(&ram_line(&view, &context)), "RAM 48.0 GiB / 64.0 GiB");
+        assert!(legend(&view, 120).is_empty());
+    }
+
+    /// Beyond its most lines the GPU legend scrolls: the lines from the
+    /// offset on, with what is hidden above and below and the keys (D-70).
+    #[test]
+    fn the_gpu_legend_scrolls_past_its_most_lines() {
+        let context = crate::test_fixtures::display_context();
+        let mut view = memory(bytes(60.0 * GIB), Some(bytes(56.0 * GIB)));
+        view.total = bytes(64.0 * GIB);
+        view.gpu_processes = (0..8).map(|slot| share(slot, 7.0)).collect();
+        let shown = |scroll: u16| -> (Vec<String>, bool) {
+            let legend = gpu_legend(&view, 52, (2, scroll), &context);
+            let lines = legend
+                .lines
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect()
+                })
+                .collect();
+            (lines, legend.scrolls)
+        };
+        let (top, scrolls) = shown(0);
+        assert!(scrolls);
+        assert_eq!(top.len(), 2);
+        assert!(top[0].starts_with("[GPU] ■ job0 7.0 GiB"), "{top:?}");
+        assert!(top[1].ends_with("▼2"), "{top:?}");
+        let (middle, _) = shown(1);
+        assert!(middle[1].ends_with("▲1 ▼1"), "{middle:?}");
+        // An offset past the end shows the last lines.
+        let (bottom, _) = shown(40);
+        assert!(bottom[1].ends_with("▲2"), "{bottom:?}");
+        assert!(bottom[1].contains("job7"), "{bottom:?}");
+        // Everything fits: nothing scrolls.
+        let (all, scrolls) = {
+            let legend = gpu_legend(&view, 52, (10, 0), &context);
+            (legend.lines.len(), legend.scrolls)
+        };
+        assert_eq!((all, scrolls), (3, false));
     }
 }

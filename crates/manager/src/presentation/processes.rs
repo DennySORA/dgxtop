@@ -10,7 +10,7 @@ use dgxtop_core::commands::{SortKey, ViewKind};
 use dgxtop_core::identity::EntityId;
 use dgxtop_core::text::{MAX_BASENAME_BYTES, sanitize_display};
 use dgxtop_core::view::{
-    OVERVIEW_GPU_ROWS, ProcessGpuView, ProcessRowView, ProcessesView, SessionState,
+    ProcessGpuView, ProcessRowView, ProcessesView, SessionState, overview_gpus_rows,
 };
 
 use super::ProcessMemoryBook;
@@ -54,7 +54,7 @@ fn gpu_panel_rows(gpu_count: usize) -> u16 {
         return 0;
     }
     let count = u16::try_from(gpu_count).unwrap_or(u16::MAX);
-    GPU_PANEL_BORDER_ROWS.saturating_add(count.saturating_mul(OVERVIEW_GPU_ROWS))
+    GPU_PANEL_BORDER_ROWS.saturating_add(overview_gpus_rows(count))
 }
 
 /// Copied slice `[start, end)` of the ordered rows.

@@ -1,4 +1,4 @@
-//! The tracked GPU processes of the history view (D-64): per process and
+//! The tracked GPU processes of the Process History tab (D-64, D-75): per process and
 //! GPU, the mean and peak of the memory it held over the window and how
 //! long it was listed, each behind a `■` in the color its part of the
 //! memory charts has. A process that has exited is dimmed and says so.
@@ -62,20 +62,14 @@ const COLUMNS: [Column; 8] = [
     Column::left("", 40, 0),
 ];
 
-/// Rows the table takes with its header; none without a process.
-pub(super) fn table_rows(history: &HistoryView) -> u16 {
-    match history.processes.len() {
-        0 => 0,
-        rows => saturate_u16(rows).saturating_add(1),
-    }
-}
-
 /// Draws the header and as many processes as `area` has rows for, at the
-/// table's natural width.
+/// table's natural width; `selected` marks the process the process pages
+/// open (D-72), the window around it kept in view.
 pub(super) fn render_processes(
     frame: &mut Frame<'_>,
     area: Rect,
     history: &HistoryView,
+    selected: Option<usize>,
     context: &DisplayContext,
 ) {
     let rows: Vec<Vec<TableCell>> = history
@@ -122,9 +116,12 @@ pub(super) fn render_processes(
             context.theme.header_style(),
         );
     }
-    for cells in rows {
+    let visible = usize::from(cursor.remaining()).max(1);
+    let first = selected.map_or(0, |index| (index + 1).saturating_sub(visible));
+    for (index, cells) in rows.into_iter().enumerate().skip(first) {
         let Some(row) = cursor.next_row() else { break };
-        draw_table_row(frame.buffer_mut(), row, &fitted, &cells, None);
+        let style = (selected == Some(index)).then(|| context.theme.selected_row_style());
+        draw_table_row(frame.buffer_mut(), row, &fitted, &cells, style);
     }
 }
 
@@ -205,6 +202,8 @@ mod tests {
             peak: Some(mean_gib * GIB * 1.25),
             listed_ns: 46 * 60 * 1_000_000_000,
             running,
+            means: vec![Some(mean_gib * GIB); 4],
+            scale_max: Some(64.0 * GIB),
         }
     }
 
@@ -216,10 +215,9 @@ mod tests {
             process(1, 277_055, "python", 61.8, true),
             process(0, 281_234, "vllm", 19.9, false),
         ];
-        assert_eq!(table_rows(&history), 3);
         let mut terminal = Terminal::new(TestBackend::new(90, 3)).unwrap();
         terminal
-            .draw(|frame| render_processes(frame, frame.area(), &history, &context))
+            .draw(|frame| render_processes(frame, frame.area(), &history, None, &context))
             .unwrap();
         let buffer = terminal.backend().buffer();
         let line = |y: u16| -> String { (0..90).map(|x| buffer[(x, y)].symbol()).collect() };
@@ -248,7 +246,5 @@ mod tests {
             )
         );
         assert!(labels[1].ends_with(", exited"));
-        history.processes.clear();
-        assert_eq!(table_rows(&history), 0);
     }
 }

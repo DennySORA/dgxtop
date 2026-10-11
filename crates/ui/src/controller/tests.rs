@@ -330,6 +330,148 @@ fn k_builds_prepare_signal_with_the_full_process_key() {
     );
 }
 
+/// F9 asks to force kill the selected process (D-70): the same PrepareSignal
+/// and confirmation as K, with SIGKILL; the Manager's policy decides.
+#[test]
+fn f9_builds_prepare_signal_with_sigkill() {
+    let mut harness = Harness::new(ViewKind::Processes);
+    let drawn = harness.hit_map.visible_selected_process().cloned().unwrap();
+    harness.keys(&[code(KeyCode::F(9))]);
+    let submitted = harness.submitted();
+    assert_eq!(submitted.len(), 1);
+    let CommandBody::PrepareSignal { target, signal } = &submitted[0] else {
+        panic!("{submitted:?}");
+    };
+    assert_eq!(*signal, Signal::Sigkill);
+    assert_eq!(target, &drawn);
+    assert!(
+        harness
+            .controller
+            .ui_state(harness.now)
+            .awaiting_confirmation
+    );
+}
+
+fn wheel(down: bool, column: u16, row: u16) -> Event {
+    Event::Mouse(MouseEvent {
+        kind: if down {
+            MouseEventKind::ScrollDown
+        } else {
+            MouseEventKind::ScrollUp
+        },
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    })
+}
+
+/// `[`/`]` and the wheel over the memory panel's GPU legend scroll it,
+/// apart from the process selection, and send nothing (D-70).
+#[test]
+fn the_memory_legend_scrolls_apart_from_the_process_selection() {
+    let mut harness = Harness::new(ViewKind::Overview);
+    let memory = ModuleId::new(crate::modules::MEMORY_MODULE_ID).unwrap();
+    let scroll = |harness: &Harness| {
+        harness
+            .controller
+            .ui_state(harness.now)
+            .scroll
+            .get(&memory)
+            .copied()
+            .unwrap_or(0)
+    };
+    harness.keys(&[key(']'), key(']'), key('[')]);
+    assert_eq!(scroll(&harness), 1);
+    harness.keys(&[key('['), key('[')]);
+    assert_eq!(scroll(&harness), 0, "never above the start");
+    let area = ratatui::layout::Rect::new(150, 2, 10, 2);
+    let revision = harness.hit_map.frame_revision();
+    harness.hit_map.push_clipped(
+        crate::registry::HitTarget {
+            frame_revision: revision,
+            module_id: memory.clone(),
+            control_id: controls::MODULE_SCROLL,
+            entity_id: None,
+            process_key: None,
+            rect: area,
+        },
+        area,
+    );
+    harness.keys(&[
+        wheel(true, 151, 2),
+        wheel(true, 151, 3),
+        wheel(false, 152, 2),
+    ]);
+    assert_eq!(scroll(&harness), 1);
+    assert!(
+        harness.submitted().is_empty(),
+        "scrolling is presentation only: {:?}",
+        harness.submitted()
+    );
+}
+
+/// ←/→ switch the history window in History and the GPU in the GPU view:
+/// one key, the action of the page it is pressed on (D-70).
+#[test]
+fn arrows_act_on_the_page_they_are_pressed_on() {
+    use crate::controller::keymap::{KeyAction, ModeKind, resolve};
+    let arrow = |code: KeyCode| crossterm::event::KeyEvent::new(code, KeyModifiers::NONE);
+    assert_eq!(
+        resolve(&arrow(KeyCode::Right), ModeKind::Normal, ViewKind::History),
+        Some(KeyAction::NextHistoryWindow)
+    );
+    assert_eq!(
+        resolve(&arrow(KeyCode::Left), ModeKind::Normal, ViewKind::History),
+        Some(KeyAction::PreviousHistoryWindow)
+    );
+    assert_eq!(
+        resolve(
+            &arrow(KeyCode::Right),
+            ModeKind::Normal,
+            ViewKind::GpuDetail
+        ),
+        Some(KeyAction::NextGpu)
+    );
+    assert_eq!(
+        resolve(&arrow(KeyCode::Left), ModeKind::Normal, ViewKind::GpuDetail),
+        Some(KeyAction::PreviousGpu)
+    );
+}
+
+/// `4` opens the Process History tab and `3` the Overview History one; in
+/// the process pages `j`/`k` move the cursor and Enter opens and closes a
+/// process (D-72, D-75). Only the tab switches send a view command.
+#[test]
+fn history_process_pages_navigate_without_a_command() {
+    let mut harness = Harness::new(ViewKind::History);
+    let history = ModuleId::new(crate::modules::HISTORY_MODULE_ID).unwrap();
+    let state = |harness: &Harness| {
+        let ui = harness.controller.ui_state(harness.now);
+        (
+            ui.tabs.get(&history).copied().unwrap_or(0),
+            ui.scroll.get(&history).copied().unwrap_or(0),
+        )
+    };
+    harness.keys(&[key('j'), code(KeyCode::Enter)]);
+    assert_eq!(state(&harness), (0, 0), "the system page has no cursor");
+    harness.keys(&[key('4'), key('j'), key('j'), key('k')]);
+    assert_eq!(state(&harness), (1, 1));
+    harness.keys(&[code(KeyCode::Enter)]);
+    assert_eq!(state(&harness), (2, 1));
+    harness.keys(&[code(KeyCode::Enter)]);
+    assert_eq!(state(&harness), (1, 1));
+    harness.keys(&[key('3')]);
+    assert_eq!(state(&harness).0, 0);
+    assert!(
+        harness
+            .submitted()
+            .iter()
+            .all(|command| format!("{command:?}").contains("History")),
+        "{:?}",
+        harness.submitted()
+    );
+}
+
 #[test]
 fn y_only_confirms_in_confirm_mode_with_a_token() {
     let mut harness = Harness::new(ViewKind::Processes);
@@ -524,12 +666,12 @@ fn tab_clicks_and_keys_switch_views() {
         ViewKind::History,
         "bursts build on the staged view and skip hidden views"
     );
-    // The action record is not a view (D-44): 5 switches nothing, and Tab
-    // wraps from the last offered view, Settings, to the overview.
+    // The action record is not a view (D-44): 6 switches nothing, and Tab
+    // wraps from the last offered tab, Settings, to the overview (D-75).
     let sent = harness.submitted().len();
-    harness.keys(&[key('5')]);
-    assert_eq!(harness.submitted().len(), sent, "5 is not a view key");
-    harness.keys(&[key('4'), code(KeyCode::Tab)]);
+    harness.keys(&[key('6')]);
+    assert_eq!(harness.submitted().len(), sent, "6 is not a view key");
+    harness.keys(&[key('5'), code(KeyCode::Tab)]);
     assert_eq!(harness.last_session().0, ViewKind::Overview, "Tab wraps");
     harness.keys(&[code(KeyCode::F(2))]);
     assert_eq!(harness.last_session().0, ViewKind::Settings);

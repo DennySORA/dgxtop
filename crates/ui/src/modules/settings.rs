@@ -13,7 +13,8 @@ use ratatui::text::{Line, Span};
 use super::ModuleBuildError;
 use super::common::{
     ColumnSpec, ManifestSpec, Output, RowCursor, TableCell, build_manifest, draw_line,
-    draw_table_header, draw_table_row, fit_columns, message, no_data, panel, split_columns,
+    draw_table_header, draw_table_row, fit_columns, message, no_data, panel, panel_with_keys,
+    split_columns,
 };
 use crate::format::{clean, format_bytes, truncate_to_width};
 use crate::num::saturate_u16;
@@ -32,6 +33,9 @@ const FIELD_COLUMNS: [ColumnSpec; 6] = [
     ColumnSpec::left("RESTART", 16, 60),
     ColumnSpec::left("NOTE", 10, 50).flexible().prefer(24),
 ];
+
+/// The keys acting on the view, at the right of its title (D-70).
+const SETTINGS_KEYS: &str = "j/k/↑/↓ select · Space enable / disable";
 
 pub struct SettingsModule {
     manifest: DisplayModuleManifest,
@@ -77,10 +81,11 @@ impl DisplayModule for SettingsModule {
             output.label("settings: no data");
             return output.finish();
         };
-        let inner = panel(
+        let inner = panel_with_keys(
             frame,
             area,
             &format!("Settings · revision {}", settings.revision),
+            SETTINGS_KEYS,
             context,
         );
         let mut rows = RowCursor::new(inner);
@@ -253,7 +258,7 @@ impl SettingsModule {
             frame.buffer_mut().set_stringn(
                 header.x,
                 header.y,
-                "modules (j/k · space toggles)",
+                "modules",
                 usize::from(header.width),
                 context.theme.header_style(),
             );

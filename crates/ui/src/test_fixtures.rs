@@ -39,6 +39,8 @@ pub(crate) fn display_context() -> crate::registry::DisplayContext {
         slot: crate::registry::Slot::Overview,
         projection_age_ms: 0,
         expanded: false,
+        scroll: 0,
+        tab: 0,
     }
 }
 
@@ -277,7 +279,6 @@ fn gpu_card(index: u32) -> GpuCard {
         temperature_trend: trend(vec![Some(70.0), Some(71.0)]),
         power_trend: trend(vec![Some(120.0), Some(121.0)]),
         memory_trend: trend(vec![Some(11.0 * GIB), Some(12.3 * GIB)]),
-        process_memory: Vec::new(),
     }
 }
 

@@ -42,6 +42,12 @@ pub struct DisplayContext {
     /// The user expanded this module (a collapsible module shows its detail;
     /// see [`DisplayModule::collapsed_rows`]).
     pub expanded: bool,
+    /// How far the user scrolled this module's scrollable part (D-70); the
+    /// module clamps it to what it has. A module with a list uses it as the
+    /// list's cursor.
+    pub scroll: u16,
+    /// The module's inner tab (D-72): 0 its first page.
+    pub tab: u8,
 }
 
 /// Clickable region produced by a module, resolved by the Controller through
@@ -143,6 +149,9 @@ pub mod controls {
     pub const SETTINGS_MODULE: &str = "settings.module";
     /// Expands or collapses the module that drew the target.
     pub const MODULE_TOGGLE: &str = "module.toggle";
+    /// A part of the module that drew the target the mouse wheel scrolls
+    /// (D-70).
+    pub const MODULE_SCROLL: &str = "module.scroll";
 
     /// Control id of a view tab.
     pub const fn tab(view: ViewKind) -> &'static str {

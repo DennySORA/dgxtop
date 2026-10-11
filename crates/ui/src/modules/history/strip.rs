@@ -156,6 +156,7 @@ fn render_plot(
         Paint::Read | Paint::Receive => theme.success,
         Paint::Write => theme.warning,
         Paint::Transmit => theme.accent,
+        Paint::Process(slot) => theme.process_color(slot),
     };
     let part_columns: Vec<Vec<Option<f64>>> = strip
         .chart

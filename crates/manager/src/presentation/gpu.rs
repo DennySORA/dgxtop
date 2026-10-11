@@ -10,11 +10,9 @@ use dgxtop_core::view::{
     CellState, GpuCard, GpuDetails, GpuView, HostState, HostStatus, LabeledCell, MetricCell,
 };
 
-use super::ProcessMemoryBook;
 use super::gpu_derived::{memory_bandwidth, pcie_bandwidth};
 use super::gpu_directory::{GpuDirectory, GpuIdentity};
 use super::labels::{host_state_text, label_text};
-use super::process_parts::process_shares;
 use super::reader::MetricReader;
 
 pub(crate) const GPU_DISABLED_REASON: &str =
@@ -103,7 +101,6 @@ pub(crate) struct GpuEnvironment<'a> {
 pub(crate) fn build_gpu_view(
     reader: &MetricReader<'_>,
     directory: &GpuDirectory<'_>,
-    processes: &ProcessMemoryBook,
     requested: Option<&EntityId>,
     environment: GpuEnvironment<'_>,
     widths: GpuTrendWidths,
@@ -127,7 +124,6 @@ pub(crate) fn build_gpu_view(
                 memory_temperature_and_power: if widths.detail { width } else { 0 },
             };
             let mut card = build_card(reader, gpu, card_widths);
-            card.process_memory = process_shares(processes, |id| *id == gpu.entity_id);
             if widths.detail && is_selected {
                 card.details = Some(Box::new(build_details(reader, gpu, &card)));
             }
@@ -223,7 +219,6 @@ fn build_card(
             },
             widths.memory_temperature_and_power,
         ),
-        process_memory: Vec::new(),
     }
 }
 
@@ -406,11 +401,9 @@ mod tests {
     use super::*;
     use crate::presentation::index::SampleIndex;
     use crate::presentation::testkit::{
-        Fixture, NOW, candidate, entity_record, explanation_for, gpu_link, host_status,
-        process_row, sample,
+        Fixture, NOW, candidate, entity_record, explanation_for, host_status, sample,
     };
-    use crate::process_memory::preferred_color;
-    use dgxtop_core::canonical::{CandidateDisposition, ProcessGpuLink, RejectReason};
+    use dgxtop_core::canonical::{CandidateDisposition, RejectReason};
     use dgxtop_core::metric::CanonicalUnit;
     use dgxtop_core::observation::EntityKind;
     use dgxtop_core::quality::SampleKind;
@@ -447,7 +440,6 @@ mod tests {
         build_gpu_view(
             &reader,
             &directory,
-            &fixture.process_memory,
             requested.as_ref(),
             environment,
             widths(),
@@ -499,44 +491,6 @@ mod tests {
 
     /// Each card's memory bar gets what each tracked process holds on that
     /// GPU, in the order of their colors (D-64).
-    #[test]
-    fn cards_carry_what_each_tracked_process_holds_on_them() {
-        let mut fixture = two_gpus();
-        let row = |pid, name: &str, links: Vec<ProcessGpuLink>| {
-            let mut row = process_row(pid, name);
-            row.gpu = links;
-            row
-        };
-        fixture.set_processes(vec![
-            row(1, "train", vec![gpu_link(GPU_A, None, Some(6 << 30))]),
-            row(
-                2,
-                "ddp",
-                vec![
-                    gpu_link(GPU_A, None, Some(1 << 30)),
-                    gpu_link(GPU_B, None, Some(3 << 30)),
-                ],
-            ),
-        ]);
-        let mut table = fixture.snapshot.process_table.as_ref().clone();
-        table.cycle_id = 1;
-        table.read_finished_boot_ns = 1;
-        fixture.process_memory.record(&table);
-        let view = build(&fixture, None, enabled());
-        let held = |card: &GpuCard| -> Vec<(u8, i32, u64)> {
-            card.process_memory
-                .iter()
-                .map(|share| (share.slot, share.pid, share.bytes))
-                .collect()
-        };
-        // Each process's color follows its name (D-65).
-        let (train, ddp) = (preferred_color("train"), preferred_color("ddp"));
-        let mut expected = vec![(train, 1, 6 << 30), (ddp, 2, 1 << 30)];
-        expected.sort_unstable();
-        assert_eq!(held(&view.cards[0]), expected);
-        assert_eq!(held(&view.cards[1]), vec![(ddp, 2, 3 << 30)]);
-    }
-
     #[test]
     fn cards_are_labeled_by_nvml_index_and_identified_by_entity() {
         let view = build(&two_gpus(), None, enabled());

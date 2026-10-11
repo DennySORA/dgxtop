@@ -1,10 +1,11 @@
 //! The tracked GPU processes on the memory bars, charts and legends
 //! (D-64): each process's part in its color, the GPU memory of the other
-//! processes in gray, and a legend of `■ name size` entries that fit.
+//! processes in gray, and a `[GPU]` legend of `■ name size` entries wrapped
+//! onto the lines it may take (D-69).
 
 use dgxtop_core::view::{ProcessShare, ProcessTrend};
 use ratatui::style::Style;
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 
 use super::common::gap;
 use crate::format::{clean, display_width, format_bytes};
@@ -13,6 +14,8 @@ use crate::widgets::{Part, Segment};
 
 /// Marker of a colored part, drawn in its color.
 pub(crate) const SWATCH: &str = "■ ";
+/// Leads the GPU legend: the memory GPU processes hold.
+pub(crate) const GPU_TAG: &str = "[GPU] ";
 /// Name of the GPU processes without a color of their own.
 const OTHER: &str = "other";
 
@@ -38,15 +41,17 @@ pub(crate) fn share_segments(
     (segments, room.max(0.0) - left)
 }
 
-/// The legend: `■ train 6.0 GiB` for each share and, when `other` is
-/// above zero, `■ other …` in gray, as many as fit `width` columns, then
-/// `+N` for those left out when it fits.
-pub(crate) fn legend(
+/// The GPU legend (D-69): `[GPU] ■ train 6.0 GiB  ■ serve 2.0 GiB …`, each
+/// share and, when `other` is above zero, `■ other …` in gray, wrapped onto
+/// at most `max_lines` lines of `width` columns, the later ones indented
+/// under the first entry; `+N` ends the last line for those left out.
+pub(crate) fn legend_lines(
     shares: &[ProcessShare],
     other: Option<u64>,
     width: usize,
+    max_lines: usize,
     context: &DisplayContext,
-) -> Vec<Span<'static>> {
+) -> Vec<Line<'static>> {
     let theme = &context.theme;
     let mut entries: Vec<[Span<'static>; 3]> = shares
         .iter()
@@ -62,30 +67,71 @@ pub(crate) fn legend(
     if let Some(other) = other.filter(|bytes| *bytes > 0) {
         entries.push(entry(OTHER, other, theme.other_processes_color(), context));
     }
-    let spacing = display_width(&gap(context).content);
-    let mut spans = Vec::new();
-    let mut used = 0;
-    for (index, entry) in entries.iter().enumerate() {
-        let entry_width: usize = entry.iter().map(Span::width).sum();
-        let left_out = entries.len() - index - 1;
-        let more = if left_out > 0 {
-            spacing + display_width(&format!("+{left_out}"))
-        } else {
-            0
-        };
-        if used + spacing + entry_width + more > width {
-            let rest = format!("+{}", entries.len() - index);
-            if used + spacing + display_width(&rest) <= width {
-                spans.push(gap(context));
-                spans.push(Span::styled(rest, theme.muted_style()));
-            }
-            break;
-        }
-        used += spacing + entry_width;
-        spans.push(gap(context));
-        spans.extend(entry.iter().cloned());
+    if entries.is_empty() || max_lines == 0 {
+        return Vec::new();
     }
-    spans
+    let lead = display_width(GPU_TAG);
+    let gap_width = display_width(&gap(context).content);
+    let entry_width = |entry: &[Span<'static>; 3]| -> usize { entry.iter().map(Span::width).sum() };
+    let mut lines: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut index = 0;
+    while index < entries.len() && lines.len() < max_lines {
+        let last = lines.len() + 1 == max_lines;
+        let mut spans = vec![if lines.is_empty() {
+            Span::styled(GPU_TAG, theme.label_style())
+        } else {
+            Span::raw(" ".repeat(lead))
+        }];
+        let mut used = lead;
+        let mut placed = 0;
+        while index < entries.len() {
+            let spacing = if placed == 0 { 0 } else { gap_width };
+            let left_after = entries.len() - index - 1;
+            let more = if last && left_after > 0 {
+                gap_width + display_width(&format!("+{left_after}"))
+            } else {
+                0
+            };
+            let fits = used + spacing + entry_width(&entries[index]) + more <= width;
+            if !fits && placed > 0 {
+                break;
+            }
+            if !fits && last {
+                break;
+            }
+            if spacing > 0 {
+                spans.push(gap(context));
+            }
+            used += spacing + entry_width(&entries[index]);
+            spans.extend(entries[index].iter().cloned());
+            placed += 1;
+            index += 1;
+        }
+        if last && index < entries.len() {
+            if placed > 0 {
+                spans.push(gap(context));
+            }
+            spans.push(Span::styled(
+                format!("+{}", entries.len() - index),
+                theme.muted_style(),
+            ));
+            index = entries.len();
+        }
+        lines.push(spans);
+    }
+    lines.into_iter().map(Line::from).collect()
+}
+
+/// Lines [`legend_lines`] takes for everything at `width`, at most
+/// `max_lines`.
+pub(crate) fn legend_line_count(
+    shares: &[ProcessShare],
+    other: Option<u64>,
+    width: usize,
+    max_lines: usize,
+    context: &DisplayContext,
+) -> usize {
+    legend_lines(shares, other, width, max_lines, context).len()
 }
 
 /// `■ name size`, the marker in `color`.
@@ -192,30 +238,48 @@ mod tests {
         assert!((covered - bytes_f64(8 * GIB)).abs() < 1.0);
     }
 
-    /// The legend keeps whole entries and counts the ones it leaves out.
+    /// The GPU legend leads with `[GPU]` once, wraps whole entries onto
+    /// its lines under the first one and counts the ones left out (D-69).
     #[test]
-    fn the_legend_keeps_whole_entries_and_counts_the_rest() {
+    fn the_gpu_legend_wraps_whole_entries_and_counts_the_rest() {
         let context = crate::test_fixtures::display_context();
-        let shares = [share(0, "train", 6), share(1, "serve", 2)];
-        let wide = text(&legend(&shares, Some(GIB), 80, &context));
-        assert_eq!(wide, "  ■ train 6.0 GiB  ■ serve 2.0 GiB  ■ other 1.0 GiB");
-        let narrow = text(&legend(&shares, Some(GIB), 22, &context));
-        assert_eq!(narrow, "  ■ train 6.0 GiB  +2");
-        assert_eq!(text(&legend(&shares, Some(0), 4, &context)), "  +2");
-        assert_eq!(text(&legend(&shares, Some(0), 3, &context)), "");
-        assert_eq!(text(&legend(&[], None, 80, &context)), "");
-        let colors: Vec<_> = legend(&shares, None, 80, &context)
+        let shares = [
+            share(0, "train", 6),
+            share(1, "serve", 2),
+            share(2, "notebook", 1),
+        ];
+        let lines = |width: usize, max: usize| -> Vec<String> {
+            legend_lines(&shares, Some(GIB), width, max, &context)
+                .iter()
+                .map(|line| text(&line.spans))
+                .collect()
+        };
+        assert_eq!(
+            lines(80, 3),
+            vec!["[GPU] ■ train 6.0 GiB  ■ serve 2.0 GiB  ■ notebook 1.0 GiB  ■ other 1.0 GiB"]
+        );
+        assert_eq!(
+            lines(42, 3),
+            vec![
+                "[GPU] ■ train 6.0 GiB  ■ serve 2.0 GiB",
+                "      ■ notebook 1.0 GiB  ■ other 1.0 GiB",
+            ]
+        );
+        assert_eq!(
+            lines(30, 2),
+            vec!["[GPU] ■ train 6.0 GiB", "      ■ serve 2.0 GiB  +2"]
+        );
+        assert_eq!(lines(10, 1), vec!["[GPU] +4"]);
+        assert_eq!(legend_line_count(&shares, None, 42, 3, &context), 2);
+        assert!(legend_lines(&[], None, 80, 3, &context).is_empty());
+        let colors: Vec<_> = legend_lines(&shares, None, 80, 1, &context)[0]
+            .spans
             .iter()
             .filter(|span| span.content == SWATCH)
             .map(|span| span.style.fg)
             .collect();
-        assert_eq!(
-            colors,
-            vec![
-                Some(context.theme.process_color(0)),
-                Some(context.theme.process_color(1))
-            ]
-        );
+        assert_eq!(colors.len(), 3);
+        assert_eq!(colors[0], Some(context.theme.process_color(0)));
     }
 
     #[test]

@@ -14,8 +14,8 @@ use ratatui::text::{Line, Span};
 use super::ModuleBuildError;
 use super::common::{
     BarRow, ManifestSpec, Output, RowCursor, build_manifest, cell_label, cell_spans, draw_line,
-    gap, join_if_fits, labeled_cell, measuring_context, message, no_data, panel, percent_ratio,
-    render_bar_row, render_chart, under_bar,
+    gap, join_if_fits, labeled_cell, measuring_context, message, no_data, panel, panel_with_keys,
+    percent_ratio, render_bar_row, render_chart, separator, under_bar,
 };
 use crate::format::{CellDetail, clean, display_width, truncate_to_width, value_text};
 use crate::num::saturate_u16;
@@ -41,8 +41,11 @@ const CHART_ROWS: u16 = 3;
 const BAR_AND_CHART_ROWS: u16 = 1 + CHART_ROWS;
 /// Value column of the utilization bar (`100.0%`).
 const PERCENT_WIDTH: u16 = 6;
-const EXPAND_HINT: &str = " ▸ click or c: cores";
-const COLLAPSE_HINT: &str = " ▾ click here or c: collapse";
+const EXPAND_HINT: &str = " ▸";
+const COLLAPSE_HINT: &str = " ▾";
+/// The keys acting on the panel, at the right of its title (D-70).
+const EXPAND_KEYS: &str = "c/click cores";
+const COLLAPSE_KEYS: &str = "c/click collapse";
 /// Breakdown marker drawn in each part's color.
 const SWATCH: &str = "■ ";
 
@@ -121,10 +124,15 @@ impl DisplayModule for CpuModule {
             title.push_str(if expanded { COLLAPSE_HINT } else { EXPAND_HINT });
         }
         if let Some(model_name) = cpu.model.as_deref() {
-            title.push_str(" · ");
+            title.push_str(if collapsible { " " } else { " · " });
             title.push_str(&clean(model_name));
         }
-        let inner = panel(frame, area, &title, context);
+        let keys = match (collapsible, expanded) {
+            (false, _) => "",
+            (true, false) => EXPAND_KEYS,
+            (true, true) => COLLAPSE_KEYS,
+        };
+        let inner = panel_with_keys(frame, area, &title, keys, context);
         if collapsible {
             // Collapsed, the whole panel expands; expanded, the title row
             // collapses so clicks on the cores stay free.
@@ -136,11 +144,22 @@ impl DisplayModule for CpuModule {
             output.target(model, &self.manifest, controls::MODULE_TOGGLE, target);
         }
         let mut rows = RowCursor::new(inner);
-        let mut text = text_lines(cpu, inner.width, context).into_iter();
+        let lines = text_lines(cpu, inner.width, context);
+        let after_chart = saturate_u16(lines.len().saturating_sub(1));
+        let mut text = lines.into_iter();
         if let (Some(line), Some(row)) = (text.next(), rows.next_row()) {
             draw_line(frame.buffer_mut(), row, &line);
         }
-        if let Some(area) = rows.take(BAR_AND_CHART_ROWS) {
+        // Collapsed, the chart takes the rows the panel has beyond its own,
+        // so it fills a row the memory panel beside it made taller (D-70).
+        let chart_rows = if expanded {
+            BAR_AND_CHART_ROWS
+        } else {
+            rows.remaining()
+                .saturating_sub(after_chart)
+                .max(BAR_AND_CHART_ROWS)
+        };
+        if let Some(area) = rows.take(chart_rows) {
             render_utilization(frame, area, cpu, context);
         }
         for line in text {
@@ -238,9 +257,9 @@ fn render_utilization(frame: &mut Frame<'_>, area: Rect, cpu: &CpuView, context:
     }
 }
 
-/// `71°C  12 W  3160 MHz`: the first temperature and power sensor and the
-/// mean frequency the cores run at now (D-67); the expanded panel lists
-/// every sensor.
+/// `71°C │ 12 W │ 3160 MHz` (D-66): the first temperature and power sensor
+/// and the mean frequency the cores run at now (D-67); the expanded panel
+/// lists every sensor.
 fn summary_line(cpu: &CpuView, context: &DisplayContext) -> Line<'static> {
     let glance = |cell: &MetricCell| cell_spans(cell, CellDetail::GLANCE, context);
     let mut spans = Vec::new();
@@ -250,14 +269,14 @@ fn summary_line(cpu: &CpuView, context: &DisplayContext) -> Line<'static> {
         .or_else(|| cpu.soc_temperatures.first());
     for sensor in [temperature, cpu.power.first()].into_iter().flatten() {
         spans.extend(glance(&sensor.cell));
-        spans.push(gap(context));
+        spans.push(separator(context));
     }
     spans.extend(glance(&cpu.frequency_now));
     Line::from(spans)
 }
 
-/// `load 1.34 1.15 1.05  tasks 2/763`; on a line of its own when the panel,
-/// narrower than memory (D-40), cannot fit it beside the sensors.
+/// `load 1.34 1.15 1.05 │ tasks 2/763`; on a line of its own when the
+/// panel, narrower than memory (D-40), cannot fit it beside the sensors.
 fn load_line(cpu: &CpuView, context: &DisplayContext) -> Line<'static> {
     let glance = |cell: &MetricCell| cell_spans(cell, CellDetail::GLANCE, context);
     let mut spans = vec![Span::styled("load ", context.theme.label_style())];
@@ -267,7 +286,7 @@ fn load_line(cpu: &CpuView, context: &DisplayContext) -> Line<'static> {
         }
         spans.extend(glance(cell));
     }
-    spans.push(gap(context));
+    spans.push(separator(context));
     spans.push(Span::styled("tasks ", context.theme.label_style()));
     spans.extend(glance(&cpu.tasks_running));
     spans.push(Span::styled("/", context.theme.muted_style()));
@@ -451,4 +470,39 @@ fn add_labels(output: &mut Output, cpu: &CpuView, context: &DisplayContext) {
     }
     output.label(cell_label("cpu load 1m", &cpu.load[0], context));
     output.label(format!("cpu cores: {}", cpu.cores.len()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_fixtures;
+
+    /// Collapsed, the utilization chart takes the rows a taller panel has
+    /// beyond its own, so no blank rows stay under the breakdown (D-70).
+    #[test]
+    fn the_collapsed_chart_fills_a_taller_panel() {
+        let context = test_fixtures::display_context();
+        let model = test_fixtures::view_model(dgxtop_core::commands::ViewKind::Overview, 1);
+        let module = CpuModule::new().unwrap();
+        let own = module.preferred_rows(&model, 80, Slot::Overview).unwrap();
+        for height in [own, own + 4] {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    module.render(&context, &model, frame.area(), frame);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let breakdown = (0..height)
+                .find(|y| {
+                    (0..80)
+                        .map(|x| buffer[(x, *y)].symbol())
+                        .collect::<String>()
+                        .contains("usr")
+                })
+                .expect("the breakdown line");
+            assert_eq!(breakdown, height - 2, "right above the bottom border");
+        }
+    }
 }

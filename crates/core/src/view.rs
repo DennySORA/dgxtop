@@ -82,6 +82,14 @@ pub const OVERVIEW_GPU_CHART_ROWS: u16 = 2;
 /// and the memory bar.
 pub const OVERVIEW_GPU_ROWS: u16 = 3 + OVERVIEW_GPU_CHART_ROWS;
 
+/// Rows `count` GPUs take inside the overview GPU panel: each GPU's rows
+/// and a divider between two GPUs (D-66).
+pub const fn overview_gpus_rows(count: u16) -> u16 {
+    count
+        .saturating_mul(OVERVIEW_GPU_ROWS)
+        .saturating_add(count.saturating_sub(1))
+}
+
 /// One displayable metric value with its evidence.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MetricCell {
@@ -250,9 +258,6 @@ pub struct GpuCard {
     /// Used framebuffer bytes, or on a unified-memory GPU the RAM its
     /// processes hold (the VRAM chart, D-40).
     pub memory_trend: Trend,
-    /// What each tracked process holds on this GPU now, in slot order
-    /// (D-64): the colored parts of the memory bar.
-    pub process_memory: Vec<ProcessShare>,
 }
 
 /// What the GPU view shows of one GPU beyond its card (D-48): its
@@ -581,6 +586,12 @@ pub struct HistoryProcessView {
     pub listed_ns: u64,
     /// Listed in the newest process list.
     pub running: bool,
+    /// What it held on that GPU in each even cell of the view's window, on
+    /// the grid of the charts' points (D-72); `None` where no process list
+    /// was recorded.
+    pub means: Vec<Option<f64>>,
+    /// Top of the scale of that GPU's memory chart.
+    pub scale_max: Option<f64>,
 }
 
 /// Where the history before this run comes from (D-51).

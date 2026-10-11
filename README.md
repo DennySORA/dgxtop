@@ -71,14 +71,16 @@ GPUs first, shows the whole machine around them, and keeps the history.
   - each GPU's utilization, memory, temperature and power;
   - now, average and maximum for every chart;
   - each GPU's last 1, 6, 12 and 24 hours, with the energy it used;
-  - each colored process's part of the memory charts, with its average and peak memory.
+  - each colored process's part of the memory charts, with its average and peak memory, also after
+    it exits.
 
   History is saved on disk for 7 days and survives restarts and reboots. The per-process parts are
   kept in memory, for as long as dgxtop runs.
 - **The whole machine.** CPU usage per core, CPU temperature and power where the hardware reports
   them, memory and swap, disk throughput and filesystem capacity, network throughput.
 - **Made for DGX Spark.** The GB10 shares memory with the CPU: dgxtop shows how much system RAM GPU
-  processes hold, and the GB10's NVLink-C2C link. Native aarch64 build.
+  processes hold and how much the system itself holds, the CPU temperature from the GB10's cluster
+  sensors, and the GB10's NVLink-C2C link. Native aarch64 build.
 - **Settings in the app.** Change the sampling interval and the display modules. Each setting shows
   its saved and effective value, where it came from, and whether it applies now or after a restart.
 
@@ -180,19 +182,24 @@ dgxtop --import-legacy ~/.config/dgxtop/config.json --dry-run   # show the v1 �
 dgxtop --version --verbose   # version, commit, toolchain, target, SQLite runtime
 ```
 
+Each panel names its own keys at the right of its title; the footer keeps the global ones.
+
 | Key | Action |
 |---|---|
 | `q`, `Ctrl-C` | Quit (`q` is text while editing a filter; `Ctrl-C` always quits) |
-| `1`–`4`, `Tab`, `Shift-Tab` | Overview, GPU, History, Settings |
-| `w` / `W` | Next / previous history window (5m, 1h, 6h, 12h, 24h) |
+| `1`–`5`, `Tab`, `Shift-Tab` | Overview, GPU, Overview History, Process History, Settings |
+| `w` / `W`, `→` / `←` | Next / previous history window (5m, 1h, 6h, 12h, 24h) |
+| `j`/`k`, `Enter` | In Process History, choose a GPU process and open or close it |
 | `c` | Show / hide the CPU sensors and per-core bars (or click the CPU panel) |
 | `j`/`k`, arrows, `PgUp`/`PgDn`, `Home`/`End` | Move the selection |
-| `h`/`l` | Previous / next GPU in the GPU view |
+| `h`/`l`, `←`/`→` | Previous / next GPU in the GPU view |
 | `g` | Cycle the process GPU filter (all GPUs → each GPU) |
 | `/` | Filter processes (Enter applies, Esc clears) |
 | `s` / `r` | Sort column / reverse order |
 | `+` / `-` | Change the sampling interval |
 | `K` | Stop the selected process (asks for confirmation) |
+| `F9` | Force-kill the selected process with SIGKILL (asks for confirmation) |
+| `[` / `]` | Scroll the GPU processes of the memory panel |
 | `y`/`Enter`, `n`/`Esc` | Confirm / cancel a pending process action |
 | `F2`, `?`/`F1` | Settings view, help |
 
