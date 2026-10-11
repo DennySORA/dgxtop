@@ -104,6 +104,19 @@ impl ProcessHistoryService {
         self.dispatch_probe();
     }
 
+    /// Whether `table` was sampled already: every committed batch hands
+    /// over the snapshot's table, so only the first commit of a cycle
+    /// brings a new one and the caller can skip building its inputs.
+    pub(crate) fn has_sampled(&self, table: &ProcessTable) -> bool {
+        self.book.has_sampled(table)
+    }
+
+    /// A commit without a new table still lets a finished probe be followed
+    /// by the next one, exactly as [`Self::on_table`] would.
+    pub(crate) fn on_sampled_table(&mut self) {
+        self.dispatch_probe();
+    }
+
     pub(crate) fn on_probe(&mut self, report: &ProbeReport, now: Now) {
         self.probing = false;
         self.book.on_probe(report, now, &*self.probe_deriver);
@@ -363,6 +376,26 @@ mod tests {
         rig.service.on_probe(&ProbeReport::default(), now(2));
         observe(&mut rig, 3);
         assert_eq!(rig.probe.take().len(), 1);
+    }
+
+    /// A commit that brings the table already sampled skips the sample but
+    /// still follows a finished probe with the next, as a new table would.
+    #[test]
+    fn a_sampled_table_still_lets_the_next_probe_leave() {
+        let mut rig = rig();
+        observe(&mut rig, 1);
+        assert_eq!(rig.probe.take().len(), 1);
+        let same = process_table(1, SECOND, Vec::new());
+        assert!(rig.service.has_sampled(&same));
+        rig.service.on_sampled_table();
+        assert!(rig.probe.take().is_empty(), "the first probe is in flight");
+        rig.service.on_probe(&ProbeReport::default(), now(1));
+        rig.service.on_sampled_table();
+        assert_eq!(rig.probe.take().len(), 1);
+        assert!(
+            !rig.service
+                .has_sampled(&process_table(2, 2 * SECOND, Vec::new()))
+        );
     }
 
     /// A full store queue keeps the journal for the next turn.

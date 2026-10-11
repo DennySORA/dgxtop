@@ -308,6 +308,12 @@ impl CommandInbox {
         self.outstanding.release();
     }
 
+    /// Wakes the control thread for a change it reads outside the command
+    /// queue (a viewport), so it is not left until the next deadline.
+    pub(crate) fn wake_control_loop(&self) {
+        self.shutdown.wake();
+    }
+
     /// After this returns no further command can enter the queue.
     pub(crate) fn close(&self) {
         *self.closed.write().unwrap_or_else(PoisonError::into_inner) = true;
@@ -483,6 +489,7 @@ impl SessionPort for SessionHandle {
 
     fn set_viewport(&self, columns: u16, rows: u16) {
         self.shared.store_viewport(columns, rows);
+        self.inbox.wake_control_loop();
     }
 }
 
@@ -632,6 +639,18 @@ mod tests {
         );
         assert!(fixture.receiver.is_empty());
         assert_eq!(fixture.inbox.outstanding.current(), 0);
+    }
+
+    /// The control thread sleeps until its next deadline, so a resize
+    /// wakes it instead of waiting for one; it requests no shutdown.
+    #[test]
+    fn a_viewport_change_wakes_the_control_thread() {
+        let fixture = fixture(1, 1);
+        assert!(fixture.wake.try_recv().is_err());
+        fixture.handle.set_viewport(132, 43);
+        assert_eq!(fixture.shared.viewport(), (132, 43));
+        assert!(fixture.wake.try_recv().is_ok());
+        assert!(!fixture.signal.is_requested());
     }
 
     #[test]

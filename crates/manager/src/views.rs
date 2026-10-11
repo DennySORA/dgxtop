@@ -32,6 +32,7 @@ use dgxtop_core::text::sanitize_display;
 use dgxtop_core::view::SessionState;
 
 use crate::error::ManagerError;
+use crate::pacing::{FrameDemand, FramePacing};
 use crate::session::SessionShared;
 
 /// Recent frame revisions remembered per session (4 s at 4 fps).
@@ -65,8 +66,7 @@ struct SessionRecord {
     shared: Arc<SessionShared>,
     state: SessionState,
     recent_frames: VecDeque<u64>,
-    dirty: bool,
-    last_frame_ns: Option<u64>,
+    demand: FrameDemand,
     last_viewport: (u16, u16),
 }
 
@@ -120,8 +120,7 @@ impl ViewSessionService {
                 state: default_state(session_id.clone()),
                 shared,
                 recent_frames: VecDeque::new(),
-                dirty: true,
-                last_frame_ns: None,
+                demand: FrameDemand::new_session(),
                 last_viewport: viewport,
             },
         );
@@ -180,7 +179,7 @@ impl ViewSessionService {
         let changed = record.state != state;
         if changed {
             record.state = state;
-            record.dirty = true;
+            record.demand.on_input();
         }
         Ok(changed)
     }
@@ -216,15 +215,32 @@ impl ViewSessionService {
         Ok(row)
     }
 
+    /// Asks for a prompt frame: what the session shows answers its user.
     pub(crate) fn mark_dirty(&mut self, session_id: &SessionId) {
         if let Some(record) = self.sessions.get_mut(session_id) {
-            record.dirty = true;
+            record.demand.on_input();
         }
     }
 
+    /// Asks every session for a prompt frame.
     pub(crate) fn mark_all_dirty(&mut self) {
         for record in self.sessions.values_mut() {
-            record.dirty = true;
+            record.demand.on_input();
+        }
+    }
+
+    /// New data for one session: a frame at the viewer's frame rate.
+    pub(crate) fn mark_data_changed(&mut self, session_id: &SessionId, now_ns: u64) {
+        if let Some(record) = self.sessions.get_mut(session_id) {
+            record.demand.on_data(now_ns);
+        }
+    }
+
+    /// New data for every session (a commit): a frame at the viewer's frame
+    /// rate, shared by the commits of one cycle.
+    pub(crate) fn mark_all_data_changed(&mut self, now_ns: u64) {
+        for record in self.sessions.values_mut() {
+            record.demand.on_data(now_ns);
         }
     }
 
@@ -235,37 +251,27 @@ impl ViewSessionService {
             let viewport = record.shared.viewport();
             if viewport != record.last_viewport {
                 record.last_viewport = viewport;
-                record.dirty = true;
+                record.demand.on_input();
                 changed.push(session_id.clone());
             }
         }
         changed
     }
 
-    /// Dirty sessions whose frame interval has elapsed.
-    pub(crate) fn due_for_frame(&self, now_ns: u64, interval_ns: u64) -> Vec<SessionId> {
+    /// Sessions whose next frame is due under `pacing`.
+    pub(crate) fn due_for_frame(&self, now_ns: u64, pacing: &FramePacing) -> Vec<SessionId> {
         self.sessions
             .iter()
-            .filter(|(_, record)| {
-                record.dirty
-                    && record
-                        .last_frame_ns
-                        .is_none_or(|last| now_ns >= last.saturating_add(interval_ns))
-            })
+            .filter(|(_, record)| record.demand.due_ns(pacing) <= now_ns)
             .map(|(session_id, _)| session_id.clone())
             .collect()
     }
 
-    /// When the next frame may be built for a dirty session.
-    pub(crate) fn next_frame_ns(&self, interval_ns: u64) -> Option<u64> {
+    /// When the next frame of any session is due.
+    pub(crate) fn next_frame_ns(&self, pacing: &FramePacing) -> Option<u64> {
         self.sessions
             .values()
-            .filter(|record| record.dirty)
-            .map(|record| {
-                record
-                    .last_frame_ns
-                    .map_or(0, |last| last.saturating_add(interval_ns))
-            })
+            .map(|record| record.demand.due_ns(pacing))
             .min()
     }
 
@@ -280,15 +286,14 @@ impl ViewSessionService {
                 record.recent_frames.pop_front();
             }
             record.recent_frames.push_back(frame_revision);
-            record.last_frame_ns = Some(now_ns);
-            record.dirty = false;
+            record.demand.on_frame(now_ns);
         }
     }
 
     /// A skipped frame still counts against the rate limit (no retry storm).
     pub(crate) fn frame_skipped(&mut self, session_id: &SessionId, now_ns: u64) {
         if let Some(record) = self.sessions.get_mut(session_id) {
-            record.last_frame_ns = Some(now_ns);
+            record.demand.on_skipped(now_ns);
         }
     }
 
@@ -730,30 +735,58 @@ mod tests {
 
     #[test]
     fn frames_are_rate_limited_and_viewport_changes_mark_dirty() {
+        const MS: u64 = 1_000_000;
+        let pacing = FramePacing {
+            input_interval_ns: 250 * MS,
+            data_interval_ns: 250 * MS,
+            cycle_settling: false,
+        };
         let mut bench = bench();
         assert_eq!(
-            bench.service.due_for_frame(0, 250),
+            bench.service.due_for_frame(0, &pacing),
             vec![bench.session.clone()]
         );
-        bench.service.record_frame(&bench.session, 1, 1_000);
+        bench.service.record_frame(&bench.session, 1, 1_000 * MS);
         assert!(
-            bench.service.due_for_frame(1_100, 250).is_empty(),
+            bench.service.due_for_frame(1_100 * MS, &pacing).is_empty(),
             "not dirty"
         );
         bench.service.mark_all_dirty();
         assert!(
-            bench.service.due_for_frame(1_100, 250).is_empty(),
+            bench.service.due_for_frame(1_100 * MS, &pacing).is_empty(),
             "too early"
         );
-        assert_eq!(bench.service.due_for_frame(1_250, 250).len(), 1);
-        bench.service.frame_skipped(&bench.session, 1_250);
-        assert!(bench.service.due_for_frame(1_300, 250).is_empty());
+        assert_eq!(bench.service.next_frame_ns(&pacing), Some(1_250 * MS));
+        assert_eq!(bench.service.due_for_frame(1_250 * MS, &pacing).len(), 1);
+        bench.service.frame_skipped(&bench.session, 1_250 * MS);
+        assert!(bench.service.due_for_frame(1_300 * MS, &pacing).is_empty());
         bench.shared.store_viewport(120, 40);
         assert_eq!(
             bench.service.viewport_changes(),
             vec![bench.session.clone()]
         );
         assert!(bench.service.viewport_changes().is_empty());
+    }
+
+    /// Commits ask for a frame at the data pace; the frame clears them.
+    #[test]
+    fn data_changes_are_paced_and_cleared_by_the_frame() {
+        const MS: u64 = 1_000_000;
+        let pacing = FramePacing {
+            input_interval_ns: 50 * MS,
+            data_interval_ns: 250 * MS,
+            cycle_settling: false,
+        };
+        let mut bench = bench();
+        bench.service.mark_all_data_changed(0);
+        bench.service.record_frame(&bench.session, 1, 0);
+        bench.service.mark_all_data_changed(100 * MS);
+        bench.service.mark_data_changed(&bench.session, 110 * MS);
+        assert!(bench.service.due_for_frame(200 * MS, &pacing).is_empty());
+        assert_eq!(bench.service.due_for_frame(250 * MS, &pacing).len(), 1);
+        bench.service.record_frame(&bench.session, 2, 250 * MS);
+        let age = 250 * MS + crate::pacing::AGE_REFRESH_NS + crate::pacing::SETTLE_NS;
+        assert_eq!(bench.service.next_frame_ns(&pacing), Some(age));
     }
 
     #[test]

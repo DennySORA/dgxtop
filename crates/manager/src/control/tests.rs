@@ -862,6 +862,107 @@ fn at39_shutdown_waits_at_most_three_seconds_and_reports_unfinished_work() {
 
 // ----- presentation ------------------------------------------------------------
 
+/// Answers every read until each collector holds a job.
+fn jobs_of_every_collector(harness: &mut Harness) -> Vec<CollectionPlan> {
+    let mut plans: Vec<CollectionPlan> = Vec::new();
+    for _ in 0..500 {
+        harness.ports.clock.advance_ms(10);
+        harness.settle();
+        for job in harness.ports.adapters.take() {
+            if let AdapterJob::Read(plan) = job {
+                let now = harness.now_ns();
+                harness.ingest(batch_reply(&plan, Vec::new(), false, now));
+            }
+        }
+        harness.settle();
+        plans.extend(harness.ports.collectors.take());
+        let collectors: BTreeSet<_> = plans.iter().map(|plan| &plan.collector_id).collect();
+        if collectors.len() == 3 {
+            return plans;
+        }
+    }
+    panic!("not every collector got a job: {plans:?}");
+}
+
+/// Collects and commits `plan` without moving the clock.
+fn commit(harness: &mut Harness, plan: &CollectionPlan, revision: u64) {
+    harness.ingest(IngestionCompletion::Collected(collected(plan)));
+    harness.settle();
+    harness.ports.store.take();
+    harness.ingest(IngestionCompletion::Committed(StoreAck {
+        batch_id: plan.batch_id,
+        collector_id: plan.collector_id.clone(),
+        status: AckStatus::Committed,
+        committed_revision: revision,
+        state_revision: 0,
+        archive: ArchiveState::Disabled,
+        reason: None,
+    }));
+    harness.settle();
+}
+
+/// Takes every pending projection; returns how many there were.
+fn projections(harness: &Harness) -> usize {
+    std::iter::from_fn(|| harness.session.take_projection()).count()
+}
+
+/// Every collector's commit used to build a projection; the commits of one
+/// cycle now share one, built as soon as the last has committed.
+#[test]
+fn the_commits_of_one_cycle_share_one_projection() {
+    let mut harness = ready_harness(HarnessOptions::default());
+    let plans = jobs_of_every_collector(&mut harness);
+    // Past the input spacing, so only the pacing can hold a frame back.
+    harness.ports.clock.advance_ms(60);
+    harness.settle();
+    assert!(
+        harness.ports.adapters.take().is_empty(),
+        "no read in flight"
+    );
+    projections(&harness);
+    let (last, first) = plans.split_last().unwrap();
+    for (revision, plan) in (2..).zip(first) {
+        commit(&mut harness, plan, revision);
+        assert_eq!(projections(&harness), 0, "the cycle is still committing");
+    }
+    commit(&mut harness, last, 9);
+    assert_eq!(projections(&harness), 1, "one frame for the whole cycle");
+}
+
+/// A collector that takes long holds the cycle's frame back for at most
+/// the settle window.
+#[test]
+fn a_slow_collector_delays_the_projection_by_at_most_the_settle_window() {
+    let mut harness = ready_harness(HarnessOptions::default());
+    let plans = jobs_of_every_collector(&mut harness);
+    projections(&harness);
+    commit(&mut harness, &plans[0], 2);
+    harness.ports.clock.advance_ms(49);
+    harness.settle();
+    assert_eq!(projections(&harness), 0);
+    harness.ports.clock.advance_ms(1);
+    harness.settle();
+    assert_eq!(projections(&harness), 1);
+}
+
+/// Input never waits for a settling cycle.
+#[test]
+fn a_view_change_gets_a_projection_while_a_cycle_settles() {
+    let mut harness = ready_harness(HarnessOptions::default());
+    let plans = jobs_of_every_collector(&mut harness);
+    harness.ports.clock.advance_ms(50);
+    harness.settle();
+    projections(&harness);
+    commit(&mut harness, &plans[0], 2);
+    assert_eq!(projections(&harness), 0);
+    harness
+        .submit(navigation(ViewKind::Processes, None, ""))
+        .unwrap();
+    harness.settle();
+    let projection = harness.session.take_projection().expect("prompt frame");
+    assert_eq!(projection.session.view, ViewKind::Processes);
+}
+
 // ----- history -----------------------------------------------------------------
 
 #[test]

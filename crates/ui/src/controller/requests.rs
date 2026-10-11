@@ -83,7 +83,6 @@ impl PendingRequests {
         self.entries.len()
     }
 
-    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

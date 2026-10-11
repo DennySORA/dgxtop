@@ -581,6 +581,14 @@ impl IngestionService {
             .min()
     }
 
+    /// Whether a collector is working or has inputs waiting: more commits
+    /// of the current cycle are on their way.
+    pub(crate) fn is_collecting(&self) -> bool {
+        self.slots
+            .iter()
+            .any(|slot| !slot.is_idle() || !slot.pending.is_empty())
+    }
+
     /// Highest backlog fill ratio over all collectors.
     pub(crate) fn backlog_utilization(&self) -> f64 {
         let limit = self.settings.max_pending_per_collector;

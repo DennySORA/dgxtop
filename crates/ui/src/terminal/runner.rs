@@ -1,6 +1,7 @@
 //! The terminal main-thread loop (`RUNTIME.md` §1, `UI.md` §4–§5).
 //!
-//! Each step: poll input (≤ 50 ms when idle, never a 0 ms busy loop),
+//! Each step: poll input (until the next draw could happen, at most
+//! [`LONGEST_IDLE_POLL`], never a 0 ms busy loop),
 //! route events through the Controller (non-blocking submits), drain
 //! command results, honour shutdown, write at most 8 KiB / 2 ms of the
 //! pending frame, and — only once the previous frame is completely written —
@@ -30,8 +31,17 @@ use super::stats::{FrameStats, FrameStatsSummary};
 use crate::controller::{Controller, ControllerContext};
 use crate::viewer::{HitMap, RenderInput, Viewer};
 
-/// Longest input poll while idle.
-pub const MAX_IDLE_POLL: Duration = Duration::from_millis(50);
+/// Input poll while a command result is awaited: results are looked for
+/// at the input cadence.
+pub const RESULT_POLL: Duration = Duration::from_millis(50);
+/// Longest input poll once a new projection could be drawn. Projections
+/// and the Manager's shutdown request arrive without waking the loop, so
+/// this bounds how late they are seen.
+pub const MAX_IDLE_POLL: Duration = Duration::from_millis(100);
+/// Longest input poll of all: right after a draw, nothing that arrives can
+/// be drawn before the data interval, so the loop sleeps until then, up to
+/// this.
+pub const LONGEST_IDLE_POLL: Duration = Duration::from_millis(250);
 /// Shortest first poll of a step (never a 0 ms busy loop).
 pub const MIN_POLL: Duration = Duration::from_millis(1);
 /// Poll timeout while a frame is being written and the terminal accepts.
@@ -478,14 +488,18 @@ impl TuiLoop {
                 FLUSH_POLL
             };
         }
-        let until_due = match self
-            .scheduler
-            .decide(self.render_key(), now, self.pressured())
-        {
+        let pressured = self.pressured();
+        let until_due = match self.scheduler.decide(self.render_key(), now, pressured) {
             Decision::Draw => MIN_POLL,
             Decision::WaitUntil(due) => due.saturating_sub(now),
         };
-        until_due.clamp(MIN_POLL, MAX_IDLE_POLL)
+        let idle = if self.controller.awaits_results() {
+            RESULT_POLL
+        } else {
+            let until_data = self.scheduler.next_data_draw(pressured).saturating_sub(now);
+            until_data.clamp(MAX_IDLE_POLL, LONGEST_IDLE_POLL)
+        };
+        until_due.min(idle).max(MIN_POLL)
     }
 
     /// Bounded terminal restore (≤ 250 ms), then the transport's flags.

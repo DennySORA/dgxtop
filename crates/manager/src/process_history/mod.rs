@@ -153,11 +153,10 @@ impl ProcessHistoryBook {
     /// process not yet followed; notes the live runs the table no longer
     /// lists and ends the ones gone for longer than the grace.
     pub(crate) fn observe(&mut self, table: &ProcessTable, inputs: &SampleInputs<'_>) {
-        let identity = (table.cycle_id, table.read_finished_boot_ns);
-        if self.last_table == Some(identity) {
+        if self.has_sampled(table) {
             return;
         }
-        self.last_table = Some(identity);
+        self.last_table = Some(table_identity(table));
         if inputs.clk_tck.is_some() {
             self.clk_tck = inputs.clk_tck;
         }
@@ -188,6 +187,12 @@ impl ProcessHistoryBook {
             self.note_missing(&listed, inputs.now);
         }
         self.bound();
+    }
+
+    /// Whether `table` is the one sampled last, so observing it would add
+    /// nothing.
+    pub(crate) fn has_sampled(&self, table: &ProcessTable) -> bool {
+        self.last_table == Some(table_identity(table))
     }
 
     /// The live runs to probe this cycle: first the ones the table lost.
@@ -511,6 +516,11 @@ impl ProcessHistoryBook {
 
 fn utc_of(now: Now) -> i64 {
     i64::try_from(now.utc_ns).unwrap_or(i64::MAX)
+}
+
+/// What tells one sampled table from the next: its cycle and read time.
+fn table_identity(table: &ProcessTable) -> (u64, u64) {
+    (table.cycle_id, table.read_finished_boot_ns)
 }
 
 fn new_run(row: &ProcessRow, inputs: &SampleInputs<'_>, (utc_ns, shift_ns): (i64, i64)) -> Run {

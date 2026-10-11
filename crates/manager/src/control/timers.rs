@@ -10,7 +10,7 @@ use dgxtop_core::ports::LogLevel;
 use dgxtop_core::view::{HostStatus, IntervalView, ViewModel};
 use std::sync::Arc;
 
-use super::{AGE_REFRESH_NS, ControlCore, MAINTAIN_NS, QueueLevels};
+use super::{ControlCore, MAINTAIN_NS, QueueLevels};
 use crate::effects::Effects;
 use crate::ingestion::PumpContext;
 use crate::overload::{OVERLOAD_SAMPLE_MS, OverloadSignals};
@@ -166,7 +166,7 @@ impl ControlCore {
                 now_ns,
             );
             for session_id in &dirty {
-                self.sessions.mark_dirty(session_id);
+                self.sessions.mark_data_changed(session_id, now_ns);
             }
         }
         let tick = self.history.tick(now_ns, self.overload.limit_history());
@@ -227,11 +227,6 @@ impl ControlCore {
     }
 
     fn periodic(&mut self, now_ns: u64) {
-        if now_ns >= self.timers.next_age_refresh_ns {
-            // Ages in projections advance even when no data arrives.
-            self.timers.next_age_refresh_ns = now_ns.saturating_add(AGE_REFRESH_NS);
-            self.sessions.mark_all_dirty();
-        }
         if now_ns >= self.timers.next_maintain_ns {
             self.timers.next_maintain_ns = now_ns.saturating_add(MAINTAIN_NS);
             if self.ingestion.request_maintenance().is_err() {
@@ -245,9 +240,7 @@ impl ControlCore {
         for session_id in self.sessions.viewport_changes() {
             self.sync_history(&session_id, now_ns);
         }
-        let due = self
-            .sessions
-            .due_for_frame(now_ns, self.projection_interval_ns());
+        let due = self.sessions.due_for_frame(now_ns, &self.frame_pacing());
         if due.is_empty() {
             return;
         }

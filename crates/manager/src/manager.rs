@@ -10,8 +10,9 @@
 //!
 //! Each category processes at least one ready item even when the slice is
 //! spent, so none can starve another, and none is drained unboundedly. When
-//! nothing is ready the thread sleeps on the channels until the next
-//! deadline, at most 50 ms (no busy spin).
+//! nothing is ready the thread sleeps on the channels (completions, commands
+//! and the wake token of shutdowns and viewport changes) until the next
+//! deadline, at most [`IDLE_TICK`] (no busy spin, no idle polling).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -36,8 +37,10 @@ const CONTROL_BATCH: usize = 8;
 const COMMAND_BATCH: usize = 8;
 /// Ingestion completions per iteration.
 const INGESTION_BATCH: usize = 4;
-/// Longest idle sleep.
-const IDLE_TICK: Duration = Duration::from_millis(50);
+/// Longest idle sleep. Everything that needs the loop either arrives on a
+/// channel or has a deadline; this only bounds what neither covers, such
+/// as reaping a session whose handles were dropped.
+const IDLE_TICK: Duration = Duration::from_millis(500);
 /// Shortest sleep when nothing is ready, so an overdue deadline can never
 /// turn into a busy spin.
 const MIN_WAIT: Duration = Duration::from_millis(1);
@@ -240,12 +243,9 @@ impl Manager {
         }
     }
 
-    /// Sleeps until a channel is ready or the next deadline (≤ 50 ms).
+    /// Sleeps until a channel is ready or the next deadline (≤ [`IDLE_TICK`]).
     fn wait(&self, next_deadline_ns: Option<u64>) {
-        let now = self.core.now_boot_ns();
-        let timeout = next_deadline_ns
-            .map_or(IDLE_TICK, |deadline| until(now, deadline))
-            .clamp(MIN_WAIT, IDLE_TICK);
+        let timeout = idle_timeout(self.core.now_boot_ns(), next_deadline_ns);
         let mut select = Select::new();
         select.recv(&self.receivers.control);
         select.recv(&self.receivers.commands);
@@ -284,6 +284,14 @@ impl Drop for Manager {
     fn drop(&mut self) {
         self.core.release_sessions();
     }
+}
+
+/// How long an idle loop sleeps at `now_ns`: until the next deadline,
+/// within [`MIN_WAIT`]..=[`IDLE_TICK`].
+fn idle_timeout(now_ns: u64, next_deadline_ns: Option<u64>) -> Duration {
+    next_deadline_ns
+        .map_or(IDLE_TICK, |deadline| until(now_ns, deadline))
+        .clamp(MIN_WAIT, IDLE_TICK)
 }
 
 /// Real-time execution budget of one iteration.
@@ -350,6 +358,22 @@ mod tests {
         let more = drain(&ready, COMMAND_BATCH, &spent, |item| handled.push(item));
         assert_eq!(handled, vec![0]);
         assert!(more, "the rest waits for the next iteration");
+    }
+
+    /// An idle loop sleeps until its next deadline instead of waking on a
+    /// fixed tick, never spinning and never past the idle bound.
+    #[test]
+    fn an_idle_loop_sleeps_until_its_next_deadline() {
+        const MS: u64 = 1_000_000;
+        assert_eq!(idle_timeout(1_000 * MS, None), IDLE_TICK);
+        assert_eq!(
+            idle_timeout(1_000 * MS, Some(1_120 * MS)),
+            Duration::from_millis(120)
+        );
+        assert_eq!(idle_timeout(1_000 * MS, Some(1_000 * MS)), MIN_WAIT);
+        assert_eq!(idle_timeout(1_000 * MS, Some(10 * MS)), MIN_WAIT);
+        assert_eq!(idle_timeout(0, Some(60_000 * MS)), IDLE_TICK);
+        assert_eq!(IDLE_TICK, Duration::from_millis(500));
     }
 
     #[test]

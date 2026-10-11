@@ -78,8 +78,13 @@ const WORKER_STOP_CAP: Duration = Duration::from_millis(500);
 /// Longest wait for the terminal frontend after a termination signal before
 /// the process exits anyway (AT39: never wait without bound).
 const FRONTEND_EXIT_GRACE: Duration = Duration::from_secs(5);
-/// Cadence of the signal watcher.
-const SIGNAL_POLL: Duration = Duration::from_millis(50);
+/// Cadence of the signal watcher while nothing happens. The handler may
+/// only store into an atomic (async-signal-safe, `dgxtop_runtime::signals`),
+/// so there is nothing to block on; 200 ms keeps a signal's shutdown well
+/// inside the 3 s budget at five wakes a second.
+const SIGNAL_POLL: Duration = Duration::from_millis(200);
+/// Cadence of the bounded wait for the frontend once a signal arrived.
+const FRONTEND_EXIT_POLL: Duration = Duration::from_millis(50);
 /// Archive reads queued for the reader: the Manager runs two at a time.
 const ARCHIVE_READ_QUEUE: usize = 4;
 /// Probe jobs waiting (D-76); the manager keeps one in flight.
@@ -1137,7 +1142,7 @@ fn wait_for_flag(flag: &AtomicBool, timeout: Duration) -> bool {
         if remaining.is_zero() {
             return false;
         }
-        std::thread::sleep(remaining.min(SIGNAL_POLL));
+        std::thread::sleep(remaining.min(FRONTEND_EXIT_POLL));
     }
 }
 
@@ -1176,6 +1181,15 @@ mod tests {
         assert_eq!(deadline.remaining(Duration::from_secs(3)), Duration::ZERO);
         let spent = ShutdownDeadline::start(Duration::ZERO);
         assert_eq!(spent.remaining(Duration::from_secs(1)), Duration::ZERO);
+    }
+
+    /// The signal watcher polls (no handler can wake it), slowly enough to
+    /// stay idle and fast enough that a signal's shutdown keeps its budget.
+    #[test]
+    fn the_signal_poll_is_slow_but_inside_the_shutdown_budget() {
+        assert!(SIGNAL_POLL >= Duration::from_millis(200));
+        assert!(SIGNAL_POLL * 10 <= SHUTDOWN_BUDGET);
+        assert!(FRONTEND_EXIT_POLL < SIGNAL_POLL);
     }
 
     #[test]

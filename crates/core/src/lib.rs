@@ -23,6 +23,7 @@ pub mod gpu_bandwidth;
 pub mod gpu_state;
 pub mod history;
 pub mod identity;
+pub mod json_size;
 pub mod metric;
 pub mod naming;
 pub mod observation;

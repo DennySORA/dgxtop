@@ -39,6 +39,7 @@ use crate::hosts::HostTable;
 use crate::ingestion::trends::TrendRecorder;
 use crate::ingestion::{IngestionPorts, IngestionService, IngestionSettings, collection_limits};
 use crate::overload::OverloadController;
+use crate::pacing::FramePacing;
 use crate::policy::QualityPolicyService;
 use crate::presentation::{HostFacts, ProcessMemoryBook};
 use crate::process::{ActionIdentity, Now, ProcessPorts, ProcessService};
@@ -53,8 +54,6 @@ use crate::views::ViewSessionService;
 
 /// Total time the shutdown waits for config/audit/action completions.
 const SHUTDOWN_WAIT_NS: u64 = 3_000_000_000;
-/// Ages shown in projections are refreshed at least this often.
-const AGE_REFRESH_NS: u64 = 1_000_000_000;
 /// Cadence of store maintenance requests (retention, minute rollover).
 const MAINTAIN_NS: u64 = 1_000_000_000;
 /// Events copied into the shutdown summary.
@@ -75,7 +74,6 @@ struct Route {
 #[derive(Debug)]
 struct Timers {
     next_overload_ns: u64,
-    next_age_refresh_ns: u64,
     next_maintain_ns: u64,
 }
 
@@ -261,7 +259,6 @@ impl ControlCore {
             ledger: ports.ledger,
             timers: Timers {
                 next_overload_ns: now,
-                next_age_refresh_ns: now,
                 next_maintain_ns: now,
             },
             phase: Phase::Running,
@@ -337,19 +334,23 @@ impl ControlCore {
         self.events.feed()
     }
 
-    /// Minimum spacing of published projections for the current overload
-    /// state (see [`crate::projection::projection_interval_ns`]).
-    pub(crate) fn projection_interval_ns(&self) -> u64 {
+    /// The frame pacing in force: the viewer's frame rate for the current
+    /// overload state, and whether a collection cycle is still committing.
+    pub(crate) fn frame_pacing(&self) -> FramePacing {
         let fps = self.overload.max_fps(self.config.effective().viewer.fps);
-        crate::projection::projection_interval_ns(
-            self.overload.state() == dgxtop_core::view::OverloadState::Normal,
-            fps,
-        )
+        FramePacing {
+            input_interval_ns: crate::projection::projection_interval_ns(
+                self.overload.state() == dgxtop_core::view::OverloadState::Normal,
+                fps,
+            ),
+            data_interval_ns: crate::projection::frame_interval_ns(fps),
+            cycle_settling: self.ingestion.is_collecting() || self.scheduler.has_read_in_flight(),
+        }
     }
 
     /// Earliest instant at which some timer or deadline needs the loop.
     pub(crate) fn next_deadline(&self) -> Option<u64> {
-        let frame = self.sessions.next_frame_ns(self.projection_interval_ns());
+        let frame = self.sessions.next_frame_ns(&self.frame_pacing());
         let draining = match &self.phase {
             Phase::Draining(draining) => Some(draining.deadline_ns),
             _ => None,
@@ -360,7 +361,6 @@ impl ControlCore {
             running.then(|| self.ingestion.next_deadline()).flatten(),
             running.then(|| self.history.next_deadline()).flatten(),
             running.then_some(self.timers.next_overload_ns),
-            running.then_some(self.timers.next_age_refresh_ns),
             running.then_some(self.timers.next_maintain_ns),
             running.then_some(frame).flatten(),
             self.config.next_deadline(),

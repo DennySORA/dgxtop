@@ -927,8 +927,42 @@ pub struct ViewModel {
 }
 
 impl ViewModel {
+    /// The projection's exact JSON length (`usize::MAX` when it has none).
     pub fn estimated_bytes(&self) -> usize {
-        serde_json::to_vec(self).map_or(usize::MAX, |encoded| encoded.len())
+        let mut counter = ByteCounter(0);
+        serde_json::to_writer(&mut counter, self).map_or(usize::MAX, |()| counter.0)
+    }
+
+    /// An upper bound on [`Self::estimated_bytes`] found without writing
+    /// the JSON (see [`crate::json_size`]).
+    pub fn bytes_bound(&self) -> usize {
+        crate::json_size::json_length_bound(self).unwrap_or(usize::MAX)
+    }
+
+    /// The size a projection is accounted at against `max_bytes`: the
+    /// bound when it fits, otherwise the exact length. Either way the
+    /// result fits `max_bytes` exactly when the JSON does.
+    pub fn accounted_bytes(&self, max_bytes: usize) -> usize {
+        let bound = self.bytes_bound();
+        if bound <= max_bytes {
+            bound
+        } else {
+            self.estimated_bytes()
+        }
+    }
+}
+
+/// Counts what `serde_json` writes instead of keeping it.
+struct ByteCounter(usize);
+
+impl std::io::Write for ByteCounter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 = self.0.saturating_add(bytes.len());
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 

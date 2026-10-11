@@ -42,24 +42,26 @@ const TRIM_STEPS: [TrimStep; 11] = [
     strip_gpu_details,
 ];
 
-/// Returns the final estimated size of the projection.
+/// Returns the size the projection is accounted at ([`ViewModel::accounted_bytes`]):
+/// it fits `max_bytes` exactly when the JSON does, and the JSON is written
+/// only when the bound does not fit.
 pub(crate) fn fit_projection(
     model: &mut ViewModel,
     max_bytes: usize,
     hints: &BudgetHints,
 ) -> usize {
-    let size = model.estimated_bytes();
+    let size = model.accounted_bytes(max_bytes);
     if size <= max_bytes {
         return size;
     }
     let target = max_bytes.saturating_sub(NOTICE_RESERVE_BYTES);
     for step in TRIM_STEPS {
-        if step(&mut model.modules, hints) && model.estimated_bytes() <= target {
+        if step(&mut model.modules, hints) && model.accounted_bytes(target) <= target {
             break;
         }
     }
     let kib = max_bytes / 1024;
-    let (level, text) = if model.estimated_bytes() <= target {
+    let (level, text) = if model.accounted_bytes(target) <= target {
         (
             BannerLevel::Info,
             format!("view reduced to fit runtime.max_projection_bytes ({kib} KiB)"),
@@ -73,7 +75,7 @@ pub(crate) fn fit_projection(
     let mut banners = std::mem::take(&mut model.banners);
     push(&mut banners, level, text);
     model.banners = order_and_bound(banners);
-    model.estimated_bytes()
+    model.accounted_bytes(max_bytes)
 }
 
 /// Keeps the most recent half of a trend (same step, shorter window).

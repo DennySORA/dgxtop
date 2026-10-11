@@ -187,6 +187,12 @@ impl Controller {
         self.quit
     }
 
+    /// Whether a command's result is still expected: the loop then looks
+    /// for it at the input cadence instead of its idle one.
+    pub fn awaits_results(&self) -> bool {
+        !self.requests.is_empty()
+    }
+
     /// Increments whenever something the Viewer shows changed.
     pub fn version(&self) -> u64 {
         self.version
