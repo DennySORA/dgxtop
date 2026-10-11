@@ -3,8 +3,9 @@
 //! the read and write rates of the busiest device, the one the title names.
 //! Filesystems on no listed device follow as rows of their own. The
 //! filesystem type, its free space (reserved blocks included, beside what
-//! is available to users) and the device's await time are the first
-//! columns a narrow panel gives up.
+//! is available to users), the drive's temperature (D-92; blank when the
+//! drive reports none) and the device's await time are the first columns a
+//! narrow panel gives up.
 
 use dgxtop_core::identity::EntityId;
 use dgxtop_core::view::{DiskDeviceView, DiskView, FilesystemView, MetricCell, ViewModel};
@@ -29,7 +30,7 @@ const PREFERRED_TABLE_ROWS: u16 = 4;
 /// Text of a cell that does not apply to the row (no filesystem, no device).
 const NOT_APPLICABLE: &str = "–";
 
-const COLUMNS: [ColumnSpec; 10] = [
+const COLUMNS: [ColumnSpec; 11] = [
     ColumnSpec::left("Device", 8, 100).flexible().prefer(12),
     ColumnSpec::left("Type", 5, 20),
     ColumnSpec::right("Used", 8, 70),
@@ -40,6 +41,7 @@ const COLUMNS: [ColumnSpec; 10] = [
     ColumnSpec::right("Write", 10, 90),
     ColumnSpec::right("IOPS", 10, 40),
     ColumnSpec::right("Await", 8, 35),
+    ColumnSpec::right("Temp", 5, 30),
 ];
 /// Spec indexes of the read and write columns (their titles are the legend).
 const READ_COLUMN: usize = 6;
@@ -241,7 +243,7 @@ fn render_table(frame: &mut Frame<'_>, area: Rect, rows: &[DiskRow<'_>], context
     }
 }
 
-fn row_cells(row: &DiskRow<'_>, context: &DisplayContext) -> [TableCell; 10] {
+fn row_cells(row: &DiskRow<'_>, context: &DisplayContext) -> [TableCell; 11] {
     let palette = &context.theme;
     let absent = || TableCell::new(NOT_APPLICABLE, palette.muted_style());
     let capacity = |cell: fn(&FilesystemView) -> &MetricCell, width: usize| {
@@ -279,7 +281,20 @@ fn row_cells(row: &DiskRow<'_>, context: &DisplayContext) -> [TableCell; 10] {
             TableCell::new(iops_text(device), palette.text_style())
         }),
         rate(|device| &device.await_ms, 8),
+        row.device
+            .map_or_else(absent, |device| temperature_cell(device, context)),
     ]
+}
+
+/// The drive's temperature, or blank when it reports none: a drive without
+/// a sensor is not an error and never reads 0.
+fn temperature_cell(device: &DiskDeviceView, context: &DisplayContext) -> TableCell {
+    let cell = &device.temperature;
+    if cell.state.has_value() && cell.value.is_some() {
+        metric_table_cell(cell, &context.theme, 5)
+    } else {
+        TableCell::new("", context.theme.muted_style())
+    }
 }
 
 /// `12/340` read/write operations per second, or each side's state label.
@@ -309,6 +324,11 @@ fn add_labels(output: &mut Output, disk: &DiskView, context: &DisplayContext) {
             &device.await_ms,
             context,
         ));
+        output.label(cell_label(
+            &format!("disk {name} temperature"),
+            &device.temperature,
+            context,
+        ));
     }
     for filesystem in disk.filesystems.iter().take(8) {
         output.label(format!(
@@ -333,16 +353,36 @@ mod tests {
     }
 
     /// A wide panel shows the filesystem type, its free and available
-    /// space and the device's await time beside the I/O rates.
+    /// space, the device's await time and the drive's temperature beside
+    /// the I/O rates.
     #[test]
-    fn a_wide_panel_shows_type_free_space_and_await() {
-        let (header, row) = header_and_root_row(120);
-        for title in ["Type", "Free", "Avail", "Await"] {
+    fn a_wide_panel_shows_type_free_space_await_and_temperature() {
+        let (header, row) = header_and_root_row(130);
+        for title in ["Type", "Free", "Avail", "Await", "Temp"] {
             assert!(header.contains(title), "{header}");
         }
-        for value in ["ext4", "988 GiB", "900 GiB", "0.4 ms"] {
+        for value in ["ext4", "988 GiB", "900 GiB", "0.4 ms", "59°C"] {
             assert!(row.contains(value), "{value} missing in {row}");
         }
+    }
+
+    /// A drive without a temperature leaves the cell blank, never 0 or a
+    /// state word; a row without a device marks it not applicable.
+    #[test]
+    fn an_unknown_drive_temperature_is_blank() {
+        let context = test_fixtures::display_context();
+        let mut disk = disk_view();
+        disk.devices[0].temperature = MetricCell::missing(
+            dgxtop_core::metric::CanonicalUnit::DegC,
+            dgxtop_core::view::CellState::Unavailable,
+        );
+        let mut network = disk.filesystems[0].clone();
+        network.mount_point = "/net".into();
+        network.block_device = None;
+        disk.filesystems.push(network);
+        let rows = table_rows(&disk);
+        assert_eq!(row_cells(&rows[0], &context)[10].text, "");
+        assert_eq!(row_cells(&rows[1], &context)[10].text, NOT_APPLICABLE);
     }
 
     /// A narrow panel gives up the type, the free space and the await time
@@ -353,7 +393,7 @@ mod tests {
         for title in ["Used", "Avail", "Use%", "Read", "Write"] {
             assert!(header.contains(title), "{header}");
         }
-        for title in ["Type", "Free", "Await"] {
+        for title in ["Type", "Free", "Await", "Temp"] {
             assert!(!header.contains(title), "{title} kept in {header}");
         }
         assert!(!row.contains("ext4"), "{row}");

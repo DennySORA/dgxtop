@@ -345,6 +345,8 @@ pub struct DiskDeviceView {
     pub read_iops: MetricCell,
     pub write_iops: MetricCell,
     pub await_ms: MetricCell,
+    /// The drive's temperature (D-92); a partition shows its disk's.
+    pub temperature: MetricCell,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

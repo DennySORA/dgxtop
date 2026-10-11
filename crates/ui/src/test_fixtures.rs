@@ -451,6 +451,7 @@ pub(crate) fn disk_view() -> DiskView {
             read_iops: ok(120.0, CanonicalUnit::CountPerSecond),
             write_iops: missing(CanonicalUnit::CountPerSecond, CellState::Warmup),
             await_ms: ok(0.4, CanonicalUnit::Milliseconds),
+            temperature: ok(58.85, CanonicalUnit::DegC),
         }],
         filesystems: vec![FilesystemView {
             entity_id: entity("fs:/"),
