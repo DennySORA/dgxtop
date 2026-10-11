@@ -49,7 +49,7 @@ impl<B: Bucket> TieredSeries<B> {
     /// Lets `fill` add a sample taken at `utc_ns` to the 5 s bucket that
     /// holds it; returns the buckets of a minute and more it closed (for
     /// the long-term store).
-    pub fn record(&mut self, utc_ns: i64, fill: impl FnOnce(&mut B)) -> Vec<(Tier, B)> {
+    pub(crate) fn record(&mut self, utc_ns: i64, fill: impl FnOnce(&mut B)) -> Vec<(Tier, B)> {
         let mut closed = Vec::new();
         self.close_before(utc_ns, &mut closed);
         let start = Tier::Recent.align(utc_ns, self.shift_ns);
@@ -165,13 +165,13 @@ impl<B: Bucket> TieredSeries<B> {
 
     /// What `tier` has not merged yet: the buckets being filled of its
     /// source, the source's source and so on.
-    pub fn unmerged(&self, tier: Tier) -> impl Iterator<Item = &B> {
+    pub(crate) fn unmerged(&self, tier: Tier) -> impl Iterator<Item = &B> {
         std::iter::successors(tier.source(), |source| source.source())
             .filter_map(|source| self.filling[source.level()].as_ref())
     }
 
     /// The buckets being filled, for the short-term file.
-    pub fn filling(&self) -> Vec<(Tier, B)> {
+    pub fn filling_buckets(&self) -> Vec<(Tier, B)> {
         Tier::ALL
             .iter()
             .zip(&self.filling)
@@ -179,16 +179,17 @@ impl<B: Bucket> TieredSeries<B> {
             .collect()
     }
 
-    /// Puts back stored buckets (startup): closed ones join the kept
-    /// buckets in time order, filling ones resume.
-    pub fn restore(&mut self, tier: Tier, bucket: B, filling: bool) {
-        let level = tier.level();
-        if filling {
-            self.filling[level] = Some(bucket);
-            return;
-        }
+    /// Puts back a stored bucket that was being filled (startup): it
+    /// resumes.
+    pub fn restore_filling(&mut self, tier: Tier, bucket: B) {
+        self.filling[tier.level()] = Some(bucket);
+    }
+
+    /// Puts back a stored closed bucket (startup): it joins the kept
+    /// buckets in time order, replacing one with its start.
+    pub fn restore_closed(&mut self, tier: Tier, bucket: B) {
         let start = bucket.start_utc_ns();
-        let kept = &mut self.kept[level];
+        let kept = &mut self.kept[tier.level()];
         let at = kept.partition_point(|old| old.start_utc_ns() < start);
         if kept.get(at).is_some_and(|old| old.start_utc_ns() == start) {
             kept[at] = bucket;
@@ -251,7 +252,7 @@ impl<B: Bucket> TieredSeries<B> {
         let filling = latest_fills.then(|| older.pop()).flatten();
         for bucket in older {
             made.push((tier, bucket));
-            self.restore(tier, bucket, false);
+            self.restore_closed(tier, bucket);
         }
         if let Some(bucket) = filling {
             made.push((tier, bucket));
@@ -448,7 +449,7 @@ mod tests {
         let tiers: Vec<Tier> = closed.iter().map(|(tier, _)| *tier).collect();
         assert_eq!(tiers, Tier::ALL[1..].to_vec());
         assert_eq!(closed[0].1.value(RunMetric::Cpu).mean(), Some(20.0));
-        assert!(series.filling().is_empty());
+        assert!(series.filling_buckets().is_empty());
         assert!(series.close_all().is_empty(), "nothing left to close");
         assert_eq!(cpu_means(&series, Tier::OneDay), vec![(0, 20.0)]);
     }
@@ -493,7 +494,7 @@ mod tests {
                 RunMetric::Cpu,
                 Some(f64::from(u8::try_from(start / 60).unwrap())),
             );
-            restored.restore(Tier::OneMinute, bucket, false);
+            restored.restore_closed(Tier::OneMinute, bucket);
         }
         assert_eq!(
             cpu_means(&restored, Tier::OneMinute),
@@ -502,7 +503,7 @@ mod tests {
         );
         let mut filling = RunBucket::new(180 * SECOND);
         filling.add(RunMetric::Cpu, Some(5.0));
-        restored.restore(Tier::OneMinute, filling, true);
+        restored.restore_filling(Tier::OneMinute, filling);
         assert_eq!(restored.len(), 4);
         restored.clear();
         assert!(restored.is_empty());
@@ -517,7 +518,7 @@ mod tests {
         for start in 0..36 {
             let mut bucket = RunBucket::new(start * 10 * MINUTE);
             bucket.add(RunMetric::Cpu, Some(2.0));
-            series.restore(Tier::TenMinutes, bucket, false);
+            series.restore_closed(Tier::TenMinutes, bucket);
         }
         let made = series.backfill(true);
         assert_eq!(cpu_means(&series, Tier::ThirtyMinutes).len(), 12);
@@ -554,10 +555,10 @@ mod tests {
         let mut series = RunSeries::default();
         let mut bucket = RunBucket::new(0);
         bucket.add(RunMetric::Cpu, Some(1.0));
-        series.restore(Tier::OneMinute, bucket, false);
+        series.restore_closed(Tier::OneMinute, bucket);
         let made = series.backfill(false);
         assert_eq!(made.len(), Tier::ALL.len() - 2);
-        assert!(series.filling().is_empty());
+        assert!(series.filling_buckets().is_empty());
         assert_eq!(cpu_means(&series, Tier::OneDay), vec![(0, 1.0)]);
     }
 
@@ -606,7 +607,7 @@ mod tests {
                 start_utc_ns: start * SECOND,
                 samples,
             };
-            series.restore(Tier::OneMinute, tally, false);
+            series.restore_closed(Tier::OneMinute, tally);
         }
         assert_eq!(tallies(&series, Tier::OneMinute), vec![(0, 1), (60, 3)]);
         let made = series.backfill(false);
@@ -625,7 +626,7 @@ mod tests {
                 start_utc_ns: start * 5 * SECOND,
                 samples: 1,
             };
-            series.restore(Tier::Recent, tally, false);
+            series.restore_closed(Tier::Recent, tally);
         }
         let kept = tallies(&series, Tier::Recent);
         assert_eq!(kept.len(), Tier::Recent.capacity());
@@ -666,7 +667,7 @@ mod tests {
             .collect();
         assert_eq!(minutes[0], 0, "aligned to the minute");
         assert_eq!(
-            series.filling()[0].0,
+            series.filling_buckets()[0].0,
             Tier::OneMinute,
             "the latest minute fills"
         );
@@ -690,7 +691,7 @@ mod tests {
         }
         let mut restored = TieredSeries::<Tally>::new(0);
         for (tier, tally) in &stored {
-            restored.restore(*tier, *tally, false);
+            restored.restore_closed(*tier, *tally);
         }
         let made = restored.resume();
         assert!(made.is_empty(), "nothing was left unclosed: {made:?}");
@@ -721,7 +722,7 @@ mod tests {
     fn a_resume_closes_what_a_size_never_closed() {
         let mut restored = TieredSeries::<Tally>::new(0);
         for minute in 0..130 {
-            restored.restore(Tier::OneMinute, minute_tally(minute, 1), false);
+            restored.restore_closed(Tier::OneMinute, minute_tally(minute, 1));
         }
         let made = restored.resume();
         let hours: Vec<(i64, u32)> = made

@@ -271,7 +271,7 @@ impl TierBook {
     ) {
         let entry = self.entry(series);
         for (tier, bucket) in buckets {
-            entry.tiers.restore(*tier, *bucket, false);
+            entry.tiers.restore_closed(*tier, *bucket);
         }
         if let Some(through) = entry.minutes_through_utc_ns() {
             entry.fed_through_utc_ns = entry.fed_through_utc_ns.max(through);

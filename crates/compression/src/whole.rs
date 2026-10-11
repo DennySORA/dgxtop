@@ -25,7 +25,7 @@ pub fn whole_series<B: Bucket>(series: &TieredSeries<B>) -> B {
 /// inside the first bucket of every coarser size held (a coarse bucket
 /// starts at its boundary, before the series may have; a finer size keeps
 /// only its latest buckets). The coarsest held size otherwise.
-pub fn chart_tier<B: Bucket>(series: &TieredSeries<B>) -> Option<Tier> {
+pub(crate) fn chart_tier<B: Bucket>(series: &TieredSeries<B>) -> Option<Tier> {
     let held: Vec<(Tier, i64)> = Tier::ALL
         .into_iter()
         .filter_map(|tier| Some((tier, series.buckets(tier).next()?.start_utc_ns())))
@@ -60,14 +60,14 @@ mod tests {
             for _ in 0..60 {
                 bucket.add(RunMetric::Memory, Some(10.0));
             }
-            series.restore(Tier::OneMinute, bucket, false);
+            series.restore_closed(Tier::OneMinute, bucket);
         }
         let mut late = RunBucket::new(0);
         for _ in 0..4 {
             late.add(RunMetric::Memory, Some(0.0));
         }
-        series.restore(Tier::TenMinutes, late, false);
-        series.restore(Tier::OneDay, late, false);
+        series.restore_closed(Tier::TenMinutes, late);
+        series.restore_closed(Tier::OneDay, late);
         let whole = whole_series(&series);
         assert_eq!(whole.value(RunMetric::Memory).count, 180);
         assert_eq!(whole.value(RunMetric::Memory).mean(), Some(10.0));
@@ -83,12 +83,12 @@ mod tests {
             bucket.add(RunMetric::Cpu, Some(1.0));
             bucket
         };
-        series.restore(Tier::OneDay, bucket(0), false);
-        series.restore(Tier::TenMinutes, bucket(40 * MINUTE), false);
+        series.restore_closed(Tier::OneDay, bucket(0));
+        series.restore_closed(Tier::TenMinutes, bucket(40 * MINUTE));
         for start in 46..50 {
-            series.restore(Tier::OneMinute, bucket(start * MINUTE), false);
+            series.restore_closed(Tier::OneMinute, bucket(start * MINUTE));
         }
-        series.restore(Tier::Recent, bucket(48 * MINUTE), false);
+        series.restore_closed(Tier::Recent, bucket(48 * MINUTE));
         assert_eq!(chart_tier(&series), Some(Tier::OneMinute));
     }
 

@@ -20,4 +20,4 @@ pub use bucket::Bucket;
 pub use run::{RunSample, RunSeries};
 pub use series::TieredSeries;
 pub use span::merged_between;
-pub use whole::{chart_tier, whole_series};
+pub use whole::whole_series;

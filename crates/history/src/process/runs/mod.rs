@@ -317,7 +317,7 @@ impl ProcessHistoryBook {
         }
         for row in load.buckets {
             if let Some(run) = self.runs.get_mut(&row.key) {
-                run.series.restore(row.tier, row.bucket, false);
+                run.series.restore_closed(row.tier, row.bucket);
             }
         }
         if let Some(recent) = load.recent.filter(|recent| recent.boot_id == self.boot_id) {
@@ -326,10 +326,10 @@ impl ProcessHistoryBook {
                     continue;
                 };
                 for bucket in saved.recent {
-                    run.series.restore(Tier::Recent, bucket, false);
+                    run.series.restore_closed(Tier::Recent, bucket);
                 }
                 for (tier, bucket) in saved.filling {
-                    run.series.restore(tier, bucket, true);
+                    run.series.restore_filling(tier, bucket);
                 }
             }
         }
@@ -379,7 +379,7 @@ impl ProcessHistoryBook {
     pub(crate) fn on_buckets(&mut self, key: &ProcessKey, rows: Vec<RunBucketRow>) {
         if let Some(run) = self.runs.get_mut(key) {
             for row in rows.into_iter().filter(|row| row.key == *key) {
-                run.series.restore(row.tier, row.bucket, false);
+                run.series.restore_closed(row.tier, row.bucket);
             }
         }
         self.backfill(key);
@@ -418,7 +418,7 @@ impl ProcessHistoryBook {
                 .map(|run| RecentRun {
                     key: run.info.key.clone(),
                     recent: run.series.buckets(Tier::Recent).copied().collect(),
-                    filling: run.series.filling(),
+                    filling: run.series.filling_buckets(),
                 })
                 .collect(),
         }

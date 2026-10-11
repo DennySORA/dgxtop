@@ -8,6 +8,7 @@ use dgxtop_core::tiers::{BarSize, Tier};
 
 use crate::bucket::{Bucket, regroup_into};
 use crate::series::TieredSeries;
+use crate::whole::chart_tier;
 
 /// The bars of a series at one size.
 #[derive(Debug, Clone, PartialEq)]
@@ -105,8 +106,8 @@ pub fn bars_in<'a, B: Bucket + 'a>(
 /// Where the series' samples begin and end.
 #[derive(Debug, Clone, Copy)]
 struct Span {
-    /// The earliest bucket start of the coarsest size: every size holds
-    /// the series from there (the finer ones may have let it go).
+    /// The first bucket start of the size that holds the whole series
+    /// ([`chart_tier`]; the finer ones may have let it go).
     first: i64,
     /// The latest bucket start of any size.
     last: i64,
@@ -114,26 +115,15 @@ struct Span {
 
 impl Span {
     fn of<B: Bucket>(series: &TieredSeries<B>) -> Option<Self> {
-        let mut first = None;
-        let mut last: Option<i64> = None;
-        for tier in Tier::ALL {
-            let mut starts = series.buckets(tier).map(Bucket::start_utc_ns);
-            let Some(start) = starts.next() else {
-                continue;
-            };
-            let end = starts.last().unwrap_or(start);
-            last = Some(last.map_or(end, |last| last.max(end)));
-            // A coarse bucket starts on its boundary, before its samples
-            // may: the finest first start not cut off by a trim.
-            first = Some(match first {
-                Some(earliest) if start.saturating_add(tier.step_i64()) > earliest => earliest,
-                _ => start,
-            });
-        }
-        Some(Self {
-            first: first?,
-            last: last?,
-        })
+        // A coarse bucket starts on its boundary, before its samples may:
+        // the series begins where the size that holds all of it begins.
+        let first = series.buckets(chart_tier(series)?).next()?.start_utc_ns();
+        let last = Tier::ALL
+            .into_iter()
+            .filter_map(|tier| series.buckets(tier).last())
+            .map(Bucket::start_utc_ns)
+            .max()?;
+        Some(Self { first, last })
     }
 }
 
@@ -321,12 +311,12 @@ mod tests {
     #[test]
     fn empty_buckets_are_left_out() {
         let mut series = TieredSeries::<Tally>::default();
-        series.restore(Tier::OneMinute, Tally::new(0), false);
+        series.restore_closed(Tier::OneMinute, Tally::new(0));
         let counted = Tally {
             start_utc_ns: MINUTE,
             samples: 2,
         };
-        series.restore(Tier::OneMinute, counted, false);
+        series.restore_closed(Tier::OneMinute, counted);
         let bars = bars_of(&series, BarSize::OneMinute, 10).unwrap();
         assert_eq!(bars.bars, vec![counted]);
     }
