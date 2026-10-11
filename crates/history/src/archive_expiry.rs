@@ -10,18 +10,13 @@
 //! every ten minutes, like the store did on its own before.
 
 use dgxtop_core::clock::NANOS_PER_SECOND;
-use dgxtop_core::ports::{ArchiveExpiry, ArchiveWhenFull};
+use dgxtop_core::ports::ArchiveExpiry;
 
 use crate::wall_clock::WallClock;
 
 /// Shortest boot time between two expiry requests.
 pub(crate) const EXPIRY_INTERVAL_NS: u64 = 600 * NANOS_PER_SECOND;
 const NANOS_PER_DAY: u64 = 86_400 * NANOS_PER_SECOND;
-
-/// When the archive's budget is reached the oldest minutes give way: the
-/// newest are what the next start compresses into the Overview's sizes,
-/// and a refused journal would be a gap of the present instead.
-pub(crate) const WHEN_FULL: ArchiveWhenFull = ArchiveWhenFull::EvictOldest;
 
 /// The archive's age limit and when it was last asked for.
 #[derive(Debug)]

@@ -114,7 +114,6 @@ impl HistoryIngest for RecordingHistory {
             gaps: Vec::new(),
             prunes: Vec::new(),
             expire: None,
-            when_full: dgxtop_core::ports::ArchiveWhenFull::EvictOldest,
             permit: None,
         })
     }

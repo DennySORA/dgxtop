@@ -422,11 +422,10 @@ pub struct ArchiveJournal {
     /// Minutes the history's compression holds in its coarser sizes, to be
     /// deleted (D-82).
     pub prunes: Vec<ArchivePrune>,
-    /// Rows the history no longer keeps by age, to be deleted (D-96).
+    /// Rows the history no longer keeps by age, to be deleted (D-96). A
+    /// journal over the archive's budget always lets the oldest whole
+    /// minutes give way: the newest are what the next start compresses.
     pub expire: Option<ArchiveExpiry>,
-    /// What the archive does when this journal does not fit its budget
-    /// (D-96).
-    pub when_full: ArchiveWhenFull,
     pub permit: Option<BytePermit>,
 }
 
@@ -439,15 +438,6 @@ pub struct ArchiveExpiry {
     pub before_utc_ns: i64,
     /// The current boot's gaps that ended before this boot time.
     pub current_boot_before_ns: u64,
-}
-
-/// What the archive does with a journal its budget cannot hold (D-96).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ArchiveWhenFull {
-    /// Delete the oldest whole minutes until the journal fits.
-    EvictOldest,
-    /// Refuse the journal (`DiskFull`); nothing is deleted.
-    Refuse,
 }
 
 /// Archive commit receipt.

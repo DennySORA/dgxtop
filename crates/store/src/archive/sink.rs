@@ -10,9 +10,7 @@ use dgxtop_core::action::{PersistenceKind, PersistenceState, PersistenceStatus};
 use dgxtop_core::clock::{TimeProvider, format_utc_ns};
 use dgxtop_core::errors::InfraError;
 use dgxtop_core::overview_history::ArchivePrune;
-use dgxtop_core::ports::{
-    ArchiveExpiry, ArchiveJournal, ArchiveReceipt, ArchiveSink, ArchiveWhenFull,
-};
+use dgxtop_core::ports::{ArchiveExpiry, ArchiveJournal, ArchiveReceipt, ArchiveSink};
 use dgxtop_core::wire::format_fixed_width;
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -87,9 +85,10 @@ struct CleanupCounts {
 ///
 /// Nothing here decides what goes (D-96): each journal says which minutes
 /// the compression holds (`prunes`), which rows are past the age the
-/// history keeps (`expire`) and whether the oldest minutes give way when
-/// the budget is reached (`when_full`). Opening, a status read and an
-/// append without such a request delete nothing.
+/// history keeps (`expire`); the history decided once that past the
+/// budget the oldest whole minutes give way, since the newest are what the
+/// next start compresses. Opening, a status read and an append that fits
+/// and asks for nothing delete nothing.
 pub struct SqliteArchive {
     path: PathBuf,
     limits: ArchiveLimits,
@@ -472,12 +471,11 @@ impl SqliteArchive {
     }
 
     /// Admission before any row is written: low disk refuses, a pinned WAL
-    /// pauses, the page cap evicts the oldest data first when the journal
-    /// asks for it (D-96) and refuses otherwise.
+    /// pauses, the page cap evicts the oldest data first (D-96) and refuses
+    /// only when nothing is left to evict.
     fn admit_with_eviction(
         &mut self,
         estimate_bytes: u64,
-        when_full: ArchiveWhenFull,
         protected_json: &str,
     ) -> Result<(), InfraError> {
         for _ in 0..MAX_EVICTION_ROUNDS {
@@ -507,9 +505,7 @@ impl SqliteArchive {
                     });
                 }
                 Err(Refusal::PageCap { .. }) => {
-                    if when_full == ArchiveWhenFull::Refuse
-                        || self.evict_oldest(protected_json)? == 0
-                    {
+                    if self.evict_oldest(protected_json)? == 0 {
                         break;
                     }
                 }
@@ -524,11 +520,7 @@ impl SqliteArchive {
     /// Writes the rows in bounded transactions, each admitted on its own;
     /// returns (written, present). A refusal after some transactions leaves
     /// those committed (a retry skips them), so the caller records a gap.
-    fn insert_batch(
-        &mut self,
-        batch: &ArchiveBatch,
-        when_full: ArchiveWhenFull,
-    ) -> Result<(u64, u64), InfraError> {
+    fn insert_batch(&mut self, batch: &ArchiveBatch) -> Result<(u64, u64), InfraError> {
         let protected_json = protected_segments_json(batch);
         let deadline = self.limits.busy_deadline();
         let max_rows = usize::try_from(self.limits.batch_rows).unwrap_or(usize::MAX);
@@ -536,7 +528,7 @@ impl SqliteArchive {
         let mut present_total = 0u64;
         for bounds in chunk_bounds(&batch.rows, max_rows, self.limits.batch_bytes) {
             let chunk = batch.rows.get(bounds).unwrap_or_default();
-            self.admit_with_eviction(storage_estimate(chunk), when_full, &protected_json)?;
+            self.admit_with_eviction(storage_estimate(chunk), &protected_json)?;
             let result: Result<u64, TxError<()>> =
                 immediate_transaction(self.connection()?, deadline, |transaction| {
                     let mut written = 0u64;
@@ -628,7 +620,7 @@ impl ArchiveSink for SqliteArchive {
         self.connection()?;
         self.check_segment_references(&batch)?;
         self.check_fits_budget(&batch)?;
-        let (written, present) = self.insert_batch(&batch, journal.when_full)?;
+        let (written, present) = self.insert_batch(&batch)?;
         self.stats.rows_written = self.stats.rows_written.saturating_add(written);
         self.stats.rows_already_present = self.stats.rows_already_present.saturating_add(present);
         self.last_issue = None;

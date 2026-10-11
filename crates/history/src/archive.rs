@@ -29,7 +29,6 @@ use dgxtop_core::ports::{
 
 use dgxtop_core::clock::format_utc_ns;
 
-use crate::archive_expiry::WHEN_FULL;
 use crate::output::ArchiveRow;
 use crate::segment::SegmentMeta;
 use crate::wall_clock::WallClock;
@@ -282,7 +281,6 @@ impl ArchiveQueue {
             gaps: collected.gaps,
             prunes,
             expire,
-            when_full: WHEN_FULL,
             permit,
         })
     }
