@@ -8,9 +8,9 @@
 //! Telemetry (adapter hosts, collectors, hot store, history) is replaced by
 //! inert ports: the process table the Manager validates targets against is
 //! published directly from procfs facts of the disposable children. The
-//! workers run the production `dgxtop::control_ops` functions; only the
-//! completion forwarding of monitor.rs is replicated at the bottom of this
-//! file.
+//! workers run the production `dgxtop::control_ops` functions on the
+//! program's queue sizes (`dgxtop::worker_queues`); only the completion
+//! forwarding of monitor.rs is replicated at the bottom of this file.
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
@@ -21,7 +21,8 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::Sender;
 use dgxtop::audit_unavailable::UnavailableAudit;
-use dgxtop::control_ops::{run_action_op, run_audit_op};
+use dgxtop::control_ops::{run_action_op, run_audit_op, run_config_job};
+use dgxtop::worker_queues::{ACTION_QUEUE, AUDIT_QUEUE, CONFIG_QUEUE};
 use dgxtop_adapters::process_action::{
     HostProcessFiles, LinuxPidfd, PidfdActionAdapter, PidfdSyscalls,
 };
@@ -37,8 +38,8 @@ use dgxtop_core::commands::{
 use dgxtop_core::config::Config;
 use dgxtop_core::identity::{BootId, HostId, Pid, PidNamespace, ProcessKey};
 use dgxtop_core::ports::{
-    AdapterJob, AuditRepository, ConfigJob, ConfigRepository, ControlCompletion, HistoryJob,
-    SessionPort, SnapshotReader, StoreJob,
+    AdapterJob, AuditRepository, ConfigJob, ControlCompletion, HistoryJob, SessionPort,
+    SnapshotReader, StoreJob,
 };
 use dgxtop_core::quality::{Namespace, SampleKind};
 use dgxtop_core::testing::{CapturingDispatch, MemoryLogger};
@@ -865,7 +866,7 @@ fn spawn_audit_worker(
 ) -> PoolHandle<AuditOp> {
     spawn_actor(
         "audit",
-        64,
+        AUDIT_QUEUE,
         repository,
         move |repository: &mut AuditSpy, op: AuditOp| {
             let completion = run_audit_op(repository, op);
@@ -884,7 +885,7 @@ fn spawn_action_worker(
 ) -> PoolHandle<ActionOp> {
     spawn_actor(
         "action",
-        16,
+        ACTION_QUEUE,
         port,
         move |port: &mut ActionPortSpy, op: ActionOp| {
             let completion = run_action_op(port, op, clock.as_ref(), None);
@@ -899,16 +900,10 @@ fn spawn_config_worker(path: PathBuf, completions: Completions) -> PoolHandle<Co
     let repository = FileConfigRepository::new(path, Arc::new(RealFileSystem));
     spawn_actor(
         "config",
-        8,
+        CONFIG_QUEUE,
         repository,
         move |repository: &mut FileConfigRepository, job: ConfigJob| {
-            let ConfigJob::Persist {
-                request_id,
-                expected_revision,
-                candidate,
-            } = job;
-            let result = repository.compare_and_swap(expected_revision, &candidate);
-            completions.deliver(ControlCompletion::Config { request_id, result });
+            completions.deliver(run_config_job(repository, job));
         },
     )
     .expect("spawn the config worker")

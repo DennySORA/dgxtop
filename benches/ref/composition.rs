@@ -22,11 +22,13 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Sender, bounded};
 use dgxtop::audit_unavailable::UnavailableAudit;
-use dgxtop::control_ops::{run_action_op, run_audit_op};
+use dgxtop::collection_ops::{is_collector_panic, run_collection};
+use dgxtop::control_ops::{run_action_op, run_audit_op, run_config_job, run_history_job};
 use dgxtop::live_store::LiveStore;
 use dgxtop::startup::{real_filesystem, value_origins};
 use dgxtop::store_actor::run_store_job;
 use dgxtop::version::BuildInfo;
+use dgxtop::worker_queues::{ACTION_QUEUE, AUDIT_QUEUE, CONFIG_QUEUE, STATE_QUEUE};
 use dgxtop_collectors::process::ProcessProbeDeriver;
 use dgxtop_collectors::registry::default_collectors;
 use dgxtop_core::action::{
@@ -525,7 +527,7 @@ impl Wiring {
         let probes = Arc::clone(&self.probes);
         spawn_actor(
             "hot-store",
-            64,
+            STATE_QUEUE,
             writer,
             move |writer: &mut StateWriter, job: StoreJob| {
                 let reads = match &job {
@@ -553,37 +555,13 @@ impl Wiring {
             usize::try_from(config.runtime.compute_workers).unwrap_or(2),
             usize::try_from(config.queues.collector_jobs).unwrap_or(8),
             Arc::new(move |plan: CollectionPlan| {
-                let collector = registry
-                    .iter()
-                    .find(|collector| collector.id() == &plan.collector_id)
-                    .cloned();
-                let collector_id = plan.collector_id.clone();
-                let batch_id = plan.batch_id;
-                let outcome = collector.map(|collector| {
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        collector.collect(&plan)
-                    }))
-                });
-                match outcome {
-                    Some(Ok(batch)) => {
-                        completions.ingestion(IngestionCompletion::Collected(Box::new(batch)))
-                    }
-                    Some(Err(_)) => {
-                        probes
-                            .collector_panics
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        completions.ingestion(IngestionCompletion::CollectorFailed {
-                            collector_id,
-                            batch_id,
-                            message: "collector panicked".to_owned(),
-                        });
-                    }
-                    None => completions.ingestion(IngestionCompletion::CollectorFailed {
-                        collector_id,
-                        batch_id,
-                        message: "unknown collector".to_owned(),
-                    }),
+                let completion = run_collection(&registry, &plan);
+                if is_collector_panic(&completion) {
+                    probes
+                        .collector_panics
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
+                completions.ingestion(completion);
             }),
         )
         .map_err(|error| error.to_string())
@@ -602,19 +580,14 @@ impl Wiring {
             usize::try_from(config.runtime.history_workers).unwrap_or(1),
             usize::try_from(config.queues.history_requests).unwrap_or(4),
             Arc::new(move |job: HistoryJob| {
-                let result = reader.read(
-                    &job.request,
-                    job.deadline_boot_ns,
-                    &job.cancel,
-                    clock.as_ref(),
-                );
-                probes.on_history_result(&job.request_id, &result);
-                completions.control(ControlCompletion::History {
-                    request_id: job.request_id,
-                    session_id: job.session_id,
-                    session_generation: job.session_generation,
-                    result,
-                });
+                let completion = run_history_job(reader.as_ref(), job, clock.as_ref());
+                if let ControlCompletion::History {
+                    request_id, result, ..
+                } = &completion
+                {
+                    probes.on_history_result(request_id, result);
+                }
+                completions.control(completion);
             }),
         )
         .map_err(|error| error.to_string())
@@ -624,16 +597,10 @@ impl Wiring {
         let completions = self.completions.clone();
         spawn_actor(
             "config",
-            8,
+            CONFIG_QUEUE,
             repository,
             move |repository: &mut FileConfigRepository, job: ConfigJob| {
-                let ConfigJob::Persist {
-                    request_id,
-                    expected_revision,
-                    candidate,
-                } = job;
-                let result = repository.compare_and_swap(expected_revision, &candidate);
-                completions.control(ControlCompletion::Config { request_id, result });
+                completions.control(run_config_job(repository, job));
             },
         )
         .map_err(|error| error.to_string())
@@ -661,7 +628,7 @@ impl Wiring {
         let completions = self.completions.clone();
         spawn_actor(
             "audit",
-            64,
+            AUDIT_QUEUE,
             repository,
             move |repository: &mut Box<dyn AuditRepository>, op: AuditOp| {
                 completions.control(ControlCompletion::Audit(run_audit_op(
@@ -678,7 +645,7 @@ impl Wiring {
         let clock = Arc::clone(&self.clock);
         spawn_actor(
             "action",
-            16,
+            ACTION_QUEUE,
             RefusingActions,
             move |port: &mut RefusingActions, op: ActionOp| {
                 completions.control(ControlCompletion::Action(run_action_op(

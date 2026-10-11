@@ -64,12 +64,17 @@ use dgxtop_store::process_history::ProcessHistoryFiles;
 use dgxtop_store::sqlite::{StatvfsFreeSpace, ensure_sqlite_version};
 
 use crate::cli::Cli;
-use crate::control_ops::{run_action_op, run_audit_op};
+use crate::collection_ops::run_collection;
+use crate::control_ops::{run_action_op, run_audit_op, run_config_job, run_history_job};
 use crate::fail_stop::FailStop;
 use crate::modes::{EXIT_FAILURE, EXIT_INVALID, fail};
 use crate::startup::{self, LoadedConfiguration};
 use crate::store_actor::run_store_job;
 use crate::version::BuildInfo;
+use crate::worker_queues::{
+    ACTION_QUEUE, ARCHIVE_QUEUE, AUDIT_QUEUE, CONFIG_QUEUE, HISTORY_TIERS_QUEUE,
+    PROCESS_HISTORY_INPUTS, PROCESS_HISTORY_QUEUE, PROCESS_PROBE_QUEUE, STATE_QUEUE,
+};
 
 /// Bounded wait for a worker to hand a completion to the Manager.
 const COMPLETION_SEND_TIMEOUT: Duration = Duration::from_secs(1);
@@ -90,17 +95,6 @@ const FRONTEND_EXIT_GRACE: Duration = Duration::from_secs(5);
 const SIGNAL_POLL: Duration = Duration::from_millis(200);
 /// Cadence of the bounded wait for the frontend once a signal arrived.
 const FRONTEND_EXIT_POLL: Duration = Duration::from_millis(50);
-/// History tier jobs waiting (D-82): the history sends one startup read at
-/// a time and a journal of closed buckets per finished minute.
-const HISTORY_TIERS_QUEUE: usize = 16;
-/// Probe jobs waiting (D-76); the process actor keeps one in flight.
-const PROCESS_PROBE_QUEUE: usize = 2;
-/// Inputs waiting for the history's process actor (D-79): a table each
-/// process period, a tick each commit, the probe's and the stores' answers.
-const PROCESS_HISTORY_INPUTS: usize = 64;
-/// Process history store jobs waiting (D-76): a journal every 10 s, the
-/// short-term file every 30 s, a run's read now and then.
-const PROCESS_HISTORY_QUEUE: usize = 8;
 
 /// Runs the monitor until the user quits, a signal arrives or the terminal hangs up.
 pub fn run(cli: &Cli) -> ExitCode {
@@ -716,7 +710,7 @@ impl Wiring {
         let logger = Arc::clone(&self.logger);
         let handle = spawn_actor(
             "archive",
-            8,
+            ARCHIVE_QUEUE,
             archive,
             move |archive: &mut SqliteArchive, journal: ArchiveJournal| {
                 let revision = journal.revision;
@@ -762,7 +756,7 @@ impl Wiring {
         let fail_stop = self.fail_stop.clone();
         spawn_actor(
             "hot-store",
-            64,
+            STATE_QUEUE,
             writer,
             move |writer: &mut dgxtop_state::StateWriter, job: StoreJob| {
                 // After a fail-stop the writer's state is not trusted again.
@@ -861,18 +855,7 @@ impl Wiring {
             usize::try_from(effective.runtime.history_workers).unwrap_or(1),
             usize::try_from(effective.queues.history_requests).unwrap_or(4),
             Arc::new(move |job: HistoryJob| {
-                let result = history.read(
-                    &job.request,
-                    job.deadline_boot_ns,
-                    &job.cancel,
-                    clock.as_ref(),
-                );
-                completions.control(ControlCompletion::History {
-                    request_id: job.request_id,
-                    session_id: job.session_id,
-                    session_generation: job.session_generation,
-                    result,
-                });
+                completions.control(run_history_job(history.as_ref(), job, clock.as_ref()));
             }),
         )
         .map_err(|error| StartError::failure(error.to_string()))
@@ -906,7 +889,7 @@ impl Wiring {
         };
         spawn_actor(
             "audit",
-            64,
+            AUDIT_QUEUE,
             repository,
             move |repository: &mut Box<dyn AuditRepository>, op: AuditOp| {
                 let completion = run_audit_op(repository.as_mut(), op);
@@ -1053,7 +1036,7 @@ impl Wiring {
         let fail_stop = self.fail_stop.clone();
         spawn_actor(
             "action",
-            16,
+            ACTION_QUEUE,
             adapter,
             move |port: &mut PidfdActionAdapter, op: ActionOp| {
                 let halted = fail_stop.reason();
@@ -1075,30 +1058,7 @@ fn spawn_collectors(
         usize::try_from(effective.runtime.compute_workers).unwrap_or(2),
         usize::try_from(effective.queues.collector_jobs).unwrap_or(8),
         Arc::new(move |plan: CollectionPlan| {
-            let collector = registry
-                .iter()
-                .find(|collector| collector.id() == &plan.collector_id)
-                .cloned();
-            let collector_id = plan.collector_id.clone();
-            let batch_id = plan.batch_id;
-            let outcome = collector.map(|collector| {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| collector.collect(&plan)))
-            });
-            match outcome {
-                Some(Ok(batch)) => {
-                    completions.ingestion(IngestionCompletion::Collected(Box::new(batch)))
-                }
-                Some(Err(_)) => completions.ingestion(IngestionCompletion::CollectorFailed {
-                    collector_id,
-                    batch_id,
-                    message: "collector panicked".to_owned(),
-                }),
-                None => completions.ingestion(IngestionCompletion::CollectorFailed {
-                    collector_id,
-                    batch_id,
-                    message: "unknown collector".to_owned(),
-                }),
-            }
+            completions.ingestion(run_collection(&registry, &plan));
         }),
     )
     .map_err(|error| StartError::failure(error.to_string()))
@@ -1110,16 +1070,10 @@ fn spawn_config(
 ) -> Result<PoolHandle<ConfigJob>, StartError> {
     spawn_actor(
         "config",
-        8,
+        CONFIG_QUEUE,
         repository,
         move |repository: &mut FileConfigRepository, job: ConfigJob| {
-            let ConfigJob::Persist {
-                request_id,
-                expected_revision,
-                candidate,
-            } = job;
-            let result = repository.compare_and_swap(expected_revision, &candidate);
-            completions.control(ControlCompletion::Config { request_id, result });
+            completions.control(run_config_job(repository, job));
         },
     )
     .map_err(|error| StartError::failure(error.to_string()))

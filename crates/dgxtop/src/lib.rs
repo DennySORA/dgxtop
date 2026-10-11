@@ -6,6 +6,7 @@
 
 pub mod audit_unavailable;
 pub mod cli;
+pub mod collection_ops;
 pub mod control_ops;
 pub mod diagnostics;
 pub mod fail_stop;
@@ -21,3 +22,4 @@ pub mod replay_unavailable;
 pub mod startup;
 pub mod store_actor;
 pub mod version;
+pub mod worker_queues;
