@@ -15,7 +15,7 @@ use dgxtop_core::overview_history::{
 use dgxtop_core::testing::{CapturingDispatch, host_id, metric_key};
 use dgxtop_core::tiers::{TIER_BUCKETS, Tier};
 
-use super::book::TierMinute;
+use super::book::{MAX_PENDING_BYTES, TierMinute};
 use super::budget::STORE_BUDGET_BYTES;
 use super::*;
 
@@ -808,4 +808,49 @@ fn the_store_budget_lets_the_series_seen_longest_ago_go() {
         prunes.iter().any(|prune| prune.series == gpu_series(0)),
         "deleted from the archive too: {prunes:?}"
     );
+}
+
+/// Live minutes waiting for the startup are bounded by bytes: the latest
+/// ones stay.
+#[test]
+fn waiting_minutes_are_bounded_by_bytes() {
+    let run = Run::attached(OverviewTiers::new(), MIDNIGHT);
+    run.tiers.feed((0..2_000).map(live).collect());
+    let bars = run.tiers.bars(
+        &power(),
+        Tier::OneMinute,
+        (MIDNIGHT, MIDNIGHT + 48 * HOUR),
+        &[],
+    );
+    let kept = MAX_PENDING_BYTES / std::mem::size_of::<OverviewBucket>();
+    assert_eq!(bars.bars.len(), kept);
+    assert_eq!(
+        bars.bars.last().map(|bar| bar.start_utc_ns),
+        Some(MIDNIGHT + 1_999 * MINUTE),
+        "the latest stay"
+    );
+}
+
+/// The closed buckets kept for a store that fell behind are bounded by
+/// what they cost, strings included: the oldest go, the latest stay.
+#[test]
+fn unsent_buckets_are_bounded_by_bytes() {
+    let mut book = TierBook::new();
+    book.keep_on_disk();
+    book.release(false);
+    for index in 0..600 {
+        book.feed(live(index));
+    }
+    let all = book.unsent_bytes();
+    let rows = book.take_unsent();
+    let per_row = std::mem::size_of::<TierRow>() + "test-hostgpu:0gpu.power.drawgpu".len();
+    assert_eq!(all, rows.len() * per_row, "rows and their strings");
+    let latest = rows.last().cloned();
+    book.return_unsent(rows);
+    assert_eq!(book.unsent_bytes(), all);
+    assert!(book.shed_unsent(all / 2));
+    assert!(book.unsent_bytes() <= all / 2);
+    assert!(!book.shed_unsent(all / 2), "nothing more to drop");
+    assert_eq!(book.take_unsent().last().cloned(), latest);
+    assert_eq!(book.unsent_bytes(), 0);
 }

@@ -11,8 +11,8 @@
 //! it and, while a store is kept, the eviction is noted so that the store
 //! and the archive delete it too ([`Eviction`]); if it comes back it starts
 //! fresh. While the store's startup load runs, a series' live minutes wait
-//! ([`MAX_PENDING_MINUTES`] at most) so that its earlier history goes in
-//! first.
+//! ([`MAX_PENDING_BYTES`] of them at most) so that its earlier history
+//! goes in first.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::mem::size_of;
@@ -23,10 +23,11 @@ use dgxtop_core::identity::MetricKey;
 use dgxtop_core::overview_history::{ArchivePrune, OverviewBars, OverviewBucket, TierRow};
 use dgxtop_core::tiers::Tier;
 
-use super::budget::{CACHE_BUDGET_BYTES, key_bytes, series_bytes};
+use super::budget::{CACHE_BUDGET_BYTES, key_bytes, row_bytes, series_bytes};
 
-/// Live minutes a series keeps while its earlier history is being read.
-pub(crate) const MAX_PENDING_MINUTES: usize = 240;
+/// Bytes of live minutes a series keeps while its earlier history is
+/// being read (about four and a half hours of minutes).
+pub(crate) const MAX_PENDING_BYTES: usize = 16 * 1024;
 
 /// A finalized minute of an Overview series, on the wall clock.
 #[derive(Debug, Clone, PartialEq)]
@@ -124,6 +125,8 @@ pub(crate) struct TierBook {
     new_backfilled: bool,
     /// Closed buckets collected for the store (only while one is kept).
     unsent: Vec<TierRow>,
+    /// What they cost in memory ([`row_bytes`]).
+    unsent_bytes: usize,
     keeps_rows: bool,
     /// Series let go since the last [`TierBook::take_evictions`] (only
     /// while a store is kept).
@@ -149,6 +152,7 @@ impl TierBook {
             waiting: false,
             new_backfilled: false,
             unsent: Vec::new(),
+            unsent_bytes: 0,
             keeps_rows: false,
             evicted: Vec::new(),
             epoch: 0,
@@ -180,26 +184,38 @@ impl TierBook {
 
     /// Takes the closed buckets collected for the store.
     pub(crate) fn take_unsent(&mut self) -> Vec<TierRow> {
+        self.unsent_bytes = 0;
         std::mem::take(&mut self.unsent)
     }
 
-    pub(crate) fn unsent_len(&self) -> usize {
-        self.unsent.len()
+    pub(crate) fn has_unsent(&self) -> bool {
+        !self.unsent.is_empty()
+    }
+
+    /// What the collected rows cost in memory.
+    #[cfg(test)]
+    pub(crate) fn unsent_bytes(&self) -> usize {
+        self.unsent_bytes
     }
 
     /// Puts back rows the store could not take yet, before the ones
     /// collected since.
     pub(crate) fn return_unsent(&mut self, mut rows: Vec<TierRow>) {
+        self.unsent_bytes += rows.iter().map(row_bytes).sum::<usize>();
         rows.append(&mut self.unsent);
         self.unsent = rows;
     }
 
-    /// Drops the oldest collected rows past `keep` (the store fell
-    /// behind); returns whether any went.
-    pub(crate) fn shed_unsent(&mut self, keep: usize) -> bool {
-        let excess = self.unsent.len().saturating_sub(keep);
-        self.unsent.drain(..excess);
-        excess > 0
+    /// Drops the oldest collected rows until they cost at most
+    /// `max_bytes` (the store fell behind); returns whether any went.
+    pub(crate) fn shed_unsent(&mut self, max_bytes: usize) -> bool {
+        let mut cut = 0;
+        while self.unsent_bytes > max_bytes && cut < self.unsent.len() {
+            self.unsent_bytes -= row_bytes(&self.unsent[cut]);
+            cut += 1;
+        }
+        self.unsent.drain(..cut);
+        cut > 0
     }
 
     /// A finalized minute: into the sizes, or waiting while the series'
@@ -217,7 +233,8 @@ impl TierBook {
             return;
         }
         let entry = self.entry(&series);
-        if entry.pending.len() >= MAX_PENDING_MINUTES {
+        let minute_bytes = size_of::<OverviewBucket>();
+        while (entry.pending.len() + 1) * minute_bytes > MAX_PENDING_BYTES {
             entry.pending.pop_front();
         }
         entry.pending.push_back(bucket);
@@ -288,6 +305,7 @@ impl TierBook {
             return;
         }
         self.unsent.retain(|row| row.series != *series);
+        self.unsent_bytes = self.unsent.iter().map(row_bytes).sum();
         self.evicted.push(Eviction {
             series: series.clone(),
             through_utc_ns: entry.given_through_utc_ns(self.shift_ns),
@@ -316,12 +334,15 @@ impl TierBook {
         if !self.keeps_rows {
             return;
         }
-        self.unsent
-            .extend(closed.into_iter().map(|(tier, bucket)| TierRow {
+        for (tier, bucket) in closed {
+            let row = TierRow {
                 series: series.clone(),
                 tier,
                 bucket,
-            }));
+            };
+            self.unsent_bytes += row_bytes(&row);
+            self.unsent.push(row);
+        }
     }
 
     /// Puts back what the store kept of a series (startup).

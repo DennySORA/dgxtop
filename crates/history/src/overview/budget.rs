@@ -10,7 +10,7 @@ use std::mem::size_of;
 
 use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::identity::MetricKey;
-use dgxtop_core::overview_history::TierStoreUsage;
+use dgxtop_core::overview_history::{TierRow, TierStoreUsage};
 
 const MIB: usize = 1024 * 1024;
 /// The cache's memory: every size of every series, with what each fills
@@ -22,6 +22,9 @@ pub(crate) const CACHE_BUDGET_BYTES: usize = 32 * MIB;
 /// WAL below the 64 MiB page cap of a small database, which refuses a
 /// write past it (`DiskFull`) and never deletes on its own.
 pub(crate) const STORE_BUDGET_BYTES: u64 = 40 * 1024 * 1024;
+/// Closed buckets kept for a store that fell behind; past it the oldest
+/// go (and the archive is no longer pruned this run).
+pub(crate) const UNSENT_BUDGET_BYTES: usize = 16 * MIB;
 /// Series one append answer past the store budget lets go at most.
 const MAX_GIVING_WAY: u64 = 8;
 
@@ -31,6 +34,12 @@ pub(crate) fn series_bytes(series: &SeriesInEveryBoot) -> usize {
         + series.entity_id.as_str().len()
         + series.metric_id.as_str().len()
         + series.scope.as_str().len()
+}
+
+/// What a closed bucket waiting for the store costs: the row and its
+/// series' strings (each row holds its own copy).
+pub(crate) fn row_bytes(row: &TierRow) -> usize {
+    size_of::<TierRow>() + series_bytes(&row.series)
 }
 
 /// Heap bytes of a boot's key of a series.

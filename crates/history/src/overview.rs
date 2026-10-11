@@ -47,9 +47,6 @@ use dgxtop_core::tiers::{TIER_BUCKETS, Tier};
 
 use self::book::{Eviction, TierBook, TierMinute};
 
-/// Closed buckets kept for a store that fell behind; past it the oldest
-/// go (and the archive is no longer pruned this run).
-const MAX_UNSENT_ROWS: usize = 200_000;
 /// Archived minutes one read returns at most (two weeks of one series).
 const ARCHIVE_PAGE_MINUTES: u32 = 20_000;
 /// The archive is pruned at most this often (boot clock).
@@ -153,6 +150,16 @@ impl StoreLink {
         let deleting = !self.forget.is_empty() || self.appends_inflight.contains(&true);
         if !deleting {
             book.give_way(budget::series_giving_way(usage, budget::STORE_BUDGET_BYTES));
+        }
+    }
+
+    /// Drops the oldest closed buckets past [`budget::UNSENT_BUDGET_BYTES`]
+    /// while the store cannot take them; the archive is then no longer
+    /// pruned this run (what it would lose was not written).
+    fn keep_unsent_within_budget(&mut self, book: &mut TierBook) {
+        if book.shed_unsent(budget::UNSENT_BUDGET_BYTES) {
+            self.healthy = false;
+            self.issue = Some("history tiers store fell behind; oldest buckets dropped".to_owned());
         }
     }
 
@@ -297,7 +304,7 @@ impl OverviewTiers {
             && matches!(link.phase, Phase::Done)
             && link.held.is_none()
             && link.appends_inflight.is_empty()
-            && book.unsent_len() == 0;
+            && !book.has_unsent();
         let due = link
             .last_prune_boot_ns
             .is_none_or(|last| now_boot_ns.saturating_sub(last) >= PRUNE_EVERY_NS);
@@ -479,6 +486,7 @@ fn flush(book: &mut TierBook, link: &mut StoreLink) {
     if let Some(job) = link.held.take() {
         link.send(book, job);
         if link.held.is_some() {
+            link.keep_unsent_within_budget(book);
             return;
         }
     }
@@ -498,11 +506,7 @@ fn flush(book: &mut TierBook, link: &mut StoreLink) {
         }
         Err(DispatchError::Busy) => {
             book.return_unsent(rows);
-            if book.shed_unsent(MAX_UNSENT_ROWS) {
-                link.healthy = false;
-                link.issue =
-                    Some("history tiers store fell behind; oldest buckets dropped".to_owned());
-            }
+            link.keep_unsent_within_budget(book);
         }
         Err(error) => link.stop(book, &error),
     }
