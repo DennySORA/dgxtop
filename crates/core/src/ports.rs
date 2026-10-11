@@ -41,7 +41,7 @@ use crate::canonical::{
 };
 use crate::clock::TimeProvider;
 use crate::commands::{CommandEnvelope, CommandRejection, CommandResult};
-use crate::config::{Config, ConfigError, ValidationIssue};
+use crate::config::{Config, ConfigError, SamplingConfig, ValidationIssue};
 use crate::errors::{ErrorDetail, InfraError};
 use crate::history::{HistoryQuery, HistoryResult};
 use crate::identity::{
@@ -641,6 +641,9 @@ pub enum StoreJob {
     },
     Gap(GapRecord),
     Maintain,
+    /// A durable sampling change: future samples use its periods and the
+    /// history its finalize grace (stored deadlines never change).
+    ApplySampling(SamplingConfig),
 }
 
 /// One Overview History read of a session's history view (D-82).

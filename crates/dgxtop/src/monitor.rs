@@ -34,7 +34,7 @@ use dgxtop_core::ports::{
     Collector, ConfigJob, ConfigRepository, ControlCompletion, Dispatch, HistoryJob,
     HistoryTierStore, IngestionCompletion, LogLevel, Logger, OverviewReader,
     ProcessHistoryCompletion, ProcessHistoryInput, ProcessHistoryJob, ProcessHistoryReader,
-    ProcessHistoryStore, ProcessProbe, ProcessProbeJob, StoreJob, StoreWriter, TelemetryPort,
+    ProcessHistoryStore, ProcessProbe, ProcessProbeJob, StoreJob, TelemetryPort,
 };
 use dgxtop_core::quality::Namespace;
 use dgxtop_history::{OverviewTiers, ProcessHistory, ProcessHistoryPorts, ProcessHistorySettings};
@@ -68,6 +68,7 @@ use crate::control_ops::{run_action_op, run_audit_op};
 use crate::fail_stop::FailStop;
 use crate::modes::{EXIT_FAILURE, EXIT_INVALID, fail};
 use crate::startup::{self, LoadedConfiguration};
+use crate::store_actor::run_store_job;
 use crate::version::BuildInfo;
 
 /// Bounded wait for a worker to hand a completion to the Manager.
@@ -730,16 +731,9 @@ impl Wiring {
                 if fail_stop.is_halted() {
                     return;
                 }
-                fail_stop.guard("hot store", || match job {
-                    StoreJob::Commit { batch, guard } => {
-                        let ack = writer.commit_collection(*batch, &guard, clock.now_boot_ns());
+                fail_stop.guard("hot store", || {
+                    if let Some(ack) = run_store_job(writer, job, clock.as_ref()) {
                         completions.ingestion(IngestionCompletion::Committed(ack));
-                    }
-                    StoreJob::Gap(gap) => writer.record_gap(gap),
-                    StoreJob::Maintain => {
-                        // The archive needs the boot/UTC pairing to stamp finished rows.
-                        writer.observe_wall_clock(clock.now_boot_ns(), clock.now_utc_ns());
-                        writer.maintain(clock.now_boot_ns());
                     }
                 });
                 if fail_stop.is_halted() {

@@ -28,7 +28,7 @@ use dgxtop_core::canonical::{
     CommitGuard, GapRecord, PolicySnapshot, StoreAck,
 };
 use dgxtop_core::clock::{NANOS_PER_MILLI, NANOS_PER_SECOND};
-use dgxtop_core::config::Config;
+use dgxtop_core::config::{Config, SamplingConfig};
 use dgxtop_core::identity::{AdapterId, BootId, CollectorId, HostId};
 use dgxtop_core::ports::{
     Collector, Dispatch, DispatchError, IngressBatch, SnapshotReader, StoreJob,
@@ -257,6 +257,8 @@ pub(crate) struct IngestionService {
     pages: pages::PageAccumulator,
     service_ns: VecDeque<u64>,
     retry_at_ns: Option<u64>,
+    /// A sampling change the store has not accepted yet.
+    pending_sampling: Option<SamplingConfig>,
     stopped: bool,
 }
 
@@ -285,6 +287,7 @@ impl IngestionService {
             pages: pages::PageAccumulator::default(),
             service_ns: VecDeque::new(),
             retry_at_ns: None,
+            pending_sampling: None,
             stopped: false,
         }
     }
@@ -561,6 +564,24 @@ impl IngestionService {
     /// Asks the store actor for retention/quota maintenance.
     pub(crate) fn request_maintenance(&self) -> Result<(), DispatchError> {
         self.store.try_dispatch(StoreJob::Maintain)
+    }
+
+    /// Tells the store about a durable sampling change. A busy store keeps
+    /// the change pending for [`Self::retry_sampling`]; dropping it would
+    /// leave the state on the old timing for the rest of the run.
+    pub(crate) fn apply_sampling(&mut self, sampling: SamplingConfig) -> Result<(), DispatchError> {
+        self.pending_sampling = Some(sampling);
+        self.retry_sampling()
+    }
+
+    /// Sends the pending sampling change, if any.
+    pub(crate) fn retry_sampling(&mut self) -> Result<(), DispatchError> {
+        let Some(sampling) = self.pending_sampling.take() else {
+            return Ok(());
+        };
+        self.store
+            .try_dispatch(StoreJob::ApplySampling(sampling.clone()))
+            .inspect_err(|_| self.pending_sampling = Some(sampling))
     }
 
     /// Stops routing and dispatching (shutdown); backlogs are released.
