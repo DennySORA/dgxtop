@@ -1,7 +1,7 @@
 //! PresentationService view building.
 //!
 //! Contract between the Manager control loop (which owns state and calls
-//! [`build_view_model`]) and the projection builders (pure functions over
+//! [`build_view_model_measured`]) and the projection builders (pure functions over
 //! immutable inputs). Builders never perform I/O, never block and only copy
 //! the visible window of large tables (processes) plus a small overscan.
 
@@ -214,11 +214,7 @@ pub fn build_header(context: &PresentationContext<'_>) -> HeaderView {
 /// Builds one immutable projection for one session: only the modules
 /// visible in the session's view (and enabled) are filled, large tables are
 /// windowed, and the result is kept within `runtime.max_projection_bytes`.
-pub fn build_view_model(context: &PresentationContext<'_>) -> ViewModel {
-    build_view_model_measured(context).0
-}
-
-/// [`build_view_model`] plus the size the projection is accounted at
+/// Returns it with the size it is accounted at
 /// ([`ViewModel::accounted_bytes`]), so the caller can size its byte permit
 /// without measuring the projection a second time.
 pub fn build_view_model_measured(context: &PresentationContext<'_>) -> (ViewModel, usize) {

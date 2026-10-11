@@ -193,13 +193,6 @@ impl ConfirmationInput {
             _ => None,
         }
     }
-
-    pub fn active_request(&self) -> Option<u128> {
-        match &self.state {
-            State::Active { request_id, .. } => Some(*request_id),
-            _ => None,
-        }
-    }
 }
 
 #[cfg(test)]

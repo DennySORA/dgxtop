@@ -15,7 +15,7 @@ use super::testkit::{
     Fixture, NOW, candidate, entity_record, explanation_for, gpu_link, history_chart, process_key,
     process_row, sample,
 };
-use super::{PROCESS_OVERSCAN_ROWS, build_view_model, build_view_model_measured, visible_modules};
+use super::{PROCESS_OVERSCAN_ROWS, build_view_model_measured, visible_modules};
 use dgxtop_core::canonical::CandidateDisposition;
 
 const ONE_MIB: usize = 1024 * 1024;
@@ -220,13 +220,13 @@ fn confirmation() -> ConfirmationView {
 #[test]
 fn the_header_follows_the_effective_redline() {
     let mut fixture = Fixture::new();
-    let model = build_view_model(&fixture.context());
+    let model = build_view_model_measured(&fixture.context()).0;
     assert_eq!(
         model.header.redline_threshold_percent,
         fixture.effective.viewer.redline_threshold_percent
     );
     fixture.effective.viewer.redline_threshold_percent = 92.5;
-    let applied = build_view_model(&fixture.context());
+    let applied = build_view_model_measured(&fixture.context()).0;
     assert_eq!(applied.header.redline_threshold_percent, 92.5);
 }
 
@@ -236,13 +236,13 @@ fn each_view_fills_only_its_visible_topics() {
     for view in ViewKind::ALL {
         let mut fixture = Fixture::new();
         fixture.session.view = view;
-        let model = build_view_model(&fixture.context());
+        let model = build_view_model_measured(&fixture.context()).0;
         // The process actions' state rides on every view (D-91).
         let mut expected = visible_modules(view).to_vec();
         expected.push("actions");
         assert_eq!(filled(&model), expected, "{view:?}");
     }
-    let model = build_view_model(&fixture_base.context());
+    let model = build_view_model_measured(&fixture_base.context()).0;
     assert_eq!(model.frame_revision, 3);
     assert_eq!(model.snapshot_revision, 7);
     assert_eq!(model.generated_boot_ns, NOW);
@@ -266,7 +266,7 @@ fn pending_confirmation_is_first_and_carries_action_details_on_any_view() {
     actions.confirmation = Some(confirmation());
     fixture.actions = Arc::new(actions);
     fixture.overload = dgxtop_core::view::OverloadState::Pressured;
-    let model = build_view_model(&fixture.context());
+    let model = build_view_model_measured(&fixture.context()).0;
     assert_eq!(model.banners[0].level, BannerLevel::Confirmation);
     assert_eq!(
         model.banners[0].text,
@@ -309,7 +309,7 @@ fn the_process_table_copies_only_the_window() {
     fixture.session.ascending = true;
     fixture.viewport = (120, 30);
     fixture.session.selected_process = Some(process_key(256, 1000));
-    let model = build_view_model(&fixture.context());
+    let model = build_view_model_measured(&fixture.context()).0;
     let processes = model.modules.processes.as_ref().unwrap();
     let visible = super::processes::visible_process_rows(30, 4);
     assert!(processes.rows.len() <= visible + PROCESS_OVERSCAN_ROWS);
@@ -401,7 +401,7 @@ fn history_is_shared_when_small_and_downsampled_to_the_chart_width() {
     let mut fixture = Fixture::new();
     fixture.session.view = ViewKind::History;
     fixture.viewport = (100, 30);
-    let small = build_view_model(&fixture.context());
+    let small = build_view_model_measured(&fixture.context()).0;
     assert!(Arc::ptr_eq(
         small.modules.history.as_ref().unwrap(),
         &fixture.history
@@ -419,7 +419,7 @@ fn history_is_shared_when_small_and_downsampled_to_the_chart_width() {
         charts: vec![history_chart(points), history_chart(Vec::new())],
         ..(*fixture.history).clone()
     });
-    let large = build_view_model(&fixture.context());
+    let large = build_view_model_measured(&fixture.context()).0;
     let history = large.modules.history.as_ref().unwrap();
     // Each chart is downsampled to the columns it is drawn in: the width
     // without the panel border (D-46).

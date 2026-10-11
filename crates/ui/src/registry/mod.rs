@@ -135,8 +135,6 @@ pub trait DisplayModule: Send {
 /// Well-known control ids shared by modules (producers) and the Controller
 /// (consumer of the HitMap).
 pub mod controls {
-    use dgxtop_core::commands::ViewKind;
-
     /// A visible process row (carries the full `ProcessKey`).
     pub const PROCESS_ROW: &str = "processes.row";
     /// The highlighted selected process row; the only valid `K` target.
@@ -150,27 +148,6 @@ pub mod controls {
     /// A part of the module that drew the target the mouse wheel scrolls
     /// (D-70).
     pub const MODULE_SCROLL: &str = "module.scroll";
-
-    /// Control id of a view tab.
-    pub const fn tab(view: ViewKind) -> &'static str {
-        match view {
-            ViewKind::Overview => "tab.overview",
-            ViewKind::GpuDetail => "tab.gpu_detail",
-            ViewKind::Processes => "tab.processes",
-            ViewKind::History => "tab.history",
-            ViewKind::Sources => "tab.sources",
-            ViewKind::Settings => "tab.settings",
-            ViewKind::Actions => "tab.actions",
-        }
-    }
-
-    /// Inverse of [`tab`].
-    pub fn view_for_tab(control_id: &str) -> Option<ViewKind> {
-        ViewKind::ALL
-            .iter()
-            .copied()
-            .find(|view| tab(*view) == control_id)
-    }
 }
 
 /// Why a module was not registered.

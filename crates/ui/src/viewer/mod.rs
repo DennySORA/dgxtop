@@ -99,6 +99,7 @@ impl Viewer {
         &self.registry
     }
 
+    #[cfg(test)]
     pub fn registry_mut(&mut self) -> &mut ModuleRegistry {
         &mut self.registry
     }

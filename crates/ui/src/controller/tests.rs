@@ -772,7 +772,7 @@ fn tab_clicks_and_keys_switch_views() {
         .hit_map
         .targets()
         .iter()
-        .find(|target| target.control_id == controls::tab(ViewKind::History))
+        .find(|target| target.control_id == crate::views::Tab::OverviewHistory.control_id())
         .unwrap()
         .clone();
     harness.keys(&[click(tab.rect.x, tab.rect.y)]);
