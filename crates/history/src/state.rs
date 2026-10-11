@@ -542,11 +542,14 @@ impl HistoryState {
         let Some(series) = self.slots.get_mut(handle) else {
             return false;
         };
-        let dropped = series.evict_oldest_raw();
+        let eviction = series.evict_oldest_raw();
         report.evicted_records = report
             .evicted_records
-            .saturating_add(u64::try_from(dropped).unwrap_or(u64::MAX));
-        dropped > 0
+            .saturating_add(u64::try_from(eviction.records).unwrap_or(u64::MAX));
+        if let Some(lost) = eviction.unsummarized {
+            self.record_loss_gap(handle, lost, "evicted", report);
+        }
+        eviction.records > 0
     }
 
     fn evict_rollup_once(&mut self, report: &mut HistoryReport) -> bool {
@@ -598,7 +601,8 @@ impl HistoryState {
     }
 
     /// Overload relief: raw history older than `keep_ns` is dropped (only
-    /// minutes that already have rollups).
+    /// minutes that already have rollups, or by boot time while the grid is
+    /// unknown and no minute can have one yet).
     pub(crate) fn shed_raw(&mut self, now_ns: u64, keep_ns: u64) -> HistoryReport {
         let mut report = HistoryReport::default();
         let target = now_ns.saturating_sub(keep_ns);
@@ -738,6 +742,67 @@ mod tests {
             stale_deadline_ns: (seconds + 3) * SECOND,
             value: Scalar::from_f64(value).unwrap(),
         }
+    }
+
+    /// Samples of `gpu:a` every second over `[0, seconds)`, committed as they come.
+    fn gauge_every_second(state: &mut HistoryState, seconds: u64) {
+        for second in 0..seconds {
+            let appends = HistoryAppends {
+                gauges: vec![gauge("gpu:a", second, 40.0)],
+                ..HistoryAppends::default()
+            };
+            state.apply(appends, second * SECOND, second + 1);
+        }
+    }
+
+    fn gpu_a(state: &HistoryState) -> &Series {
+        let key = metric_key("gpu:a", ids::GPU_TEMPERATURE, "gpu");
+        state.slots.get(state.handle_of(&key).unwrap()).unwrap()
+    }
+
+    /// Before the boot is paired with UTC no minute can be finalized, yet
+    /// raw history still ages by boot time instead of growing to its cap;
+    /// the minutes cut once the grid is known start where raw data does.
+    #[test]
+    fn raw_history_ages_by_boot_time_before_the_minute_grid_is_known() {
+        let ledger = ByteLedger::for_memory_limit_mib(64);
+        let mut state = HistoryState::new(settings(), &ledger);
+        gauge_every_second(&mut state, 600);
+        state.maintain(600 * SECOND);
+        let series = gpu_a(&state);
+        assert_eq!(series.gauge.raw_floor_ns, 300 * SECOND);
+        // Whole chunks of 64 records go: the one holding 256 s to 319 s stays.
+        assert_eq!(series.gauge.raw.first().unwrap().time_ns, 256 * SECOND);
+        assert!(
+            series.gauge.buckets.is_empty(),
+            "no minute without the grid"
+        );
+        let late = state.apply(
+            HistoryAppends {
+                gauges: vec![gauge("gpu:a", 299, 1.0)],
+                ..HistoryAppends::default()
+            },
+            600 * SECOND,
+            601,
+        );
+        assert_eq!(late.gauge_drops.late, 1, "older than the raw history");
+
+        state.set_minute_grid(MinuteGrid::BOOT);
+        state.maintain(700 * SECOND);
+        let series = gpu_a(&state);
+        let first = series.gauge.buckets.first().unwrap();
+        assert_eq!(first.start_ns, 300 * SECOND);
+        assert_eq!(first.covered_ns, 60 * SECOND);
+    }
+
+    #[test]
+    fn overload_sheds_raw_history_before_the_minute_grid_is_known() {
+        let ledger = ByteLedger::for_memory_limit_mib(64);
+        let mut state = HistoryState::new(settings(), &ledger);
+        gauge_every_second(&mut state, 200);
+        let report = state.shed_raw(200 * SECOND, 60 * SECOND);
+        assert_eq!(report.evicted_records, 128, "two whole chunks");
+        assert_eq!(gpu_a(&state).gauge.raw_floor_ns, 140 * SECOND);
     }
 
     #[test]

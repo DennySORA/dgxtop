@@ -7,7 +7,10 @@
 //! and the raw floor never passes `finalized_through_ns`, so evicting raw data
 //! never loses data that has no rollup yet. Minutes follow the boot's
 //! [`MinuteGrid`] (whole UTC minutes); until it is known nothing is final,
-//! so no minute is ever cut on a grid that would move.
+//! so no minute is ever cut on a grid that would move. Raw history still
+//! ages by boot time meanwhile (retention and memory pressure do not wait
+//! for the wall clock): what it drops then has no rollup and never will, so
+//! it is closed (later samples there are late, rollups begin after it).
 
 use dgxtop_core::budget::{ByteLedger, CapacityError, Partition};
 use dgxtop_core::identity::MetricKey;
@@ -68,6 +71,15 @@ pub(crate) struct Finalization {
 enum RawTrack {
     Gauge(u64),
     Counter(u64),
+}
+
+/// Raw records dropped by one capacity eviction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RawEviction {
+    pub records: usize,
+    /// The time the dropped records held when no rollup summarizes it
+    /// (only before the grid is known): lost history, shown as a gap.
+    pub unsummarized: Option<(u64, u64)>,
 }
 
 /// Floors moved by one rollup eviction.
@@ -158,6 +170,10 @@ impl Series {
         if !self.finalized_any {
             self.finalized_through_ns = grid.floor(self.finalized_through_ns);
         }
+        // No rollup exists yet: the first one starts on the minute holding
+        // the floor raw history aged to.
+        self.gauge.rollup_floor_ns = grid.floor(self.gauge.rollup_floor_ns);
+        self.counter.rollup_floor_ns = grid.floor(self.counter.rollup_floor_ns);
     }
 
     /// The boot's minutes, when known.
@@ -376,10 +392,7 @@ impl Series {
     /// horizon), keeping the newest evicted record as the carry so the step
     /// crossing the floor stays available.
     fn advance_gauge_raw_floor(&mut self, target_ns: u64) -> usize {
-        let Some(grid) = self.grid else {
-            return 0;
-        };
-        let target = grid.floor(target_ns).min(self.finalized_through_ns);
+        let target = self.raw_floor_target(target_ns);
         if target <= self.gauge.raw_floor_ns {
             return 0;
         }
@@ -395,23 +408,45 @@ impl Series {
         self.gauge.carry = newest_evicted
             .filter(|record| record.value.is_some() && record.stale_deadline_ns > target);
         self.gauge.raw_floor_ns = target;
+        if self.grid.is_none() {
+            self.close_unsummarized(target);
+            self.gauge.rollup_floor_ns = self.gauge.rollup_floor_ns.max(target);
+        }
         self.gauge
             .raw
             .drop_front_while(|last| last.time_ns < target)
     }
 
     fn advance_counter_raw_floor(&mut self, target_ns: u64) -> usize {
-        let Some(grid) = self.grid else {
-            return 0;
-        };
-        let target = grid.floor(target_ns).min(self.finalized_through_ns);
+        let target = self.raw_floor_target(target_ns);
         if target <= self.counter.raw_floor_ns {
             return 0;
         }
         self.counter.raw_floor_ns = target;
+        if self.grid.is_none() {
+            self.close_unsummarized(target);
+            self.counter.rollup_floor_ns = self.counter.rollup_floor_ns.max(target);
+        }
         self.counter
             .raw
             .drop_front_while(|last| last.end_ns <= target)
+    }
+
+    /// Where a raw floor may move for `target_ns`: on the grid, a minute
+    /// start no later than the finalized horizon (what goes is summarized
+    /// by rollups); before the grid, `target_ns` itself, because no minute
+    /// can be cut yet and raw history must not wait for the wall clock.
+    fn raw_floor_target(&self, target_ns: u64) -> u64 {
+        match self.grid {
+            Some(grid) => grid.floor(target_ns).min(self.finalized_through_ns),
+            None => target_ns,
+        }
+    }
+
+    /// Raw data dropped before the grid is known has no rollup and never
+    /// will: a sample there is late from now on.
+    fn close_unsummarized(&mut self, floor_ns: u64) {
+        self.finalized_through_ns = self.finalized_through_ns.max(floor_ns);
     }
 
     /// Normal raw retention.
@@ -448,10 +483,8 @@ impl Series {
     /// Normal rollup and gap retention. Once retention catches up with a
     /// capacity truncation, the truncation is no longer visible.
     pub(crate) fn advance_rollup_floors(&mut self, target_ns: u64) -> usize {
-        let Some(grid) = self.grid else {
-            return 0;
-        };
-        let target = grid.floor(target_ns);
+        // Before the grid there is no rollup, but gaps still age out.
+        let target = self.grid.map_or(target_ns, |grid| grid.floor(target_ns));
         let dropped = self
             .advance_gauge_rollup_floor(target)
             .saturating_add(self.advance_counter_rollup_floor(target))
@@ -471,24 +504,30 @@ impl Series {
         self.segments.would_create(identity, unit)
     }
 
+    /// The raw track whose oldest chunk eviction drops next, with the
+    /// floor that drops it: on the grid only a chunk whose minutes are
+    /// final; before the grid any chunk (nothing can be final yet).
     fn evictable_raw_track(&self) -> Option<RawTrack> {
-        let grid = self.grid?;
         let finalized = self.finalized_through_ns;
+        let summarized = |floor: &u64| self.grid.is_none() || *floor <= finalized;
         let gauge = self
             .gauge
             .raw
             .oldest_chunk()
             .and_then(<[GaugeSample]>::last)
-            .map(|last| grid.end_of(last.time_ns))
-            .filter(|floor| *floor <= finalized)
+            .map(|last| match self.grid {
+                Some(grid) => grid.end_of(last.time_ns),
+                None => last.time_ns.saturating_add(1),
+            })
+            .filter(summarized)
             .map(RawTrack::Gauge);
         let counter = self
             .counter
             .raw
             .oldest_chunk()
             .and_then(<[CounterSample]>::last)
-            .map(|last| grid.ceil(last.end_ns))
-            .filter(|floor| *floor <= finalized)
+            .map(|last| self.grid.map_or(last.end_ns, |grid| grid.ceil(last.end_ns)))
+            .filter(summarized)
             .map(RawTrack::Counter);
         match (gauge, counter) {
             (Some(RawTrack::Gauge(g)), Some(RawTrack::Counter(c))) if c < g => counter,
@@ -504,12 +543,27 @@ impl Series {
         })
     }
 
-    /// Drops the oldest evictable raw chunk; returns the records dropped.
-    pub(crate) fn evict_oldest_raw(&mut self) -> usize {
-        match self.evictable_raw_track() {
-            Some(RawTrack::Gauge(floor)) => self.advance_gauge_raw_floor(floor),
-            Some(RawTrack::Counter(floor)) => self.advance_counter_raw_floor(floor),
-            None => 0,
+    /// Drops the oldest evictable raw chunk.
+    pub(crate) fn evict_oldest_raw(&mut self) -> RawEviction {
+        let (from, records, to) = match self.evictable_raw_track() {
+            Some(RawTrack::Gauge(floor)) => {
+                let from = self.gauge.raw.first().map_or(floor, |first| first.time_ns);
+                (from, self.advance_gauge_raw_floor(floor), floor)
+            }
+            Some(RawTrack::Counter(floor)) => {
+                let from = self
+                    .counter
+                    .raw
+                    .first()
+                    .map_or(floor, |first| first.start_ns);
+                (from, self.advance_counter_raw_floor(floor), floor)
+            }
+            None => (0, 0, 0),
+        };
+        let unsummarized = (self.grid.is_none() && records > 0).then_some((from, to));
+        RawEviction {
+            records,
+            unsummarized,
         }
     }
 
@@ -727,12 +781,35 @@ mod tests {
         series.commit_finalization(plan, &mut report);
         let floor = series.oldest_evictable_raw_ns().unwrap();
         assert_eq!(floor, 120 * SECOND);
-        assert_eq!(series.evict_oldest_raw(), 64);
+        let eviction = series.evict_oldest_raw();
+        assert_eq!(eviction.records, 64);
+        assert_eq!(eviction.unsummarized, None, "the minutes have rollups");
         assert_eq!(series.gauge.raw_floor_ns, 120 * SECOND);
         let eviction = series.evict_oldest_rollup().unwrap();
         assert_eq!(eviction.from_ns, 0);
         assert_eq!(eviction.to_ns, 360 * SECOND);
         assert!(series.capacity_truncated);
+    }
+
+    /// Under memory pressure the oldest raw chunk goes even before the
+    /// grid is known; the time it held is reported as lost.
+    #[test]
+    fn capacity_eviction_drops_the_oldest_raw_chunk_before_the_grid_is_known() {
+        let ledger = ByteLedger::for_memory_limit_mib(64);
+        let key = metric_key("cpu.package.0", ids::CPU_TEMPERATURE_PACKAGE, "package:0");
+        let descriptor = descriptor(ids::CPU_TEMPERATURE_PACKAGE).unwrap();
+        let mut series = Series::new(key, descriptor, (0, 0), None, &ledger).unwrap();
+        for second in 0..200 {
+            push_gauge(&mut series, second, 1.0);
+        }
+        // The first chunk holds seconds 0 to 63.
+        let floor = 63 * SECOND + 1;
+        assert_eq!(series.oldest_evictable_raw_ns(), Some(floor));
+        let eviction = series.evict_oldest_raw();
+        assert_eq!(eviction.records, 64);
+        assert_eq!(eviction.unsummarized, Some((0, floor)));
+        assert_eq!(series.gauge.raw_floor_ns, floor);
+        assert_eq!(series.admit_sample(63 * SECOND), Err(DropReason::Late));
     }
 
     #[test]

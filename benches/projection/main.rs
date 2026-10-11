@@ -286,6 +286,11 @@ impl SnapshotWorld {
                 *self.rejections.entry(reason).or_insert(0) += 1;
             }
         }
+        // As the monitor's maintenance step: the pairing fixes the minute
+        // grid, so minutes are finalized and raw history is summarized.
+        let clock = self.pipeline.clock();
+        self.writer
+            .observe_wall_clock(clock.now_boot_ns(), clock.now_utc_ns());
         self.writer.maintain(now);
         let snapshot = self.snapshots.latest();
         self.processes
