@@ -21,11 +21,10 @@ mod memory;
 mod network;
 mod ordering;
 mod plan;
-mod process_parts;
+mod process_shares;
 mod processes;
 mod reader;
 mod run_history;
-mod run_inputs;
 mod settings;
 #[cfg(test)]
 mod testkit;
@@ -37,22 +36,21 @@ pub(crate) use history_charts::history_charts;
 pub use plan::visible_modules;
 pub use processes::PROCESS_OVERSCAN_ROWS;
 pub(crate) use run_history::run_request;
-pub(crate) use run_inputs::run_inputs;
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use dgxtop_core::action::PersistenceStatus;
 use dgxtop_core::canonical::{CatalogSnapshot, ImmutableSnapshot};
 use dgxtop_core::commands::ViewKind;
 use dgxtop_core::config::{BUILTIN_MODULES, Config, ValueOrigin};
-use dgxtop_core::identity::{MetricKey, ModuleId};
+use dgxtop_core::identity::ModuleId;
 use dgxtop_core::naming::adapters;
-use dgxtop_core::ports::ProcessMemoryReader;
+use dgxtop_core::ports::TrendReader;
 use dgxtop_core::process_model::ProcessHistoryModel;
 use dgxtop_core::view::{
     ActionsView, GpuView, HeaderView, HistoryView, HostStatus, IntervalView, ModuleViews,
-    OverloadState, SessionState, Trend, ViewModel,
+    OverloadState, SessionState, ViewModel,
 };
 
 use banners::BannerFacts;
@@ -61,64 +59,6 @@ use gpu::{GpuEnvironment, GpuTrendWidths};
 use gpu_directory::GpuDirectory;
 use plan::{ViewPlan, ViewportLayout};
 use reader::MetricReader;
-
-/// Bounded recent values per trend series (sparklines), fed by the Manager
-/// from committed snapshots. Gaps are kept as `None`.
-#[derive(Debug, Clone, Default)]
-pub struct TrendBook {
-    capacity: usize,
-    series: BTreeMap<MetricKey, VecDeque<Option<f64>>>,
-}
-
-impl TrendBook {
-    /// `capacity` points per series.
-    pub fn new(capacity: usize) -> Self {
-        Self {
-            capacity: capacity.max(1),
-            series: BTreeMap::new(),
-        }
-    }
-
-    /// Appends one point (or a gap) to a series, evicting the oldest.
-    pub fn push(&mut self, key: &MetricKey, value: Option<f64>) {
-        let points = self.series.entry(key.clone()).or_default();
-        if points.len() == self.capacity {
-            points.pop_front();
-        }
-        points.push_back(value.filter(|number| number.is_finite()));
-    }
-
-    /// Whether a series has points.
-    pub fn contains(&self, key: &MetricKey) -> bool {
-        self.series.contains_key(key)
-    }
-
-    /// Drops series that are no longer wanted (bounded key set).
-    pub fn retain(&mut self, mut keep: impl FnMut(&MetricKey) -> bool) {
-        self.series.retain(|key, _| keep(key));
-    }
-
-    /// Most recent `width` points of a series (oldest first).
-    pub fn trend(&self, key: &MetricKey, width: usize) -> Trend {
-        let points = self
-            .series
-            .get(key)
-            .map(|points| {
-                let skip = points.len().saturating_sub(width);
-                points.iter().skip(skip).copied().collect()
-            })
-            .unwrap_or_default();
-        Trend { points }
-    }
-
-    pub fn len(&self) -> usize {
-        self.series.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.series.is_empty()
-    }
-}
 
 /// Static host facts shown in the header.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -164,13 +104,11 @@ pub struct PresentationContext<'a> {
     pub actions: Arc<ActionsView>,
     /// Built by the HistoryService for this session.
     pub history: Arc<HistoryView>,
-    pub trends: &'a TrendBook,
+    /// The state's short trends (D-99).
+    pub trends: &'a dyn TrendReader,
     /// The GPU process runs and colors the history's process actor
     /// published (D-64, D-76, D-79).
     pub processes: &'a ProcessHistoryModel,
-    /// What each GPU process held over time, for the history's memory
-    /// charts (D-64).
-    pub process_memory: &'a dyn ProcessMemoryReader,
     pub facts: &'a HostFacts,
     /// Module ids enabled in the effective configuration.
     pub enabled_modules: &'a [String],
@@ -217,12 +155,8 @@ pub fn build_header(context: &PresentationContext<'_>) -> HeaderView {
 pub fn build_view_model_measured(context: &PresentationContext<'_>) -> (ViewModel, usize) {
     let plan = ViewPlan::new(context.session.view, context.enabled_modules);
     let layout = ViewportLayout::new(context.viewport);
-    let reader = MetricReader::new(
-        context.snapshot,
-        context.catalog,
-        context.trends,
-        context.now_boot_ns,
-    );
+    let reader = MetricReader::new(context.snapshot, context.catalog, context.now_boot_ns)
+        .with_trends(context.trends);
     let directory = GpuDirectory::new(context.catalog, reader.index());
     let gpu_count = if plan.shows(plan::GPU) {
         directory.gpus().len()
@@ -326,16 +260,9 @@ fn build_modules(
         )));
     }
     if plan.shows(plan::HISTORY) {
-        let charts = history::history_for_display(&context.history, layout.history_chart_points());
-        modules.history = Some(process_parts::with_process_parts(
-            charts,
-            &process_parts::ProcessHistoryInputs {
-                tracked: &inputs.processes.tracked,
-                memory: context.process_memory,
-                directory: inputs.directory,
-                cells: layout.history_chart_points(),
-            },
-        ));
+        // The service's view, with the processes' parts the history joined
+        // with its memory charts (D-99).
+        modules.history = Some(Arc::clone(&context.history));
         let opened = run_history::run_request(context.session, context.viewport);
         modules.process_history = Some(Arc::new(run_history::build_process_history_view(
             &run_history::RunHistoryInputs {

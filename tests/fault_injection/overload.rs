@@ -80,6 +80,7 @@ impl OverloadRig {
             false,
         )
         .into_parts();
+        let trends = Arc::new(writer.trends());
         let mut workers = WorkerSet::default();
         let store = spawn_store_worker(
             writer,
@@ -109,6 +110,7 @@ impl OverloadRig {
             audit: Box::new(audit),
             history: Box::new(history_pool),
             logger: Arc::clone(&logger) as Arc<dyn Logger>,
+            trends,
             ..inert_ports(time, Arc::new(snapshots), &ledger, ingress.clone())
         };
         // A real live manifest gives the scheduler its fast read groups (the

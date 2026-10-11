@@ -175,6 +175,7 @@ fn planned_query(index: usize, series: &[HistorySeries], at_utc_ns: i64) -> Plan
             from_utc_ns: end.saturating_sub(BARS_TARGET.saturating_mul(step)),
             end_utc_ns: end,
             at_utc_ns,
+            parts_of: std::collections::BTreeSet::new(),
         },
     }
 }

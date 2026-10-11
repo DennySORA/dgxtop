@@ -2,33 +2,37 @@
 //! (D-79): the history follows the runs and what each GPU process holds
 //! over time on its own actor and publishes a bounded read model (like the
 //! state's snapshot), which the Manager's presentation only shapes into
-//! views. The Manager hands it the committed process tables with what a
-//! sample takes beside them ([`ProcessTableSample`]) and the runs a session
-//! shows ([`RunRequest`]).
+//! views. The Manager hands it the committed process tables with the
+//! snapshot and catalog they came with ([`ProcessTableSample`]) and the
+//! runs a session shows ([`RunRequest`]).
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::canonical::ProcessTable;
+use crate::canonical::{CatalogSnapshot, ImmutableSnapshot, ProcessTable};
 use crate::identity::{EntityId, ProcessKey};
 use crate::process_history::{RunBucket, RunEnd, RunInfo};
 use crate::tiers::BarSize;
 
-/// A committed process table, new since the last one handed over, and
-/// what its sample of the runs takes from the snapshot beside it.
+/// A committed process table, new since the last one handed over, as the
+/// Manager hands it on unchanged (D-99): the snapshot it is new in and the
+/// catalog of that moment, from which the history takes what a sample of
+/// the runs needs beside the table (the GPUs' labels, the host's clock
+/// ticks and network rates).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProcessTableSample {
-    pub table: Arc<ProcessTable>,
-    /// Clock ticks per second, to place a run's start; `None` takes the
-    /// time it was first seen.
-    pub clk_tck: Option<u64>,
-    /// Each GPU's label (`GPU 0`) by its entity.
-    pub gpu_labels: BTreeMap<EntityId, String>,
-    /// What the host receives and sends, bytes per second.
-    pub host_network: [Option<f64>; 2],
+    /// The committed snapshot whose `process_table` is new.
+    pub snapshot: Arc<ImmutableSnapshot>,
+    pub catalog: Arc<CatalogSnapshot>,
     /// How often the table is read: a table's memory values hold for a
     /// few such periods at most (D-64).
     pub process_period_ms: u64,
+}
+
+impl ProcessTableSample {
+    /// The new table.
+    pub fn table(&self) -> &Arc<ProcessTable> {
+        &self.snapshot.process_table
+    }
 }
 
 /// A run a session shows, at a bar size, over as many bars as its plots

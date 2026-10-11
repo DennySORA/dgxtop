@@ -11,6 +11,7 @@ use dgxtop_core::view::{
     HistoryChartKind, HistoryChartView, HistoryPart, HistoryPointView, HistoryView,
 };
 
+use super::stats::nanos_to_seconds;
 use crate::format::{clean, format_value};
 
 /// How a strip colors its columns.
@@ -55,8 +56,8 @@ pub(super) struct Series<'a> {
 }
 
 impl<'a> Series<'a> {
-    /// An Overview History chart over a window of `span_seconds`.
-    fn of_chart(chart: &'a HistoryChartView, span_seconds: f64) -> Self {
+    /// An Overview History chart.
+    fn of_chart(chart: &'a HistoryChartView) -> Self {
         let state = match (&chart.error, chart.pending) {
             (Some(error), _) => SeriesState::Failed(error),
             (None, true) => SeriesState::Pending,
@@ -71,7 +72,7 @@ impl<'a> Series<'a> {
             peak: chart.peak,
             // The mean power times the time covered.
             energy: (chart.kind == HistoryChartKind::GpuPower)
-                .then(|| Some(chart.mean? * chart.coverage_ratio? * span_seconds))
+                .then(|| Some(chart.mean? * nanos_to_seconds(chart.covered_ns?)))
                 .flatten(),
             state,
         }
@@ -151,9 +152,7 @@ const RATE_PANELS: [([Rate; 2], &str); 2] = [
 /// The panels of `history`, in display order; a series the view does not
 /// carry has no strip, and a panel without strips is left out.
 pub(super) fn panels(history: &HistoryView) -> Vec<Panel<'_>> {
-    #[allow(clippy::cast_precision_loss)]
-    let span_seconds = history.end_utc_ns.saturating_sub(history.start_utc_ns) as f64 / 1e9;
-    let series = |chart| Series::of_chart(chart, span_seconds);
+    let series = Series::of_chart;
     let first = |kind| history.charts.iter().find(|chart| chart.kind == kind);
     let mut panels = Vec::new();
     if let Some(cpu) = first(HistoryChartKind::CpuUtilization) {
@@ -190,7 +189,7 @@ pub(super) fn panels(history: &HistoryView) -> Vec<Panel<'_>> {
         }
     }
     for (pair, title) in RATE_PANELS {
-        if let Some(panel) = rate_panel(history, pair, title, span_seconds) {
+        if let Some(panel) = rate_panel(history, pair, title) {
             panels.push(panel);
         }
     }
@@ -229,12 +228,7 @@ fn gpu_label(subject: &str) -> String {
 
 /// A device's two rates on one scale, set when they are drawn: the tallest
 /// column of the two (D-57), so their heights compare.
-fn rate_panel<'a>(
-    history: &'a HistoryView,
-    pair: [Rate; 2],
-    title: &str,
-    span_seconds: f64,
-) -> Option<Panel<'a>> {
+fn rate_panel<'a>(history: &'a HistoryView, pair: [Rate; 2], title: &str) -> Option<Panel<'a>> {
     let charts: Vec<(&HistoryChartView, &str, Paint)> = pair
         .into_iter()
         .filter_map(|(kind, label, paint)| {
@@ -246,7 +240,7 @@ fn rate_panel<'a>(
         .iter()
         .map(|(chart, label, paint)| Strip {
             label: (*label).to_owned(),
-            series: Series::of_chart(chart, span_seconds),
+            series: Series::of_chart(chart),
             scale: None,
             paint: *paint,
         })
@@ -327,6 +321,27 @@ mod tests {
         );
         assert_eq!(gpu_label("GPU 1 · NVIDIA GB10"), "GPU 1");
         assert_eq!(gpu_label("nameless"), "nameless");
+    }
+
+    /// A power chart's energy is its mean over the time it holds (D-99):
+    /// half an hour recorded at 200 W is 360 kJ whatever the window spans;
+    /// nothing recorded, or another series, has none.
+    #[test]
+    fn a_power_strip_draws_its_mean_over_the_time_it_holds() {
+        let mut history = history_view();
+        let power = history
+            .charts
+            .iter_mut()
+            .find(|chart| chart.kind == HistoryChartKind::GpuPower)
+            .unwrap();
+        power.mean = Some(200.0);
+        power.covered_ns = Some(1_800 * 1_000_000_000);
+        let energy = Series::of_chart(power).energy.unwrap();
+        assert!((energy - 360_000.0).abs() < 1e-6, "{energy}");
+        power.covered_ns = None;
+        assert_eq!(Series::of_chart(power).energy, None);
+        let cpu = &history.charts[0];
+        assert_eq!(Series::of_chart(cpu).energy, None, "{:?}", cpu.kind);
     }
 
     /// GB10 reports no power limit: its power strip is scaled to its peak,

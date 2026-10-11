@@ -362,7 +362,7 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 a projection is immutable | `dgxtop-manager::presentation::history::tests::small_results_are_shared_unchanged` | PARTIAL: type-level |
+| S1 a projection is immutable | `dgxtop-manager::presentation::tests::history_is_shared_as_the_service_built_it` | PARTIAL: type-level |
 | S2 latest-only: 1 pending + 1 active | `dgxtop-core::view::tests::slot_keeps_only_latest_and_releases_bytes`, `dgxtop-manager::projection::tests::published_projection_holds_its_bytes_until_dropped`, `dgxtop-ui::terminal::runner::tests::input_and_q_still_work_while_output_is_blocked_for_30_seconds` |  |
 | S3 nothing dirty → no draw | `dgxtop-ui::terminal::runner::tests::rendering_is_dirty_only`, `dgxtop-manager::views::tests::frames_are_rate_limited_and_viewport_changes_mark_dirty` |  |
 | S4 selection kept by ProcessKey | `dgxtop-manager::presentation::processes::tests::selection_follows_the_process_key_when_rows_reorder` |  |

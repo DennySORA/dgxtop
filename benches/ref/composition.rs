@@ -43,7 +43,7 @@ use dgxtop_core::overview_history::{OverviewAnswer, OverviewRequest};
 use dgxtop_core::ports::{
     AuditRepository, CancelFlag, Collector, ConfigJob, ConfigRepository, ControlCompletion,
     Dispatch, DispatchError, HistoryJob, IngestionCompletion, LogLevel, Logger, OverviewReader,
-    ProcessActionPort, ProcessHistoryInput, ProcessHistoryReader, StoreJob,
+    ProcessActionPort, ProcessHistoryInput, ProcessHistoryReader, ProcessMemoryReader, StoreJob,
 };
 use dgxtop_core::quality::Namespace;
 use dgxtop_history::{ProcessHistory, ProcessHistoryPorts, ProcessHistorySettings};
@@ -294,7 +294,28 @@ impl RefComposition {
             false,
         )
         .into_parts();
-        let history = Arc::new(SwitchableHistory::new(Arc::new(history_index)));
+        // The history's process actor, without a probe (replay) or stores
+        // (the archive is off), as the monitor runs it (D-79); its memory
+        // record goes to the history's readers (D-99).
+        let (process_actor, published) = ProcessHistory::new(
+            ProcessHistorySettings {
+                boot_id: clock.boot_id(),
+                utc_offset_s: 0,
+            },
+            ProcessHistoryPorts {
+                probe: None,
+                probe_deriver: Arc::new(ProcessProbeDeriver),
+                store: None,
+                clock: Arc::clone(&clock),
+                logger: Arc::clone(&logger) as Arc<dyn Logger>,
+            },
+        );
+        let published = Arc::new(published);
+        let history = Arc::new(SwitchableHistory::new(Arc::new(
+            history_index
+                .with_process_memory(Arc::clone(&published) as Arc<dyn ProcessMemoryReader>),
+        )));
+        let trends = Arc::new(writer.trends());
         let mut workers: Vec<Box<dyn StopWorker>> = Vec::new();
         let store = wiring.spawn_store(writer)?;
         workers.push(Box::new(NamedPool("hot-store", store.clone())));
@@ -311,21 +332,6 @@ impl RefComposition {
         workers.push(Box::new(NamedPool("audit", audit.clone())));
         let actions = wiring.spawn_actions()?;
         workers.push(Box::new(NamedPool("action", actions.clone())));
-        // The history's process actor, without a probe (replay) or stores
-        // (the archive is off), as the monitor runs it (D-79).
-        let (process_actor, published) = ProcessHistory::new(
-            ProcessHistorySettings {
-                boot_id: clock.boot_id(),
-                utc_offset_s: 0,
-            },
-            ProcessHistoryPorts {
-                probe: None,
-                probe_deriver: Arc::new(ProcessProbeDeriver),
-                store: None,
-                clock: Arc::clone(&clock),
-                logger: Arc::clone(&logger) as Arc<dyn Logger>,
-            },
-        );
         let process_history = spawn_actor(
             "process-history",
             64,
@@ -337,7 +343,6 @@ impl RefComposition {
             "process-history",
             process_history.clone(),
         )));
-        let published = Arc::new(published);
 
         let host_id = host_identity(Path::new("/")).map_err(|error| error.to_string())?;
         let (specs, manifests, adapter_ids) = replay_hosts(inputs)?;
@@ -381,6 +386,7 @@ impl RefComposition {
             collector_registry,
             store: Box::new(store),
             snapshots: Arc::new(snapshots.clone()),
+            trends,
             history: Box::new(TimedHistoryDispatch {
                 pool: history_pool,
                 probes: Arc::clone(&inputs.probes),
@@ -391,7 +397,6 @@ impl RefComposition {
             process_history: Some(ProcessHistoryHandles {
                 inputs: Box::new(process_history),
                 runs: Arc::clone(&published) as Arc<dyn ProcessHistoryReader>,
-                memory: published,
             }),
             logger: Arc::clone(&product_logger),
             ledger: ledger.clone(),

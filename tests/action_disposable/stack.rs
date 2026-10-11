@@ -792,6 +792,7 @@ fn manager_ports(
         collector_registry: Vec::new(),
         store: Box::new(CapturingDispatch::<StoreJob>::new()),
         snapshots,
+        trends: Arc::new(dgxtop_core::trends::TrendBook::default()),
         history: Box::new(CapturingDispatch::<HistoryJob>::new()),
         config: Box::new(workers.config.clone()),
         audit: Box::new(RecordingDispatch::new(

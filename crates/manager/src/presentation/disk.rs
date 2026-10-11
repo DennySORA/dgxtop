@@ -186,7 +186,8 @@ mod tests {
     const TREND_WIDTH: usize = 60;
 
     fn build(fixture: &Fixture) -> DiskView {
-        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
+        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, NOW)
+            .with_trends(&fixture.trends);
         build_disk_view(&reader, TREND_WIDTH)
     }
 

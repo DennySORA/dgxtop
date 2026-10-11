@@ -1,10 +1,11 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use dgxtop_core::action::Signal;
-use dgxtop_core::canonical::{ProcessRow, ProcessTable};
+use dgxtop_core::canonical::{CatalogSnapshot, ProcessRow, ProcessTable};
 use dgxtop_core::errors::InfraError;
 use dgxtop_core::identity::EntityId;
+use dgxtop_core::naming::{attributes, entity};
+use dgxtop_core::observation::EntityKind;
 use dgxtop_core::ports::{ProcessHistoryCompletion, ProcessHistoryReader, ProcessMemoryReader};
 use dgxtop_core::process_history::{
     EndCause, ProcessHistoryLoad, RunDetails, RunEnd, RunInfo, RunMetric, StoreUsage,
@@ -12,8 +13,8 @@ use dgxtop_core::process_history::{
 use dgxtop_core::process_model::RunRequest;
 use dgxtop_core::process_probe::{ProbeLiveness, ProbeReading, ProbeReport};
 use dgxtop_core::testing::{
-    CapturingDispatch, FakeClock, IdleProbeDeriver, MemoryLogger, boot_id, gpu_process,
-    process_table, test_process_key,
+    CapturingDispatch, FakeClock, IdleProbeDeriver, MemoryLogger, boot_id, catalog_of,
+    entity_record, gpu_process, process_table, table_sample, test_process_key,
 };
 use dgxtop_core::tiers::BarSize;
 
@@ -67,18 +68,34 @@ fn table_at(second: u64, rows: Vec<ProcessRow>) -> ProcessTable {
     process_table(second, second * SECOND, rows)
 }
 
+/// The host's clock at 100 ticks a second and `GPU` as NVML's GPU 0.
+fn catalog() -> CatalogSnapshot {
+    catalog_of(vec![
+        entity_record(
+            entity::HOST,
+            EntityKind::Host,
+            "host",
+            &[(attributes::CLK_TCK, "100")],
+        ),
+        entity_record(
+            GPU,
+            EntityKind::Gpu,
+            "NVIDIA GB10",
+            &[(attributes::NVML_INDEX, "0")],
+        ),
+    ])
+}
+
 /// The clock moves to `second` and the table read then is handed over.
 fn table(rig: &mut Rig, second: u64, rows: Vec<ProcessRow>) {
     let ahead = (second * SECOND).saturating_sub(rig.clock.now_boot_ns());
     rig.clock.advance_ns(ahead);
     rig.actor
-        .handle(ProcessHistoryInput::Table(Box::new(ProcessTableSample {
-            table: Arc::new(table_at(second, rows)),
-            clk_tck: Some(100),
-            gpu_labels: BTreeMap::from([(EntityId::new(GPU).unwrap(), "GPU 0".to_owned())]),
-            host_network: [None, None],
-            process_period_ms: 1_000,
-        })));
+        .handle(ProcessHistoryInput::Table(Box::new(table_sample(
+            table_at(second, rows),
+            catalog(),
+            1_000,
+        ))));
 }
 
 fn loaded(rig: &mut Rig, load: ProcessHistoryLoad) {

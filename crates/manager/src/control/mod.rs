@@ -21,7 +21,7 @@ use dgxtop_core::clock::{TimeProvider, ms_to_ns};
 use dgxtop_core::commands::CommandResult;
 use dgxtop_core::identity::{BootId, HostId, SessionId};
 use dgxtop_core::naming::{self, adapters, groups};
-use dgxtop_core::ports::{LogLevel, Logger};
+use dgxtop_core::ports::{LogLevel, Logger, TrendReader};
 use uuid::Uuid;
 
 use crate::archive::ArchiveTracker;
@@ -31,7 +31,6 @@ use crate::effects::Effects;
 use crate::error::ManagerError;
 use crate::history::{HistoryService, HistorySettings};
 use crate::hosts::HostTable;
-use crate::ingestion::trends::TrendRecorder;
 use crate::ingestion::{IngestionPorts, IngestionService, IngestionSettings, collection_limits};
 use crate::overload::OverloadController;
 use crate::pacing::FramePacing;
@@ -93,7 +92,8 @@ pub(crate) struct ControlCore {
     policy: QualityPolicyService,
     scheduler: SamplingScheduler,
     ingestion: IngestionService,
-    trends: TrendRecorder,
+    /// The state's short trends (D-99): read, never recorded here.
+    trends: Arc<dyn TrendReader>,
     /// How often the process table is read (its memory values hold a few
     /// such periods, D-64).
     process_period_ms: u64,
@@ -189,7 +189,7 @@ impl ControlCore {
         );
         Self {
             hosts: HostTable::new(&setup.adapters),
-            trends: TrendRecorder::new(u64::from(fast_ms)),
+            trends: ports.trends,
             process_period_ms: process_ms,
             process_history,
             sessions: ViewSessionService::new(effective.viewer.max_sessions),

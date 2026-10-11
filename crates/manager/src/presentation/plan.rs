@@ -4,8 +4,6 @@
 use dgxtop_core::commands::ViewKind;
 use dgxtop_core::view::history_plot_columns;
 
-use crate::history::MIN_DISPLAY_POINTS;
-
 pub(crate) const CPU: &str = "cpu";
 pub(crate) const GPU: &str = "gpu";
 pub(crate) const MEMORY: &str = "memory";
@@ -81,16 +79,6 @@ impl ViewportLayout {
         usize::from(self.columns).clamp(MIN_TREND_POINTS, MAX_TREND_POINTS)
     }
 
-    /// History charts: the points the HistoryService queries for a chart's
-    /// plot (D-50), so the projection shares its result instead of
-    /// downsampling it every frame.
-    pub(crate) fn history_chart_points(self) -> usize {
-        let queried = u32::from(history_plot_columns(self.columns)).max(MIN_DISPLAY_POINTS);
-        usize::try_from(queried)
-            .unwrap_or(MAX_TREND_POINTS)
-            .clamp(MIN_TREND_POINTS, MAX_TREND_POINTS)
-    }
-
     /// Bars of a Process History chart (D-77): one a column of its plot,
     /// which is laid out like a history chart's.
     pub(crate) fn run_chart_bars(self) -> usize {
@@ -157,11 +145,6 @@ mod tests {
         let wide = ViewportLayout::new((160, 50));
         assert_eq!(wide.chart_points(), 160);
         assert_eq!(wide.half_chart_points(), 80);
-        // Two history panels of 77 side by side, each a 53-column plot: the
-        // charts keep the 60 points the HistoryService queries at least, so
-        // the Viewer merges them and no projection downsamples (D-50).
-        assert_eq!(wide.history_chart_points(), 60);
-        assert_eq!(ViewportLayout::new((213, 41)).history_chart_points(), 80);
         // A GPU chart spans the full-width panel (D-43); the GPUs share a
         // point budget, so many GPUs do not multiply the projection.
         assert_eq!(wide.gpu_summary_points(2), 160);

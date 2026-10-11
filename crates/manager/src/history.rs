@@ -14,10 +14,12 @@
 //!   aligned buckets that cover it (never a sliding average), refreshed once
 //!   a minute. A bar size change redraws the charts and keeps the
 //!   statistics.
-//! * The history answers both from its own sizes (`OverviewReader`, D-82);
-//!   the service only asks and shapes the view. A chart keeps the bars that
-//!   no longer change and asks only for the rest; a round's view is built
-//!   once, when its last answer arrives.
+//! * The history answers both from its own sizes (`OverviewReader`, D-82),
+//!   which are its cache: each round asks a chart's whole window and gets
+//!   its bars, the window's mean, peak and time held and, for a memory
+//!   chart, the tracked processes' parts (D-64, D-99). The service keeps
+//!   only the latest answer of each read and shapes the view; a round's
+//!   view is built once, when its last answer arrives.
 //! * Only sessions currently on the history view read. A bar size, chart or
 //!   column change bumps the charts' generation (new statistics series bump
 //!   theirs), cancels the group's running reads and makes their late answers
@@ -26,14 +28,14 @@
 //!   Refreshed at the bar size (5 s to 60 s), three times slower while
 //!   throttled.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use dgxtop_core::clock::{NANOS_PER_MILLI, TimeProvider, ms_to_ns};
 use dgxtop_core::commands::ViewKind;
 use dgxtop_core::errors::ErrorDetail;
-use dgxtop_core::history::{MAX_HISTORY_POINTS, SeriesInEveryBoot, coverage_ratio};
-use dgxtop_core::identity::{MetricKey, SessionId};
+use dgxtop_core::history::{MAX_HISTORY_POINTS, SeriesInEveryBoot};
+use dgxtop_core::identity::{EntityId, MetricKey, SessionId};
 use dgxtop_core::metric::{CanonicalUnit, descriptor};
 use dgxtop_core::overview_history::{
     OverviewAnswer, OverviewBars, OverviewBucket, OverviewRequest,
@@ -41,7 +43,7 @@ use dgxtop_core::overview_history::{
 use dgxtop_core::ports::{CancelFlag, Dispatch, DispatchError, HistoryJob};
 use dgxtop_core::tiers::{BarSize, Tier};
 use dgxtop_core::view::{
-    DiskHistory, HistoryChartKind, HistoryChartView, HistoryPointView, HistoryView,
+    DiskHistory, HistoryChartKind, HistoryChartView, HistoryPart, HistoryPointView, HistoryView,
     HistoryWindowSummary, SessionState, history_plot_columns,
 };
 use uuid::Uuid;
@@ -127,10 +129,6 @@ impl BarGrid {
         self.bar.tier().unwrap_or(Tier::OneMinute)
     }
 
-    fn step_ns(self) -> i64 {
-        self.tier().step_i64()
-    }
-
     fn span_ns(self) -> u64 {
         self.tier()
             .step_ns()
@@ -157,6 +155,10 @@ pub(crate) struct HistoryChartSpec {
     pub(crate) key: MetricKey,
     /// Fixed top of the scale; `None` scales the chart to its peak.
     pub(crate) scale_max: Option<f64>,
+    /// The GPUs whose tracked processes' parts the chart stacks (a GPU's
+    /// memory, or the unified GPUs under the RAM used, D-64); empty for
+    /// other charts.
+    pub(crate) parts_of: BTreeSet<EntityId>,
 }
 
 /// What the presentation picks for a session on the history view: the
@@ -215,74 +217,11 @@ struct Inflight {
     cancel: CancelFlag,
 }
 
-/// A chart's bars: the ones that no longer change, kept between rounds,
-/// and the latest ones, asked again each round.
-#[derive(Debug, Default)]
-struct BarCache {
-    /// The history's epoch the settled bars belong to.
-    epoch: u64,
-    settled: Vec<OverviewBucket>,
-    /// Bars starting from here are asked again.
-    next_from: Option<i64>,
-    recent: Vec<OverviewBucket>,
-    answered: bool,
-}
-
-impl BarCache {
-    /// Where the next read starts in `window`.
-    fn read_from(&self, (start, _): (i64, i64)) -> i64 {
-        self.next_from.map_or(start, |from| from.max(start))
-    }
-
-    /// Takes an answer for the bars of `window` from `from` on; `false`
-    /// when the history's past changed under the bars kept, so the whole
-    /// window must be read again.
-    fn take(
-        &mut self,
-        answer: OverviewBars,
-        (from, window_start): (i64, i64),
-        (tier, shift): (Tier, i64),
-    ) -> bool {
-        if self.answered && answer.epoch != self.epoch && from > window_start {
-            *self = Self::default();
-            return false;
-        }
-        self.epoch = answer.epoch;
-        self.answered = true;
-        let settled_from = if answer.settled_through_utc_ns == i64::MIN {
-            from
-        } else {
-            tier.align(answer.settled_through_utc_ns, shift).max(from)
-        };
-        self.settled.retain(|bar| bar.start_utc_ns < from);
-        let (settled, recent): (Vec<OverviewBucket>, Vec<OverviewBucket>) = answer
-            .bars
-            .into_iter()
-            .partition(|bar| bar.start_utc_ns < settled_from);
-        self.settled.extend(settled);
-        self.recent = recent;
-        self.next_from = Some(settled_from);
-        true
-    }
-
-    /// The bars in `window`, oldest first.
-    fn bars_in(&self, (start, end): (i64, i64)) -> impl Iterator<Item = &OverviewBucket> {
-        self.settled
-            .iter()
-            .chain(&self.recent)
-            .filter(move |bar| bar.start_utc_ns >= start && bar.start_utc_ns < end)
-    }
-
-    /// Lets the settled bars before `start` go (the window moved on).
-    fn trim(&mut self, start: i64) {
-        self.settled.retain(|bar| bar.start_utc_ns >= start);
-    }
-}
-
 #[derive(Debug)]
 struct ChartState {
     spec: HistoryChartSpec,
-    bars: BarCache,
+    /// The history's latest answer for the chart's window (D-99).
+    bars: Option<OverviewBars>,
     error: Option<String>,
 }
 
@@ -298,7 +237,7 @@ impl ChartState {
     fn new(spec: HistoryChartSpec) -> Self {
         Self {
             spec,
-            bars: BarCache::default(),
+            bars: None,
             error: None,
         }
     }
@@ -427,7 +366,7 @@ impl SessionHistory {
         match group {
             Group::Charts => {
                 for chart in &mut self.charts {
-                    chart.bars = BarCache::default();
+                    chart.bars = None;
                     chart.error = None;
                 }
             }
@@ -736,9 +675,7 @@ impl HistoryService {
         result: Result<OverviewAnswer, ErrorDetail>,
     ) -> Option<SessionId> {
         let inflight = self.inflight.remove(&request_id)?;
-        let shift = self.shift_ns();
         let session = self.sessions.get_mut(&inflight.session_id)?;
-        let tier = session.grid.tier();
         let group = inflight.purpose.group();
         if &inflight.session_id != session_id
             || inflight.generation != generation
@@ -746,38 +683,24 @@ impl HistoryService {
         {
             return None;
         }
-        let window = session.grid.window_at(session.chart_round.at_utc_ns, shift);
-        let again = match (inflight.purpose, result) {
+        match (inflight.purpose, result) {
             (Purpose::Bars(index), Ok(OverviewAnswer::Bars(bars))) => {
                 session.disk = Some((bars.kept_on_disk, bars.store_issue.clone()));
                 let chart = session.charts.get_mut(index)?;
                 chart.error = None;
-                let from = chart.bars.read_from(window);
-                !chart.bars.take(bars, (from, window.0), (tier, shift))
+                chart.bars = Some(bars);
             }
             (Purpose::Windows(index), Ok(OverviewAnswer::Windows(windows))) => {
                 let stat = session.stats.get_mut(index)?;
                 stat.error = None;
                 stat.windows = Some(windows);
-                false
             }
             (purpose, Ok(_)) => {
                 session.set_error(purpose, "history answered another read".to_owned());
-                false
             }
             (purpose, Err(error)) => {
                 session.set_error(purpose, error.message);
-                false
             }
-        };
-        if again {
-            // The history's past changed: read the whole window again in
-            // this round (a later round reads it anyway).
-            let round = session.round_mut(group);
-            if round.serial == inflight.round {
-                round.queue.push_back(inflight.purpose.index());
-            }
-            return None;
         }
         if !session.round_mut(group).finish(inflight.round) {
             return None;
@@ -829,19 +752,12 @@ impl HistoryService {
 
     fn schedule_refreshes(&mut self, now_ns: u64, limited: bool) {
         let at = (now_ns, self.now_utc_ns());
-        let shift = self.shift_ns();
         for session in self.sessions.values_mut().filter(|session| session.active) {
             for group in [Group::Charts, Group::Stats] {
                 if now_ns < session.round(group).refresh_due_ns {
                     continue;
                 }
                 session.begin_round(group, at);
-                if group == Group::Charts {
-                    let (start, _) = session.grid.window_at(at.1, shift);
-                    for chart in &mut session.charts {
-                        chart.bars.trim(start);
-                    }
-                }
                 if limited {
                     let period = match group {
                         Group::Charts => session.grid.refresh_ms(),
@@ -1009,7 +925,6 @@ impl HistoryService {
                 .map(|chart| chart_view(chart, (grid, window), (session.active, merges)))
                 .collect(),
             summaries: summaries_of(&session.stats, session.active),
-            // The presentation adds the processes (D-64).
             disk: match &session.disk {
                 None if self.settings.kept_on_disk => DiskHistory::On,
                 None | Some((false, _)) => DiskHistory::Off,
@@ -1072,8 +987,8 @@ fn apply_stats(
     }
 }
 
-/// The read of `purpose`: the bars a chart does not hold yet, or a
-/// statistics series' windows, at its round's time.
+/// The read of `purpose`: a chart's whole window (the history's sizes are
+/// its cache, D-99), or a statistics series' windows, at its round's time.
 fn request_of(session: &SessionHistory, purpose: Purpose, shift: i64) -> OverviewRequest {
     match purpose {
         Purpose::Bars(index) => {
@@ -1083,9 +998,10 @@ fn request_of(session: &SessionHistory, purpose: Purpose, shift: i64) -> Overvie
             OverviewRequest::Bars {
                 series: SeriesInEveryBoot::from(&chart.spec.key),
                 tier: session.grid.tier(),
-                from_utc_ns: chart.bars.read_from(window),
+                from_utc_ns: window.0,
                 end_utc_ns: window.1,
                 at_utc_ns: at,
+                parts_of: chart.spec.parts_of.clone(),
             }
         }
         Purpose::Windows(index) => OverviewRequest::Windows {
@@ -1105,32 +1021,30 @@ fn unit_of(metric_id: &str) -> CanonicalUnit {
     descriptor(metric_id).map_or(CanonicalUnit::Count, |known| known.unit)
 }
 
-/// A chart: a point per bar holding a value, with the mean, peak and time
-/// held over the window, all merged from the bars.
+/// A chart: a point per bar of the window holding a value, and the
+/// window's mean, peak, time held and process parts as the history merged
+/// them (D-99).
 fn chart_view(
     chart: &ChartState,
-    (grid, window): (BarGrid, (i64, i64)),
+    (grid, (start, end)): (BarGrid, (i64, i64)),
     (active, merges): (bool, bool),
 ) -> HistoryChartView {
     let spec = &chart.spec;
-    let step = grid.step_ns();
-    let mut whole = OverviewBucket::new(window.0);
-    let points: Vec<HistoryPointView> = chart
-        .bars
-        .bars_in(window)
-        .map(|bar| {
-            whole.merge(bar);
-            HistoryPointView {
-                start_utc_ns: utc_u64(bar.start_utc_ns),
-                end_utc_ns: utc_u64(bar.start_utc_ns.saturating_add(step)),
-                mean: bar.mean(),
-                min: bar.low(),
-                max: bar.peak(),
-            }
+    let step = grid.tier().step_i64();
+    let answer = chart.bars.as_ref();
+    let points: Vec<HistoryPointView> = answer
+        .into_iter()
+        .flat_map(|answer| &answer.bars)
+        .filter(|bar| bar.start_utc_ns >= start && bar.start_utc_ns < end)
+        .map(|bar| HistoryPointView {
+            start_utc_ns: utc_u64(bar.start_utc_ns),
+            end_utc_ns: utc_u64(bar.start_utc_ns.saturating_add(step)),
+            mean: bar.mean(),
+            min: bar.low(),
+            max: bar.peak(),
         })
         .collect();
-    let answered = chart.bars.answered;
-    let covered_ns = answered.then_some(whole.covered_ns);
+    let whole = answer.map(|answer| &answer.whole);
     HistoryChartView {
         kind: spec.kind,
         subject: spec.subject.clone(),
@@ -1138,15 +1052,24 @@ fn chart_view(
         unit: unit_of(spec.key.metric_id.as_str()),
         scale_max: spec.scale_max,
         points,
-        mean: whole.mean(),
-        peak: whole.peak(),
-        coverage_ratio: covered_ns.map(|covered| coverage_ratio(covered, grid.span_ns())),
-        covered_ns,
+        mean: whole.and_then(OverviewBucket::mean),
+        peak: whole.and_then(OverviewBucket::peak),
+        covered_ns: whole.map(|whole| whole.covered_ns),
         display_downsampled: merges,
-        pending: active && !answered && chart.error.is_none(),
+        pending: active && answer.is_none() && chart.error.is_none(),
         error: chart.error.clone(),
-        // The presentation adds the processes' parts (D-64).
-        parts: Vec::new(),
+        parts: answer
+            .map(|answer| {
+                answer
+                    .parts
+                    .iter()
+                    .map(|part| HistoryPart {
+                        slot: part.slot,
+                        means: part.means.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     }
 }
 
@@ -1165,10 +1088,10 @@ fn summaries_of(stats: &[StatState], active: bool) -> Vec<HistoryWindowSummary> 
                 kind: stat.spec.kind,
                 subject: stat.spec.subject.clone(),
                 window_label: window.label().to_owned(),
+                span_ns: window.span_ns(),
                 unit: unit_of(stat.spec.key.metric_id.as_str()),
                 mean: bucket.and_then(OverviewBucket::mean),
                 peak: bucket.and_then(OverviewBucket::peak),
-                coverage_ratio: covered_ns.map(|covered| coverage_ratio(covered, window.span_ns())),
                 covered_ns,
                 integral: (stat.spec.kind == HistoryChartKind::GpuPower)
                     .then_some(bucket)

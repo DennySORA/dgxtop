@@ -1,25 +1,10 @@
-//! Display downsampling of the history charts to the chart width
-//! (STORAGE.md §5): pixel buckets keep min/max/mean, never bridge a gap or a
-//! time discontinuity, leave the authoritative result untouched and mark the
-//! chart `display_downsampled`.
+//! Display downsampling of the history charts when a projection must
+//! shrink to its byte budget (STORAGE.md §5): pixel buckets keep
+//! min/max/mean, never bridge a gap or a time discontinuity, and leave the
+//! authoritative result untouched. A chart is never downsampled to its
+//! width: the HistoryService asks one bar per plot column already (D-50).
 
-use std::sync::Arc;
-
-use dgxtop_core::view::{HistoryPointView, HistoryView};
-
-/// Shares the service result when every chart already fits `width` points.
-pub(crate) fn history_for_display(history: &Arc<HistoryView>, width: usize) -> Arc<HistoryView> {
-    let fits = |points: &[HistoryPointView]| width == 0 || points.len() <= width;
-    if history.charts.iter().all(|chart| fits(&chart.points)) {
-        return Arc::clone(history);
-    }
-    let mut view = (**history).clone();
-    for chart in view.charts.iter_mut().filter(|chart| !fits(&chart.points)) {
-        chart.points = downsample(&chart.points, width);
-        chart.display_downsampled = true;
-    }
-    Arc::new(view)
-}
+use dgxtop_core::view::HistoryPointView;
 
 /// Merges contiguous points of one pixel bucket. Gap points (no mean) only
 /// merge with gap points, so every break stays visible.
@@ -115,7 +100,6 @@ impl Bucket {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presentation::testkit::{empty_history, history_chart};
 
     const SECOND: u64 = 1_000_000_000;
 
@@ -129,21 +113,6 @@ mod tests {
         }
     }
 
-    fn view(points: Vec<HistoryPointView>) -> Arc<HistoryView> {
-        Arc::new(HistoryView {
-            charts: vec![history_chart(points)],
-            ..empty_history()
-        })
-    }
-
-    #[test]
-    fn small_results_are_shared_unchanged() {
-        let history = view((0..10).map(|second| point(second, Some(1.0))).collect());
-        let shown = history_for_display(&history, 80);
-        assert!(Arc::ptr_eq(&shown, &history));
-        assert!(!shown.charts[0].display_downsampled);
-    }
-
     #[test]
     fn buckets_keep_min_max_and_time_weighted_mean() {
         let points: Vec<HistoryPointView> = (0..300)
@@ -152,25 +121,16 @@ mod tests {
                 point(second, Some(value))
             })
             .collect();
-        let history = view(points);
-        let shown = history_for_display(&history, 30);
-        let chart = &shown.charts[0];
-        assert!(chart.display_downsampled);
-        assert!(chart.points.len() <= 30);
-        let peak = chart
-            .points
+        let merged = downsample(&points, 30);
+        assert!(merged.len() <= 30);
+        let peak = merged
             .iter()
             .filter_map(|point| point.max)
             .fold(f64::MIN, f64::max);
         assert_eq!(peak, 95.0);
-        let spike_bucket = chart
-            .points
-            .iter()
-            .find(|point| point.max == Some(95.0))
-            .unwrap();
+        let spike_bucket = merged.iter().find(|point| point.max == Some(95.0)).unwrap();
         assert_eq!(spike_bucket.min, Some(10.0));
         assert!((spike_bucket.mean.unwrap() - 18.5).abs() < 1e-9);
-        assert_eq!(history.charts[0].points.len(), 300);
     }
 
     #[test]

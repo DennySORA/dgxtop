@@ -6,14 +6,17 @@
 //! one disk and one interface. The disk and the interface are the busiest
 //! when the view opens and stay while they report, so the charts never jump
 //! between devices. The statistics (D-48) summarize the same four GPU
-//! series over 1 h to 24 h.
+//! series over 1 h to 24 h. A memory chart names the GPUs whose tracked
+//! processes' parts it stacks (D-64): a GPU's memory its GPU, the RAM used
+//! the GPUs that share the RAM; the history joins them (D-99).
+
+use std::collections::BTreeSet;
 
 use dgxtop_core::canonical::{CatalogSnapshot, ImmutableSnapshot};
 use dgxtop_core::metric::ids;
 use dgxtop_core::naming::entity;
 use dgxtop_core::view::HistoryChartKind;
 
-use super::TrendBook;
 use super::disk::device_views;
 use super::gpu::gpu_name;
 use super::gpu_directory::{GpuDirectory, GpuIdentity};
@@ -35,11 +38,10 @@ const SERIES_PER_GPU: usize = 4;
 pub(crate) fn history_charts(
     snapshot: &ImmutableSnapshot,
     catalog: &CatalogSnapshot,
-    trends: &TrendBook,
     now_boot_ns: u64,
     request: &ChartRequest<'_>,
 ) -> HistoryPicks {
-    let reader = MetricReader::new(snapshot, catalog, trends, now_boot_ns);
+    let reader = MetricReader::new(snapshot, catalog, now_boot_ns);
     HistoryPicks {
         charts: dashboard(&reader, catalog, request.shown),
         stats: gpu_stats(&reader, catalog),
@@ -110,6 +112,14 @@ fn dashboard(
         entity::SCOPE_INTERFACE,
         busiest_interface,
     );
+    let unified = directory.unified_gpus();
+    for spec in &mut charts.specs {
+        spec.parts_of = match spec.kind {
+            HistoryChartKind::GpuMemory => BTreeSet::from([spec.key.entity_id.clone()]),
+            HistoryChartKind::MemoryUsed => unified.clone(),
+            _ => BTreeSet::new(),
+        };
+    }
     charts.specs
 }
 
@@ -228,6 +238,7 @@ impl Charts<'_, '_> {
                 subject: subject.to_owned(),
                 key: entry.sample.key.clone(),
                 scale_max,
+                parts_of: BTreeSet::new(),
             });
         }
     }
@@ -279,7 +290,6 @@ mod tests {
         history_charts(
             &fixture.snapshot,
             &fixture.catalog,
-            &fixture.trends,
             NOW,
             &ChartRequest { shown },
         )
@@ -354,6 +364,42 @@ mod tests {
             charts[4].key.metric_id.as_str(),
             "disk.write.bytes_per_second"
         );
+    }
+
+    /// A memory chart names the GPUs whose processes' parts it stacks
+    /// (D-64, D-99): a GPU's memory its own GPU, the RAM used the GPUs
+    /// that share the RAM (none on a discrete GPU); the rest none.
+    #[test]
+    fn memory_charts_name_the_gpus_of_their_parts() {
+        let parts_of = |fixture: &Fixture| -> Vec<(HistoryChartKind, Vec<String>)> {
+            charts(fixture, &[])
+                .iter()
+                .map(|spec| {
+                    let gpus = spec.parts_of.iter().map(ToString::to_string).collect();
+                    (spec.kind, gpus)
+                })
+                .collect()
+        };
+        let mut fixture = host();
+        fixture.add(
+            "gpu",
+            sample("gpu.memory.framebuffer.used", GPU_A, "gpu").u64(1 << 30),
+        );
+        let discrete = parts_of(&fixture);
+        assert!(discrete.contains(&(HistoryChartKind::GpuMemory, vec![GPU_A.to_owned()])));
+        assert!(discrete.contains(&(HistoryChartKind::MemoryUsed, Vec::new())));
+        assert!(discrete.contains(&(HistoryChartKind::CpuUtilization, Vec::new())));
+        fixture.add_entity(entity_record(
+            GPU_B,
+            EntityKind::Gpu,
+            "NVIDIA GB10",
+            &[
+                (attributes::NVML_INDEX, "1"),
+                (attributes::MEMORY_MODEL, "unified"),
+            ],
+        ));
+        let unified = parts_of(&fixture);
+        assert!(unified.contains(&(HistoryChartKind::MemoryUsed, vec![GPU_B.to_owned()])));
     }
 
     /// The history keeps only the Overview metrics in every bar size

@@ -17,6 +17,7 @@ use crate::identity::{
     SourceId,
 };
 use crate::metric::{CanonicalUnit, NativeUnit, Scalar};
+use crate::naming::{attributes, entity};
 use crate::observation::{Capability, EntityRecord, Observation, SourceDescriptor};
 use crate::ports::IngressBatch;
 use crate::quality::{Freshness, Namespace, Quality, ReadStatus, SampleKind, SelectionState};
@@ -458,6 +459,48 @@ impl CatalogSnapshot {
 
     pub fn entity(&self, entity_id: &EntityId) -> Option<&Arc<EntityRecord>> {
         self.entities.get(entity_id)
+    }
+
+    /// Clock ticks per second the host entity publishes (`clk_tck`), which
+    /// place a process's start; never defaulted.
+    pub fn clk_tck(&self) -> Option<u64> {
+        let host = EntityId::new(entity::HOST).ok()?;
+        self.entity(&host)?
+            .attribute(attributes::CLK_TCK)?
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|ticks| *ticks > 0)
+    }
+
+    /// The NVML index the adapter gave `gpu`; it orders and labels GPUs,
+    /// the `gpu:<UUID>` entity identifies them.
+    pub fn nvml_index(&self, gpu: &EntityId) -> Option<u32> {
+        self.entity(gpu)?
+            .attribute(attributes::NVML_INDEX)?
+            .trim()
+            .parse::<u32>()
+            .ok()
+    }
+
+    /// `gpu`'s label: `GPU 0` by its NVML index, else `GPU 1a2b3c4d` from
+    /// its UUID (a GPU that vanished keeps that one).
+    pub fn gpu_label(&self, gpu: &EntityId) -> String {
+        entity::gpu_label(gpu.as_str(), self.nvml_index(gpu))
+    }
+
+    /// An interface's name: its `ifname`, else its display name, else its
+    /// entity id.
+    pub fn interface_name<'a>(&'a self, interface: &'a EntityId) -> &'a str {
+        let record = self.entity(interface);
+        record
+            .and_then(|record| record.attribute(attributes::IFNAME))
+            .or_else(|| {
+                record
+                    .map(|record| record.display_name.as_str())
+                    .filter(|name| !name.is_empty())
+            })
+            .unwrap_or(interface.as_str())
     }
 
     /// Rebuilds the `by_metric` grouping.

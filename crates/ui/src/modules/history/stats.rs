@@ -58,13 +58,16 @@ impl GpuStats<'_> {
             return None;
         }
         in_window()
-            .filter_map(|summary| {
-                summary
-                    .covered_ns
-                    .map(nanos_to_seconds)
-                    .or_else(|| Some(summary.coverage_ratio? * window_seconds(window)?))
-            })
+            .filter_map(|summary| summary.covered_ns.map(nanos_to_seconds))
             .reduce(f64::max)
+    }
+
+    /// Seconds `window` spans, as the Manager gives it (D-99).
+    fn span_seconds(&self, window: &str) -> Option<f64> {
+        self.summaries
+            .iter()
+            .find(|summary| summary.window_label == window)
+            .map(|summary| nanos_to_seconds(summary.span_ns))
     }
 }
 
@@ -123,18 +126,6 @@ pub(super) fn nanos_to_seconds(nanos: u64) -> f64 {
     #[allow(clippy::cast_precision_loss)]
     let nanos = nanos as f64;
     nanos / 1e9
-}
-
-/// Seconds of `window` (`1h`, `24h`).
-fn window_seconds(window: &str) -> Option<f64> {
-    let (count, unit) = window.split_at(window.len().checked_sub(1)?);
-    let count: f64 = count.parse().ok()?;
-    match unit {
-        "m" => Some(count * 60.0),
-        "h" => Some(count * 3_600.0),
-        "d" => Some(count * 86_400.0),
-        _ => None,
-    }
 }
 
 /// A column of the table.
@@ -405,7 +396,7 @@ fn energy_text(summary: &HistoryWindowSummary) -> String {
 /// `last 6h`, or for a window only partly recorded `last 6h (1h 12m)`.
 fn window_text(block: &GpuStats<'_>, window: &str) -> String {
     let label = format!("last {window}");
-    match (block.recorded_seconds(window), window_seconds(window)) {
+    match (block.recorded_seconds(window), block.span_seconds(window)) {
         (Some(held), Some(span)) if held < span * FULL_COVERAGE => {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let held = held.max(0.0).round() as u64;
@@ -446,14 +437,10 @@ mod tests {
             .fold(1u16, |rows, block| rows.saturating_add(block.rows()))
     }
 
-    /// Sets each window's recorded seconds, `held(window seconds)`, and its
-    /// ratio as the store gives it: of the window, or of the time since a
-    /// boot `uptime` seconds ago when the window reaches back before it.
-    fn record(summaries: &mut [HistoryWindowSummary], held: impl Fn(f64) -> f64, uptime: f64) {
+    /// Sets each window's recorded seconds, `held(window seconds)`.
+    fn record(summaries: &mut [HistoryWindowSummary], held: impl Fn(f64) -> f64) {
         for summary in summaries {
-            let window = window_seconds(&summary.window_label).unwrap();
-            let seconds = held(window);
-            summary.coverage_ratio = Some(seconds / window.min(uptime));
+            let seconds = held(nanos_to_seconds(summary.span_ns));
             summary.covered_ns = Some(format!("{:.0}", seconds * 1e9).parse().unwrap());
         }
     }
@@ -482,7 +469,7 @@ mod tests {
         // dgxtop ran 1 h 12 m: the last hour is full, the 6 h window holds
         // 1 h 12 m, the 12 h and 24 h windows nothing more.
         let mut summaries = gpu_window_stats();
-        record(&mut summaries, |window| window.min(4_320.0), f64::INFINITY);
+        record(&mut summaries, |window| window.min(4_320.0));
         let blocks = gpu_stats(&summaries);
         assert_eq!(blocks[0].windows, vec!["1h", "6h"]);
         let rows = draw(&summaries, 140);
@@ -492,23 +479,20 @@ mod tests {
             "{rows:#?}"
         );
         // Only the first hour recorded, partly: one window, which says so.
-        record(&mut summaries, |_| 1_800.0, f64::INFINITY);
+        record(&mut summaries, |_| 1_800.0);
         let blocks = gpu_stats(&summaries);
         assert_eq!(blocks[0].windows, vec!["1h"]);
         let rows = draw(&summaries, 140);
         assert!(rows[1].contains("last 1h (30m)"), "{rows:#?}");
-        // A machine up five hours: the store answers 6 h to 24 h windows
-        // over the five hours since boot, so their ratios share that span;
-        // dgxtop recorded 15 minutes of each.
-        record(&mut summaries, |_| 900.0, 5.0 * 3_600.0);
+        // A machine up five hours on which dgxtop recorded 15 minutes: each
+        // window holds the same 15 minutes, so only the first is listed.
+        record(&mut summaries, |_| 900.0);
         let blocks = gpu_stats(&summaries);
         assert_eq!(blocks[0].windows, vec!["1h"], "{:#?}", blocks[0].windows);
         let rows = draw(&summaries, 140);
         assert!(rows[1].contains("last 1h (15m)"), "{rows:#?}");
         assert_eq!(recorded_text(45), "45s");
         assert_eq!(recorded_text(7_200), "2h");
-        assert_eq!(window_seconds("5m"), Some(300.0));
-        assert_eq!(window_seconds("x"), None);
     }
 
     #[test]

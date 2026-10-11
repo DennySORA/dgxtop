@@ -411,6 +411,7 @@ mod tests {
             from_utc_ns: from,
             end_utc_ns: from + 10 * minute,
             at_utc_ns: utc_at_boot + i64::try_from(now).unwrap(),
+            parts_of: std::collections::BTreeSet::new(),
         };
         let answer = OverviewReader::read(
             &history.index,
@@ -482,6 +483,7 @@ mod tests {
             from_utc_ns: hour,
             end_utc_ns: hour + 2 * 3_600 * 1_000_000_000,
             at_utc_ns: utc_at_boot + i64::try_from(now).unwrap(),
+            parts_of: std::collections::BTreeSet::new(),
         };
         let read = |deadline, cancel: &CancelFlag| {
             OverviewReader::read(&history.index, &request, deadline, cancel, clock.as_ref())
@@ -494,14 +496,81 @@ mod tests {
         // From the first sample to now (the last one's step reaches now).
         assert_eq!(held, now, "finalized and unfinalized minutes, once");
         assert!(bars.bars.iter().all(|bar| bar.mean() == Some(40.0)));
-        assert!(
-            bars.settled_through_utc_ns > utc_at_boot,
-            "minutes were finalized"
+        assert_eq!(
+            bars.whole.covered_ns, now,
+            "the window's totals hold it all"
         );
         let cancelled = CancelFlag::new();
         cancelled.cancel();
         assert!(read(u64::MAX, &cancelled).is_err());
         assert!(read(0, &CancelFlag::new()).is_err(), "past its deadline");
+    }
+
+    /// A memory chart's bars come joined with the tracked processes' parts
+    /// (D-99): the process record is asked for the GPUs named, over the
+    /// bars' window on the wall clock, one cell per bar of the size; a
+    /// chart naming no GPU, or a history without the record, has none.
+    #[test]
+    fn memory_bars_carry_the_process_parts_of_their_gpus() {
+        use std::collections::BTreeSet;
+        use std::sync::Arc;
+
+        use dgxtop_core::history::SeriesInEveryBoot;
+        use dgxtop_core::identity::EntityId;
+        use dgxtop_core::overview_history::{OverviewAnswer, OverviewRequest};
+        use dgxtop_core::ports::{CancelFlag, OverviewReader, ProcessMemoryReader};
+        use dgxtop_core::process_model::{MemoryPart, ProcessHistoryModel};
+        use dgxtop_core::testing::StaticProcessHistory;
+        use dgxtop_core::tiers::Tier;
+
+        let (history, _ledger) = history(false);
+        let memory = StaticProcessHistory::new(ProcessHistoryModel::default());
+        let held = MemoryPart {
+            slot: 3,
+            means: vec![Some(6.0); 24],
+        };
+        memory.set_parts(vec![held.clone()]);
+        let joined = history
+            .index
+            .clone()
+            .with_process_memory(Arc::clone(&memory) as Arc<dyn ProcessMemoryReader>);
+        let gpu = EntityId::new("gpu:GPU-aaaa").unwrap();
+        let hour = Tier::OneHour.align(i64::try_from(UTC_AT_BOOT).unwrap(), 0);
+        let request = |parts_of: BTreeSet<EntityId>| OverviewRequest::Bars {
+            series: SeriesInEveryBoot::from(&metric_key("memory", ids::MEMORY_USED, "system")),
+            tier: Tier::OneHour,
+            from_utc_ns: hour,
+            end_utc_ns: hour + 24 * 3_600 * 1_000_000_000,
+            at_utc_ns: hour,
+            parts_of,
+        };
+        let clock = clock_at(0);
+        let parts = |reader: &dyn OverviewReader, parts_of| {
+            let answer = reader
+                .read(
+                    &request(parts_of),
+                    u64::MAX,
+                    &CancelFlag::new(),
+                    clock.as_ref(),
+                )
+                .unwrap();
+            let OverviewAnswer::Bars(bars) = answer else {
+                panic!("bars asked");
+            };
+            bars.parts
+        };
+        assert_eq!(parts(&joined, BTreeSet::from([gpu.clone()])), vec![held]);
+        let window = (
+            u64::try_from(hour).unwrap(),
+            u64::try_from(hour).unwrap() + 24 * 3_600 * 1_000_000_000,
+        );
+        assert_eq!(
+            memory.asked(),
+            vec![(BTreeSet::from([gpu.clone()]), window, 24)]
+        );
+        assert!(parts(&joined, BTreeSet::new()).is_empty());
+        assert_eq!(memory.asked().len(), 1, "no GPU, nothing asked");
+        assert!(parts(&history.index, BTreeSet::from([gpu])).is_empty());
     }
 
     /// A finished Overview minute the wall clock cannot place (here: its

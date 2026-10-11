@@ -2,13 +2,22 @@
 //! size and the window statistics of one series, answered from the
 //! history's sizes, with the minutes not finalized yet (from the raw
 //! steps, up to now) merged into the bar and the windows holding them.
-//! Each piece is taken under its own short lock, never both at once.
+//! Each piece is taken under its own short lock, never both at once. The
+//! bars come whole each time (the sizes are the history's cache), with the
+//! window's totals and, for a memory chart, the tracked processes' parts
+//! from the process memory record, one cell per bar (D-97, D-99).
+
+use std::collections::BTreeSet;
 
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::errors::{ErrorCode, ErrorDetail};
 use dgxtop_core::history::SeriesInEveryBoot;
-use dgxtop_core::overview_history::{OverviewAnswer, OverviewBucket, OverviewRequest};
+use dgxtop_core::identity::EntityId;
+use dgxtop_core::overview_history::{
+    OverviewAnswer, OverviewBars, OverviewBucket, OverviewRequest,
+};
 use dgxtop_core::ports::{CancelFlag, OverviewReader};
+use dgxtop_core::tiers::Tier;
 
 use crate::HistoryIndex;
 use crate::grid::utc_minute_ending_near;
@@ -42,9 +51,15 @@ impl OverviewReader for HistoryIndex {
                 tier,
                 from_utc_ns,
                 end_utc_ns,
+                parts_of,
                 ..
             } => {
-                OverviewAnswer::Bars(tiers.bars(series, *tier, (*from_utc_ns, *end_utc_ns), &extra))
+                let window = (*from_utc_ns, *end_utc_ns);
+                let mut bars = tiers.bars(series, *tier, window, &extra);
+                if !parts_of.is_empty() {
+                    self.join_parts(&mut bars, parts_of, (*tier, window));
+                }
+                OverviewAnswer::Bars(bars)
             }
             OverviewRequest::Windows {
                 series,
@@ -56,6 +71,30 @@ impl OverviewReader for HistoryIndex {
 }
 
 impl HistoryIndex {
+    /// Each tracked process's part of what `gpus` held, one cell for each
+    /// bar of `tier` in `window`, so a part stacks on the bar it belongs
+    /// to; none without the process record.
+    fn join_parts(
+        &self,
+        bars: &mut OverviewBars,
+        gpus: &BTreeSet<EntityId>,
+        (tier, (start, end)): (Tier, (i64, i64)),
+    ) {
+        let Some(memory) = self.process_memory() else {
+            return;
+        };
+        let cells = u64::try_from(end.saturating_sub(start)).unwrap_or(0) / tier.step_ns();
+        let window = (
+            u64::try_from(start).unwrap_or(0),
+            u64::try_from(end).unwrap_or(0),
+        );
+        if let Ok(cells) = usize::try_from(cells)
+            && cells > 0
+        {
+            bars.parts = memory.parts(gpus, window, cells);
+        }
+    }
+
     /// `series`' minutes since its last finalized one, up to now, on the
     /// wall clock of `clock`, each filed in its one UTC minute like the
     /// finalized ones.

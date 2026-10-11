@@ -330,7 +330,8 @@ mod tests {
     use dgxtop_core::observation::EntityKind;
 
     fn build(fixture: &Fixture) -> CpuView {
-        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
+        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, NOW)
+            .with_trends(&fixture.trends);
         build_cpu_view(&reader, fixture.facts.cpu_model.as_deref(), 60)
     }
 

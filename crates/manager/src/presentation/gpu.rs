@@ -432,7 +432,8 @@ mod tests {
         requested: Option<&str>,
         environment: GpuEnvironment<'_>,
     ) -> GpuView {
-        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
+        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, NOW)
+            .with_trends(&fixture.trends);
         let index = SnapshotLookup::new(&fixture.snapshot);
         let directory = GpuDirectory::new(&fixture.catalog, &index);
         let requested = requested.map(|id| EntityId::new(id).unwrap());

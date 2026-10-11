@@ -5,33 +5,31 @@
 //! followed by the next; a run a session shows is asked for until the
 //! model answers it.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use dgxtop_core::action::Signal;
 use dgxtop_core::canonical::ProcessTable;
-use dgxtop_core::identity::{EntityId, ProcessKey, SessionId};
-use dgxtop_core::ports::{
-    Dispatch, ProcessHistoryInput, ProcessHistoryReader, ProcessMemoryReader,
-};
-use dgxtop_core::process_model::{MemoryPart, ProcessHistoryModel, ProcessTableSample, RunRequest};
+use dgxtop_core::identity::{ProcessKey, SessionId};
+use dgxtop_core::ports::{Dispatch, ProcessHistoryInput, ProcessHistoryReader};
+use dgxtop_core::process_model::{ProcessHistoryModel, ProcessTableSample, RunRequest};
 
 /// A request the model does not answer yet is asked again after this long
 /// (the actor's queue may have been full).
 const ASK_AGAIN_NS: u64 = 1_000_000_000;
 
-/// The ports of the process actor (the composition root wires them).
+/// The ports of the process actor (the composition root wires them; its
+/// memory record reaches the Manager joined with the history's bars,
+/// D-99).
 pub struct ProcessHistoryHandles {
     pub inputs: Box<dyn Dispatch<ProcessHistoryInput>>,
     pub runs: Arc<dyn ProcessHistoryReader>,
-    pub memory: Arc<dyn ProcessMemoryReader>,
 }
 
 /// The Manager's link to the process actor (module docs).
 pub(crate) struct ProcessHistoryLink {
     inputs: Option<Box<dyn Dispatch<ProcessHistoryInput>>>,
     runs: Arc<dyn ProcessHistoryReader>,
-    memory: Arc<dyn ProcessMemoryReader>,
     /// The table handed over last (cycle, read time).
     last_table: Option<(u64, u64)>,
     /// What each session asked for last, and when.
@@ -46,21 +44,16 @@ pub(crate) struct ProcessHistoryLink {
 impl ProcessHistoryLink {
     /// `None`: no process history (tests and tools without one).
     pub(crate) fn new(handles: Option<ProcessHistoryHandles>) -> Self {
-        let (inputs, runs, memory) = match handles {
-            Some(handles) => (Some(handles.inputs), handles.runs, handles.memory),
-            None => {
-                let none = Arc::new(NoProcessHistory::default());
-                (
-                    None,
-                    Arc::clone(&none) as Arc<dyn ProcessHistoryReader>,
-                    none as Arc<dyn ProcessMemoryReader>,
-                )
-            }
+        let (inputs, runs) = match handles {
+            Some(handles) => (Some(handles.inputs), handles.runs),
+            None => (
+                None,
+                Arc::new(NoProcessHistory::default()) as Arc<dyn ProcessHistoryReader>,
+            ),
         };
         Self {
             inputs,
             runs,
-            memory,
             last_table: None,
             asked: BTreeMap::new(),
             flushes: 0,
@@ -74,10 +67,6 @@ impl ProcessHistoryLink {
         self.runs.latest()
     }
 
-    pub(crate) fn memory(&self) -> &dyn ProcessMemoryReader {
-        self.memory.as_ref()
-    }
-
     /// Whether `table` was handed over already, so the caller can skip
     /// building its sample.
     pub(crate) fn has_table(&self, table: &ProcessTable) -> bool {
@@ -87,7 +76,7 @@ impl ProcessHistoryLink {
     /// Hands over a new table; one refused for a full queue goes with the
     /// next commit.
     pub(crate) fn send_table(&mut self, sample: ProcessTableSample) {
-        let identity = table_identity(&sample.table);
+        let identity = table_identity(sample.table());
         if self.send(ProcessHistoryInput::Table(Box::new(sample))) {
             self.last_table = Some(identity);
         }
@@ -186,17 +175,6 @@ struct NoProcessHistory {
 impl ProcessHistoryReader for NoProcessHistory {
     fn latest(&self) -> Arc<ProcessHistoryModel> {
         Arc::clone(&self.model)
-    }
-}
-
-impl ProcessMemoryReader for NoProcessHistory {
-    fn parts(
-        &self,
-        _gpus: &BTreeSet<EntityId>,
-        _window: (u64, u64),
-        _cells: usize,
-    ) -> Vec<MemoryPart> {
-        Vec::new()
     }
 }
 

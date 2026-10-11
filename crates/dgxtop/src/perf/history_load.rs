@@ -622,6 +622,7 @@ mod tests {
             from_utc_ns: at - i64::try_from(HOUR_NS).unwrap(),
             end_utc_ns: at,
             at_utc_ns: at,
+            parts_of: std::collections::BTreeSet::new(),
         };
         let answer = store
             .history

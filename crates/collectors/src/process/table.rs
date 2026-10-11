@@ -25,7 +25,7 @@ use dgxtop_core::canonical::{
 use dgxtop_core::clock::NANOS_PER_SECOND;
 use dgxtop_core::identity::{AdapterId, CollectorId, EntityId, IdentityError, ProcessKey};
 use dgxtop_core::metric::{self, Domain, MetricDescriptor, Scalar, ids, native};
-use dgxtop_core::naming::{self, adapters, attributes, entity, groups};
+use dgxtop_core::naming::{self, adapters, groups};
 use dgxtop_core::observation::BatchStatus;
 use dgxtop_core::ports::Collector;
 use dgxtop_core::process_stat::{self, ProcessStat};
@@ -122,16 +122,7 @@ fn procfs_delivered(session: &Session<'_>) -> bool {
 
 /// `clk_tck` published by the catalog host entity; never defaulted.
 fn clk_tck(session: &Session<'_>) -> Option<u64> {
-    let host = EntityId::new(entity::HOST).ok()?;
-    session
-        .plan()
-        .catalog
-        .entity(&host)?
-        .attribute(attributes::CLK_TCK)?
-        .trim()
-        .parse::<u64>()
-        .ok()
-        .filter(|ticks| *ticks > 0)
+    session.plan().catalog.clk_tck()
 }
 
 /// The newest procfs record of one process instance (D-79): its CPU ticks

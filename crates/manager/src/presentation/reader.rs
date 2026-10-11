@@ -1,11 +1,15 @@
-//! One read-only facade over the snapshot, catalog and trend book, shared by
-//! every module builder of a projection.
+//! One read-only facade over the snapshot, catalog and the state's trends,
+//! shared by every module builder of a projection.
+
+use std::collections::BTreeSet;
 
 use dgxtop_core::canonical::{CatalogSnapshot, Explanation, ImmutableSnapshot, SnapshotEntry};
-use dgxtop_core::identity::MetricKey;
+use dgxtop_core::identity::{EntityId, MetricKey, ProcessKey};
+use dgxtop_core::metric::ids;
+use dgxtop_core::naming::entity;
+use dgxtop_core::ports::TrendReader;
 use dgxtop_core::view::{MetricCell, Trend};
 
-use super::TrendBook;
 use super::cell::{build_metric_cell, missing_cell};
 use super::index::{KeyResolver, SnapshotLookup};
 
@@ -14,7 +18,8 @@ pub(crate) struct MetricReader<'a> {
     keys: KeyResolver,
     snapshot: &'a ImmutableSnapshot,
     catalog: &'a CatalogSnapshot,
-    trends: &'a TrendBook,
+    /// `None` where no trend is drawn (the history's chart picks).
+    trends: Option<&'a dyn TrendReader>,
     now_boot_ns: u64,
 }
 
@@ -22,7 +27,6 @@ impl<'a> MetricReader<'a> {
     pub(crate) fn new(
         snapshot: &'a ImmutableSnapshot,
         catalog: &'a CatalogSnapshot,
-        trends: &'a TrendBook,
         now_boot_ns: u64,
     ) -> Self {
         let index = SnapshotLookup::new(snapshot);
@@ -32,8 +36,16 @@ impl<'a> MetricReader<'a> {
             keys,
             snapshot,
             catalog,
-            trends,
+            trends: None,
             now_boot_ns,
+        }
+    }
+
+    /// Reads trends from the state's `trends`.
+    pub(crate) fn with_trends(self, trends: &'a dyn TrendReader) -> Self {
+        Self {
+            trends: Some(trends),
+            ..self
         }
     }
 
@@ -93,18 +105,36 @@ impl<'a> MetricReader<'a> {
         self.trend_of(key, width)
     }
 
-    /// The trend of a series recorded beside `(metric, entity, preferred
-    /// scope)`, whose key `beside` derives from that series' key.
-    pub(crate) fn trend_beside(
+    /// What the processes of `gpus` held beside each of the latest
+    /// `width` points of the host's used memory (D-64).
+    pub(crate) fn gpu_memory_trend(&self, gpus: &BTreeSet<EntityId>, width: usize) -> Trend {
+        self.beside_used_memory(width, |trends, used| {
+            trends.gpu_memory_beside(used, gpus, width)
+        })
+    }
+
+    /// What `process` held on `gpus` beside the same points (D-64).
+    pub(crate) fn process_memory_trend(
         &self,
-        (metric, entity, preferred_scope): (&str, &str, &str),
-        beside: impl Fn(&MetricKey) -> Option<MetricKey>,
+        process: &ProcessKey,
+        gpus: &BTreeSet<EntityId>,
         width: usize,
     ) -> Trend {
-        let key = self
-            .series_key(metric, entity, preferred_scope)
-            .and_then(|key| beside(&key));
-        self.trend_of(key, width)
+        self.beside_used_memory(width, |trends, used| {
+            trends.process_memory_beside(used, process, gpus, width)
+        })
+    }
+
+    fn beside_used_memory(
+        &self,
+        width: usize,
+        read: impl Fn(&dyn TrendReader, &MetricKey) -> Trend,
+    ) -> Trend {
+        let used = self.series_key(ids::MEMORY_USED, entity::MEMORY, entity::SCOPE_SYSTEM);
+        match (self.trends, used) {
+            (Some(trends), Some(used)) if width > 0 => read(trends, &used),
+            _ => Trend::default(),
+        }
     }
 
     /// The committed key of the series, else the catalog's.
@@ -116,8 +146,8 @@ impl<'a> MetricReader<'a> {
     }
 
     fn trend_of(&self, key: Option<MetricKey>, width: usize) -> Trend {
-        match key {
-            Some(key) if width > 0 => self.trends.trend(&key, width),
+        match (self.trends, key) {
+            (Some(trends), Some(key)) if width > 0 => trends.trend(&key, width),
             _ => Trend::default(),
         }
     }
@@ -138,7 +168,7 @@ mod tests {
             "memory",
             sample("memory.cached", "memory", "system").unavailable(),
         );
-        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
+        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, NOW);
         assert_eq!(
             reader.cell("memory.used", "memory", "system").value_f64(),
             Some(42.0)

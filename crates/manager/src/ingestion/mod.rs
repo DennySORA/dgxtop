@@ -18,7 +18,6 @@
 //!   a slow or hung host beyond that bound.
 
 pub(crate) mod pages;
-pub(crate) mod trends;
 
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;

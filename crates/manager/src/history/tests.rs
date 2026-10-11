@@ -2,6 +2,7 @@ use super::*;
 use dgxtop_core::clock::NANOS_PER_SECOND;
 use dgxtop_core::commands::SortKey;
 use dgxtop_core::errors::ErrorCode;
+use dgxtop_core::process_model::MemoryPart;
 use dgxtop_core::testing::{CapturingDispatch, FakeClock, metric_key};
 
 const SECOND: u64 = NANOS_PER_SECOND;
@@ -78,6 +79,7 @@ fn cpu() -> HistoryChartSpec {
         subject: String::new(),
         key: metric_key("cpu", "cpu.utilization.total", "host"),
         scale_max: Some(100.0),
+        parts_of: BTreeSet::new(),
     }
 }
 
@@ -87,6 +89,7 @@ fn read_rate(entity: &str) -> HistoryChartSpec {
         subject: entity.to_owned(),
         key: metric_key(entity, "disk.read.bytes_per_second", "device"),
         scale_max: None,
+        parts_of: BTreeSet::new(),
     }
 }
 
@@ -96,6 +99,7 @@ fn gpu_series(kind: HistoryChartKind, metric: &str) -> HistoryChartSpec {
         subject: "0 · NVIDIA L4".to_owned(),
         key: metric_key("gpu:GPU-a", metric, "gpu"),
         scale_max: None,
+        parts_of: BTreeSet::new(),
     }
 }
 
@@ -112,11 +116,25 @@ fn bar(start: i64, minutes: u64, value: f64) -> OverviewBucket {
     )
 }
 
-fn bars_answer(bars: Vec<OverviewBucket>, settled_through: i64, epoch: u64) -> OverviewAnswer {
+/// The history's answer of `bars` starting at `start`, its totals merged
+/// from them as the history merges them (D-99).
+fn bars_answer(start: i64, bars: Vec<OverviewBucket>) -> OverviewAnswer {
+    let mut whole = OverviewBucket::new(start);
+    for bar in &bars {
+        whole.merge(bar);
+    }
+    answer_of(bars, whole, Vec::new())
+}
+
+fn answer_of(
+    bars: Vec<OverviewBucket>,
+    whole: OverviewBucket,
+    parts: Vec<MemoryPart>,
+) -> OverviewAnswer {
     OverviewAnswer::Bars(OverviewBars {
-        epoch,
-        settled_through_utc_ns: settled_through,
         bars,
+        whole,
+        parts,
         kept_on_disk: true,
         store_issue: None,
     })
@@ -208,12 +226,12 @@ fn a_round_is_drawn_once_all_its_answers_arrived() {
     let open = end - HOUR;
     // Two hours ago a 45-minute hour, an hour ago nothing, now 20 minutes.
     let answered = vec![bar(open - 2 * HOUR, 45, 30.0), bar(open, 20, 60.0)];
-    assert_eq!(bench.answer(&jobs[0], bars_answer(answered, open, 0)), None);
+    assert_eq!(bench.answer(&jobs[0], bars_answer(from, answered)), None);
     assert!(
         bench.service.view(&bench.session).charts[0].pending,
         "not drawn yet"
     );
-    let done = bench.answer(&jobs[1], bars_answer(Vec::new(), i64::MIN, 0));
+    let done = bench.answer(&jobs[1], bars_answer(from, Vec::new()));
     assert_eq!(done, Some(bench.session.clone()));
     let view = bench.service.view(&bench.session);
     let chart = &view.charts[0];
@@ -237,62 +255,84 @@ fn a_round_is_drawn_once_all_its_answers_arrived() {
     assert_eq!(view.charts[1].covered_ns, Some(0), "nothing recorded");
     assert_eq!(view.start_utc_ns, u64::try_from(from).unwrap());
     // A late answer of the same round is stale.
-    assert_eq!(bench.answer(&jobs[0], bars_answer(Vec::new(), 0, 0)), None);
+    assert_eq!(bench.answer(&jobs[0], bars_answer(from, Vec::new())), None);
 }
 
-/// Bars that no longer change are kept: the next round reads only from
-/// the first one that may; when the history's past changes, the whole
-/// window is read again in the same round.
+/// Every round reads a chart's whole window: the history's sizes are its
+/// cache, so the service keeps only the latest answer and draws it as it
+/// came (D-99), the window's mean, peak and time held included.
 #[test]
-fn settled_bars_are_kept_and_only_the_rest_is_read() {
+fn every_round_reads_the_whole_window_and_draws_its_answer() {
     let mut bench = bench(4);
     bench.open("1h", &[cpu()]);
     let first = bench.sent(NOW).pop().unwrap();
     let (_, window_start, end, _) = bars_request(&first);
     let open = end - HOUR;
-    let settled = open + 20 * MINUTE;
-    let old = bar(open - HOUR, 60, 10.0);
     bench.answer(
         &first,
-        bars_answer(vec![old, bar(open, 20, 40.0)], settled, 1),
+        bars_answer(
+            window_start,
+            vec![bar(open - HOUR, 60, 10.0), bar(open, 20, 40.0)],
+        ),
     );
-    // The next round, a minute later.
+    // The next round, a minute later, asks the same whole window.
     let later = NOW + 61 * SECOND;
     bench.clock.advance_ns(61 * SECOND);
     let next = bench.sent(later).pop().unwrap();
     let (_, from, _, _) = bars_request(&next);
-    assert_eq!(from, open, "only the bar being filled is read again");
+    assert_eq!(from, window_start, "the whole window, every round");
+    // The history's totals are drawn as they came, never merged again.
+    let mut whole = OverviewBucket::new(window_start);
+    whole.merge(&bar(open, 21, 41.0));
+    whole.covered_ns = 90 * 60 * SECOND;
     bench.answer(
         &next,
-        bars_answer(vec![bar(open, 21, 41.0)], settled + MINUTE, 1),
+        answer_of(vec![bar(open, 21, 41.0)], whole, Vec::new()),
     );
     let chart = &bench.service.view(&bench.session).charts[0];
     let means: Vec<Option<f64>> = chart.points.iter().map(|point| point.mean).collect();
-    assert_eq!(
-        means,
-        vec![Some(10.0), Some(41.0)],
-        "the kept bar and the new"
+    assert_eq!(means, vec![Some(41.0)], "the latest answer only");
+    assert_eq!(chart.covered_ns, Some(90 * 60 * SECOND));
+    assert_eq!(chart.peak, Some(46.0));
+}
+
+/// A memory chart asks for the processes' parts of the GPUs it names and
+/// draws them as the history joined them (D-64, D-99); other charts ask
+/// for none.
+#[test]
+fn a_memory_chart_carries_the_parts_the_history_joined() {
+    let mut bench = bench(4);
+    let gpu = EntityId::new("gpu:GPU-a").unwrap();
+    let mut memory = gpu_series(HistoryChartKind::GpuMemory, "gpu.memory.process_allocated");
+    memory.parts_of = BTreeSet::from([gpu.clone()]);
+    bench.open("1h", &[cpu(), memory]);
+    let jobs = bench.sent(NOW);
+    let asked: Vec<BTreeSet<EntityId>> = jobs
+        .iter()
+        .map(|job| match &job.request {
+            OverviewRequest::Bars { parts_of, .. } => parts_of.clone(),
+            OverviewRequest::Windows { .. } => panic!("bars expected"),
+        })
+        .collect();
+    assert_eq!(asked, vec![BTreeSet::new(), BTreeSet::from([gpu])]);
+    let (_, from, _, _) = bars_request(&jobs[1]);
+    let part = MemoryPart {
+        slot: 2,
+        means: vec![Some(6.0), None],
+    };
+    bench.answer(&jobs[0], bars_answer(from, Vec::new()));
+    bench.answer(
+        &jobs[1],
+        answer_of(Vec::new(), OverviewBucket::new(from), vec![part]),
     );
-    // The history's past changed (its startup compression finished).
-    bench.clock.advance_ns(61 * SECOND);
-    let changed = bench.sent(later + 61 * SECOND).pop().unwrap();
-    assert_eq!(
-        bench.answer(&changed, bars_answer(vec![bar(open, 22, 42.0)], settled, 2)),
-        None,
-        "read again before drawing"
-    );
-    let again = bench.sent(later + 61 * SECOND).pop().unwrap();
-    let (_, from, _, _) = bars_request(&again);
-    assert_eq!(from, window_start, "the whole window");
-    let full = vec![bar(open - 3 * HOUR, 60, 5.0), bar(open, 22, 42.0)];
-    assert!(
-        bench
-            .answer(&again, bars_answer(full, settled, 2))
-            .is_some()
-    );
-    let chart = &bench.service.view(&bench.session).charts[0];
-    assert_eq!(chart.points.len(), 2);
-    assert_eq!(chart.points[0].mean, Some(5.0));
+    let view = bench.service.view(&bench.session);
+    assert!(view.charts[0].parts.is_empty());
+    let parts: Vec<(u8, Vec<Option<f64>>)> = view.charts[1]
+        .parts
+        .iter()
+        .map(|part| (part.slot, part.means.clone()))
+        .collect();
+    assert_eq!(parts, vec![(2, vec![Some(6.0), None])]);
 }
 
 /// Each GPU series' statistics are one read for its four windows, merged
@@ -334,7 +374,12 @@ fn statistics_are_one_read_per_series_for_four_windows() {
     assert_eq!(power_rows[1].peak, Some(205.0));
     let joules = 200.0 * 300.0 * 60.0;
     assert!((power_rows[1].integral.unwrap() - joules).abs() < 1e-6);
-    assert!((power_rows[1].coverage_ratio.unwrap() - 300.0 / 360.0).abs() < 1e-9);
+    let spans: Vec<u64> = power_rows.iter().map(|row| row.span_ns).collect();
+    assert_eq!(
+        spans,
+        [1, 6, 12, 24].map(|hours| hours * 3_600 * SECOND),
+        "each window carries its length"
+    );
     assert!(view.summaries.iter().all(|row| !row.pending));
     let util_row = view
         .summaries
@@ -403,7 +448,7 @@ fn a_new_series_restarts_the_reads_and_a_new_scale_only_redraws() {
         NOW,
     );
     assert!(first[0].cancel.is_cancelled());
-    assert_eq!(bench.answer(&first[0], bars_answer(Vec::new(), 0, 0)), None);
+    assert_eq!(bench.answer(&first[0], bars_answer(0, Vec::new())), None);
     let view = bench.service.view(&bench.session);
     assert_eq!(view.charts.len(), 1);
     assert!(view.charts[0].pending);
@@ -482,9 +527,9 @@ fn the_disk_state_follows_the_history() {
     assert_eq!(bench.service.view(&bench.session).disk, DiskHistory::On);
     let job = bench.sent(NOW).pop().unwrap();
     let failing = OverviewAnswer::Bars(OverviewBars {
-        epoch: 0,
-        settled_through_utc_ns: i64::MIN,
         bars: Vec::new(),
+        whole: OverviewBucket::new(0),
+        parts: Vec::new(),
         kept_on_disk: true,
         store_issue: Some("history tiers: disk full".to_owned()),
     });
@@ -496,9 +541,9 @@ fn the_disk_state_follows_the_history() {
     bench.clock.advance_ns(61 * SECOND);
     let job = bench.sent(NOW + 61 * SECOND).pop().unwrap();
     let off = OverviewAnswer::Bars(OverviewBars {
-        epoch: 0,
-        settled_through_utc_ns: i64::MIN,
         bars: Vec::new(),
+        whole: OverviewBucket::new(0),
+        parts: Vec::new(),
         kept_on_disk: false,
         store_issue: None,
     });

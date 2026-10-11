@@ -16,6 +16,7 @@ use dgxtop_core::identity::{CollectorId, MetricKey};
 use dgxtop_core::metric::{CanonicalUnit, Scalar, ids};
 use dgxtop_core::ports::{
     ArchiveJournal, HistoryAppends, HistoryIngest, HistoryOutcome, SnapshotReader, StoreWriter,
+    TrendReader,
 };
 use dgxtop_core::quality::{Freshness, Namespace, Quality, SampleKind, SelectionState};
 use dgxtop_core::testing::{UTC_ON_A_WHOLE_MINUTE_NS, metric_key, source_id};
@@ -317,4 +318,27 @@ fn journals_are_drained_only_when_the_archive_is_on() {
     let mut on = rig(true);
     assert!(on.writer.take_archive_journal(1 << 20).is_some());
     assert_eq!(on.history.calls(), vec![Call::TakeJournal]);
+}
+
+/// The short trends are filled at commit (D-99): a committed read is a
+/// point once its revision is published, a rejected commit, a gap or a
+/// maintenance step adds none, and a sampling change restarts them.
+#[test]
+fn a_committed_read_is_a_trend_point() {
+    let mut rig = rig(false);
+    let trends = rig.writer.trends();
+    let key = temperature_key();
+    assert!(trends.trend(&key, 10).points.is_empty());
+    rig.commit(1, SECOND);
+    assert_eq!(trends.trend(&key, 10).points, vec![Some(50.0)]);
+    rig.commit(0, 2 * SECOND);
+    rig.writer.record_gap(gap("host_unavailable"));
+    rig.writer.maintain(3 * SECOND);
+    assert_eq!(trends.trend(&key, 10).points, vec![Some(50.0)]);
+    rig.commit(1, 2 * SECOND);
+    assert_eq!(trends.trend(&key, 10).points, vec![Some(50.0); 2]);
+    let mut sampling = Config::defaults().unwrap().sampling;
+    sampling.interval_ms *= 2;
+    rig.writer.set_sampling(&sampling);
+    assert!(trends.trend(&key, 10).points.is_empty());
 }

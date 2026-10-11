@@ -5,10 +5,12 @@
 //!   ProcessService ever receives one.
 //! * Process history (D-76): `ProcessProbe` (read-only, beside the
 //!   adapters) and `ProcessHistoryStore`; the history's process actor takes
-//!   `ProcessHistoryInput`s and publishes through `ProcessHistoryReader` and
-//!   `ProcessMemoryReader` (D-79).
+//!   `ProcessHistoryInput`s and publishes through `ProcessHistoryReader`
+//!   (to the Manager) and `ProcessMemoryReader` (to the history's readers,
+//!   which join it with the memory charts' bars, D-99) (D-79).
 //! * Collectors are pure (`Collector::collect`).
-//! * State (D-79): `StoreWriter` (HotStore actor only) and `SnapshotReader`.
+//! * State (D-79): `StoreWriter` (HotStore actor only), `SnapshotReader`
+//!   and `TrendReader` (the short trends it fills at commit, D-99).
 //! * History (D-79): `HistoryIngest`, through which the live state hands
 //!   each commit to the history, and `OverviewReader` (D-82), through
 //!   which the Manager reads it (D-90); `HistoryTierStore` keeps the
@@ -60,7 +62,7 @@ use crate::process_history::{
 };
 use crate::process_model::{MemoryPart, ProcessHistoryModel, ProcessTableSample, RunRequest};
 use crate::process_probe::{ProbeReading, ProbeReport, ProbeState, ProbeTarget};
-use crate::view::{HostStatus, ViewModel};
+use crate::view::{HostStatus, Trend, ViewModel};
 
 /// Read-only telemetry adapter. Owns its driver handles; returns native values
 /// with provenance; never writes stores, never renders, never signals.
@@ -99,6 +101,30 @@ pub trait StoreWriter: Send {
 /// Cheap access to the latest immutable snapshot.
 pub trait SnapshotReader: Send + Sync {
     fn latest(&self) -> Arc<ImmutableSnapshot>;
+}
+
+/// The state's short trends (D-79, D-99): the latest points of the
+/// overview's sparkline series, one per new read, filled at commit.
+pub trait TrendReader: Send + Sync {
+    /// The latest `width` points of `key`, oldest first; empty when the
+    /// state keeps none.
+    fn trend(&self, key: &MetricKey, width: usize) -> Trend;
+    /// Beside each of the latest `width` points of the `memory.used`
+    /// series `used`: what the processes of the GPUs `gpus` held (their
+    /// `gpu.memory.process_allocated` summed), a gap where any of them had
+    /// no value; empty without a GPU.
+    fn gpu_memory_beside(&self, used: &MetricKey, gpus: &BTreeSet<EntityId>, width: usize)
+    -> Trend;
+    /// Beside the same points: what `process` held on `gpus`, a gap where
+    /// it held none, from the first point it held some (D-64); empty when
+    /// it held none in the points kept.
+    fn process_memory_beside(
+        &self,
+        used: &MetricKey,
+        process: &ProcessKey,
+        gpus: &BTreeSet<EntityId>,
+        width: usize,
+    ) -> Trend;
 }
 
 /// Cooperative cancellation flag shared with a running job.

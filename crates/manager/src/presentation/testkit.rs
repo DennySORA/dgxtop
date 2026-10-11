@@ -16,19 +16,18 @@ use dgxtop_core::identity::{
 };
 use dgxtop_core::metric::{NativeUnit, Scalar};
 use dgxtop_core::naming::collector_id;
-use dgxtop_core::observation::{Attribute, EntityKind, EntityRecord};
+use dgxtop_core::observation::EntityRecord;
 use dgxtop_core::process_model::ProcessHistoryModel;
 use dgxtop_core::quality::{Freshness, Quality, ReadStatus, SampleKind, SelectionState};
-use dgxtop_core::testing::{
-    StaticProcessHistory, adapter_id, boot_id, host_id, metric_key, source_id,
-};
+use dgxtop_core::testing::{adapter_id, boot_id, host_id, metric_key, source_id};
 use dgxtop_core::view::{
     ActionsView, DiskHistory, HistoryChartKind, HistoryChartView, HistoryPointView, HistoryView,
     HostState, HostStatus, IntervalView, OverloadState, SessionState,
 };
 
 use super::cell::canonical_unit_of;
-use super::{HostFacts, PresentationContext, SettingsInputs, TrendBook};
+use super::{HostFacts, PresentationContext, SettingsInputs};
+use dgxtop_core::trends::TrendBook;
 
 /// Boot-clock "now" of every fixture.
 pub(crate) const NOW: u64 = 100_000_000_000;
@@ -239,29 +238,7 @@ pub(crate) fn explanation_for(
     }
 }
 
-pub(crate) fn entity_record(
-    id: &str,
-    kind: EntityKind,
-    display_name: &str,
-    attributes: &[(&str, &str)],
-) -> EntityRecord {
-    EntityRecord {
-        entity_id: EntityId::new(id).unwrap(),
-        kind,
-        parent_id: None,
-        generation: 1,
-        discovered_boot_ns: 0,
-        removed_boot_ns: None,
-        display_name: display_name.to_owned(),
-        attributes: attributes
-            .iter()
-            .map(|(key, value)| Attribute {
-                key: (*key).to_owned(),
-                value: (*value).to_owned(),
-            })
-            .collect(),
-    }
-}
+pub(crate) use dgxtop_core::testing::entity_record;
 
 pub(crate) fn process_key(pid: i64, start_time_ticks: u64) -> ProcessKey {
     ProcessKey {
@@ -347,7 +324,6 @@ pub(crate) fn history_chart(points: Vec<HistoryPointView>) -> HistoryChartView {
         points,
         mean: None,
         peak: None,
-        coverage_ratio: Some(1.0),
         covered_ns: None,
         display_downsampled: false,
         pending: false,
@@ -378,7 +354,6 @@ pub(crate) struct Fixture {
     pub(crate) trends: TrendBook,
     /// What the history's process actor published.
     pub(crate) processes: ProcessHistoryModel,
-    pub(crate) process_memory: Arc<StaticProcessHistory>,
     pub(crate) facts: HostFacts,
     pub(crate) enabled_modules: Vec<String>,
     pub(crate) now_boot_ns: u64,
@@ -427,7 +402,6 @@ impl Fixture {
             history: Arc::new(empty_history()),
             trends: TrendBook::new(120),
             processes: ProcessHistoryModel::default(),
-            process_memory: StaticProcessHistory::new(ProcessHistoryModel::default()),
             facts: HostFacts {
                 host_name: "dgx-test".to_owned(),
                 version: "0.2.0".to_owned(),
@@ -462,7 +436,6 @@ impl Fixture {
             history: Arc::clone(&self.history),
             trends: &self.trends,
             processes: &self.processes,
-            process_memory: self.process_memory.as_ref(),
             facts: &self.facts,
             enabled_modules: &self.enabled_modules,
             archive: self.archive_status.as_ref(),

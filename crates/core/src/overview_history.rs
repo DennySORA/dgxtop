@@ -12,13 +12,15 @@
 //! the history asks its store to keep, the archived minutes it compresses
 //! at startup and the reads the Manager asks of it.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::errors::InfraError;
 use crate::history::SeriesInEveryBoot;
-use crate::identity::HostId;
+use crate::identity::{EntityId, HostId};
 use crate::metric::ids;
 use crate::naming::entity;
+use crate::process_model::MemoryPart;
 use crate::tiers::Tier;
 
 const NANOS_PER_SECOND_F64: f64 = 1e9;
@@ -276,13 +278,17 @@ pub enum HistoryTierCompletion {
 #[derive(Debug, Clone, PartialEq)]
 pub enum OverviewRequest {
     /// The bars of `tier` that start in `[from_utc_ns, end_utc_ns)`, the
-    /// latest with what is still being filled up to `at_utc_ns`.
+    /// latest with what is still being filled up to `at_utc_ns`, with the
+    /// window's totals and, for a memory chart, the tracked processes'
+    /// parts of what the GPUs `parts_of` held (D-64, D-99).
     Bars {
         series: SeriesInEveryBoot,
         tier: Tier,
         from_utc_ns: i64,
         end_utc_ns: i64,
         at_utc_ns: i64,
+        /// No GPU: no parts.
+        parts_of: BTreeSet<EntityId>,
     },
     /// The series over each span ending at `at_utc_ns`, merged from the
     /// aligned buckets that cover it.
@@ -302,17 +308,17 @@ impl OverviewRequest {
 }
 
 /// The bars of one series: those holding a value, oldest first (a bar
-/// with nothing is a gap).
+/// with nothing is a gap), read whole from the history's sizes each time
+/// (D-99).
 #[derive(Debug, Clone, PartialEq)]
 pub struct OverviewBars {
-    /// Changes when the series' past changed (the startup compression of
-    /// the archive filled it in, or the series was let go or came back),
-    /// so cached bars must be read again.
-    pub epoch: u64,
-    /// Bars ending by this time never change again (minutes reach the
-    /// history in time order).
-    pub settled_through_utc_ns: i64,
     pub bars: Vec<OverviewBucket>,
+    /// The window as one bucket, merged from its bars: its mean, peak and
+    /// the time it holds (D-99).
+    pub whole: OverviewBucket,
+    /// Each tracked process's part of the bars, one cell per bar of the
+    /// window, in color order; empty when no GPU was asked (D-64, D-97).
+    pub parts: Vec<MemoryPart>,
     /// The history keeps the sizes on disk (its store is attached).
     pub kept_on_disk: bool,
     /// Why the history's store is not keeping the sizes, if it is not.

@@ -124,6 +124,7 @@ impl TelemetryRig {
             false,
         )
         .into_parts();
+        let trends = Arc::new(writer.trends());
         let mut workers = WorkerSet::default();
         let store = spawn_store_worker(
             writer,
@@ -163,6 +164,7 @@ impl TelemetryRig {
             store: Box::new(store),
             history: Box::new(history_pool),
             logger,
+            trends,
             ..inert_ports(
                 Arc::clone(&clock),
                 Arc::new(snapshots.clone()),

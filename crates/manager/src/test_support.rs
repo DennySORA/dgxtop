@@ -7,17 +7,13 @@ use crate::session::SessionHandle;
 use crate::setup::{ManagerInboxes, ManagerPorts, ManagerSetup, ProcessHistoryHandles};
 use dgxtop_core::action::{ActionOp, AuditCompletion, AuditOp, PersistenceKind, PersistenceStatus};
 use dgxtop_core::budget::{ByteLedger, Partition, QueueGate};
-use dgxtop_core::canonical::{
-    CanonicalSample, CollectionBatch, CollectionPlan, CollectorState, DomainSnapshot,
-    ImmutableSnapshot, SnapshotEntry,
-};
+use dgxtop_core::canonical::{CollectionBatch, CollectionPlan, CollectorState, ImmutableSnapshot};
 use dgxtop_core::commands::{CommandBody, CommandEnvelope, CommandRejection, CommandResult};
 use dgxtop_core::config::{Config, ValueOrigin};
 use dgxtop_core::identity::PidNamespace;
 use dgxtop_core::identity::{AdapterId, CollectorId};
 use dgxtop_core::identity::{EntityId, MetricKey, OriginIdentity, ProfileId};
 use dgxtop_core::metric::NativeUnit;
-use dgxtop_core::metric::{CanonicalUnit, Scalar};
 use dgxtop_core::naming::is_replay_adapter;
 use dgxtop_core::observation::CatalogDelta;
 use dgxtop_core::observation::{
@@ -25,17 +21,17 @@ use dgxtop_core::observation::{
 };
 use dgxtop_core::ports::{
     AdapterJob, ConfigJob, ControlCompletion, HistoryJob, IngestionCompletion, ProcessHistoryInput,
-    ProcessHistoryReader, ProcessMemoryReader, SessionPort, StoreJob,
+    ProcessHistoryReader, SessionPort, StoreJob,
 };
 use dgxtop_core::ports::{Collector, IngressBatch, SnapshotReader};
 use dgxtop_core::quality::Availability;
-use dgxtop_core::quality::{Freshness, Quality, SelectionState};
 use dgxtop_core::quality::{Namespace, RawKind, SampleKind};
 use dgxtop_core::testing::{
     CapturingDispatch, FakeClock, MemoryLogger, StaticProcessHistory, boot_id, host_id,
 };
 use dgxtop_core::testing::{ObservationBuilder, batch_of, metric_key};
 use dgxtop_core::testing::{adapter_id, read_group, source_id};
+use dgxtop_core::trends::TrendBook;
 use dgxtop_core::view::{HostState, HostStatus};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -241,68 +237,11 @@ pub(crate) fn ingress_page(
     ))
 }
 
-/// The test process key, shared with the history crate (D-79).
-pub(crate) use dgxtop_core::testing::test_process_key;
-
-/// A committed sample of `key` (no value means "unavailable").
-pub(crate) fn sample_entry(key: &MetricKey, value: Option<f64>, read_ns: u64) -> SnapshotEntry {
-    let selection_state = if value.is_some() {
-        SelectionState::Selected
-    } else {
-        SelectionState::Unavailable
-    };
-    SnapshotEntry {
-        stale_after_boot_ns: None,
-        sample: CanonicalSample {
-            schema_version: 1,
-            snapshot_revision: 1,
-            cycle_id: 1,
-            key: key.clone(),
-            source_id: value.map(|_| source_id("test:source:1")),
-            source_generation: value.map(|_| 1),
-            unit: CanonicalUnit::Percent,
-            value: value.map(|number| Scalar::from_f64(number).unwrap()),
-            sample_kind: SampleKind::Measured,
-            selection_state,
-            quality: Quality::Verified,
-            freshness: Freshness::Fresh,
-            observed_boot_ns: None,
-            committed_boot_ns: read_ns,
-            policy_revision: 1,
-            candidate_source_ids: Vec::new(),
-            reason_codes: Vec::new(),
-            eligible_for_history: value.is_some(),
-            measurement_freshness: Freshness::Unknown,
-            read_finished_boot_ns: read_ns,
-        },
-        last_good: None,
-    }
-}
-
-/// A snapshot holding the given `(collector, entry)` samples.
-pub(crate) fn committed_snapshot(
-    revision: u64,
-    entries: Vec<(&str, SnapshotEntry)>,
-) -> ImmutableSnapshot {
-    let mut domains: BTreeMap<CollectorId, DomainSnapshot> = BTreeMap::new();
-    for (collector, entry) in entries {
-        let domain = domains
-            .entry(CollectorId::new(collector).unwrap())
-            .or_default();
-        domain.revision = revision;
-        domain
-            .samples
-            .insert(entry.sample.key.clone(), std::sync::Arc::new(entry));
-    }
-    ImmutableSnapshot {
-        revision,
-        domains: domains
-            .into_iter()
-            .map(|(id, domain)| (id, Arc::new(domain)))
-            .collect(),
-        ..ImmutableSnapshot::default()
-    }
-}
+/// A committed sample of `key` (no value means "unavailable") and a
+/// snapshot of such samples, shared with the state crate's tests.
+pub(crate) use dgxtop_core::testing::{
+    snapshot_entry as sample_entry, snapshot_of as committed_snapshot,
+};
 
 /// Boot time at which every harness starts.
 pub(crate) const HARNESS_START_NS: u64 = 1_000_000_000_000;
@@ -417,6 +356,7 @@ pub(crate) fn harness_ports(options: &HarnessOptions) -> (ManagerPorts, Ports) {
         collector_registry: options.collectors.clone(),
         store: Box::new(ports.store.clone()),
         snapshots: ports.snapshots.clone(),
+        trends: Arc::new(TrendBook::default()),
         history: Box::new(ports.history.clone()),
         config: Box::new(ports.config.clone()),
         audit: Box::new(ports.audit.clone()),
@@ -424,7 +364,6 @@ pub(crate) fn harness_ports(options: &HarnessOptions) -> (ManagerPorts, Ports) {
         process_history: options.process_history.then(|| ProcessHistoryHandles {
             inputs: Box::new(ports.process_inputs.clone()),
             runs: Arc::clone(&ports.process_history) as Arc<dyn ProcessHistoryReader>,
-            memory: Arc::clone(&ports.process_history) as Arc<dyn ProcessMemoryReader>,
         }),
         logger: ports.logger.clone(),
         ledger: ports.ledger.clone(),

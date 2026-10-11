@@ -100,15 +100,7 @@ fn interface_view(reader: &MetricReader<'_>, entity_id: &EntityId) -> InterfaceV
 
 /// Interfaces are identified by namespace + ifindex; the name is display only.
 fn interface_name(catalog: &CatalogSnapshot, entity_id: &EntityId) -> String {
-    let record = catalog.entity(entity_id);
-    let named = record
-        .and_then(|record| record.attribute(attributes::IFNAME))
-        .or_else(|| {
-            record
-                .map(|record| record.display_name.as_str())
-                .filter(|name| !name.is_empty())
-        });
-    label_text(named.unwrap_or(entity_id.as_str()))
+    label_text(catalog.interface_name(entity_id))
 }
 
 #[cfg(test)]
@@ -145,7 +137,8 @@ mod tests {
         interface(&mut fixture, "netif:ns:3", "ib0", Some(5e9));
         interface(&mut fixture, "netif:ns:4", "eth1", None);
         interface(&mut fixture, "netif:ns:5", "docker0", Some(0.0));
-        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
+        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, NOW)
+            .with_trends(&fixture.trends);
         let view = build_network_view(&reader, 3, TREND_WIDTH);
         let names: Vec<&str> = view
             .interfaces
@@ -174,7 +167,8 @@ mod tests {
         fixture.trends.push(&rx, Some(5e9));
         fixture.trends.push(&tx, Some(2.0));
         fixture.trends.push(&loopback, Some(9e9));
-        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
+        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, NOW)
+            .with_trends(&fixture.trends);
         let view = build_network_view(&reader, 3, TREND_WIDTH);
         assert_eq!(view.interfaces[0].name, "ib0");
         assert_eq!(view.rx_trend.points, vec![Some(4e9), Some(5e9)]);

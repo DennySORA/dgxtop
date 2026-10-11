@@ -410,10 +410,10 @@ pub(crate) fn gpu_window_stats() -> Vec<HistoryWindowSummary> {
                     kind,
                     subject: subject.to_owned(),
                     window_label: window.to_owned(),
+                    span_ns: seconds_to_ns(hours * 3600.0),
                     unit,
                     mean: Some(mean),
                     peak: Some(peak),
-                    coverage_ratio: Some(coverage),
                     covered_ns: Some(seconds_to_ns(hours * 3600.0 * coverage)),
                     integral: (kind == HistoryChartKind::GpuPower)
                         .then_some(mean * hours * 3600.0 * coverage),
@@ -598,7 +598,6 @@ pub(crate) fn history_view() -> HistoryView {
             points,
             mean: Some(mean),
             peak: Some(peak),
-            coverage_ratio: Some(1.0),
             covered_ns: Some(60 * MINUTE),
             display_downsampled: true,
             pending: false,
@@ -618,7 +617,6 @@ pub(crate) fn history_view() -> HistoryView {
         }),
         (20.0, 95.0),
     );
-    cpu.coverage_ratio = Some(0.917);
     cpu.covered_ns = Some(55 * MINUTE);
     let rate = |minute: u64| Some((f64::from(u32::try_from(minute).unwrap()) * 1024.0, 65_536.0));
     let half_rate =

@@ -119,6 +119,7 @@ fn fixture_with_audit(audit: Box<dyn Dispatch<AuditOp>>) -> Fixture {
         collector_registry: vec![Arc::new(NoopCollector(CollectorId::new("cpu").unwrap()))],
         store: Box::new(CapturingDispatch::<StoreJob>::new()),
         snapshots: Arc::new(Snapshots::default()),
+        trends: Arc::new(dgxtop_core::trends::TrendBook::default()),
         history: Box::new(CapturingDispatch::<HistoryJob>::new()),
         config: Box::new(config_jobs.clone()),
         audit,

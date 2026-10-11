@@ -469,8 +469,6 @@ fn at05_pages_accumulate_into_one_job_and_state_advances_only_after_the_ack() {
         reason: None,
     }));
     harness.settle();
-    let trend = harness.manager.core().trends.book().trend(&cpu, 10);
-    assert_eq!(trend.points, vec![Some(42.0)]);
     let next = next_read_of(&mut harness, "cpu");
     let now = harness.now_ns();
     harness.ingest(batch_reply(&next, Vec::new(), false, now));
@@ -1000,9 +998,9 @@ fn history_view_queries_and_drops_stale_generations() {
     assert_eq!(job.session_id, *harness.session.session_id());
     let answer = dgxtop_core::overview_history::OverviewAnswer::Bars(
         dgxtop_core::overview_history::OverviewBars {
-            epoch: 0,
-            settled_through_utc_ns: 0,
             bars: Vec::new(),
+            whole: dgxtop_core::overview_history::OverviewBucket::new(0),
+            parts: Vec::new(),
             kept_on_disk: false,
             store_issue: None,
         },

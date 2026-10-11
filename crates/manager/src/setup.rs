@@ -18,7 +18,7 @@ use dgxtop_core::identity::{BootId, HostId, PidNamespace};
 use dgxtop_core::observation::AdapterManifest;
 use dgxtop_core::ports::{
     AdapterJob, Collector, ConfigJob, ControlCompletion, Dispatch, HistoryJob, IngestionCompletion,
-    Logger, SnapshotReader, StoreJob,
+    Logger, SnapshotReader, StoreJob, TrendReader,
 };
 use dgxtop_core::quality::Namespace;
 
@@ -44,6 +44,8 @@ pub struct ManagerPorts {
     pub collector_registry: Vec<Arc<dyn Collector>>,
     pub store: Box<dyn Dispatch<StoreJob>>,
     pub snapshots: Arc<dyn SnapshotReader>,
+    /// The state's short trends (D-99).
+    pub trends: Arc<dyn TrendReader>,
     /// The Overview History's reads (D-82).
     pub history: Box<dyn Dispatch<HistoryJob>>,
     pub config: Box<dyn Dispatch<ConfigJob>>,

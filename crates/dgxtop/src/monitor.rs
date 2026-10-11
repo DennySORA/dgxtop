@@ -33,7 +33,8 @@ use dgxtop_core::ports::{
     AuditRepository, Collector, ConfigJob, ConfigRepository, ControlCompletion, Dispatch,
     HistoryJob, HistoryTierStore, IngestionCompletion, LogLevel, Logger, OverviewReader,
     ProcessHistoryCompletion, ProcessHistoryInput, ProcessHistoryJob, ProcessHistoryReader,
-    ProcessHistoryStore, ProcessProbe, ProcessProbeJob, StoreJob, TelemetryPort,
+    ProcessHistoryStore, ProcessMemoryReader, ProcessProbe, ProcessProbeJob, StoreJob,
+    TelemetryPort,
 };
 use dgxtop_core::quality::Namespace;
 use dgxtop_history::{OverviewTiers, ProcessHistory, ProcessHistoryPorts, ProcessHistorySettings};
@@ -542,6 +543,9 @@ impl Wiring {
             effective.store.archive_enabled && sqlite_ok,
         )
         .into_parts();
+        // The state fills the trends at commit; the Manager only reads them
+        // (D-99).
+        let trends = Arc::new(writer.trends());
         // The Overview's sizes follow the local clock and are kept with the
         // archive (D-82); both before the hot store feeds them.
         history_index
@@ -574,9 +578,6 @@ impl Wiring {
         let collectors =
             spawn_collectors(effective, collector_registry.clone(), completions.clone())?;
         workers.push(Box::new(("collector".to_owned(), collectors.clone())));
-        let history =
-            self.spawn_history(effective, Arc::new(history_index), completions.clone())?;
-        workers.push(Box::new(("history".to_owned(), history.clone())));
         let config_file = config_repository.status();
         let config = spawn_config(config_repository, completions.clone())?;
         workers.push(Box::new(("config".to_owned(), config.clone())));
@@ -594,12 +595,20 @@ impl Wiring {
             &process_inbox,
             &mut workers,
         )?;
-        let process_history = self.spawn_process_history(
+        let (process_history, process_memory) = self.spawn_process_history(
             (process_probe, process_store),
             (boot_id.clone(), facts.utc_offset_s),
             &process_inbox,
             &mut workers,
         )?;
+        // The history's readers join the memory charts' bars with the
+        // process actor's memory record (D-99).
+        let history = self.spawn_history(
+            effective,
+            Arc::new(history_index.with_process_memory(process_memory)),
+            completions.clone(),
+        )?;
+        workers.push(Box::new(("history".to_owned(), history.clone())));
 
         let (specs, manifests) = host_specs(cli, effective, self.namespace, &self.clock, &host_id)?;
         let supervisor = Supervisor::start(
@@ -634,6 +643,7 @@ impl Wiring {
             collector_registry,
             store: Box::new(store),
             snapshots: Arc::new(snapshots),
+            trends,
             history: Box::new(history),
             config: Box::new(config),
             audit: Box::new(audit),
@@ -935,7 +945,8 @@ impl Wiring {
 
     /// The history's process actor (D-79): the GPU process runs and
     /// memory, fed by the Manager, answered by the probe and the stores,
-    /// read by the Manager through what it publishes.
+    /// read by the Manager through what it publishes; its memory record
+    /// goes to the history's readers.
     fn spawn_process_history(
         &self,
         (probe, store): (
@@ -945,7 +956,7 @@ impl Wiring {
         (boot_id, utc_offset_s): (BootId, i32),
         inbox: &ProcessInbox,
         workers: &mut Vec<Box<dyn StopOnShutdown>>,
-    ) -> Result<ProcessHistoryHandles, StartError> {
+    ) -> Result<(ProcessHistoryHandles, Arc<dyn ProcessMemoryReader>), StartError> {
         let (actor, published) = ProcessHistory::new(
             ProcessHistorySettings {
                 boot_id,
@@ -971,11 +982,13 @@ impl Wiring {
         // inbox is set before any answer can come.
         let _ = inbox.set(handle.clone());
         let published = Arc::new(published);
-        Ok(ProcessHistoryHandles {
-            inputs: Box::new(handle),
-            runs: Arc::clone(&published) as Arc<dyn ProcessHistoryReader>,
-            memory: published,
-        })
+        Ok((
+            ProcessHistoryHandles {
+                inputs: Box::new(handle),
+                runs: Arc::clone(&published) as Arc<dyn ProcessHistoryReader>,
+            },
+            published,
+        ))
     }
 
     /// The process history's stores (D-76), on with

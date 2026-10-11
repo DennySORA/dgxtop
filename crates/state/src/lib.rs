@@ -3,8 +3,9 @@
 //! The live state of dgxtop (D-79): what the collectors committed, held in
 //! memory only and gone at restart, like a small Redis. It serves the
 //! Manager's real-time reads (the latest snapshot with its arbitration
-//! explanations, collector state for the next delta) and hands every
-//! committed batch on to the history. No persistence, no history, no I/O.
+//! explanations, collector state for the next delta, the overview's short
+//! trends) and hands every committed batch on to the history. No
+//! persistence, no history beyond the short trends, no I/O.
 //!
 //! The single-writer commit pipeline (`STORAGE.md` §1, `INTERFACES.md` §8):
 //! [`StateWriter`] is owned by the HotStore actor thread. Each commit is
@@ -14,8 +15,9 @@
 //! [`ImmutableSnapshot`] revision is published. History is reached only
 //! through the injected `HistoryIngest` port (D-79), called on this thread
 //! before the publish, so a commit is in history once its ack is visible.
-//! Readers get the latest snapshot through [`SharedSnapshot`]; they never
-//! hold a mutable handle.
+//! Readers get the latest snapshot through [`SharedSnapshot`] and the
+//! trends, filled after each commit's publish, through [`SharedTrends`]
+//! (D-99); they never hold a mutable handle.
 
 #![forbid(unsafe_code)]
 
@@ -26,6 +28,7 @@ mod ingest;
 mod retained;
 mod settings;
 mod snapshot;
+mod trends;
 mod validate;
 
 use std::collections::BTreeMap;
@@ -48,11 +51,13 @@ use uuid::Uuid;
 
 pub use counters::StoreCounters;
 pub use snapshot::SharedSnapshot;
+pub use trends::SharedTrends;
 
 use dedup::{REMEMBERED_BATCHES, Recall, RememberedBatches};
 use retained::RetainedAllocations;
 use settings::StateSettings;
 use snapshot::RecentGaps;
+use trends::TrendRecorder;
 use validate::{CheckedBatch, ContentRules, DescriptorIndex, EpochState, Rejection};
 
 /// The two handles of one live state, built together.
@@ -108,6 +113,7 @@ impl LiveState {
             epochs: EpochState::default(),
             history,
             recent_gaps: RecentGaps::new(timing.fast_period_ns),
+            trends: TrendRecorder::new(timing.fast_period_ns),
             counters: StoreCounters::default(),
             series_count: 0,
             truncated: false,
@@ -174,6 +180,7 @@ pub struct StateWriter {
     epochs: EpochState,
     history: Box<dyn HistoryIngest>,
     recent_gaps: RecentGaps,
+    trends: TrendRecorder,
     counters: StoreCounters,
     series_count: u32,
     truncated: bool,
@@ -197,8 +204,14 @@ impl StateWriter {
     /// stale deadlines and totals never change.
     pub fn set_sampling(&mut self, sampling: &SamplingConfig) {
         self.timing = SamplingTiming::from_sampling(sampling);
+        self.trends.set_step(self.timing.fast_period_ns);
         self.history
             .set_finalize_grace(self.timing.finalize_grace_ns);
+    }
+
+    /// The read side of the trends this writer fills (D-99).
+    pub fn trends(&self) -> SharedTrends {
+        self.trends.reader()
     }
 
     /// Records the boot-to-UTC relation (call it with every maintenance
@@ -430,6 +443,7 @@ impl StateWriter {
         );
         self.counters.count_commit();
         self.publish(change, frame, revision, now);
+        self.trends.record(&self.current);
         self.shared.publish_counters(self.counters);
         StoreAck {
             batch_id,

@@ -43,8 +43,7 @@ use dgxtop_core::commands::{CommandEnvelope, CommandRejection, CommandResult, So
 use dgxtop_core::config::{Config, ValueOrigin};
 use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::identity::{EntityId, MetricKey, SessionId};
-use dgxtop_core::metric::{CanonicalUnit, Scalar, descriptor, ids};
-use dgxtop_core::naming::entity;
+use dgxtop_core::metric::{CanonicalUnit, descriptor, ids};
 use dgxtop_core::observation::EntityKind;
 use dgxtop_core::ports::{
     LoadOrigin, ProcessHistoryInput, ProcessHistoryReader, SessionPort, SnapshotReader, StoreWriter,
@@ -59,9 +58,9 @@ use dgxtop_history::{
     ProcessHistory, ProcessHistoryPorts, ProcessHistorySettings, PublishedProcessHistory,
 };
 use dgxtop_manager::presentation::{
-    HostFacts, PresentationContext, SettingsInputs, TrendBook, build_view_model_measured,
+    HostFacts, PresentationContext, SettingsInputs, build_view_model_measured,
 };
-use dgxtop_state::{SharedSnapshot, StateWriter};
+use dgxtop_state::{SharedSnapshot, SharedTrends, StateWriter};
 use dgxtop_ui::terminal::GatedInput;
 use dgxtop_ui::{TuiLoop, TuiOptions};
 use serde::Serialize;
@@ -70,8 +69,6 @@ use serde_json::json;
 const BENCH: &str = "projection";
 const RUNS: usize = 3;
 const START_BOOT_NS: u64 = 1_000_000_000_000;
-/// The Manager's sparkline depth (4 min at 1 s).
-const TREND_POINTS: usize = 240;
 /// Loop-clock step per frame: above the 4 fps frame interval.
 const FRAME_STEP: Duration = Duration::from_millis(300);
 /// Runner steps allowed to flush one frame before giving up.
@@ -199,12 +196,13 @@ fn run() -> BenchResult<PathBuf> {
 }
 
 /// The replay pipeline committing into a real (replay-namespace) hot store,
-/// plus the Manager-equivalent sparkline feed and process memory record.
+/// with the trends that state fills at commit (D-99), and the history's
+/// process memory record.
 struct SnapshotWorld {
     pipeline: ReplayPipeline,
     writer: StateWriter,
     snapshots: SharedSnapshot,
-    trends: TrendFeed,
+    trends: SharedTrends,
     /// The history's process actor, fed each cycle's table (D-79).
     processes: ProcessHistory,
     published: PublishedProcessHistory,
@@ -230,6 +228,7 @@ impl SnapshotWorld {
             false,
         )
         .into_parts();
+        let trends = writer.trends();
         let (processes, published) = ProcessHistory::new(
             ProcessHistorySettings {
                 boot_id: dgxtop_core::testing::boot_id("bench"),
@@ -247,7 +246,7 @@ impl SnapshotWorld {
             pipeline,
             writer,
             snapshots,
-            trends: TrendFeed::new(),
+            trends,
             processes,
             model: published.latest(),
             published,
@@ -293,63 +292,11 @@ impl SnapshotWorld {
         let snapshot = self.snapshots.latest();
         self.processes
             .handle(ProcessHistoryInput::Table(Box::new(ProcessTableSample {
-                table: Arc::clone(&snapshot.process_table),
-                clk_tck: None,
-                gpu_labels: BTreeMap::new(),
-                host_network: [None, None],
+                snapshot,
+                catalog: Arc::clone(self.pipeline.catalog()),
                 process_period_ms: self.process_period_ms,
             })));
         self.model = self.published.latest();
-        self.trends.record(&snapshot);
-    }
-}
-
-/// Mirror of the Manager's sparkline recorder: tracked series only, one
-/// point per new read, gaps kept as `None`.
-struct TrendFeed {
-    book: TrendBook,
-    last_read: BTreeMap<MetricKey, u64>,
-}
-
-impl TrendFeed {
-    fn new() -> Self {
-        Self {
-            book: TrendBook::new(TREND_POINTS),
-            last_read: BTreeMap::new(),
-        }
-    }
-
-    fn record(&mut self, snapshot: &ImmutableSnapshot) {
-        for domain in snapshot.domains.values() {
-            for (key, entry) in &domain.samples {
-                if !is_trend_key(key)
-                    || self.last_read.get(key) == Some(&entry.sample.read_finished_boot_ns)
-                {
-                    continue;
-                }
-                self.last_read
-                    .insert(key.clone(), entry.sample.read_finished_boot_ns);
-                let value = entry
-                    .sample
-                    .selection_state
-                    .has_value()
-                    .then_some(entry.sample.value)
-                    .flatten()
-                    .map(Scalar::to_f64_lossy);
-                self.book.push(key, value);
-            }
-        }
-    }
-}
-
-fn is_trend_key(key: &MetricKey) -> bool {
-    match key.metric_id.as_str() {
-        ids::CPU_UTILIZATION_TOTAL => key.scope.as_str() == entity::SCOPE_HOST,
-        ids::MEMORY_USED => true,
-        ids::GPU_UTILIZATION_COMPUTE | ids::GPU_TEMPERATURE | ids::GPU_POWER_DRAW => {
-            entity::parse_gpu(key.entity_id.as_str()).is_some()
-        }
-        _ => false,
     }
 }
 
@@ -497,9 +444,8 @@ impl StaticInputs {
             overload: OverloadState::Normal,
             actions: Arc::clone(&self.actions),
             history: Arc::clone(&self.history),
-            trends: &world.trends.book,
+            trends: &world.trends,
             processes: &world.model,
-            process_memory: &world.published,
             facts: &self.facts,
             enabled_modules: &self.config.viewer.enabled_modules,
             archive: None,
@@ -575,7 +521,6 @@ fn history_view(snapshot: &ImmutableSnapshot, now_ns: u64) -> HistoryView {
                 points: points.clone(),
                 mean: Some(41.5),
                 peak: Some(75.0),
-                coverage_ratio: Some(0.97),
                 covered_ns: Some(3_492_000_000_000),
                 display_downsampled: true,
                 pending: false,
