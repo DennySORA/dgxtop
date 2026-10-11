@@ -15,7 +15,7 @@ use dgxtop_core::identity::{BootId, ProcessKey};
 use dgxtop_core::metric::ids;
 use dgxtop_core::observation::{BatchStatus, Observation, PAGE_CONTINUES};
 use dgxtop_core::ports::TelemetryPort;
-use dgxtop_core::process_stat::ProcessStat;
+use dgxtop_core::process_stat::{self, ProcessStat};
 use dgxtop_core::quality::{Quality, ReadStatus};
 use dgxtop_core::testing::{FakeClock, boot_id, host_id};
 use support::*;
@@ -397,7 +397,7 @@ fn overflowing_values_become_error_records() {
     assert!(
         ticks
             .reason_codes
-            .contains(&"RSS_BYTES_OVERFLOW".to_owned())
+            .contains(&process_stat::RSS_BYTES_OVERFLOW.to_owned())
     );
     let stat = stat_of(ticks);
     assert_eq!(stat.rss_bytes, None, "an overflow is no value");
@@ -425,7 +425,7 @@ fn unknown_page_size_is_unsupported_not_zero() {
     assert!(
         record
             .reason_codes
-            .contains(&"PAGE_SIZE_UNKNOWN".to_owned())
+            .contains(&process_stat::PAGE_SIZE_UNKNOWN.to_owned())
     );
 }
 

@@ -17,6 +17,26 @@ const STATE: &str = "proc.state:";
 const THREADS: &str = "proc.threads:";
 const REAPED_TICKS: &str = "proc.reaped_ticks:";
 
+/// Reason codes the adapter attaches when it could not read the RSS; the
+/// collector passes the one it finds on to the row.
+pub const PAGE_SIZE_UNKNOWN: &str = "PAGE_SIZE_UNKNOWN";
+pub const RSS_FIELD_ABSENT: &str = "RSS_FIELD_ABSENT";
+pub const RSS_PARSE_ERROR: &str = "RSS_PARSE_ERROR";
+pub const RSS_BYTES_OVERFLOW: &str = "RSS_BYTES_OVERFLOW";
+const RSS_FAILURES: [&str; 4] = [
+    PAGE_SIZE_UNKNOWN,
+    RSS_FIELD_ABSENT,
+    RSS_PARSE_ERROR,
+    RSS_BYTES_OVERFLOW,
+];
+
+/// The RSS failure among a record's reason codes, if any.
+pub fn rss_failure<'a>(codes: impl IntoIterator<Item = &'a String>) -> Option<&'static str> {
+    codes
+        .into_iter()
+        .find_map(|code| RSS_FAILURES.into_iter().find(|failure| code == failure))
+}
+
 /// What one `stat` read (and the cached owner) says of a process besides
 /// its own CPU ticks, which are the record's value.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -137,11 +157,17 @@ mod tests {
     }
 
     #[test]
+    fn the_rss_failure_is_found_among_other_codes() {
+        let codes: Vec<String> = ["proc.uid:1", RSS_BYTES_OVERFLOW, "OWNER_UNREADABLE"]
+            .map(str::to_owned)
+            .to_vec();
+        assert_eq!(rss_failure(&codes), Some(RSS_BYTES_OVERFLOW));
+        assert_eq!(rss_failure(&codes[..1]), None);
+    }
+
+    #[test]
     fn a_record_without_tags_has_no_stat() {
-        let codes = vec![
-            "PAGE_SIZE_UNKNOWN".to_owned(),
-            "gpu_usage:compute".to_owned(),
-        ];
+        let codes = vec![PAGE_SIZE_UNKNOWN.to_owned(), "gpu_usage:compute".to_owned()];
         assert_eq!(ProcessStat::from_reason_codes(&codes), None);
         assert_eq!(ProcessStat::from_reason_codes(&[]), None);
     }
@@ -153,7 +179,7 @@ mod tests {
             "proc.state:SS",
             "proc.threads:",
             "proc.unknown:5",
-            "RSS_BYTES_OVERFLOW",
+            RSS_BYTES_OVERFLOW,
             "proc.ppid:1",
         ]
         .map(str::to_owned)

@@ -19,7 +19,7 @@ use dgxtop_core::identity::{EntityId, Pid, PidNamespace, ProcessKey, Scope};
 use dgxtop_core::metric::{ids, native};
 use dgxtop_core::naming::{self, entity, groups};
 use dgxtop_core::observation::{Observation, ReadPlan, SourceDescriptor};
-use dgxtop_core::process_stat::ProcessStat;
+use dgxtop_core::process_stat::{self, ProcessStat};
 use dgxtop_core::quality::{RawKind, ReadStatus};
 use dgxtop_core::text::sanitize_command_name;
 
@@ -450,10 +450,12 @@ fn reaped_ticks(stat: &PidStat) -> Option<u64> {
 /// Resident pages × page size, without overflow and never guessed; the
 /// error is the reason code the record carries instead.
 fn rss_bytes(stat: &PidStat, page_size: Option<u64>) -> Result<u64, &'static str> {
-    let page_size = page_size.ok_or("PAGE_SIZE_UNKNOWN")?;
+    let page_size = page_size.ok_or(process_stat::PAGE_SIZE_UNKNOWN)?;
     match stat.rss_pages {
-        Field::Value(pages) => pages.checked_mul(page_size).ok_or("RSS_BYTES_OVERFLOW"),
-        Field::Absent => Err("RSS_FIELD_ABSENT"),
-        Field::Invalid => Err("RSS_PARSE_ERROR"),
+        Field::Value(pages) => pages
+            .checked_mul(page_size)
+            .ok_or(process_stat::RSS_BYTES_OVERFLOW),
+        Field::Absent => Err(process_stat::RSS_FIELD_ABSENT),
+        Field::Invalid => Err(process_stat::RSS_PARSE_ERROR),
     }
 }

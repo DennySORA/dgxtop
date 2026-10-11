@@ -30,7 +30,7 @@ use dgxtop_core::metric::{
 use dgxtop_core::naming::{self, adapters, attributes, entity, groups};
 use dgxtop_core::observation::BatchStatus;
 use dgxtop_core::ports::Collector;
-use dgxtop_core::process_stat::ProcessStat;
+use dgxtop_core::process_stat::{self, ProcessStat};
 use dgxtop_core::quality::SampleKind;
 use dgxtop_core::text::{sanitize_command_name, sanitize_display};
 
@@ -314,7 +314,13 @@ fn tagged_rss(
     }
     match bytes {
         Some(bytes) => (Some(bytes), None),
-        None => (None, Some(reasons::MISSING_INPUT)),
+        None => (
+            None,
+            Some(
+                process_stat::rss_failure(&record.observation.reason_codes)
+                    .unwrap_or(reasons::MISSING_INPUT),
+            ),
+        ),
     }
 }
 

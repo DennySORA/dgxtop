@@ -884,3 +884,30 @@ fn a_failed_descendant_tick_read_gives_no_spike() {
     // 10 ticks in 2 s at 100 a second, counted from the first table.
     assert_eq!(row(&third, 42).descendants.unwrap().cpu_percent, Some(5.0));
 }
+
+/// The adapter's own reason for an unread RSS reaches the row, not a
+/// generic missing input.
+#[test]
+fn an_unread_rss_keeps_the_adapters_reason() {
+    let without_rss = |ticks: u64, at: u64| {
+        let mut record = host(9, 1, ticks, 3, at).remove(0);
+        record
+            .reason_codes
+            .retain(|code| !code.starts_with("proc.rss:"));
+        record
+            .reason_codes
+            .insert(0, dgxtop_core::process_stat::RSS_PARSE_ERROR.to_owned());
+        vec![record]
+    };
+    let batch = two_cycles(
+        (without_rss(0, SECOND), vec![]),
+        (without_rss(100, 2 * SECOND), vec![]),
+    );
+    let process = row(&batch, 9);
+    assert_eq!(process.cpu_percent, Some(100.0));
+    assert_eq!(process.rss_bytes, None);
+    assert_eq!(
+        process.missing_reason.as_deref(),
+        Some(dgxtop_core::process_stat::RSS_PARSE_ERROR)
+    );
+}
