@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 /// A bench failure with a message for the console.
 pub type BenchResult<T> = Result<T, String>;
 
-/// Command line of a bench (`cargo bench --bench <name> -- [args]`).
+/// Command line of a bench (`cargo bench --features bench-support --bench <name> -- [args]`).
 #[derive(Debug, Clone)]
 pub struct BenchArgs {
     pub mode: BenchMode,
@@ -92,7 +92,7 @@ fn usage(bench: &str, accepts_soak: bool) -> String {
         ""
     };
     format!(
-        "usage: cargo bench -p dgxtop --bench {bench} -- [--smoke|--full] [--out REPORT.json]{soak}\n\
+        "usage: cargo bench -p dgxtop --features bench-support --bench {bench} -- [--smoke|--full] [--out REPORT.json]{soak}\n\
          default: --smoke (seconds, never acceptance); report: target/perf/{bench}-<mode>.json"
     )
 }

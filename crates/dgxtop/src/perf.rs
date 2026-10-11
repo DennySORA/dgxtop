@@ -1,7 +1,8 @@
 //! Performance evidence primitives shared by the benchmark harness and the
-//! validation report: nearest-rank quantiles, bounded raw latency series,
-//! process-tree CPU accounting and the `performance-report.schema.json`
-//! document (spec/dgxtop-v2/PERFORMANCE.md §2, §5).
+//! validation report: nearest-rank quantiles, process-tree CPU accounting
+//! and the `performance-report.schema.json` document
+//! (spec/dgxtop-v2/PERFORMANCE.md §2, §5). Compiled only for the benches
+//! (`bench-support`) and this crate's tests: no CLI path uses it.
 //!
 //! Nothing here fabricates results: a report is `measured` only when built
 //! from recorded samples; budgets are read from `bench/budgets.json`.
@@ -10,7 +11,7 @@
 //! [`scenarios`] and [`fixture`] (seeded REF workload, AT35), [`pipeline`]
 //! (in-process replay → collectors), [`history_load`] (24 h history shape),
 //! [`latency`], [`coverage`], [`verdict`], [`environment`], [`threads`],
-//! [`evidence`] and [`report`] (honest report assembly).
+//! [`tree_stats`], [`evidence`] and [`report`] (honest report assembly).
 
 pub mod coverage;
 pub mod environment;
@@ -22,6 +23,7 @@ pub mod pipeline;
 pub mod report;
 pub mod scenarios;
 pub mod threads;
+pub mod tree_stats;
 pub mod verdict;
 
 use std::path::Path;
@@ -39,61 +41,6 @@ pub fn nearest_rank(sorted: &[f64], quantile: f64) -> Option<f64> {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let index = (rank as usize).clamp(1, sorted.len()) - 1;
     sorted.get(index).copied()
-}
-
-/// Bounded raw latency samples in microseconds (all samples kept up to the cap).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LatencySeries {
-    samples_us: Vec<u64>,
-    capacity: usize,
-    dropped: u64,
-}
-
-impl LatencySeries {
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            samples_us: Vec::with_capacity(capacity.min(1 << 20)),
-            capacity,
-            dropped: 0,
-        }
-    }
-
-    pub fn record_us(&mut self, value_us: u64) {
-        if self.samples_us.len() < self.capacity {
-            self.samples_us.push(value_us);
-        } else {
-            self.dropped = self.dropped.saturating_add(1);
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.samples_us.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.samples_us.is_empty()
-    }
-
-    /// Samples beyond the capacity (a harness must size capacity so this stays 0).
-    pub fn dropped(&self) -> u64 {
-        self.dropped
-    }
-
-    /// Nearest-rank quantile in milliseconds over all recorded samples.
-    #[allow(clippy::cast_precision_loss)]
-    pub fn quantile_ms(&self, quantile: f64) -> Option<f64> {
-        let mut sorted: Vec<f64> = self
-            .samples_us
-            .iter()
-            .map(|value| *value as f64 / 1000.0)
-            .collect();
-        sorted.sort_by(f64::total_cmp);
-        nearest_rank(&sorted, quantile)
-    }
-
-    pub fn raw_us(&self) -> &[u64] {
-        &self.samples_us
-    }
 }
 
 /// CPU seconds of a process tree between two samples, as percent of ONE
@@ -272,46 +219,6 @@ impl Budgets {
         serde_json::from_str(&text)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
     }
-
-    /// Gate failures of one REF run (empty = passes every REF threshold).
-    pub fn evaluate_run(&self, run: &RunResult) -> Vec<String> {
-        let mut failures = Vec::new();
-        if run.duration_seconds < self.minimum_duration_seconds {
-            failures.push(format!(
-                "duration {}s below minimum {}s",
-                run.duration_seconds, self.minimum_duration_seconds
-            ));
-        }
-        let counts = [
-            ("commands", run.sample_counts.commands),
-            ("frames", run.sample_counts.frames),
-            ("history_queries", run.sample_counts.history_queries),
-        ];
-        for (name, count) in counts {
-            if let Some(minimum) = self.minimum_samples.get(name)
-                && count < *minimum
-            {
-                failures.push(format!("{name}: {count} samples below minimum {minimum}"));
-            }
-        }
-        let metrics = serde_json::to_value(&run.metrics).unwrap_or_default();
-        for (name, bound) in &self.limits {
-            let Some(value) = metrics.get(name).and_then(serde_json::Value::as_f64) else {
-                failures.push(format!("{name}: missing metric"));
-                continue;
-            };
-            if bound.max.is_some_and(|max| value > max) || bound.min.is_some_and(|min| value < min)
-            {
-                failures.push(format!("{name}={value} outside {bound:?}"));
-            }
-        }
-        failures
-    }
-}
-
-/// Lower-case hex SHA-256 of a file (evidence integrity).
-pub fn file_sha256(path: &Path) -> Result<String, std::io::Error> {
-    Ok(dgxtop_core::digest::sha256_hex(&std::fs::read(path)?))
 }
 
 #[cfg(test)]
@@ -319,66 +226,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn latency_series_is_bounded_and_counts_drops() {
-        let mut series = LatencySeries::with_capacity(3);
-        for value in [1000, 2000, 3000, 4000] {
-            series.record_us(value);
-        }
-        assert_eq!(series.len(), 3);
-        assert_eq!(series.dropped(), 1);
-        assert_eq!(series.quantile_ms(0.95), Some(3.0));
-    }
-
-    #[test]
     fn cpu_percent_uses_one_core_denominator() {
         // 15 ticks at 100 Hz over 30 s = 0.15 s CPU = 0.5 % of one core.
         assert_eq!(cpu_percent_of_one_core(15, 100, 30.0), Some(0.5));
         assert_eq!(cpu_percent_of_one_core(15, 0, 30.0), None);
         assert_eq!(cpu_percent_of_one_core(15, 100, 0.0), None);
-    }
-
-    fn passing_run() -> RunResult {
-        RunResult {
-            duration_seconds: 1800.0,
-            sample_counts: SampleCounts {
-                commands: 10_000,
-                frames: 1000,
-                history_queries: 1000,
-            },
-            metrics: RunMetrics {
-                cpu_mean_one_core_percent: 1.0,
-                rss_tree_peak_mib: 100.0,
-                managed_peak_mib: 50.0,
-                command_p95_ms: 1.0,
-                command_p99_ms: 2.0,
-                frame_p95_ms: 3.0,
-                frame_p99_ms: 4.0,
-                projection_p95_ms: 10.0,
-                history_p95_ms: 5.0,
-                coverage_percent: 100.0,
-                unexplained_drops: 0.0,
-                adaptive_throttle_events: 0.0,
-                crashes: 0.0,
-                deadlocks: 0.0,
-            },
-        }
-    }
-
-    #[test]
-    fn budgets_gate_runs_from_the_spec_file() {
-        let budgets = Budgets::load(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/dgxtop-v2/bench/budgets.json"),
-        )
-        .unwrap();
-        assert!(budgets.evaluate_run(&passing_run()).is_empty());
-        let mut slow = passing_run();
-        slow.metrics.frame_p95_ms = 17.0;
-        slow.sample_counts.frames = 10;
-        slow.duration_seconds = 60.0;
-        let failures = budgets.evaluate_run(&slow);
-        assert_eq!(failures.len(), 3, "{failures:?}");
-        let mut low_coverage = passing_run();
-        low_coverage.metrics.coverage_percent = 99.0;
-        assert_eq!(budgets.evaluate_run(&low_coverage).len(), 1);
     }
 }
