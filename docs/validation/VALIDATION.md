@@ -223,7 +223,7 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 | S2 read fresh, measurement time unknown | `dgxtop-collectors::shared::arbitration::tests::missing_device_timestamp_means_read_fresh_measurement_unknown` |  |
 | F1 timeout/fault/unsupported/stale never 0 | `dgxtop-collectors::shared::arbitration::tests::{failed_reads_and_stale_values_are_never_zero, faulted_fallback_is_excluded_and_the_valid_source_selected}`, `dgxtop-ui::format::cell::tests::missing_states_render_their_labels_never_zero` |  |
 | F2 an alarm is not a fault | `dgxtop-collectors::shared::arbitration::tests::alarm_keeps_the_hot_reading`, `dgxtop-adapters/adapters_c_hwmon::alarm_flag_keeps_high_reading_and_quality` |  |
-| F3 replay never enters live history | `dgxtop-collectors::shared::arbitration::tests::replay_is_rejected_by_a_live_policy_and_accepted_by_a_replay_policy`, `dgxtop-collectors::system::network::tests::replayed_counters_feed_no_live_interval`, `dgxtop-store/store_hot_commit::at05_invalid_namespace_unit_and_unknown_metrics_reject_the_whole_batch` | The live store rejects simulated values |
+| F3 replay never enters live history | `dgxtop-collectors::shared::arbitration::tests::replay_is_rejected_by_a_live_policy_and_accepted_by_a_replay_policy`, `dgxtop-collectors::system::network::tests::replayed_counters_feed_no_live_interval`, `dgxtop/store_hot_commit::at05_invalid_namespace_unit_and_unknown_metrics_reject_the_whole_batch` | The live store rejects simulated values |
 
 <a id="at05"></a>
 
@@ -233,11 +233,11 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 one commit carries canonical, history and state | `dgxtop-store/store_hot_commit::at05_commit_applies_samples_history_and_state_atomically`, `dgxtop-store/store_hot_commit::at05_capacity_rejection_leaves_no_partial_state` |  |
-| S2 a collector baseline advances only after the receipt | `dgxtop-manager::control::tests::at05_pages_accumulate_into_one_job_and_state_advances_only_after_the_ack`, `dgxtop-manager::ingestion::tests::one_job_in_flight_and_backlog_coalesces_into_the_next_job`, `dgxtop-store/store_hot_commit::at05_stale_base_rejects_the_whole_batch` | The Manager side uses a fake store |
+| S1 one commit carries canonical, history and state | `dgxtop/store_hot_commit::at05_commit_applies_samples_history_and_state_atomically`, `dgxtop/store_hot_commit::at05_capacity_rejection_leaves_no_partial_state` |  |
+| S2 a collector baseline advances only after the receipt | `dgxtop-manager::control::tests::at05_pages_accumulate_into_one_job_and_state_advances_only_after_the_ack`, `dgxtop-manager::ingestion::tests::one_job_in_flight_and_backlog_coalesces_into_the_next_job`, `dgxtop/store_hot_commit::at05_stale_base_rejects_the_whole_batch` | The Manager side uses a fake store |
 | S3 services hold only the ports they need |  | STRUCTURAL (`ControlCore::new` hands each service its own ports) |
-| F1 a stale epoch or base rejects the whole batch | `dgxtop-store/store_hot_commit::at05_stale_epoch_rejects_the_whole_batch_and_changes_nothing`, `dgxtop-store/store_hot_commit::at05_stale_base_rejects_the_whole_batch` |  |
-| F2 a resent batch never duplicates history | `dgxtop-store/store_hot_commit::at05_duplicate_batch_returns_the_original_ack_without_duplicate_history` |  |
+| F1 a stale epoch or base rejects the whole batch | `dgxtop/store_hot_commit::at05_stale_epoch_rejects_the_whole_batch_and_changes_nothing`, `dgxtop/store_hot_commit::at05_stale_base_rejects_the_whole_batch` |  |
+| F2 a resent batch never duplicates history | `dgxtop/store_hot_commit::at05_duplicate_batch_returns_the_original_ack_without_duplicate_history` |  |
 | F3 the UI holds no store writer | `contracts::structure::implementation_crates_depend_on_no_workspace_crate_but_core` | PARTIAL: the UI crate cannot reach the store crate; nothing checks the core trait name |
 
 <a id="at06"></a>
@@ -248,8 +248,8 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 every partition's quota is queryable | `dgxtop-store/store_hot_commit::at06_partition_usage_is_visible_in_store_health`, `dgxtop-store/store_hot_memory::eviction_under_a_tiny_budget_never_exceeds_partitions_and_reports_truncation`, `dgxtop-store/store_persist_audit::database_files_are_private`, `dgxtop-store/store_persist_archive::batch_insert_writes_every_table_in_bounded_transactions`, `dgxtop-store/store_persist_config::cas_success_increments_revision_with_private_modes` | Memory partitions report usage and limit; audit and archive report db+wal+shm against their limits |
-| S2 archive off does not affect the hot store | `dgxtop-store/store_hot_commit::at06_archive_disabled_does_not_affect_the_hot_store` |  |
+| S1 every partition's quota is queryable | `dgxtop/store_hot_commit::at06_partition_usage_is_visible_in_store_health`, `dgxtop/store_hot_memory::eviction_under_a_tiny_budget_never_exceeds_partitions_and_reports_truncation`, `dgxtop-store/store_persist_audit::database_files_are_private`, `dgxtop-store/store_persist_archive::batch_insert_writes_every_table_in_bounded_transactions`, `dgxtop-store/store_persist_config::cas_success_increments_revision_with_private_modes` | Memory partitions report usage and limit; audit and archive report db+wal+shm against their limits |
+| S2 archive off does not affect the hot store | `dgxtop/store_hot_commit::at06_archive_disabled_does_not_affect_the_hot_store` |  |
 | F1 archive full: current values keep refreshing | `fault_injection::store_partitions::at06_stuck_then_full_archive_never_stalls_hot_store_commits`, `dgxtop-store/store_persist_archive::low_free_disk_refuses_appends_and_recovers`, `dgxtop-manager::archive::tests::gaps_are_counted_by_bounded_cause_and_made_visible` | Real hot store and SQLite archive actors |
 | F2 audit cannot persist: no signal | `action_disposable::at10::at10_audit_refusing_the_intent_sends_nothing`, `action_disposable::at10::at10_unavailable_audit_store_sends_nothing`, `fault_injection::store_partitions::at06_at31_audit_below_low_water_refuses_actions_before_the_action_worker`, `fault_injection::store_partitions::at06_at31_low_water_after_prepare_refuses_the_intent_and_recovers`, `dgxtop-manager::process::tests::intent_write_failure_never_sends` | Real Manager, SQLite audit, pidfd and disposable child |
 | F3 the Manager never stalls | `fault_injection::store_partitions::at06_at39_stuck_audit_times_out_the_intent_and_its_late_receipt_never_sends`, `fault_injection::safe_shutdown::at39_shutdown_with_hung_config_and_audit_storage_is_bounded_and_honest` | Views answered in < 1 s while audit storage hangs |
@@ -262,14 +262,14 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 1000 → 1300 B in 3 s = 100 B/s, 300 total | `dgxtop-collectors::shared::counter::tests::bytes_1000_to_1300_over_3s_is_100_per_second_and_300_total`, `dgxtop-collectors::system::network::tests::byte_rate_uses_actual_elapsed_time_and_emits_exact_interval`, `dgxtop-store/store_hot_history::at07_counter_interval_total_is_exact` |  |
-| S2 changing the sampling rate keeps old totals | `dgxtop-store/store_hot_history::at07_changing_the_sampling_interval_keeps_old_totals`, `dgxtop-store/store_hot_properties::totals_of_disjoint_windows_add_up_to_their_union` |  |
-| S3 coverage is exact | `dgxtop-store/store_hot_history::at07_coverage_is_exact_and_gaps_are_never_zero_filled`, `dgxtop-store/store_hot_properties::gauge_time_weighted_mean_matches_the_reference` |  |
+| S1 1000 → 1300 B in 3 s = 100 B/s, 300 total | `dgxtop-collectors::shared::counter::tests::bytes_1000_to_1300_over_3s_is_100_per_second_and_300_total`, `dgxtop-collectors::system::network::tests::byte_rate_uses_actual_elapsed_time_and_emits_exact_interval`, `dgxtop/store_hot_history::at07_counter_interval_total_is_exact` |  |
+| S2 changing the sampling rate keeps old totals | `dgxtop/store_hot_history::at07_changing_the_sampling_interval_keeps_old_totals`, `dgxtop/store_hot_properties::totals_of_disjoint_windows_add_up_to_their_union` |  |
+| S3 coverage is exact | `dgxtop/store_hot_history::at07_coverage_is_exact_and_gaps_are_never_zero_filled`, `dgxtop/store_hot_properties::gauge_time_weighted_mean_matches_the_reference` |  |
 | F1 counter reset | `dgxtop-collectors::shared::counter::tests::reset_generation_boot_and_interval_changes_are_gaps`, `dgxtop-collectors::system::network::tests::counter_reset_is_never_a_negative_or_zero_rate` |  |
-| F2 generation change | `dgxtop-collectors::system::network::tests::recreated_interface_restarts_from_warmup`, `dgxtop-store/store_hot_history::at07_generation_changes_cut_segments_and_utc_steps_are_discontinuities` |  |
-| F3 UTC going backwards | `dgxtop-store/store_hot_history::at07_generation_changes_cut_segments_and_utc_steps_are_discontinuities` | PARTIAL: gauges only |
-| F4 a different boot | `dgxtop-collectors::tests::boot_change_restarts_counters_at_warmup`, `dgxtop-store/store_hot_history::at07_other_boots_are_separate_series_and_unknown_boots_are_empty` |  |
-| F5 a 2 h gap stays out of the last hour | `dgxtop-store/store_hot_history::at07_two_hour_gap_does_not_leak_into_the_last_hour` |  |
+| F2 generation change | `dgxtop-collectors::system::network::tests::recreated_interface_restarts_from_warmup`, `dgxtop/store_hot_history::at07_generation_changes_cut_segments_and_utc_steps_are_discontinuities` |  |
+| F3 UTC going backwards | `dgxtop/store_hot_history::at07_generation_changes_cut_segments_and_utc_steps_are_discontinuities` | PARTIAL: gauges only |
+| F4 a different boot | `dgxtop-collectors::tests::boot_change_restarts_counters_at_warmup`, `dgxtop/store_hot_history::at07_other_boots_are_separate_series_and_unknown_boots_are_empty` |  |
+| F5 a 2 h gap stays out of the last hour | `dgxtop/store_hot_history::at07_two_hour_gap_does_not_leak_into_the_last_hour` |  |
 
 <a id="at08"></a>
 
@@ -364,9 +364,9 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 | S2 latest-only: 1 pending + 1 active | `dgxtop-core::view::tests::slot_keeps_only_latest_and_releases_bytes`, `dgxtop-manager::projection::tests::published_projection_holds_its_bytes_until_dropped`, `dgxtop-ui::terminal::runner::tests::input_and_q_still_work_while_output_is_blocked_for_30_seconds` |  |
 | S3 nothing dirty → no draw | `dgxtop-ui::terminal::runner::tests::rendering_is_dirty_only`, `dgxtop-manager::views::tests::frames_are_rate_limited_and_viewport_changes_mark_dirty` |  |
 | S4 selection kept by ProcessKey | `dgxtop-manager::presentation::processes::tests::selection_follows_the_process_key_when_rows_reorder` |  |
-| F1 an old Arc stays accounted | `dgxtop-core::view::tests::slot_keeps_only_latest_and_releases_bytes`, `dgxtop-store/store_hot_memory::at13_snapshots_held_by_a_slow_reader_stay_accounted` |  |
+| F1 an old Arc stays accounted | `dgxtop-core::view::tests::slot_keeps_only_latest_and_releases_bytes`, `dgxtop/store_hot_memory::at13_snapshots_held_by_a_slow_reader_stay_accounted` |  |
 | F2 a stale destructive frame is rejected | `dgxtop-manager::control::tests::at13_absent_or_unselected_targets_are_rejected_and_never_retargeted`, `dgxtop-manager::views::tests::destructive_targets_must_exist_and_match_the_selection` | D-35 |
-| F3 full snapshots do not accumulate | `dgxtop-store/store_hot_memory::at25_the_store_retains_only_the_latest_snapshot` |  |
+| F3 full snapshots do not accumulate | `dgxtop/store_hot_memory::at25_the_store_retains_only_the_latest_snapshot` |  |
 
 <a id="at14"></a>
 
@@ -493,12 +493,12 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 every allocation takes a BytePermit | `dgxtop-runtime::supervisor::tests::busy_while_in_flight_and_capacity_when_credit_is_missing`, `dgxtop-runtime::ipc::frame::tests::body_allocation_is_exactly_the_declared_length`, `dgxtop-store/store_hot_commit::at05_capacity_rejection_leaves_no_partial_state`, `dgxtop-store::history::accounted::tests::deque_capacity_is_reserved_before_growth`, `dgxtop-store/store_hot_query_limits::query_memory_is_reserved_up_front_and_released`, `dgxtop-manager::projection::tests::a_full_projection_budget_is_reserved_before_building_and_shrunk_after` | One test per site; "every" is confirmed by review |
+| S1 every allocation takes a BytePermit | `dgxtop-runtime::supervisor::tests::busy_while_in_flight_and_capacity_when_credit_is_missing`, `dgxtop-runtime::ipc::frame::tests::body_allocation_is_exactly_the_declared_length`, `dgxtop/store_hot_commit::at05_capacity_rejection_leaves_no_partial_state`, `dgxtop-core::budget::accounted::tests::deque_capacity_is_reserved_before_growth`, `dgxtop/store_hot_query_limits::query_memory_is_reserved_up_front_and_released`, `dgxtop-manager::projection::tests::a_full_projection_budget_is_reserved_before_building_and_shrunk_after` | One test per site; "every" is confirmed by review |
 | S2 32 items and 8 MiB together | `dgxtop-core::budget::tests::queue_gate_enforces_items_and_bytes_together` |  |
 | S3 a 5 MiB batch fits | `dgxtop-core::budget::tests::reserve_release_and_never_overcommit`, `dgxtop-runtime::supervisor::credit::tests::whole_group_plans_reserve_the_bounded_worst_case` |  |
 | F1 small batches can still exceed the byte cap | `dgxtop-core::budget::tests::queue_gate_enforces_items_and_bytes_together` |  |
-| F2 release, hand-off and pinning never leak | `dgxtop-core::budget::tests::transfer_split_merge_keep_totals`, `dgxtop-core::budget::tests::random_reserve_release_balances`, `dgxtop-store::history::chunk::tests::evicted_chunk_stays_accounted_while_pinned` |  |
-| F3 no allocate-then-check | `dgxtop-manager::projection::tests::a_ledger_without_room_for_a_full_projection_skips_the_frame_before_building`, `dgxtop-store::history::accounted::tests::failed_growth_leaves_deque_unchanged`, `dgxtop-runtime::ipc::frame::tests::oversize_prefix_is_rejected_without_allocating` | NOT MET for IPC decode |
+| F2 release, hand-off and pinning never leak | `dgxtop-core::budget::tests::transfer_split_merge_keep_totals`, `dgxtop-core::budget::tests::random_reserve_release_balances`, `dgxtop-history::chunk::tests::evicted_chunk_stays_accounted_while_pinned` |  |
+| F3 no allocate-then-check | `dgxtop-manager::projection::tests::a_ledger_without_room_for_a_full_projection_skips_the_frame_before_building`, `dgxtop-core::budget::accounted::tests::failed_growth_leaves_deque_unchanged`, `dgxtop-runtime::ipc::frame::tests::oversize_prefix_is_rejected_without_allocating` | NOT MET for IPC decode |
 
 <a id="at22"></a>
 
@@ -582,10 +582,10 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 59.5 → 60.5 s bridge kept | `dgxtop-store/store_hot_history::at27_cross_minute_interval_is_a_bridge_counted_exactly_once`, `dgxtop-store::history::rollup::tests::crossing_interval_becomes_a_bridge_exactly_once` |  |
-| S2 exact totals counted once | `dgxtop-store/store_hot_properties::totals_of_disjoint_windows_add_up_to_their_union` |  |
-| F1 no proportional guess at an evicted edge | `dgxtop-store/store_hot_history::at27_boundary_without_raw_is_a_boundary_gap_never_proportional` |  |
-| F2 a missing segment shows boundary_gap | `dgxtop-store/store_hot_history::at27_boundary_without_raw_is_a_boundary_gap_never_proportional` |  |
+| S1 59.5 → 60.5 s bridge kept | `dgxtop/store_hot_history::at27_cross_minute_interval_is_a_bridge_counted_exactly_once`, `dgxtop-history::rollup::tests::crossing_interval_becomes_a_bridge_exactly_once` |  |
+| S2 exact totals counted once | `dgxtop/store_hot_properties::totals_of_disjoint_windows_add_up_to_their_union` |  |
+| F1 no proportional guess at an evicted edge | `dgxtop/store_hot_history::at27_boundary_without_raw_is_a_boundary_gap_never_proportional` |  |
+| F2 a missing segment shows boundary_gap | `dgxtop/store_hot_history::at27_boundary_without_raw_is_a_boundary_gap_never_proportional` |  |
 | F3 2 < 10 < 100 ordering | `dgxtop-store/store_persist_archive::fixed_width_keys_sort_numerically`, `dgxtop-core::wire::tests::fixed_width_orders_lexically_like_numbers` |  |
 
 <a id="at28"></a>
@@ -749,12 +749,12 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 ≤ 2000 points, 200 k scanned, 4 MiB | `dgxtop-store/store_hot_query_limits::invalid_queries_are_validation_failures`, `dgxtop-store::query::tests::point_cap_respects_request_config_and_bytes`, `dgxtop-core::config::tests::query_and_worker_defaults_match_the_runtime_limits` |  |
-| S2 2 workers, 4 jobs | `dgxtop-manager::history::tests::every_chart_queries_one_window_at_a_bounded_resolution`, `dgxtop-runtime::queues::tests::busy_when_the_queue_is_full_and_never_blocks`, `dgxtop-store/store_hot_query_limits::at38_two_history_workers_query_while_commits_continue` |  |
+| S1 ≤ 2000 points, 200 k scanned, 4 MiB | `dgxtop/store_hot_query_limits::invalid_queries_are_validation_failures`, `dgxtop-history::query::tests::point_cap_respects_request_config_and_bytes`, `dgxtop-core::config::tests::query_and_worker_defaults_match_the_runtime_limits` |  |
+| S2 2 workers, 4 jobs | `dgxtop-manager::history::tests::every_chart_queries_one_window_at_a_bounded_resolution`, `dgxtop-runtime::queues::tests::busy_when_the_queue_is_full_and_never_blocks`, `dgxtop/store_hot_query_limits::at38_two_history_workers_query_while_commits_continue` |  |
 | S3 UID lookup off the control/UI threads, numeric fallback | `dgxtop-manager::presentation::processes::tests::rows_carry_gpu_labels_numeric_users_and_sanitized_names` | No NSS lookup exists |
-| F1 a pathological query → QueryTooLarge or Busy | `dgxtop-store/store_hot_query_limits::at38_scan_budget_returns_query_too_large_with_a_coarser_suggestion`, `dgxtop-store/store_hot_query_limits::query_memory_is_reserved_up_front_and_released` |  |
+| F1 a pathological query → QueryTooLarge or Busy | `dgxtop/store_hot_query_limits::at38_scan_budget_returns_query_too_large_with_a_coarser_suggestion`, `dgxtop/store_hot_query_limits::query_memory_is_reserved_up_front_and_released` |  |
 | F2 a stuck NSS cannot freeze the screen | `contracts::structure::core_and_the_viewer_carry_no_system_or_driver_dependencies` | No NSS call exists |
-| F3 a long reader never pins all memory | `dgxtop-store::history::pin::tests::chunks_pinned_by_a_running_query_stay_accounted_after_eviction`, `dgxtop-store/store_hot_query_limits::at38_deadline_returns_timed_out` |  |
+| F3 a long reader never pins all memory | `dgxtop-history::pin::tests::chunks_pinned_by_a_running_query_stay_accounted_after_eviction`, `dgxtop/store_hot_query_limits::at38_deadline_returns_timed_out` |  |
 
 <a id="at39"></a>
 
