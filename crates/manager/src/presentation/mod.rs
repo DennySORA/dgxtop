@@ -209,6 +209,7 @@ pub fn build_header(context: &PresentationContext<'_>) -> HeaderView {
         hosts_total: u32::try_from(context.hosts.len()).unwrap_or(u32::MAX),
         read_only: effective.actions.read_only || !effective.actions.enabled,
         theme: effective.viewer.theme,
+        redline_threshold_percent: effective.viewer.redline_threshold_percent,
     }
 }
 

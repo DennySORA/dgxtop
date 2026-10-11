@@ -873,6 +873,9 @@ pub struct HeaderView {
     pub hosts_total: u32,
     pub read_only: bool,
     pub theme: Theme,
+    /// `viewer.redline_threshold_percent`: the fill from which gauges are
+    /// red (D-87), display only.
+    pub redline_threshold_percent: f64,
 }
 
 /// Per-session view state; the single authoritative copy lives in the Manager.
@@ -1024,6 +1027,7 @@ mod tests {
                 hosts_total: 0,
                 read_only: false,
                 theme: Theme::Dark,
+                redline_threshold_percent: 80.0,
             },
             session: SessionState {
                 session_id: SessionId::new("s").unwrap(),

@@ -109,9 +109,9 @@ impl Viewer {
         // Start every frame from a clean buffer so nothing stale survives a
         // failed or partial previous draw.
         frame.render_widget(Clear, area);
-        let palette = input.model.map_or_else(ThemePalette::default, |model| {
-            ThemePalette::for_theme(model.header.theme)
-        });
+        let palette = input
+            .model
+            .map_or_else(ThemePalette::default, ThemePalette::for_model);
         let tier = size_tier(area.width, area.height);
         let mut report =
             FrameReport::new(tier, input.model.map_or(0, |model| model.frame_revision));

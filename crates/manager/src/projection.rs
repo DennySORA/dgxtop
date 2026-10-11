@@ -158,6 +158,7 @@ mod tests {
                 hosts_total: 0,
                 read_only: false,
                 theme: Theme::Dark,
+                redline_threshold_percent: 80.0,
             },
             session: SessionState {
                 session_id: SessionId::new("s1").unwrap(),

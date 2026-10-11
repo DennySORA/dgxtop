@@ -973,6 +973,7 @@ pub(crate) fn header() -> HeaderView {
         hosts_total: 7,
         read_only: false,
         theme: Theme::Dark,
+        redline_threshold_percent: 80.0,
     }
 }
 

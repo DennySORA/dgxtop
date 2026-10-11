@@ -216,6 +216,21 @@ fn confirmation() -> ConfirmationView {
     }
 }
 
+/// D-87: the header carries the effective redline, so a configuration
+/// applied at runtime recolors the next frame's gauges.
+#[test]
+fn the_header_follows_the_effective_redline() {
+    let mut fixture = Fixture::new();
+    let model = build_view_model(&fixture.context());
+    assert_eq!(
+        model.header.redline_threshold_percent,
+        fixture.effective.viewer.redline_threshold_percent
+    );
+    fixture.effective.viewer.redline_threshold_percent = 92.5;
+    let applied = build_view_model(&fixture.context());
+    assert_eq!(applied.header.redline_threshold_percent, 92.5);
+}
+
 #[test]
 fn each_view_fills_only_its_visible_topics() {
     let fixture_base = Fixture::new();

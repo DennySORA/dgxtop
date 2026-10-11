@@ -517,8 +517,9 @@ mod tests {
             .iter()
             .position(|row| row.contains("GPU utilization"))
             .unwrap();
+        // The whole six-row strip: below 50 % is green only at its foot (D-87).
         let theme = crate::test_fixtures::display_context().theme;
-        let strip_rows = u16::try_from(gpu + 1).unwrap()..u16::try_from(gpu + 4).unwrap();
+        let strip_rows = u16::try_from(gpu + 1).unwrap()..u16::try_from(gpu + 7).unwrap();
         let colors: Vec<ratatui::style::Color> = strip_rows
             .flat_map(|y| (0..width / 2).map(move |x| (x, y)))
             .map(|cell| buffer[cell].fg)
