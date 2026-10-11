@@ -9,7 +9,7 @@ use dgxtop_core::action::{ActionOp, AuditOp};
 use dgxtop_core::budget::{ByteLedger, QueueGate};
 use dgxtop_core::canonical::CollectionPlan;
 use dgxtop_core::clock::TimeProvider;
-use dgxtop_core::ports::{AdapterJob, ConfigJob, HistoryJob, SnapshotReader, StoreJob};
+use dgxtop_core::ports::{AdapterJob, ConfigJob, HistoryJob, SnapshotReader, StateJob};
 use dgxtop_core::testing::{CapturingDispatch, MemoryLogger};
 use dgxtop_core::trends::TrendBook;
 
@@ -29,7 +29,7 @@ pub fn inert_ports(
         adapters: Box::new(CapturingDispatch::<AdapterJob>::new()),
         collectors: Box::new(CapturingDispatch::<CollectionPlan>::new()),
         collector_registry: Vec::new(),
-        store: Box::new(CapturingDispatch::<StoreJob>::new()),
+        state: Box::new(CapturingDispatch::<StateJob>::new()),
         snapshots,
         trends: Arc::new(TrendBook::default()),
         history: Box::new(CapturingDispatch::<HistoryJob>::new()),

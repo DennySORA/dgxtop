@@ -11,7 +11,7 @@ use dgxtop_history::{History, HistoryIndex};
 use dgxtop_state::{LiveState, SharedSnapshot, StateWriter};
 
 /// The three handles of one live store, built together: `writer` belongs
-/// to the HotStore actor, `snapshots` to presentation and `history` to the
+/// to the state actor, `snapshots` to presentation and `history` to the
 /// history workers.
 #[derive(Debug)]
 pub struct LiveStore {

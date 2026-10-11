@@ -7,7 +7,7 @@
 //!   coalesced into the next job's inputs; inputs of an older epoch are
 //!   dropped, expired inputs and overflow become gaps.
 //! * The plan's delta base is the committed state from the latest snapshot;
-//!   `next_state` becomes the base only after the store acknowledges the
+//!   `next_state` becomes the base only after the state acknowledges the
 //!   commit. A stale-base/epoch rejection re-queues the inputs so they are
 //!   collected again on the fresh base (bounded retries).
 //! * Lost jobs/acks time out so a collector can never stay blocked.
@@ -30,7 +30,7 @@ use dgxtop_core::clock::{NANOS_PER_MILLI, NANOS_PER_SECOND};
 use dgxtop_core::config::{Config, SamplingConfig};
 use dgxtop_core::identity::{AdapterId, BootId, CollectorId, HostId};
 use dgxtop_core::ports::{
-    Collector, Dispatch, DispatchError, IngressBatch, SnapshotReader, StoreJob,
+    Collector, Dispatch, DispatchError, IngressBatch, SnapshotReader, StateJob,
 };
 use uuid::Uuid;
 
@@ -38,7 +38,7 @@ use uuid::Uuid;
 const MAX_INPUT_RETRIES: u8 = 2;
 /// Retry delay after the collector pool answered `Busy`.
 const DISPATCH_RETRY_NS: u64 = 20 * NANOS_PER_MILLI;
-/// Lower bound of the safety timeout of one collector job or store ack.
+/// Lower bound of the safety timeout of one collector job or state ack.
 const MIN_JOB_TIMEOUT_NS: u64 = 10 * NANOS_PER_SECOND;
 /// Collection service samples kept for the overload p95.
 const SERVICE_SAMPLES: usize = 32;
@@ -193,14 +193,14 @@ pub(crate) enum CollectedOutcome {
     Stale,
     /// Produced under an older epoch; discarded without commit.
     EpochDiscarded,
-    /// Failed validation or the store port refused it; data lost as gaps.
+    /// Failed validation or the state port refused it; data lost as gaps.
     Dropped {
         reason: String,
         gaps: Vec<GapRecord>,
     },
 }
 
-/// Outcome of a store acknowledgement.
+/// Outcome of a state acknowledgement.
 #[derive(Debug)]
 pub(crate) enum CommitOutcome {
     Committed,
@@ -218,7 +218,7 @@ pub(crate) enum CommitOutcome {
 /// Ports owned by the ingestion service.
 pub(crate) struct IngestionPorts {
     pub(crate) collectors: Box<dyn Dispatch<CollectionPlan>>,
-    pub(crate) store: Box<dyn Dispatch<StoreJob>>,
+    pub(crate) state: Box<dyn Dispatch<StateJob>>,
     pub(crate) snapshots: Arc<dyn SnapshotReader>,
     pub(crate) registry: Vec<Arc<dyn Collector>>,
 }
@@ -235,14 +235,14 @@ pub(crate) struct IngestionSettings {
 
 pub(crate) struct IngestionService {
     collectors: Box<dyn Dispatch<CollectionPlan>>,
-    store: Box<dyn Dispatch<StoreJob>>,
+    state: Box<dyn Dispatch<StateJob>>,
     snapshots: Arc<dyn SnapshotReader>,
     slots: Vec<CollectorSlot>,
     settings: IngestionSettings,
     pages: pages::PageAccumulator,
     service_ns: VecDeque<u64>,
     retry_at_ns: Option<u64>,
-    /// A sampling change the store has not accepted yet.
+    /// A sampling change the state has not accepted yet.
     pending_sampling: Option<SamplingConfig>,
     stopped: bool,
 }
@@ -261,7 +261,7 @@ impl IngestionService {
             .collect();
         Self {
             collectors: ports.collectors,
-            store: ports.store,
+            state: ports.state,
             snapshots: ports.snapshots,
             slots,
             settings: IngestionSettings {
@@ -381,7 +381,7 @@ impl IngestionService {
         report
     }
 
-    /// A collector job finished; forwards the batch to the store.
+    /// A collector job finished; forwards the batch to the state.
     pub(crate) fn on_collected(
         &mut self,
         batch: Box<CollectionBatch>,
@@ -423,7 +423,7 @@ impl IngestionService {
             collector_id: batch.collector_id.clone(),
             state_base_revision: batch.state_base_revision,
         };
-        match self.store.try_dispatch(StoreJob::Commit { batch, guard }) {
+        match self.state.try_dispatch(StateJob::Commit { batch, guard }) {
             Ok(()) => {
                 job.deadline_ns = now_ns.saturating_add(self.settings.job_timeout_ns);
                 slot.phase = SlotPhase::AwaitingAck(job);
@@ -440,7 +440,7 @@ impl IngestionService {
         }
     }
 
-    /// The store acknowledged (or rejected) a commit.
+    /// The state acknowledged (or rejected) a commit.
     pub(crate) fn on_committed(&mut self, ack: &StoreAck, now_ns: u64) -> CommitOutcome {
         let Some(slot) = self
             .slots
@@ -527,17 +527,17 @@ impl IngestionService {
         gaps
     }
 
-    /// Sends a gap record to the store.
+    /// Sends a gap record to the state.
     pub(crate) fn record_gap(&self, gap: GapRecord) -> Result<(), DispatchError> {
-        self.store.try_dispatch(StoreJob::Gap(gap))
+        self.state.try_dispatch(StateJob::Gap(gap))
     }
 
-    /// Asks the store actor for retention/quota maintenance.
+    /// Asks the state actor for retention/quota maintenance.
     pub(crate) fn request_maintenance(&self) -> Result<(), DispatchError> {
-        self.store.try_dispatch(StoreJob::Maintain)
+        self.state.try_dispatch(StateJob::Maintain)
     }
 
-    /// Tells the store about a durable sampling change. A busy store keeps
+    /// Tells the state about a durable sampling change. A busy state keeps
     /// the change pending for [`Self::retry_sampling`]; dropping it would
     /// leave the state on the old timing for the rest of the run.
     pub(crate) fn apply_sampling(&mut self, sampling: SamplingConfig) -> Result<(), DispatchError> {
@@ -550,8 +550,8 @@ impl IngestionService {
         let Some(sampling) = self.pending_sampling.take() else {
             return Ok(());
         };
-        self.store
-            .try_dispatch(StoreJob::ApplySampling(sampling.clone()))
+        self.state
+            .try_dispatch(StateJob::ApplySampling(sampling.clone()))
             .inspect_err(|_| self.pending_sampling = Some(sampling))
     }
 
@@ -681,19 +681,19 @@ mod tests {
     struct Bench {
         service: IngestionService,
         plans: CapturingDispatch<CollectionPlan>,
-        store: CapturingDispatch<StoreJob>,
+        state: CapturingDispatch<StateJob>,
         snapshots: Arc<FakeSnapshots>,
     }
 
     fn bench(max_pending: usize) -> Bench {
         let plans = CapturingDispatch::new();
-        let store = CapturingDispatch::new();
+        let state = CapturingDispatch::new();
         let snapshots = Arc::new(FakeSnapshots::default());
         let config = Config::defaults().unwrap();
         let service = IngestionService::new(
             IngestionPorts {
                 collectors: Box::new(plans.clone()),
-                store: Box::new(store.clone()),
+                state: Box::new(state.clone()),
                 snapshots: snapshots.clone(),
                 registry: vec![
                     Arc::new(FakeCollector::new(
@@ -714,7 +714,7 @@ mod tests {
         Bench {
             service,
             plans,
-            store,
+            state,
             snapshots,
         }
     }
@@ -852,13 +852,13 @@ mod tests {
             CollectedOutcome::Committing
         ));
         assert_eq!(bench.service.pump(2 * SECOND, &context(1)).dispatched, 0);
-        let jobs = bench.store.take();
-        let StoreJob::Commit { guard, .. } = &jobs[0] else {
+        let jobs = bench.state.take();
+        let StateJob::Commit { guard, .. } = &jobs[0] else {
             panic!("commit expected");
         };
         assert_eq!(guard.expected_epoch, 1);
         assert_eq!(guard.state_base_revision, 0);
-        // Ack: the store holds next_state; the next job uses the new base.
+        // Ack: the state holds next_state; the next job uses the new base.
         bench.snapshots.set_collector_state("cpu", 1);
         let outcome = bench
             .service
@@ -878,7 +878,7 @@ mod tests {
         bench.service.pump(SECOND, &context(1));
         let first = bench.plans.take().pop().unwrap();
         bench.service.on_collected(collected(&first), SECOND, 1);
-        bench.store.take();
+        bench.state.take();
         // Another commit advanced the stored state meanwhile.
         bench.snapshots.set_collector_state("cpu", 5);
         let outcome = bench
@@ -896,7 +896,7 @@ mod tests {
             bench
                 .service
                 .on_collected(collected(&current), 3 * SECOND, 1);
-            bench.store.take();
+            bench.state.take();
             let outcome = bench
                 .service
                 .on_committed(&ack(&current, AckStatus::RejectedStaleBase, 5), 3 * SECOND);
@@ -938,7 +938,7 @@ mod tests {
             bench.service.on_collected(collected(&plan), SECOND, 2),
             CollectedOutcome::EpochDiscarded
         ));
-        assert!(bench.store.is_empty());
+        assert!(bench.state.is_empty());
     }
 
     #[test]
@@ -1016,7 +1016,7 @@ mod tests {
         bench.service.route(cycle("procfs", "cpu", 1, 1, 1));
         bench.service.pump(SECOND, &context(1));
         let plan = bench.plans.take().pop().unwrap();
-        bench.store.set_busy(true);
+        bench.state.set_busy(true);
         let CollectedOutcome::Dropped { gaps, .. } =
             bench.service.on_collected(collected(&plan), SECOND, 1)
         else {
@@ -1024,7 +1024,7 @@ mod tests {
         };
         assert_eq!(gaps[0].reason, "store_unavailable");
         assert!(bench.service.record_gap(gaps[0].clone()).is_err());
-        bench.store.set_busy(false);
+        bench.state.set_busy(false);
         assert!(bench.service.request_maintenance().is_ok());
     }
 
@@ -1038,7 +1038,7 @@ mod tests {
             bench
                 .service
                 .on_collected(collected(&plan), index * SECOND, 1);
-            bench.store.take();
+            bench.state.take();
             bench.service.on_committed(
                 &ack(&plan, AckStatus::Committed, 1),
                 index * SECOND + 2 * SECOND,

@@ -26,7 +26,7 @@ use dgxtop_state::SharedSnapshot;
 
 use super::manager_rig::{Identity, RunningManager, inert_ports, ingress_gate, manager_setup};
 use super::workers::{
-    Completions, WorkerSet, spawn_collector_pool, spawn_history_pool, spawn_store_worker,
+    Completions, WorkerSet, spawn_collector_pool, spawn_history_pool, spawn_state_worker,
 };
 
 /// Bound of the Manager's own shutdown wait (RUNTIME.md §8) plus slack.
@@ -126,14 +126,14 @@ impl TelemetryRig {
         .into_parts();
         let trends = Arc::new(writer.trends());
         let mut workers = WorkerSet::default();
-        let store = spawn_store_worker(
+        let state = spawn_state_worker(
             writer,
             None,
             Arc::clone(&clock),
             completions.clone(),
             u64::from(config.queues.archive_bytes),
         );
-        workers.track(&store);
+        workers.track(&state);
         let registry = default_collectors();
         let collectors = spawn_collector_pool(config, registry.clone(), completions.clone());
         workers.track(&collectors);
@@ -161,7 +161,7 @@ impl TelemetryRig {
             adapters: Box::new(supervisor.clone()),
             collectors: Box::new(collectors),
             collector_registry: registry,
-            store: Box::new(store),
+            state: Box::new(state),
             history: Box::new(history_pool),
             logger,
             trends,

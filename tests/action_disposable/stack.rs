@@ -5,7 +5,7 @@
 //! repository in its actor, all talking through the Manager's bounded
 //! inboxes; the test drives a `SessionHandle` exactly like a frontend.
 //!
-//! Telemetry (adapter hosts, collectors, hot store, history) is replaced by
+//! Telemetry (adapter hosts, collectors, state, history) is replaced by
 //! inert ports: the process table the Manager validates targets against is
 //! published directly from procfs facts of the disposable children. The
 //! workers run the production `dgxtop::control_ops` functions on the

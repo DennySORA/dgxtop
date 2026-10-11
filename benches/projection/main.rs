@@ -195,7 +195,7 @@ fn run() -> BenchResult<PathBuf> {
     common::finish(outcome, &spec, &config, environment, &mut evidence, &paths)
 }
 
-/// The replay pipeline committing into a real (replay-namespace) hot store,
+/// The replay pipeline committing into a real (replay-namespace) live state,
 /// with the trends that state fills at commit (D-99), and the history's
 /// process memory record.
 struct SnapshotWorld {

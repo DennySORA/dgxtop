@@ -2,7 +2,7 @@
 //!
 //! Every port is a `dgxtop_core` abstraction: the Manager never names a
 //! runtime, store, adapter or UI type. Each service receives only the ports
-//! it needs (the scheduler the adapter port, ingestion the collector/store
+//! it needs (the scheduler the adapter port, ingestion the collector/state
 //! ports, the ProcessService the audit and action ports, ...).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,7 +18,7 @@ use dgxtop_core::identity::{BootId, HostId, PidNamespace};
 use dgxtop_core::observation::AdapterManifest;
 use dgxtop_core::ports::{
     AdapterJob, Collector, ConfigJob, ControlCompletion, Dispatch, HistoryJob, IngestionCompletion,
-    Logger, SnapshotReader, StoreJob, TrendReader,
+    Logger, SnapshotReader, StateJob, TrendReader,
 };
 use dgxtop_core::quality::Namespace;
 
@@ -27,7 +27,7 @@ use crate::presentation::HostFacts;
 pub use crate::process_link::ProcessHistoryHandles;
 
 /// Capacity of the data-path completion inbox (adapter replies, collector
-/// results, store acks, host status). Payload bytes are bounded separately by
+/// results, state acks, host status). Payload bytes are bounded separately by
 /// the ingress `QueueGate` permits the batches carry.
 pub const INGESTION_INBOX_CAPACITY: usize = 256;
 /// Capacity of the control completion inbox (config, audit, action, history).
@@ -42,7 +42,8 @@ pub struct ManagerPorts {
     pub adapters: Box<dyn Dispatch<AdapterJob>>,
     pub collectors: Box<dyn Dispatch<CollectionPlan>>,
     pub collector_registry: Vec<Arc<dyn Collector>>,
-    pub store: Box<dyn Dispatch<StoreJob>>,
+    /// The live state's actor: commits, gaps, maintenance (D-79).
+    pub state: Box<dyn Dispatch<StateJob>>,
     pub snapshots: Arc<dyn SnapshotReader>,
     /// The state's short trends (D-99).
     pub trends: Arc<dyn TrendReader>,

@@ -2,7 +2,7 @@
 //! AT06, AT24, AT30, AT31, AT36, AT39).
 //!
 //! Each scenario assembles the real concretes the composition root wires
-//! together — the Manager on its own control thread, the HotStore actor,
+//! together — the Manager on its own control thread, the state actor,
 //! the SQLite audit and archive behind their actors, the file configuration
 //! repository, the collector pool, and the adapter-host supervisor with real
 //! `dgxtop --adapter-host` children serving replay fixtures — and fakes only

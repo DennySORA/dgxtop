@@ -767,7 +767,7 @@ pub struct DomainSnapshot {
     pub explanations: BTreeMap<MetricKey, Arc<Explanation>>,
 }
 
-/// Health of the hot store.
+/// Health of the live state.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct StoreHealth {
     pub ledger: Option<LedgerSnapshot>,

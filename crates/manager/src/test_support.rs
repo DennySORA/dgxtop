@@ -20,7 +20,7 @@ use dgxtop_core::observation::CatalogDelta;
 use dgxtop_core::observation::{AdapterManifest, AdapterOperation, Isolation, SourceDescriptor};
 use dgxtop_core::ports::{
     AdapterJob, ConfigJob, ControlCompletion, HistoryJob, IngestionCompletion, ProcessHistoryInput,
-    ProcessHistoryReader, SessionPort, StoreJob,
+    ProcessHistoryReader, SessionPort, StateJob,
 };
 use dgxtop_core::ports::{Collector, IngressBatch, SnapshotReader};
 use dgxtop_core::quality::Availability;
@@ -120,7 +120,7 @@ impl FakeSnapshots {
         *guard = Arc::new(next);
     }
 
-    /// Simulates the store adopting `next_state` of a collector.
+    /// Simulates the state adopting `next_state` of a collector.
     pub(crate) fn set_collector_state(&self, collector: &str, revision: u64) {
         self.update(|snapshot| {
             snapshot.collector_states.insert(
@@ -234,7 +234,7 @@ pub(crate) struct Ports {
     pub(crate) clock: Arc<FakeClock>,
     pub(crate) adapters: CapturingDispatch<AdapterJob>,
     pub(crate) collectors: CapturingDispatch<CollectionPlan>,
-    pub(crate) store: CapturingDispatch<StoreJob>,
+    pub(crate) state: CapturingDispatch<StateJob>,
     pub(crate) history: CapturingDispatch<HistoryJob>,
     pub(crate) config: CapturingDispatch<ConfigJob>,
     pub(crate) audit: CapturingDispatch<AuditOp>,
@@ -312,7 +312,7 @@ pub(crate) fn harness_ports(options: &HarnessOptions) -> (ManagerPorts, Ports) {
         clock: FakeClock::new(HARNESS_START_NS),
         adapters: CapturingDispatch::new(),
         collectors: CapturingDispatch::new(),
-        store: CapturingDispatch::new(),
+        state: CapturingDispatch::new(),
         history: CapturingDispatch::new(),
         config: CapturingDispatch::new(),
         audit: CapturingDispatch::new(),
@@ -334,7 +334,7 @@ pub(crate) fn harness_ports(options: &HarnessOptions) -> (ManagerPorts, Ports) {
         adapters: Box::new(ports.adapters.clone()),
         collectors: Box::new(ports.collectors.clone()),
         collector_registry: options.collectors.clone(),
-        store: Box::new(ports.store.clone()),
+        state: Box::new(ports.state.clone()),
         history: Box::new(ports.history.clone()),
         config: Box::new(ports.config.clone()),
         audit: Box::new(ports.audit.clone()),

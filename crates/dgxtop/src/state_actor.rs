@@ -1,33 +1,33 @@
-//! What the HotStore actor does with one [`StoreJob`]: the composition
-//! root's only translation from the Manager's store jobs to the live
-//! state's writer, shared by the monitor and the integration rigs.
+//! What the state actor does with one [`StateJob`]: the composition root's
+//! only translation from the Manager's state jobs to the live state's
+//! writer, shared by the monitor and the integration rigs.
 
 use dgxtop_core::canonical::StoreAck;
 use dgxtop_core::clock::TimeProvider;
-use dgxtop_core::ports::{StoreJob, StoreWriter};
+use dgxtop_core::ports::{StateJob, StoreWriter};
 use dgxtop_state::StateWriter;
 
 /// Applies `job` to the live state; a commit answers with its ack.
-pub fn run_store_job(
+pub fn run_state_job(
     writer: &mut StateWriter,
-    job: StoreJob,
+    job: StateJob,
     clock: &dyn TimeProvider,
 ) -> Option<StoreAck> {
     match job {
-        StoreJob::Commit { batch, guard } => {
+        StateJob::Commit { batch, guard } => {
             Some(writer.commit_collection(*batch, &guard, clock.now_boot_ns()))
         }
-        StoreJob::Gap(gap) => {
+        StateJob::Gap(gap) => {
             writer.record_gap(gap);
             None
         }
-        StoreJob::Maintain => {
+        StateJob::Maintain => {
             // The archive needs the boot/UTC pairing to stamp finished rows.
             writer.observe_wall_clock(clock.now_boot_ns(), clock.now_utc_ns());
             writer.maintain(clock.now_boot_ns());
             None
         }
-        StoreJob::ApplySampling(sampling) => {
+        StateJob::ApplySampling(sampling) => {
             writer.set_sampling(&sampling);
             None
         }
@@ -105,7 +105,7 @@ mod tests {
         }
     }
 
-    fn temperature_commit(at: u64) -> StoreJob {
+    fn temperature_commit(at: u64) -> StateJob {
         let collector = CollectorId::new("gpu").unwrap();
         let value = CanonicalValue {
             key: metric_key("gpu:0", ids::GPU_TEMPERATURE, "gpu"),
@@ -143,7 +143,7 @@ mod tests {
             next_state: CollectorState::default(),
             failures: Vec::new(),
         };
-        StoreJob::Commit {
+        StateJob::Commit {
             batch: Box::new(batch),
             guard: CommitGuard {
                 expected_epoch: 1,
@@ -174,10 +174,10 @@ mod tests {
         let expected = SamplingTiming::from_sampling(&slower);
 
         assert!(
-            run_store_job(&mut writer, StoreJob::ApplySampling(slower), clock.as_ref()).is_none()
+            run_state_job(&mut writer, StateJob::ApplySampling(slower), clock.as_ref()).is_none()
         );
         let commit = temperature_commit(9 * SECOND);
-        let ack = run_store_job(&mut writer, commit, clock.as_ref()).unwrap();
+        let ack = run_state_job(&mut writer, commit, clock.as_ref()).unwrap();
         assert!(ack.status.is_committed());
 
         let timing = history.lock();

@@ -1,6 +1,6 @@
 //! The history the REF history queries are served from. Replay data is never
 //! history-eligible (ADR08), so after warm-up the bench preloads a private
-//! live-namespace hot store with the realistic 24 h shape of
+//! live-namespace state with the realistic 24 h shape of
 //! `perf::history_load` for exactly the history-capable series the replay
 //! snapshot holds (same host/boot identity, so the Manager's queries hit
 //! them), then keeps appending at the live 1 Hz cadence from a harness

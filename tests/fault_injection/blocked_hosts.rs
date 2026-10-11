@@ -1,7 +1,7 @@
 //! AT24 (blocked host and quarantine bounds) with real child processes:
 //! two `dgxtop --adapter-host` replay children — a GPU backend (the demo
 //! fixture's `nvml.*` groups) and a host backend (CPU, memory, network, ...)
-//! — under the real supervisor, Manager, collectors and HotStore. The GPU
+//! — under the real supervisor, Manager, collectors and state. The GPU
 //! host's reads hang inside the adapter call (replay `hang` fault), i.e. the
 //! whole host stops answering like an NVML call stuck in the driver.
 
@@ -288,7 +288,7 @@ fn at24_at39_unreapable_host_is_quarantined_never_respawned_and_shutdown_stays_b
 }
 
 /// A hung backend commits nothing, so its last values must age out: the
-/// hot store stamps each value with its stale deadline (`now >= deadline`,
+/// state stamps each value with its stale deadline (`now >= deadline`,
 /// STORAGE.md §3) and the projection shows it as stale afterwards (AT24).
 #[test]
 #[ignore = "fault-injection run (opt-in): cargo test --test fault_injection -- --ignored"]

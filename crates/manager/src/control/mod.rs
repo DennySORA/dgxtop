@@ -48,7 +48,7 @@ use crate::views::ViewSessionService;
 
 /// Total time the shutdown waits for config/audit/action completions.
 const SHUTDOWN_WAIT_NS: u64 = 3_000_000_000;
-/// Cadence of store maintenance requests (retention, minute rollover).
+/// Cadence of state maintenance requests (retention, minute rollover).
 const MAINTAIN_NS: u64 = 1_000_000_000;
 /// Safety timeout of a collector job: this many fast periods (≥ 10 s).
 const JOB_TIMEOUT_PERIODS: u64 = 4;
@@ -135,7 +135,7 @@ impl ControlCore {
         let ingestion = IngestionService::new(
             IngestionPorts {
                 collectors: ports.collectors,
-                store: ports.store,
+                state: ports.state,
                 snapshots: ports.snapshots,
                 registry: ports.collector_registry,
             },
@@ -366,7 +366,7 @@ impl ControlCore {
         }
     }
 
-    /// Records a visible gap in the store.
+    /// Records a visible gap in the state.
     fn record_gap(&mut self, gap: GapRecord) {
         if self.ingestion.record_gap(gap).is_err() {
             self.logger.log(

@@ -1,6 +1,6 @@
 //! The REF composition: the same components and wiring as the monitor's
 //! composition root (`crates/dgxtop/src/monitor/`) in the replay
-//! namespace — HotStore actor, collector pool, history pool, config and
+//! namespace — state actor, collector pool, history pool, config and
 //! audit (SQLite) actors, the adapter supervisor with seven *child-process*
 //! replay hosts (`dgxtop --adapter-host replay-N`, one fixture slice each)
 //! and the Manager on its own thread — minus the terminal.
@@ -26,7 +26,7 @@ use dgxtop::collection_ops::{is_collector_panic, run_collection};
 use dgxtop::control_ops::{run_action_op, run_audit_op, run_config_job, run_history_job};
 use dgxtop::live_store::LiveStore;
 use dgxtop::startup::{real_filesystem, value_origins};
-use dgxtop::store_actor::run_store_job;
+use dgxtop::state_actor::run_state_job;
 use dgxtop::version::BuildInfo;
 use dgxtop::worker_queues::{ACTION_QUEUE, AUDIT_QUEUE, CONFIG_QUEUE, STATE_QUEUE};
 use dgxtop_collectors::process::ProcessProbeDeriver;
@@ -45,7 +45,7 @@ use dgxtop_core::overview_history::{OverviewAnswer, OverviewRequest};
 use dgxtop_core::ports::{
     AuditRepository, CancelFlag, Collector, ConfigJob, ConfigRepository, ControlCompletion,
     Dispatch, DispatchError, HistoryJob, IngestionCompletion, LogLevel, Logger, OverviewReader,
-    ProcessActionPort, ProcessHistoryInput, ProcessHistoryReader, ProcessMemoryReader, StoreJob,
+    ProcessActionPort, ProcessHistoryInput, ProcessHistoryReader, ProcessMemoryReader, StateJob,
 };
 use dgxtop_core::quality::Namespace;
 use dgxtop_history::{ProcessHistory, ProcessHistoryPorts, ProcessHistorySettings};
@@ -319,8 +319,8 @@ impl RefComposition {
         )));
         let trends = Arc::new(writer.trends());
         let mut workers: Vec<Box<dyn StopWorker>> = Vec::new();
-        let store = wiring.spawn_store(writer)?;
-        workers.push(Box::new(NamedPool("hot-store", store.clone())));
+        let state = wiring.spawn_state(writer)?;
+        workers.push(Box::new(NamedPool("state", state.clone())));
         let collector_registry = default_collectors();
         let collectors = wiring.spawn_collectors(&config, collector_registry.clone())?;
         workers.push(Box::new(NamedPool("collector", collectors.clone())));
@@ -386,7 +386,7 @@ impl RefComposition {
             adapters: Box::new(supervisor.clone()),
             collectors: Box::new(collectors),
             collector_registry,
-            store: Box::new(store),
+            state: Box::new(state),
             snapshots: Arc::new(snapshots.clone()),
             trends,
             history: Box::new(TimedHistoryDispatch {
@@ -521,20 +521,20 @@ fn replay_hosts(inputs: &CompositionInputs<'_>) -> BenchResult<HostPlan> {
 }
 
 impl Wiring {
-    fn spawn_store(&self, writer: StateWriter) -> BenchResult<PoolHandle<StoreJob>> {
+    fn spawn_state(&self, writer: StateWriter) -> BenchResult<PoolHandle<StateJob>> {
         let clock = Arc::clone(&self.clock);
         let completions = self.completions.clone();
         let probes = Arc::clone(&self.probes);
         spawn_actor(
-            "hot-store",
+            "state",
             STATE_QUEUE,
             writer,
-            move |writer: &mut StateWriter, job: StoreJob| {
+            move |writer: &mut StateWriter, job: StateJob| {
                 let reads = match &job {
-                    StoreJob::Commit { batch, .. } => reads_of(batch),
+                    StateJob::Commit { batch, .. } => reads_of(batch),
                     _ => Vec::new(),
                 };
-                if let Some(ack) = run_store_job(writer, job, clock.as_ref()) {
+                if let Some(ack) = run_state_job(writer, job, clock.as_ref()) {
                     probes.on_commit(&reads, &ack);
                     completions.ingestion(IngestionCompletion::Committed(ack));
                 }

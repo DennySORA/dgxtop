@@ -20,6 +20,6 @@ pub mod perf;
 mod provenance;
 pub mod replay_unavailable;
 pub mod startup;
-pub mod store_actor;
+pub mod state_actor;
 pub mod version;
 pub mod worker_queues;

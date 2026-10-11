@@ -40,7 +40,7 @@ impl FailStop {
     }
 
     /// Connects the shutdown request once the Manager exists; a fail-stop
-    /// that happened before (e.g. in the hot store) requests it at once.
+    /// that happened before (e.g. in the state) requests it at once.
     pub fn connect(&self, request_shutdown: impl Fn(&str) + Send + Sync + 'static) {
         // The first connection wins; later ones are ignored.
         let _ = self.inner.shutdown.set(Box::new(request_shutdown));
@@ -143,31 +143,31 @@ mod tests {
     fn a_panic_halts_requests_shutdown_and_keeps_the_first_reason() {
         let (fail_stop, requests) = fail_stop();
         fail_stop.connect(recorder(&requests));
-        let outcome = fail_stop.guard("hot store", || -> u8 { panic!("ledger underflow") });
+        let outcome = fail_stop.guard("state", || -> u8 { panic!("ledger underflow") });
         assert_eq!(outcome, None);
         assert_eq!(
             fail_stop.reason().as_deref(),
-            Some("hot store: ledger underflow")
+            Some("state: ledger underflow")
         );
         fail_stop.halt("manager", "later failure");
         assert_eq!(
             fail_stop.reason().as_deref(),
-            Some("hot store: ledger underflow")
+            Some("state: ledger underflow")
         );
         let requests = requests.lock().unwrap();
-        assert_eq!(requests[0], "fail-stop: hot store: ledger underflow");
+        assert_eq!(requests[0], "fail-stop: state: ledger underflow");
     }
 
     #[test]
     fn a_fail_stop_before_the_connection_requests_shutdown_when_connected() {
         let (fail_stop, requests) = fail_stop();
         let message = String::from("bad state");
-        let _ = fail_stop.guard("hot store", move || -> () { panic!("{message}") });
+        let _ = fail_stop.guard("state", move || -> () { panic!("{message}") });
         assert!(requests.lock().unwrap().is_empty());
         fail_stop.connect(recorder(&requests));
         assert_eq!(
             requests.lock().unwrap().as_slice(),
-            ["fail-stop: hot store: bad state"]
+            ["fail-stop: state: bad state"]
         );
     }
 

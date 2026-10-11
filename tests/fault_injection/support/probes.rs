@@ -190,7 +190,7 @@ pub fn open_descriptor_count() -> usize {
 const RIG_THREAD_PREFIXES: [&str; 9] = [
     "fault-manager",
     "dgxtop-supervis",
-    "hot-store-",
+    "state-",
     "collector-",
     "history-",
     "config-",

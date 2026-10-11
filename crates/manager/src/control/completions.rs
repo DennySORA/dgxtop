@@ -1,5 +1,5 @@
 //! Completion handling: data-path completions (adapter replies, collector
-//! results, store acks, host status) and control-path completions (config,
+//! results, state acks, host status) and control-path completions (config,
 //! audit, actions, history).
 
 use std::sync::Arc;
@@ -146,7 +146,7 @@ impl ControlCore {
             self.scheduler.reconfigure(&effective, now.boot_ns);
             let fast = self.scheduler.effective_fast_interval_ms();
             self.history.set_raw_interval(fast);
-            // A full store queue keeps the old sampling until the next
+            // A full state queue keeps the old sampling until the next
             // periodic retry.
             let _ = self.ingestion.apply_sampling(effective.sampling.clone());
         } else {
@@ -425,7 +425,7 @@ impl ControlCore {
         self.refresh_policy();
     }
 
-    // ----- collectors and store ---------------------------------------------
+    // ----- collectors and state ---------------------------------------------
 
     fn on_collected(&mut self, batch: Box<CollectionBatch>, now: u64) {
         let epoch = self.scheduler.epoch();

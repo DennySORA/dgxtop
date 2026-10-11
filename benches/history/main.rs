@@ -1,4 +1,4 @@
-//! History meso benchmark: the real hot store's history with a
+//! History meso benchmark: the real live state's history with a
 //! realistic-shape 24 h preload of 512 series (`perf::history_load`), then
 //!
 //! * append: one 1 s commit of every series (gauges + exact counter

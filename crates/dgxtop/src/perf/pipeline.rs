@@ -1,6 +1,6 @@
 //! In-process replay pipeline for micro benchmarks: the REF fixture split
 //! over replay hosts → `ReplayAdapter` discovery and paged reads → the real
-//! collectors (arbitration included) → optionally the real hot store.
+//! collectors (arbitration included) → optionally the real live state.
 //!
 //! No threads, IPC or scheduler are involved, so a bench timing a step of
 //! this pipeline measures exactly that hot path. Read groups follow their

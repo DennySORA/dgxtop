@@ -1,5 +1,5 @@
 //! AT05 (atomic single-writer commit handshake) and AT06 (partitions visible,
-//! archive independent of the hot store).
+//! archive independent of the live state).
 
 #[path = "store_hot_support.rs"]
 mod support;

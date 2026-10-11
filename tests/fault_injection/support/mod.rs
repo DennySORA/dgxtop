@@ -8,7 +8,7 @@
 //! * [`filesystem`]: failpoint filesystem plus hung fsync / unreadable file.
 //! * [`hosts`]: replay fixtures split per backend, `dgxtop --adapter-host`
 //!   child launches and an unreapable-child launcher.
-//! * [`telemetry_rig`]: Manager + supervisor + collectors + HotStore.
+//! * [`telemetry_rig`]: Manager + supervisor + collectors + state.
 
 pub mod action_rig;
 pub mod filesystem;

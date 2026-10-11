@@ -16,7 +16,7 @@ use dgxtop_core::overview_history::{HistoryTierCompletion, HistoryTierJob};
 use dgxtop_core::ports::{
     ArchiveGapCause, ArchiveJournal, ArchiveOutcome, ArchiveReader, ArchiveReceipt, ArchiveSink,
     AuditRepository, Collector, ConfigJob, ControlCompletion, Dispatch, HistoryJob,
-    HistoryTierStore, IngestionCompletion, LogLevel, Logger, OverviewReader, StoreJob,
+    HistoryTierStore, IngestionCompletion, LogLevel, Logger, OverviewReader, StateJob,
 };
 use dgxtop_history::OverviewTiers;
 use dgxtop_runtime::queues::{PoolHandle, spawn_actor, spawn_pool};
@@ -32,7 +32,7 @@ use super::StartError;
 use super::assemble::Wiring;
 use crate::collection_ops::run_collection;
 use crate::control_ops::{run_action_op, run_audit_op, run_config_job, run_history_job};
-use crate::store_actor::run_store_job;
+use crate::state_actor::run_state_job;
 use crate::worker_queues::{
     ACTION_QUEUE, ARCHIVE_QUEUE, AUDIT_QUEUE, CONFIG_QUEUE, HISTORY_TIERS_QUEUE, STATE_QUEUE,
 };
@@ -207,26 +207,26 @@ impl Wiring {
         Ok(Some(handle))
     }
 
-    pub(super) fn spawn_store(
+    pub(super) fn spawn_state(
         &self,
         writer: StateWriter,
         archive: Option<PoolHandle<ArchiveJournal>>,
         (completions, archive_bytes): (Completions, u64),
         workers: &mut Workers,
-    ) -> Result<PoolHandle<StoreJob>, StartError> {
+    ) -> Result<PoolHandle<StateJob>, StartError> {
         let clock = Arc::clone(&self.clock);
         let fail_stop = self.fail_stop.clone();
         workers.actor(
-            "hot-store",
+            "state",
             STATE_QUEUE,
             writer,
-            move |writer: &mut StateWriter, job: StoreJob| {
+            move |writer: &mut StateWriter, job: StateJob| {
                 // After a fail-stop the writer's state is not trusted again.
                 if fail_stop.is_halted() {
                     return;
                 }
-                fail_stop.guard("hot store", || {
-                    if let Some(ack) = run_store_job(writer, job, clock.as_ref()) {
+                fail_stop.guard("state", || {
+                    if let Some(ack) = run_state_job(writer, job, clock.as_ref()) {
                         completions.ingestion(IngestionCompletion::Committed(ack));
                     }
                 });
@@ -245,7 +245,7 @@ impl Wiring {
     /// The history's store of the Overview's sizes (D-82), on with the
     /// archive: one actor with the tiers database and a read-only reader of
     /// the archive, answering the history directly (the Manager never sees
-    /// these jobs). Attached before the hot store starts, so live minutes
+    /// these jobs). Attached before the state starts, so live minutes
     /// wait for the startup load.
     pub(super) fn spawn_history_tiers(
         &self,

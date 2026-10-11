@@ -125,7 +125,7 @@ impl Wiring {
         // (D-99).
         let trends = Arc::new(writer.trends());
         // The Overview's sizes follow the local clock and are kept with the
-        // archive (D-82); both before the hot store feeds them.
+        // archive (D-82); both before the state feeds them.
         history_index
             .overview()
             .set_utc_offset(local_utc_offset_s());
@@ -138,7 +138,7 @@ impl Wiring {
             (history_index.overview().clone(), host_id.clone()),
             &mut workers,
         )?;
-        let store = self.spawn_store(
+        let state = self.spawn_state(
             writer,
             archive,
             (
@@ -204,7 +204,7 @@ impl Wiring {
             adapters: Box::new(supervisor.clone()),
             collectors: Box::new(collectors),
             collector_registry,
-            store: Box::new(store),
+            state: Box::new(state),
             snapshots: Arc::new(snapshots),
             trends,
             history: Box::new(history),

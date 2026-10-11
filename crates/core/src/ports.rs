@@ -9,7 +9,7 @@
 //!   (to the Manager) and `ProcessMemoryReader` (to the history's readers,
 //!   which join it with the memory charts' bars, D-99) (D-79).
 //! * Collectors are pure (`Collector::collect`).
-//! * State (D-79): `StoreWriter` (HotStore actor only), `SnapshotReader`
+//! * State (D-79): `StoreWriter` (the state actor only), `SnapshotReader`
 //!   and `TrendReader` (the short trends it fills at commit, D-99).
 //! * History (D-79): `HistoryIngest`, through which the live state hands
 //!   each commit to the history, and `OverviewReader` (D-82), through
@@ -83,7 +83,7 @@ pub trait Collector: Send + Sync {
     fn collect(&self, plan: &CollectionPlan) -> CollectionBatch;
 }
 
-/// Single writer of the live state (HotStore actor only).
+/// Single writer of the live state (the state actor only).
 pub trait StoreWriter: Send {
     /// Validates epoch/base/namespace/units, then commits samples, history and
     /// collector state atomically, or rejects the whole batch.
@@ -675,9 +675,9 @@ pub enum AdapterJob {
     Discover(DiscoverRequest),
 }
 
-/// Store actor work.
+/// What the live state's actor does for the Manager (D-79).
 #[derive(Debug)]
-pub enum StoreJob {
+pub enum StateJob {
     Commit {
         batch: Box<CollectionBatch>,
         guard: CommitGuard,

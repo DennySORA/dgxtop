@@ -8,7 +8,7 @@
 //! persistence, no history beyond the short trends, no I/O.
 //!
 //! The single-writer commit pipeline (`STORAGE.md` §1, `INTERFACES.md` §8):
-//! [`StateWriter`] is owned by the HotStore actor thread. Each commit is
+//! [`StateWriter`] is owned by the state actor thread. Each commit is
 //! validated completely before anything changes (epoch, base revision,
 //! values, namespace, units, memory admission), then samples, history
 //! and collector state are applied and exactly one new
@@ -62,7 +62,7 @@ use validate::{CheckedBatch, ContentRules, DescriptorIndex, EpochState, Rejectio
 
 /// The two handles of one live state, built together.
 ///
-/// `writer` belongs to the HotStore actor, `snapshots` to presentation.
+/// `writer` belongs to the state actor, `snapshots` to presentation.
 #[derive(Debug)]
 pub struct LiveState {
     writer: StateWriter,
@@ -161,7 +161,7 @@ struct SnapshotChange {
     process_table: Option<(ProcessTable, BytePermit)>,
 }
 
-/// Write side of the live state (`StoreWriter`), owned by the HotStore actor.
+/// Write side of the live state (`StoreWriter`), owned by the state actor.
 pub struct StateWriter {
     settings: StateSettings,
     timing: SamplingTiming,

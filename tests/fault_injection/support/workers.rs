@@ -1,11 +1,11 @@
 //! Real worker wiring for the scenarios, mirroring the private assembly in
 //! `crates/dgxtop/src/monitor/`: the config, audit, action, collector,
-//! history and LiveState workers on the runtime's fixed pools and actors, and
-//! the archive actor the LiveState feeds. The only deviations are test seams:
+//! history and state workers on the runtime's fixed pools and actors, and
+//! the archive actor the state feeds. The only deviations are test seams:
 //! a [`Gate`] in front of storage workers, probes recording what the archive
 //! did, and a recording action port that never signals anything. Every
 //! worker runs the production job functions (`dgxtop::control_ops`,
-//! `dgxtop::collection_ops`, `dgxtop::store_actor`) on the program's queue
+//! `dgxtop::collection_ops`, `dgxtop::state_actor`) on the program's queue
 //! sizes (`dgxtop::worker_queues`).
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,7 +15,7 @@ use std::time::Duration;
 use crossbeam_channel::Sender;
 use dgxtop::collection_ops::run_collection;
 use dgxtop::control_ops::{run_action_op, run_audit_op, run_config_job, run_history_job};
-use dgxtop::store_actor::run_store_job;
+use dgxtop::state_actor::run_state_job;
 use dgxtop::worker_queues::{ACTION_QUEUE, ARCHIVE_QUEUE, AUDIT_QUEUE, CONFIG_QUEUE, STATE_QUEUE};
 use dgxtop_core::action::{
     ActionError, ActionHandle, ActionOp, AuditOp, CapabilityContext, DurableReceipt,
@@ -29,7 +29,7 @@ use dgxtop_core::identity::ProcessKey;
 use dgxtop_core::ports::{
     ArchiveJournal, ArchiveReceipt, ArchiveSink, AuditRepository, Collector, ConfigJob,
     ControlCompletion, Dispatch, HistoryJob, IngestionCompletion, OverviewReader,
-    ProcessActionPort, StoreJob,
+    ProcessActionPort, StateJob,
 };
 use dgxtop_manager::ManagerInboxes;
 use dgxtop_runtime::queues::{PoolHandle, StopReport, spawn_actor, spawn_pool};
@@ -353,7 +353,7 @@ pub fn spawn_archive_worker(
     .expect("spawn archive worker")
 }
 
-/// The archive side of the HotStore actor: journals go to the archive actor
+/// The archive side of the state actor: journals go to the archive actor
 /// with `try_dispatch`; a refusal (busy archive) is counted, never waited on.
 #[derive(Clone)]
 pub struct ArchiveFeed {
@@ -390,19 +390,19 @@ impl ArchiveFeed {
     }
 }
 
-pub fn spawn_store_worker(
+pub fn spawn_state_worker(
     writer: StateWriter,
     archive: Option<ArchiveFeed>,
     clock: Arc<dyn TimeProvider>,
     completions: Completions,
     archive_bytes: u64,
-) -> PoolHandle<StoreJob> {
+) -> PoolHandle<StateJob> {
     spawn_actor(
-        "hot-store",
+        "state",
         STATE_QUEUE,
         writer,
-        move |writer: &mut StateWriter, job: StoreJob| {
-            if let Some(ack) = run_store_job(writer, job, clock.as_ref()) {
+        move |writer: &mut StateWriter, job: StateJob| {
+            if let Some(ack) = run_state_job(writer, job, clock.as_ref()) {
                 completions.ingestion(IngestionCompletion::Committed(ack));
             }
             if let Some(archive) = &archive
@@ -412,5 +412,5 @@ pub fn spawn_store_worker(
             }
         },
     )
-    .expect("spawn hot-store worker")
+    .expect("spawn the state worker")
 }
