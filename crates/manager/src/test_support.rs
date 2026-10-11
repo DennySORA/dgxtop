@@ -458,6 +458,8 @@ pub(crate) fn harness_ports(options: &HarnessOptions) -> (ManagerPorts, Ports) {
         config: Box::new(ports.config.clone()),
         audit: Box::new(ports.audit.clone()),
         actions: Box::new(ports.actions.clone()),
+        process_probe: None,
+        process_history: None,
         logger: ports.logger.clone(),
         diagnostics: ports.diagnostics.clone(),
         ledger: ports.ledger.clone(),

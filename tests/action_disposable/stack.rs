@@ -822,6 +822,8 @@ fn manager_ports(
             journal.clone(),
             Arc::clone(&workers.action_work),
         )),
+        process_probe: None,
+        process_history: None,
         logger: Arc::new(MemoryLogger::default()),
         diagnostics,
         ingress: QueueGate::new("ingress", 32, 8 * MIB, ledger.clone(), Partition::Ingress),

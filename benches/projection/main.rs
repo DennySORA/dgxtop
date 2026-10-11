@@ -56,6 +56,7 @@ use dgxtop_manager::presentation::{
     HostFacts, PresentationContext, ProcessMemoryBook, SettingsInputs, TrendBook,
     build_view_model_measured,
 };
+use dgxtop_manager::process_history::ProcessHistoryBook;
 use dgxtop_store::hot::{HotStore, HotStoreWriter, SharedSnapshot};
 use dgxtop_ui::terminal::GatedInput;
 use dgxtop_ui::{TuiLoop, TuiOptions};
@@ -201,6 +202,7 @@ struct SnapshotWorld {
     snapshots: SharedSnapshot,
     trends: TrendFeed,
     process_memory: ProcessMemoryBook,
+    process_history: ProcessHistoryBook,
     rejections: BTreeMap<String, u64>,
 }
 
@@ -227,6 +229,7 @@ impl SnapshotWorld {
             snapshots,
             trends: TrendFeed::new(u64::from(config.sampling.interval_ms)),
             process_memory: ProcessMemoryBook::new(u64::from(config.sampling.interval_ms)),
+            process_history: ProcessHistoryBook::new(dgxtop_core::testing::boot_id("bench")),
             rejections: BTreeMap::new(),
         })
     }
@@ -461,6 +464,8 @@ impl StaticInputs {
             history: Arc::clone(&self.history),
             trends: &world.trends.book,
             process_memory: &world.process_memory,
+            process_history: &world.process_history,
+            process_history_kept: false,
             boot_to_utc_ns: 0,
             facts: &self.facts,
             enabled_modules: &self.config.viewer.enabled_modules,

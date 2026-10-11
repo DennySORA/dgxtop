@@ -3,6 +3,8 @@
 //! * Telemetry: `TelemetryPort` (adapters, inside adapter hosts) is read-only.
 //! * Action: `ProcessActionPort` is a separate trait; only the Manager's
 //!   ProcessService ever receives one.
+//! * Process history (D-76): `ProcessProbe` (read-only, beside the
+//!   adapters) and `ProcessHistoryStore`.
 //! * Collectors are pure (`Collector::collect`).
 //! * Store: `StoreWriter` (HotStore actor only), `SnapshotReader`,
 //!   `HistoryReader`, `ConfigRepository`, `AuditRepository`, `ArchiveSink`,
@@ -39,6 +41,9 @@ use crate::history::{ArchiveQuery, ArchiveResult, HistoryQuery, HistoryResult};
 use crate::identity::{AdapterId, CollectorId, MetricKey, ProcessKey, SessionId, SourceId};
 use crate::observation::{
     AdapterHealth, AdapterManifest, CatalogDelta, DiscoverRequest, ObservationBatch, ReadPlan,
+};
+use crate::process_history::{
+    ProcessHistoryJournal, ProcessHistoryLoad, RecentHistory, RunBucketRow,
 };
 use crate::process_probe::{ProbeReport, ProbeTarget};
 use crate::view::{HostStatus, ViewModel};
@@ -352,6 +357,46 @@ pub trait ProcessProbe: Send {
     fn probe(&mut self, targets: &[ProbeTarget]) -> ProbeReport;
 }
 
+/// The stores of the process history (D-76): a long-term database of runs
+/// and their minute and ten-minute buckets, and a short-term file of the
+/// live runs' recent buckets.
+pub trait ProcessHistoryStore: Send {
+    /// What both stores kept, read at startup.
+    fn load(&mut self) -> Result<ProcessHistoryLoad, InfraError>;
+    fn append(&mut self, journal: &ProcessHistoryJournal) -> Result<(), InfraError>;
+    /// Replaces the short-term file.
+    fn save_recent(&mut self, recent: &RecentHistory) -> Result<(), InfraError>;
+    /// One run's buckets, for a run whose buckets are not in memory.
+    fn read_run(&mut self, key: &ProcessKey) -> Result<Vec<RunBucketRow>, InfraError>;
+}
+
+/// Process probe work (D-76).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessProbeJob {
+    pub targets: Vec<ProbeTarget>,
+}
+
+/// Process history store work (D-76).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProcessHistoryJob {
+    Load,
+    Append(ProcessHistoryJournal),
+    SaveRecent(RecentHistory),
+    ReadRun(ProcessKey),
+}
+
+/// What became of a [`ProcessHistoryJob`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProcessHistoryCompletion {
+    Loaded(Result<ProcessHistoryLoad, InfraError>),
+    Appended(Result<(), InfraError>),
+    Saved(Result<(), InfraError>),
+    RunRead {
+        key: ProcessKey,
+        result: Result<Vec<RunBucketRow>, InfraError>,
+    },
+}
+
 /// Non-blocking job submission to a fixed worker.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DispatchError {
@@ -521,6 +566,10 @@ pub enum ControlCompletion {
         session_generation: u64,
         result: Result<ArchiveResult, ErrorDetail>,
     },
+    /// What the process probe read (D-76).
+    ProcessProbe(ProbeReport),
+    /// What a process history store job did (D-76).
+    ProcessHistory(ProcessHistoryCompletion),
 }
 
 /// UI-facing session handle implemented by the Manager.

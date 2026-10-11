@@ -1299,6 +1299,27 @@ impl ProcessService {
         );
     }
 
+    /// The process and signal of an action that `completion` says was
+    /// sent (D-76: the process history notes why a run ended).
+    pub(crate) fn signal_sent(
+        &self,
+        completion: &ActionCompletion,
+    ) -> Option<(ProcessKey, Signal)> {
+        let ActionCompletion::Sent {
+            request_id,
+            intent_id,
+            outcome: SignalOutcome::Sent,
+            ..
+        } = completion
+        else {
+            return None;
+        };
+        let record = self
+            .records
+            .get(self.records.by_confirm(*request_id, Some(*intent_id))?)?;
+        Some((record.target.clone(), record.signal))
+    }
+
     fn on_sent(
         &mut self,
         request_id: Uuid,

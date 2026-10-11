@@ -397,6 +397,7 @@ pub(crate) struct Fixture {
     pub(crate) history: Arc<HistoryView>,
     pub(crate) trends: TrendBook,
     pub(crate) process_memory: ProcessMemoryBook,
+    pub(crate) process_history: crate::process_history::ProcessHistoryBook,
     /// Wall clock minus boot clock (0: the history's times are boot times).
     pub(crate) boot_to_utc_ns: i128,
     pub(crate) facts: HostFacts,
@@ -445,6 +446,9 @@ impl Fixture {
             history: Arc::new(empty_history()),
             trends: TrendBook::new(120, 1000),
             process_memory: ProcessMemoryBook::new(1000),
+            process_history: crate::process_history::ProcessHistoryBook::new(
+                dgxtop_core::testing::boot_id("boot-test"),
+            ),
             boot_to_utc_ns: 0,
             facts: HostFacts {
                 host_name: "dgx-test".to_owned(),
@@ -480,6 +484,8 @@ impl Fixture {
             history: Arc::clone(&self.history),
             trends: &self.trends,
             process_memory: &self.process_memory,
+            process_history: &self.process_history,
+            process_history_kept: false,
             boot_to_utc_ns: self.boot_to_utc_ns,
             facts: &self.facts,
             enabled_modules: &self.enabled_modules,

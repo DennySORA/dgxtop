@@ -24,6 +24,8 @@ mod plan;
 mod process_parts;
 mod processes;
 mod reader;
+mod run_history;
+mod run_inputs;
 mod settings;
 mod sources;
 #[cfg(test)]
@@ -35,6 +37,7 @@ pub use cell::build_metric_cell;
 pub(crate) use history_charts::history_charts;
 pub use plan::visible_modules;
 pub use processes::PROCESS_OVERSCAN_ROWS;
+pub(crate) use run_inputs::run_inputs;
 
 pub use crate::process_memory::ProcessMemoryBook;
 
@@ -167,6 +170,10 @@ pub struct PresentationContext<'a> {
     pub trends: &'a TrendBook,
     /// GPU processes' colors and memory over time (D-64).
     pub process_memory: &'a ProcessMemoryBook,
+    /// The GPU process runs (D-76).
+    pub process_history: &'a crate::process_history::ProcessHistoryBook,
+    /// Whether runs outlive dgxtop.
+    pub process_history_kept: bool,
     /// Wall clock minus boot clock when the projection is built: places the
     /// process memory record on the history view's time axis.
     pub boot_to_utc_ns: i128,
@@ -342,6 +349,14 @@ fn build_modules(
                 cells: layout.history_chart_points(),
             },
         ));
+        modules.process_history = Some(Arc::new(run_history::build_process_history_view(
+            &run_history::RunHistoryInputs {
+                book: context.process_history,
+                colors: inputs.process_memory,
+                opened: context.session.selected_process.as_ref(),
+                kept_on_disk: context.process_history_kept,
+            },
+        )));
     }
     if plan.shows(plan::SOURCES) {
         modules.sources = Some(Arc::new(sources::build_sources_view(&SourcesInputs {

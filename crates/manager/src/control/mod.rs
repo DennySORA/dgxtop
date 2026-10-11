@@ -42,6 +42,7 @@ use crate::overload::OverloadController;
 use crate::policy::QualityPolicyService;
 use crate::presentation::{HostFacts, ProcessMemoryBook};
 use crate::process::{ActionIdentity, Now, ProcessPorts, ProcessService};
+use crate::process_history::{ProcessHistoryPorts, ProcessHistoryService};
 use crate::projection::PresentationService;
 use crate::results::ResultCache;
 use crate::scheduler::SamplingScheduler;
@@ -115,6 +116,7 @@ pub(crate) struct ControlCore {
     ingestion: IngestionService,
     trends: TrendRecorder,
     process_memory: ProcessMemoryBook,
+    process_history: ProcessHistoryService,
     history: HistoryService,
     config: ConfigurationService,
     process: ProcessService,
@@ -199,6 +201,15 @@ impl ControlCore {
             &effective,
             ports.diagnostics.clone(),
         );
+        let process_history = ProcessHistoryService::new(
+            ProcessHistoryPorts {
+                probe: ports.process_probe,
+                store: ports.process_history,
+            },
+            setup.boot_id.clone(),
+            Arc::clone(&ports.logger),
+            now,
+        );
         let catalog = DeviceCatalog::new(
             setup.host_id.clone(),
             setup.boot_id.clone(),
@@ -215,6 +226,7 @@ impl ControlCore {
             hosts: HostTable::new(&setup.adapters),
             trends: TrendRecorder::new(u64::from(fast_ms)),
             process_memory,
+            process_history,
             sessions: ViewSessionService::new(effective.viewer.max_sessions),
             presentation: PresentationService::new(
                 ports.ledger.clone(),
@@ -291,6 +303,7 @@ impl ControlCore {
         self.started = true;
         let now = self.now();
         self.process.start(now);
+        self.process_history.start();
     }
 
     pub(crate) fn open_session(&mut self) -> Result<SessionHandle, ManagerError> {

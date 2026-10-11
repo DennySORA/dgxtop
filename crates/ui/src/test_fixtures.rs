@@ -985,6 +985,7 @@ pub(crate) fn full_modules(with_confirmation: bool) -> ModuleViews {
         network: Some(Arc::new(network_view())),
         processes: Some(Arc::new(processes_view(12, 0, 12))),
         history: Some(Arc::new(history_view())),
+        process_history: None,
         sources: Some(Arc::new(sources_view())),
         settings: Some(Arc::new(settings_view())),
         actions: Some(Arc::new(actions_view(with_confirmation))),

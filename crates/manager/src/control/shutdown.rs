@@ -30,6 +30,8 @@ impl ControlCore {
         let mut fx = Effects::default();
         self.revoked_tokens = self.process.begin_shutdown(now, &mut fx);
         self.apply(fx);
+        // The store worker writes these while the shutdown drains.
+        self.process_history.flush(now);
         self.scheduler.stop();
         self.ingestion.stop();
         self.history.cancel_all();

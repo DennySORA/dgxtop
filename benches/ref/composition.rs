@@ -317,6 +317,8 @@ impl RefComposition {
             config: Box::new(config_actor),
             audit: Box::new(audit),
             actions: Box::new(actions),
+            process_probe: None,
+            process_history: None,
             logger: Arc::clone(&logger) as Arc<dyn Logger>,
             diagnostics: diagnostics.clone(),
             ledger: ledger.clone(),

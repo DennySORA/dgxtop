@@ -15,6 +15,7 @@ use crate::config::{Theme, ValueOrigin};
 use crate::history::HistoryMethod;
 use crate::identity::{EntityId, MetricKey, ModuleId, ProcessKey, SessionId};
 use crate::metric::{CanonicalUnit, Scalar};
+use crate::process_history::{RunEnd, RunInfo, RunMetric};
 use crate::quality::{Freshness, Quality, SampleKind, SelectionState};
 
 /// Why a cell has (or lacks) a value; always rendered as text, never only color.
@@ -594,6 +595,64 @@ pub struct HistoryProcessView {
     pub scale_max: Option<f64>,
 }
 
+/// Rows of runs a Process History projection carries at most.
+pub const MAX_RUN_ROWS: usize = 200;
+/// Points a run chart carries at most.
+pub const MAX_RUN_CHART_POINTS: usize = 240;
+
+/// The Process History tab (D-76): GPU process runs, the newest start
+/// first, and the run the session opened.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcessHistoryView {
+    pub runs: Vec<RunRowView>,
+    /// Runs listed beyond [`MAX_RUN_ROWS`].
+    pub more_runs: usize,
+    pub opened: Option<RunDetailView>,
+    /// Runs outlive dgxtop (its stores are on).
+    pub kept_on_disk: bool,
+}
+
+/// One run in the list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunRowView {
+    pub key: ProcessKey,
+    pub name: String,
+    pub started_utc_ns: i64,
+    pub runtime_ns: u64,
+    pub live: bool,
+    pub end: Option<RunEnd>,
+    pub gpus: Vec<String>,
+    pub peak_gpu_memory: Option<f64>,
+    pub mean_gpu_utilization: Option<f64>,
+    pub mean_cpu: Option<f64>,
+    /// Its color while it holds one (D-64).
+    pub slot: Option<u8>,
+}
+
+/// The run opened: everything known of it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunDetailView {
+    pub info: RunInfo,
+    pub live: bool,
+    pub slot: Option<u8>,
+    /// UTC start of the first point and the time each point covers.
+    pub first_utc_ns: i64,
+    pub step_ns: u64,
+    pub charts: Vec<RunChartView>,
+    /// Its buckets are being read from the long-term store.
+    pub loading: bool,
+}
+
+/// One chart of a run: a mean per point, and the run's mean and peak.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunChartView {
+    pub metric: RunMetric,
+    pub unit: CanonicalUnit,
+    pub means: Vec<Option<f64>>,
+    pub mean: Option<f64>,
+    pub peak: Option<f64>,
+}
+
 /// Where the history before this run comes from (D-51).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DiskHistory {
@@ -848,6 +907,8 @@ pub struct ModuleViews {
     pub network: Option<Arc<NetworkView>>,
     pub processes: Option<Arc<ProcessesView>>,
     pub history: Option<Arc<HistoryView>>,
+    /// Built beside `history`, for the Process History tab (D-76).
+    pub process_history: Option<Arc<ProcessHistoryView>>,
     pub sources: Option<Arc<SourcesView>>,
     pub settings: Option<Arc<SettingsView>>,
     pub actions: Option<Arc<ActionsView>>,

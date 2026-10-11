@@ -13,7 +13,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Sender, bounded};
+use dgxtop_adapters::common::RootedFiles;
 use dgxtop_adapters::process_action::PidfdActionAdapter;
+use dgxtop_adapters::procfs::ProcfsProcessProbe;
 use dgxtop_adapters::replay::ReplayAdapter;
 use dgxtop_collectors::registry::default_collectors;
 use dgxtop_core::action::{ActionOp, AuditOp};
@@ -28,8 +30,8 @@ use dgxtop_core::observation::AdapterManifest;
 use dgxtop_core::ports::{
     ArchiveGapCause, ArchiveJournal, ArchiveOutcome, ArchiveReadJob, ArchiveReader, ArchiveSink,
     AuditRepository, Collector, ConfigJob, ConfigRepository, ControlCompletion, Dispatch,
-    HistoryJob, HistoryReader, IngestionCompletion, LogLevel, Logger, StoreJob, StoreWriter,
-    TelemetryPort,
+    HistoryJob, HistoryReader, IngestionCompletion, LogLevel, Logger, ProcessProbe,
+    ProcessProbeJob, StoreJob, StoreWriter, TelemetryPort,
 };
 use dgxtop_core::quality::Namespace;
 use dgxtop_manager::presentation::HostFacts;
@@ -76,6 +78,8 @@ const FRONTEND_EXIT_GRACE: Duration = Duration::from_secs(5);
 const SIGNAL_POLL: Duration = Duration::from_millis(50);
 /// Archive reads queued for the reader: the Manager runs two at a time.
 const ARCHIVE_READ_QUEUE: usize = 4;
+/// Probe jobs waiting (D-76); the manager keeps one in flight.
+const PROCESS_PROBE_QUEUE: usize = 2;
 
 /// Runs the monitor until the user quits, a signal arrives or the terminal hangs up.
 pub fn run(cli: &Cli) -> ExitCode {
@@ -497,6 +501,7 @@ impl Wiring {
         workers.push(Box::new(("audit".to_owned(), audit.clone())));
         let actions = self.spawn_actions(completions.clone())?;
         workers.push(Box::new(("action".to_owned(), actions.clone())));
+        let process_probe = self.spawn_process_probe(completions.clone(), &mut workers)?;
 
         let (specs, manifests) = host_specs(cli, effective, self.namespace, &self.clock, &host_id)?;
         let supervisor = Supervisor::start(
@@ -537,6 +542,9 @@ impl Wiring {
             config: Box::new(config),
             audit: Box::new(audit),
             actions: Box::new(actions),
+            process_probe: process_probe
+                .map(|port| Box::new(port) as Box<dyn Dispatch<ProcessProbeJob>>),
+            process_history: None,
             logger: Arc::clone(&self.logger),
             diagnostics: self.diagnostics.clone(),
             ledger: self.ledger.clone(),
@@ -790,6 +798,31 @@ impl Wiring {
             },
         )
         .map_err(|error| StartError::failure(error.to_string()))
+    }
+
+    /// The process history's probe (D-76): live processes only, so none in
+    /// a replay.
+    fn spawn_process_probe(
+        &self,
+        completions: Completions,
+        workers: &mut Vec<Box<dyn StopOnShutdown>>,
+    ) -> Result<Option<PoolHandle<ProcessProbeJob>>, StartError> {
+        if self.namespace != Namespace::Live {
+            return Ok(None);
+        }
+        let probe = ProcfsProcessProbe::new(Arc::new(RootedFiles::host()), Arc::clone(&self.clock));
+        let handle = spawn_actor(
+            "process-probe",
+            PROCESS_PROBE_QUEUE,
+            probe,
+            move |probe: &mut ProcfsProcessProbe, job: ProcessProbeJob| {
+                let report = probe.probe(&job.targets);
+                completions.control(ControlCompletion::ProcessProbe(report));
+            },
+        )
+        .map_err(|error| StartError::failure(error.to_string()))?;
+        workers.push(Box::new(("process-probe".to_owned(), handle.clone())));
+        Ok(Some(handle))
     }
 
     fn spawn_actions(&self, completions: Completions) -> Result<PoolHandle<ActionOp>, StartError> {

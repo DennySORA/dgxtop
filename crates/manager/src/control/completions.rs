@@ -4,7 +4,9 @@
 
 use std::sync::Arc;
 
-use dgxtop_core::canonical::{CollectionBatch, CollectorEvent, GapRecord, StoreAck};
+use dgxtop_core::canonical::{
+    CollectionBatch, CollectorEvent, GapRecord, ImmutableSnapshot, StoreAck,
+};
 use dgxtop_core::clock::ms_to_ns;
 use dgxtop_core::diagnostics::names;
 use dgxtop_core::event::EventKind;
@@ -27,7 +29,9 @@ use crate::hosts::{HostStatusRejection, module_health};
 use crate::ingestion::pages::PagePush;
 use crate::ingestion::trends::unified_gpus;
 use crate::ingestion::{CollectedOutcome, CommitOutcome, CycleInput};
+use crate::presentation::run_inputs;
 use crate::process::Now;
+use crate::process_history::SampleInputs;
 use crate::scheduler::{ReadReply, ReplyMatch, RequestKind};
 
 /// Source ids carried by these entities are per-process and never catalog
@@ -50,6 +54,9 @@ impl ControlCore {
                 self.apply(fx);
             }
             ControlCompletion::Action(action) => {
+                if let Some((target, signal)) = self.process.signal_sent(&action) {
+                    self.process_history.note_signal(&target, signal, now);
+                }
                 let open = self.sessions.open_ids();
                 let mut fx = Effects::default();
                 self.process.on_action(action, now, &open, &mut fx);
@@ -90,6 +97,14 @@ impl ControlCore {
                 Some(session) => self.sessions.mark_dirty(&session),
                 None => self.count_stale("history_archive"),
             },
+            ControlCompletion::ProcessProbe(report) => {
+                self.process_history.on_probe(&report, now);
+            }
+            ControlCompletion::ProcessHistory(completion) => {
+                if self.process_history.on_completion(completion, now) {
+                    self.sessions.mark_all_dirty();
+                }
+            }
         }
     }
 
@@ -529,6 +544,7 @@ impl ControlCore {
             CommitOutcome::Committed(batch) => {
                 let snapshot = self.ingestion.snapshots().latest();
                 self.process_memory.record(&snapshot.process_table);
+                self.sample_process_history(&snapshot);
                 self.trends.record(
                     &snapshot,
                     &unified_gpus(&self.catalog.snapshot()),
@@ -614,6 +630,22 @@ impl ControlCore {
     }
 
     // ----- hosts --------------------------------------------------------------
+
+    /// Samples the process history from the committed process table (D-76).
+    fn sample_process_history(&mut self, snapshot: &ImmutableSnapshot) {
+        let now = self.now();
+        let catalog = self.catalog.snapshot();
+        let inputs = run_inputs(snapshot, &catalog, now.boot_ns);
+        self.process_history.on_table(
+            &snapshot.process_table,
+            &SampleInputs {
+                now,
+                clk_tck: inputs.clk_tck,
+                gpu_labels: &inputs.gpu_labels,
+                host_network: inputs.host_network,
+            },
+        );
+    }
 
     fn on_host_status(&mut self, status: HostStatus, now: u64) {
         let update = match self.hosts.apply(status) {

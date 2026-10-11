@@ -134,6 +134,8 @@ pub fn inert_ports(
         config: Box::new(CapturingDispatch::<ConfigJob>::new()),
         audit: Box::new(CapturingDispatch::<AuditOp>::new()),
         actions: Box::new(CapturingDispatch::<ActionOp>::new()),
+        process_probe: None,
+        process_history: None,
         logger: Arc::new(MemoryLogger::default()),
         diagnostics: Diagnostics::new(),
         ledger: ledger.clone(),

@@ -51,6 +51,7 @@ impl ControlCore {
         }
         self.pump_collectors(now.boot_ns);
         self.tick_history(now.boot_ns);
+        self.process_history.tick(now);
         self.sample_overload(now.boot_ns, levels);
         self.periodic(now.boot_ns);
         self.publish_frames(now.boot_ns);
@@ -335,6 +336,8 @@ impl ControlCore {
             history: self.history.view(session_id),
             trends: self.trends.book(),
             process_memory: &self.process_memory,
+            process_history: self.process_history.book(),
+            process_history_kept: self.process_history.keeps_runs_on_disk(),
             boot_to_utc_ns: self
                 .clock
                 .now_utc_ns()

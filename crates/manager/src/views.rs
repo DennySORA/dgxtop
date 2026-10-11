@@ -7,7 +7,9 @@
 //! * `gpu_detail`: `selected_entity_id` is the shown GPU;
 //! * `history` / `sources`: `selected_entity_id` is a series selector
 //!   (`metric_id|scope|entity_id`); `filter` is the history window token or
-//!   the sources text filter.
+//!   the sources text filter; in `history`, `selected_process` is the run
+//!   the Process History tab opened (D-76), of any boot, never validated
+//!   against the live table.
 //!
 //! Stale-frame rule: every published projection has a `frame_revision`; a
 //! session remembers the last [`STALE_FRAME_WINDOW`] revisions it was sent.
