@@ -14,6 +14,8 @@ against the evidence logs:
 - every AT is present exactly once;
 - every log hash and exit code matches;
 - every test named for a PASS case passed in a cited log.
+- every cited test is still defined in the workspace's sources, so a deleted or renamed
+  test cannot stay cited because an old log lists it (a removed clause cites no test).
 
 Specification acceptance (the spec package and its Python tools) and software acceptance (the
 Rust program) are reported separately. The spec package's own Python tests are not Rust or
@@ -129,11 +131,11 @@ Totals: PASS 14, FAIL 0, NOT_RUN 24, BLOCKED 2 (of 40).
 | [AT09](#at09) | R09 ProcessKey sampled once, multi-GPU association | PASS | `gate-test` | One host row per ProcessKey with several GPU links; PID reuse and merged associations handled |
 | [AT10](#at10) | R10 Process termination: authorization, stable identity, audit | PASS | `gate-test` | Real disposable child, real SQLite audit, real pidfd and Manager: one durable intent, at most one SIGTERM, every refusal sends nothing |
 | [AT11](#at11) | R11 Controller only translates input intent | NOT_RUN | `gate-test` | Keys and clicks become typed commands; stable selection; quit and cancel reachable; no system calls; the end-to-end part is opt-in and was not run |
-| [AT12](#at12) | R12 Viewer layout and module extension | NOT_RUN | `gate-test` | Layout tiers, registry extension and narrow screens pass; the sources module is registered but not offered (D-36) |
+| [AT12](#at12) | R12 Viewer layout and module extension | NOT_RUN | `gate-test` | Layout tiers, registry extension and narrow screens pass; the sources and actions modules are retired (D-91) |
 | [AT13](#at13) | R13 Immutable snapshots, stable selection, stale frames | NOT_RUN | `gate-test` | Latest-only slots, dirty-only drawing and key-based selection tested; immutability is type-level only |
 | [AT14](#at14) | R14 Worker isolation, timeouts, backpressure, reaping limits | NOT_RUN | `gate-test` | A hung host is isolated, timed out, restarted only after reap, quarantined when unreapable; the end-to-end part is opt-in and was not run |
 | [AT15](#at15) | R15 Discovery, hot-plug and capability updates stay local | PASS | `gate-test` | 1000 hot-plug rounds bounded; new incarnations; static metadata cached; partial pages never delete |
-| [AT16](#at16) | R16 Source diagnostics, age and visible exceptions | NOT_RUN | `gate-test` | Diagnostics are built and tested, but the Sources view is not offered (D-36) |
+| [AT16](#at16) | R16 Source diagnostics, age and visible exceptions | NOT_RUN | `gate-test` | The Sources view is removed (D-91); intervals, action states, unknown values and gaps are tested |
 | [AT17](#at17) | R17 Observability, privacy and capacity targets | NOT_RUN | `gate-test` | Bounded labels, escaped audit names and log drop counters tested; the metrics are not output and nine are never recorded |
 | [AT18](#at18) | R18 Staged migration and recoverable program/configuration | NOT_RUN | `gate-test` | Legacy dry-run/apply, rollback and corrupt-file handling tested; installer disk-full and interrupted switch are not |
 | [AT19](#at19) | R19 Existing rules kept, real verification records | NOT_RUN | `rules-preserved`, `spec-package-validation` | Rules file unchanged and evidence recorded; the owner's manual check is not recorded |
@@ -284,7 +286,7 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 | S3 new epoch, effective interval visible | `dgxtop-manager::control::tests::at22_at08_late_reply_of_the_old_epoch_is_dropped_after_a_config_change` |  |
 | F1 an old revision conflicts | `dgxtop-store/store_persist_config::stale_revision_conflicts`, `dgxtop-manager::config::tests::old_revision_conflicts_and_pending_change_is_busy` |  |
 | F2 a persist failure never reports success | `dgxtop-store/store_persist_config::a_failure_before_the_rename_keeps_the_old_file`, `dgxtop-manager::control::tests::at08_persist_failure_keeps_the_running_configuration` |  |
-| F3 restart-only changes return RequiresRestart | `dgxtop-manager::config::tests::restart_only_changes_require_restart_without_persisting`, `dgxtop-manager::control::tests::at08_restart_only_and_stale_revisions_never_persist` |  |
+| F3 restart-only changes return RequiresRestart |  | REMOVED by D-91: `ReplaceConfig` is refused, and `SetSamplingInterval` / `SetModuleEnabled` never touch a restart-only field |
 | F4 a late batch of the old epoch is ignored | `dgxtop-manager::control::tests::at22_at08_late_reply_of_the_old_epoch_is_dropped_after_a_config_change`, `dgxtop-manager::ingestion::tests::old_epoch_inputs_never_reach_a_job_and_expired_ones_become_gaps` |  |
 
 <a id="at09"></a>
@@ -295,7 +297,7 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 same host CPU/RSS across two GPUs | `dgxtop-collectors::process::table::tests::one_process_on_two_gpus_is_one_host_row_with_two_links`, `dgxtop-ui::viewer::tests::processes_view_follows_the_reference_columns_and_marks_the_selection` |  |
+| S1 same host CPU/RSS across two GPUs | `dgxtop-collectors::process::table::tests::one_process_on_two_gpus_is_one_host_row_with_two_links` | The rendering test became `processes_table_follows_the_reference_columns_and_marks_the_selection` with the Processes view's removal (D-91); the recorded logs predate it |
 | S2 host data read once per cycle | `dgxtop-manager::scheduler::tests::cadences_follow_period_classes_and_discovery_interval`, `dgxtop-adapters/adapters_a_process::paging_is_consistent_within_a_cycle_and_resnapshots_the_next_cycle`, `dgxtop-collectors::process::table::tests::one_process_on_two_gpus_is_one_host_row_with_two_links` | Composition |
 | F1 new start ticks: no inherited CPU base | `dgxtop-collectors::process::table::tests::reused_pid_with_new_start_time_never_inherits_the_old_base`, `dgxtop-collectors::process::table::tests::gpu_entry_of_an_older_instance_is_not_linked_to_a_reused_pid` |  |
 | F2 graphics + compute not double-counted | `dgxtop-collectors::process::table::tests::merged_compute_and_graphics_association_is_one_link`, `adapters_b_nvml::compute_and_graphics_of_one_pid_are_one_association` |  |
@@ -311,7 +313,7 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 |---|---|---|
 | S1 own child, held pidfd, valid confirmation → one durable intent | `action_disposable::at10::at10_confirmed_sigterm_reaches_only_the_disposable_child_after_one_durable_intent` | Order intent → send → syscall asserted |
 | S2 at most one SIGTERM | `action_disposable::at10::at10_confirmed_sigterm_reaches_only_the_disposable_child_after_one_durable_intent`, `action_disposable::at32::at32_token_is_single_use_across_sessions_concurrency_and_replays` |  |
-| S3 sent and exit shown separately | `action_disposable::at32::at32_signal_sent_is_reported_without_waiting_for_exit`, `dgxtop-ui::viewer::tests::actions_view_never_says_terminated` |  |
+| S3 sent and exit shown separately | `action_disposable::at32::at32_signal_sent_is_reported_without_waiting_for_exit`, `dgxtop-ui::format::action::tests::signal_sent_is_never_called_terminated` | The Actions view is removed (D-91); its state words live in `format::action` |
 | F1 root session | `action_disposable::at10::at10_root_session_sends_nothing` |  |
 | F2 another UID | `action_disposable::at10::at10_target_listed_under_another_uid_sends_nothing`, `action_disposable::at10::at10_process_of_another_user_is_refused_by_the_kernel_identity_check` |  |
 | F3 another PID namespace | `action_disposable::at10::at10_target_in_another_pid_namespace_sends_nothing` |  |
@@ -341,12 +343,12 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 ### AT12 — R12 Viewer layout and module extension
 
-**Status: NOT_RUN.** Evidence: `gate-test`. All ten modules are registered and render in tests, but by the owner's decision (D-36) the source diagnostics view is not offered, so S1's "all ten modules usable" is not met from the interface.
+**Status: NOT_RUN.** Evidence: `gate-test`. By the owner's decisions the source diagnostics view was first hidden (D-36) and then removed with the Processes and Actions views (D-91): eight modules are registered and render in tests, so S1's "all ten modules usable" is not met.
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 all ten modules usable | `dgxtop-ui::registry::tests::builtin_registers_the_ten_modules_without_warnings`, `dgxtop-ui::viewer::tests::every_view_renders_at_every_size_with_a_quit_hint`, `dgxtop-ui::viewer::tests::overview_follows_the_reference_layout_and_keeps_every_module_visible_when_wide`, `dgxtop-ui::views::tests::sources_processes_and_actions_are_not_offered` | NOT MET in the interface: sources and the action record are hidden at the owner's request (a pending confirmation is a banner in every view and an outcome a notice, D-44); the process table lives in the overview |
-| S2 an eleventh module registers | `dgxtop-ui::viewer::tests::an_eleventh_fixture_module_is_registered_and_laid_out`, `dgxtop-ui::registry::tests::an_eleventh_module_can_be_registered`, `dgxtop-ui::viewer::layout::tests::a_module_without_a_cell_gets_a_full_width_row_below_the_grid` | A module without a grid cell still gets a row (D-38) |
+| S1 all ten modules usable | `dgxtop-ui::registry::tests::builtin_registers_every_builtin_module_without_warnings`, `dgxtop-ui::viewer::tests::every_view_renders_at_every_size_with_a_quit_hint`, `dgxtop-ui::viewer::tests::overview_follows_the_reference_layout_and_keeps_every_module_visible_when_wide`, `dgxtop-ui::views::tests::the_retired_views_are_not_offered` | NOT MET: the `sources` and `actions` modules are retired (D-91); a pending confirmation is a banner in every view and an outcome a notice (D-44); the process table lives in the overview |
+| S2 an eleventh module registers | `dgxtop-ui::viewer::tests::a_further_fixture_module_is_registered_and_laid_out`, `dgxtop-ui::registry::tests::a_further_module_can_be_registered`, `dgxtop-ui::viewer::layout::tests::a_module_without_a_cell_gets_a_full_width_row_below_the_grid` | A module without a grid cell still gets a row (D-38) |
 | S3 ≥ 120 / 80 / < 80 / < 40 render | `dgxtop-ui::viewer::tests::every_view_renders_at_every_size_with_a_quit_hint`, `dgxtop-ui::viewer::tests::tiers_are_reported_per_size`, `dgxtop-ui::viewer::layout::tests::tiers_follow_the_spec_boundaries`, `pty::tiny_terminal_shows_size_notice_and_still_quits` |  |
 | F1 duplicate id or API mismatch rejected | `dgxtop-ui::registry::tests::duplicate_ids_are_rejected_with_a_warning`, `dgxtop-ui::registry::tests::api_version_mismatch_is_rejected_with_a_warning` |  |
 | F2 no GPU: unsupported shown, startup not blocked | `pty::live_mode_without_gpu_starts_isolated_hosts_and_quits`, `dgxtop-manager::presentation::gpu::tests::reasons_when_gpu_data_is_absent`, `dgxtop-ui::viewer::tests::gpu_unavailable_reason_is_shown`, `dgxtop-adapters/adapters_b_nvml::no_gpu_reports_unavailable` |  |
@@ -403,18 +405,18 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 ### AT16 — R16 Source diagnostics, age and visible exceptions
 
-**Status: NOT_RUN.** Evidence: `gate-test`. The presentation and rendering tests below pass, but the owner removed the source diagnostics view from the interface for now (D-36), so a user cannot reach S1–S4. Restoring the tab restores the path.
+**Status: NOT_RUN.** Evidence: `gate-test`. The owner removed the source diagnostics view from the interface (D-36) and then its code and presentation (D-91), so S1, S2 and S4 have nothing left to test and a user cannot reach them; S3, S5 and F1–F3 are tested where they now live.
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 selected / excluded / alias / conflict reasons | `dgxtop-manager::presentation::sources::tests::candidates_show_dispositions_origin_and_evidence`, `dgxtop-manager::presentation::sources::tests::conflicting_and_quality_dispositions_are_named`, `dgxtop-ui::viewer::tests::sources_view_explains_arbitration` | Not reachable in the interface (D-36) |
-| S2 age | `dgxtop-manager::presentation::sources::tests::candidates_show_dispositions_origin_and_evidence` |  |
-| S3 effective interval | `dgxtop-ui::viewer::tests::sources_view_explains_arbitration`, `dgxtop-manager::scheduler::tests::effective_period_respects_minimum_multiplier_and_cap` |  |
-| S4 policy revision | `dgxtop-ui::viewer::tests::sources_view_explains_arbitration` |  |
-| S5 action states are clear | `dgxtop-ui::viewer::tests::actions_view_never_says_terminated`, `dgxtop-manager::process::tests::unknown_outcomes_from_recovery_are_surfaced_and_never_resent` |  |
+| S1 selected / excluded / alias / conflict reasons |  | REMOVED by D-91: the Sources view and its presentation are removed |
+| S2 age |  | REMOVED by D-91 with the Sources view; each adapter host's last success age is in Settings' data sources block |
+| S3 effective interval | `dgxtop-manager::scheduler::tests::effective_period_respects_minimum_multiplier_and_cap` | The Sources view's rendering is REMOVED by D-91 |
+| S4 policy revision |  | REMOVED by D-91 with the Sources view |
+| S5 action states are clear | `dgxtop-ui::format::action::tests::signal_sent_is_never_called_terminated`, `dgxtop-manager::process::tests::unknown_outcomes_from_recovery_are_surfaced_and_never_resent` |  |
 | F1 unknown is never success-coloured or 0 | `dgxtop-ui::format::cell::tests::missing_states_render_their_labels_never_zero`, `dgxtop-ui::viewer::tests::missing_topics_render_no_data_instead_of_zero` |  |
 | F2 a fixed value is only a suspect diagnostic | `dgxtop-collectors::shared::arbitration::tests::an_unchanged_reading_is_only_a_suspect_diagnostic_never_fake_data` |  |
-| F3 history gaps are visible | `dgxtop-ui::modules::history::strip::tests::columns_follow_time_and_keep_gaps_and_peaks`, `dgxtop-ui::widgets::sparkline::tests::gaps_are_blank_and_zero_is_lowest_bar`, `dgxtop-manager::presentation::history::tests::gaps_and_discontinuities_are_never_bridged` |  |
+| F3 history gaps are visible | `dgxtop-ui::modules::history::strip::tests::columns_follow_time_and_keep_gaps`, `dgxtop-ui::widgets::sparkline::tests::gaps_are_blank_and_zero_is_lowest_bar`, `dgxtop-manager::presentation::history::tests::gaps_and_discontinuities_are_never_bridged` |  |
 
 <a id="at17"></a>
 
@@ -444,8 +446,8 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 | S3 rollback starts the old version; v2 data kept | `cli::installer::installs_a_verified_release_keeps_the_previous_binary_and_rolls_back` | Stub old binary |
 | F1 checksum corruption keeps a recoverable file | `cli::installer::a_checksum_mismatch_is_refused_and_the_installed_binary_is_kept`, `dgxtop-store/store_persist_audit::a_garbage_file_is_recreated_with_its_journals`, `dgxtop-store/store_persist_audit::damaged_pages_behind_a_valid_header_are_recreated`, `dgxtop-store/store_persist_archive::corrupt_and_other_format_archives_are_recreated` | D-85: a corrupt or other-format database is deleted and created afresh (the spec keeps it); the binary and `config.json` stay recoverable |
 | F2 unknown schema | `dgxtop-store/store_persist_config::future_schema_is_reported_and_never_rewritten`, `cli::future_schema_is_refused_and_never_rewritten` |  |
-| F3 disk full | `dgxtop-store/store_persist_config::enospc_during_write_keeps_the_old_file` | PARTIAL: configuration write only |
-| F4 an interrupted switch | `dgxtop-store/store_persist_config::rename_failure_keeps_the_old_file`, `dgxtop-store/store_persist_audit::a_file_is_never_deleted_for_what_is_not_its_fault` | PARTIAL: no binary-switch test; D-85: no database migration remains to interrupt |
+| F3 disk full | `dgxtop-store/store_persist_config::a_failure_before_the_rename_keeps_the_old_file` | PARTIAL: configuration write only |
+| F4 an interrupted switch | `dgxtop-store/store_persist_config::a_failure_before_the_rename_keeps_the_old_file`, `dgxtop-store/store_persist_audit::a_file_is_never_deleted_for_what_is_not_its_fault` | PARTIAL: no binary-switch test; D-85: no database migration remains to interrupt |
 | F5 rollback never claims to undo signals | `cli::installer::installs_a_verified_release_keeps_the_previous_binary_and_rolls_back` |  |
 
 <a id="at19"></a>
@@ -552,12 +554,12 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 projections only for visible topics | `dgxtop-manager::presentation::tests::each_view_fills_only_its_visible_topics`, `dgxtop-manager::presentation::tests::processes_view_copies_only_the_window` |  |
+| S1 projections only for visible topics | `dgxtop-manager::presentation::tests::each_view_fills_only_its_visible_topics`, `dgxtop-manager::presentation::tests::the_process_table_copies_only_the_window` |  |
 | S2 per session 1 pending + 1 active | `dgxtop-core::view::tests::slot_keeps_only_latest_and_releases_bytes`, `dgxtop-manager::projection::tests::published_projection_holds_its_bytes_until_dropped` |  |
 | S3 a projection ≤ 1 MiB | `dgxtop-manager::presentation::tests::reference_load_projection_stays_under_one_mebibyte`, `dgxtop-manager::presentation::tests::small_budget_is_respected_and_announced`, `dgxtop-manager::projection::tests::oversized_or_unadmitted_projections_are_skipped` |  |
 | F1 two slow sessions keep retired Arcs bounded |  | UNCOVERED |
 | F2 a module cannot reach history or the store | `contracts::structure::implementation_crates_depend_on_no_workspace_crate_but_core` | PARTIAL / STRUCTURAL |
-| F3 a cancelled history query drops the late view | `dgxtop-manager::history::tests::results_give_points_mean_peak_and_coverage_and_late_ones_are_dropped`, `dgxtop-manager::control::tests::history_view_queries_and_drops_stale_generations` |  |
+| F3 a cancelled history query drops the late view | `dgxtop-manager::history::tests::a_new_series_restarts_the_reads_and_a_new_scale_only_redraws`, `dgxtop-manager::control::tests::history_view_queries_and_drops_stale_generations` |  |
 
 <a id="at26"></a>
 
@@ -750,7 +752,7 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 | Clause | Tests | Note |
 |---|---|---|
 | S1 ≤ 2000 points, 200 k scanned, 4 MiB | `dgxtop-core::config::tests::query_and_worker_defaults_match_the_runtime_limits` | Bars a chart ≤ `store.max_history_points`; the scan and byte caps are REMOVED by D-90 |
-| S2 2 workers, 4 jobs | `dgxtop-manager::history::tests::every_chart_queries_one_window_at_a_bounded_resolution`, `dgxtop-runtime::queues::tests::busy_when_the_queue_is_full_and_never_blocks`, `dgxtop/store_hot_query_limits::at38_two_history_workers_query_while_commits_continue` |  |
+| S2 2 workers, 4 jobs | `dgxtop-runtime::queues::tests::busy_when_the_queue_is_full_and_never_blocks`, `dgxtop/store_hot_query_limits::at38_two_history_workers_query_while_commits_continue` | The Manager's read test became `every_chart_reads_the_same_local_clock_bars` (D-82); the recorded logs predate it |
 | S3 UID lookup off the control/UI threads, numeric fallback | `dgxtop-manager::presentation::processes::tests::rows_carry_gpu_labels_numeric_users_and_sanitized_names` | No NSS lookup exists |
 | F1 a pathological query → QueryTooLarge or Busy |  | REMOVED by D-90: no request can ask for more than a size's buckets |
 | F2 a stuck NSS cannot freeze the screen | `contracts::structure::core_and_the_viewer_carry_no_system_or_driver_dependencies` | No NSS call exists |

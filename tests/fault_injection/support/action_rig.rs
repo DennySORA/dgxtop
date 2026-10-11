@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use dgxtop_core::action::{ConfirmationToken, Signal};
+use dgxtop_core::action::{ConfirmationToken, PersistenceState, Signal};
 use dgxtop_core::budget::ByteLedger;
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::commands::{CommandBody, ViewKind};
@@ -159,9 +159,13 @@ impl ActionRig {
             .expect("checked by the predicate")
     }
 
-    pub fn wait_until_actions_available(&self) {
-        self.actions_view("process actions available", |actions| {
-            actions.actions_available
+    /// Waits until a projection shows the audit store healthy, which is
+    /// when the Manager allows actions here (policy and caller allow them).
+    /// The Manager asks the audit worker for its recovery before its status
+    /// and handles the answers in order, so the recovery was answered too.
+    pub fn wait_until_audit_is_healthy(&self) {
+        self.actions_view("a healthy audit store", |actions| {
+            actions.audit.state == PersistenceState::Healthy
         });
     }
 

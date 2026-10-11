@@ -246,6 +246,7 @@ impl AuditRepository for AuditSpy {
             self.journal.record(Step::OutcomeRecorded {
                 request_id: outcome.request_id,
                 state: outcome.state,
+                detail: outcome.detail.clone(),
             });
         }
         written
@@ -266,7 +267,11 @@ impl AuditRepository for AuditSpy {
         if self.faults.has_crashed() {
             return Err(dead_process(false));
         }
-        self.repository.recover_unknown(now_boot_ns, now_utc)
+        let answer = self.repository.recover_unknown(now_boot_ns, now_utc);
+        self.journal.record(Step::RecoveryAnswered {
+            recovered: answer.as_ref().ok().cloned(),
+        });
+        answer
     }
 
     fn expire(&mut self, before_utc: &str) -> Result<AuditExpiryReport, AuditFailure> {
@@ -284,7 +289,11 @@ impl AuditRepository for AuditSpy {
                 ..PersistenceStatus::healthy(PersistenceKind::Audit)
             };
         }
-        self.repository.status()
+        let status = self.repository.status();
+        self.journal.record(Step::StatusReported {
+            state: status.state,
+        });
+        status
     }
 }
 

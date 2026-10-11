@@ -301,12 +301,16 @@ impl Bench {
 
     fn state_of(&self, prepare_request: Uuid) -> ActionState {
         self.service
-            .view_for(&self.session, self.now.boot_ns)
-            .recent
+            .records
             .iter()
-            .find(|record| record.request_id == prepare_request)
+            .find(|record| record.prepare_request == prepare_request)
             .map(|record| record.state)
             .unwrap()
+    }
+
+    /// Why a prepare would be refused before reaching the action worker.
+    fn unavailable_reason(&self) -> Option<String> {
+        self.service.availability().map(|denial| denial.reason)
     }
 }
 
@@ -1000,14 +1004,7 @@ fn audit_trouble_fails_closed() {
         ResultCode::from(ErrorCode::Unavailable)
     );
     assert!(bench.actions.is_empty());
-    let view = bench.service.view_for(&bench.session, bench.now.boot_ns);
-    assert!(!view.actions_available);
-    assert!(
-        view.unavailable_reason
-            .as_deref()
-            .unwrap()
-            .contains("disk full")
-    );
+    assert!(bench.unavailable_reason().unwrap().contains("disk full"));
     // Before the first status report actions are unavailable as well.
     let audit = CapturingDispatch::new();
     let actions = CapturingDispatch::new();
@@ -1063,12 +1060,7 @@ fn intent_write_failure_never_sends() {
     let ops = bench.actions.take();
     assert!(Bench::sends(&ops).is_empty());
     assert!(ops.iter().any(|op| matches!(op, ActionOp::Release { .. })));
-    assert!(
-        !bench
-            .service
-            .view_for(&bench.session, bench.now.boot_ns)
-            .actions_available
-    );
+    assert!(bench.unavailable_reason().is_some());
 }
 
 #[test]
@@ -1242,13 +1234,6 @@ fn unknown_outcomes_from_recovery_are_surfaced_and_never_resent() {
     assert_eq!(bench.service.unknown_outcomes(), 1);
     let view = bench.service.view_for(&bench.session, bench.now.boot_ns);
     assert_eq!(view.unknown_outcomes, 1);
-    let record = view
-        .recent
-        .iter()
-        .find(|record| record.request_id == recovered.request_id)
-        .unwrap();
-    assert_eq!(record.state, ActionState::Unknown);
-    assert!(record.result.contains("never retried"));
     for _ in 0..30 {
         bench.advance_ms(1_000);
         bench.tick();
@@ -1304,8 +1289,7 @@ fn failed_recovery_blocks_actions_and_is_retried() {
         &open,
         &mut fx,
     );
-    let session = SessionId::new("s1").unwrap();
-    assert!(!service.view_for(&session, now.boot_ns).actions_available);
+    assert!(service.availability().is_some());
     now.boot_ns += 2 * SECOND;
     service.tick(now, &mut fx);
     let ops = audit.take();

@@ -25,7 +25,9 @@ use dgxtop::control_ops::{run_action_op, run_audit_op};
 use dgxtop_adapters::process_action::{
     HostProcessFiles, LinuxPidfd, PidfdActionAdapter, PidfdSyscalls,
 };
-use dgxtop_core::action::{ActionOp, ActionState, AuditOp, ConfirmationToken, Signal};
+use dgxtop_core::action::{
+    ActionOp, ActionState, AuditOp, ConfirmationToken, PersistenceState, Signal,
+};
 use dgxtop_core::budget::{ByteLedger, MIB, Partition, QueueGate};
 use dgxtop_core::canonical::{CollectionPlan, ImmutableSnapshot, ProcessRow};
 use dgxtop_core::clock::TimeProvider;
@@ -40,7 +42,7 @@ use dgxtop_core::ports::{
 };
 use dgxtop_core::quality::{Namespace, SampleKind};
 use dgxtop_core::testing::{CapturingDispatch, MemoryLogger};
-use dgxtop_core::view::{ActionRecordView, ActionsView, ViewModel};
+use dgxtop_core::view::{ActionsView, ViewModel};
 use dgxtop_manager::presentation::HostFacts;
 use dgxtop_manager::{
     Manager, ManagerChannels, ManagerPorts, ManagerSetup, SessionHandle, ShutdownSummary,
@@ -67,6 +69,8 @@ use crate::spies::{
 pub const RESULT_WAIT: Duration = Duration::from_secs(5);
 /// Bound of every wait for a projected actions view.
 pub const VIEW_WAIT: Duration = Duration::from_secs(5);
+/// Bound of every wait for the audit store's side of an action.
+pub const AUDIT_WAIT: Duration = Duration::from_secs(5);
 /// Bound of every wait for a signalled child to exit.
 pub const EXIT_WAIT: Duration = Duration::from_secs(5);
 /// Same bound as the composition root's completion forwarding.
@@ -163,7 +167,7 @@ pub struct Faults {
 /// A confirmation the Manager issued.
 #[derive(Debug, Clone)]
 pub struct Prepared {
-    /// Request id of the `PrepareSignal` (also the record id in the view).
+    /// Request id of the `PrepareSignal`.
     pub request_id: Uuid,
     pub token: ConfirmationToken,
     pub expires_boot_ns: u64,
@@ -595,39 +599,59 @@ impl ActionStack {
 
     // ----- what the frontend sees --------------------------------------------------
 
-    /// Waits until the Manager reports actions as available (audit healthy
-    /// and recovered, policy and caller allow them).
-    pub fn await_available(&self) -> ActionsView {
-        self.session
-            .await_actions("actions available", |view| view.actions_available)
+    // ----- what the audit store saw ----------------------------------------------
+
+    /// Waits until the audit store answered the startup recovery and
+    /// reported itself healthy, and the Manager handled both answers: from
+    /// then on the audit lets actions through (policy and caller decide).
+    pub fn await_audit_ready(&self) {
+        self.await_journal("a recovered, healthy audit store", |steps| {
+            steps.recovered_intents().is_some()
+                && steps
+                    .statuses_reported()
+                    .contains(&PersistenceState::Healthy)
+        });
+        self.settle();
     }
 
-    /// Waits until the Manager reports actions as unavailable for `reason`.
-    pub fn await_unavailable(&self, reason: &str) -> ActionsView {
-        self.session
-            .await_actions(&format!("actions unavailable: {reason}"), |view| {
-                !view.actions_available
-                    && view
-                        .unavailable_reason
-                        .as_deref()
-                        .is_some_and(|text| text.contains(reason))
-            })
+    /// Waits until the audit store reported that it refuses new records and
+    /// the Manager handled the report: from then on actions fail closed.
+    pub fn await_audit_refusing(&self) {
+        self.await_journal("an audit store refusing new records", |steps| {
+            steps
+                .statuses_reported()
+                .contains(&PersistenceState::Failed)
+        });
+        self.settle();
     }
 
-    /// Waits until the recent-actions list shows `request_id` in `state`.
-    pub fn await_record(&self, request_id: Uuid, state: ActionState) -> ActionRecordView {
-        let view = self.session.await_actions(
-            &format!("action {request_id} in state {}", state.name()),
-            |view| {
-                view.recent
-                    .iter()
-                    .any(|record| record.request_id == request_id && record.state == state)
+    /// Waits until the audit store wrote the outcome row `state` of the
+    /// intent of `confirm_request` and returns the row's detail.
+    pub fn await_outcome(&self, confirm_request: Uuid, state: ActionState) -> String {
+        let mut detail = None;
+        self.await_journal(
+            &format!("outcome {} of {confirm_request}", state.name()),
+            |steps| {
+                detail = steps.outcome_detail(confirm_request, state);
+                detail.is_some()
             },
         );
-        view.recent
-            .into_iter()
-            .find(|record| record.request_id == request_id)
-            .expect("record present")
+        detail.expect("checked by the wait")
+    }
+
+    fn await_journal(&self, what: &str, mut accept: impl FnMut(&Steps) -> bool) {
+        let deadline = Instant::now() + AUDIT_WAIT;
+        loop {
+            let steps = self.steps();
+            if accept(&steps) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {what}; journal: {steps:#?}"
+            );
+            thread::sleep(POLL);
+        }
     }
 
     // ----- synchronization and teardown ------------------------------------------

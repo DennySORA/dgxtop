@@ -1,5 +1,5 @@
 //! One protected action and the bounded registry of actions, plus the
-//! `ActionsView` projection (never containing the token).
+//! confirmation it projects (never containing the token).
 
 use dgxtop_core::action::{
     ActionHandle, ActionState, ConfirmationToken, ExitObservation, PreparedProcess, Signal,
@@ -7,12 +7,13 @@ use dgxtop_core::action::{
 use dgxtop_core::clock::ns_to_ms;
 use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::identity::{ProcessKey, SessionId};
-use dgxtop_core::view::{ActionRecordView, ConfirmationView};
+use dgxtop_core::view::ConfirmationView;
 use uuid::Uuid;
 
 /// Non-terminal actions at once (RUNTIME.md §4).
 pub(crate) const MAX_INFLIGHT_ACTIONS: usize = 8;
-/// Terminal actions kept for the recent list.
+/// Terminal actions kept, so a late confirm or cancel of their token is
+/// answered with what became of them.
 pub(crate) const MAX_RECENT_ACTIONS: usize = 32;
 
 /// Why tokens that had not reached `sending` were revoked.
@@ -88,10 +89,6 @@ pub(crate) struct ActionRecord {
     pub(crate) send_deadline_ns: Option<u64>,
     pub(crate) exit: Option<ExitWatch>,
     pub(crate) revoked: Option<RevokeReason>,
-    pub(crate) result: String,
-    pub(crate) updated_ns: u64,
-    /// Recovered at startup without outcome: displayed, never resent.
-    pub(crate) recovered: bool,
 }
 
 impl ActionRecord {
@@ -117,23 +114,6 @@ impl ActionRecord {
                 | ActionState::IntentPending
                 | ActionState::IntentCommitted
         )
-    }
-
-    pub(crate) fn set_state(&mut self, state: ActionState, result: &str, now_ns: u64) {
-        self.state = state;
-        self.result = dgxtop_core::text::sanitize_message(result);
-        self.updated_ns = now_ns;
-    }
-
-    pub(crate) fn recent_view(&self, now_ns: u64) -> ActionRecordView {
-        ActionRecordView {
-            request_id: self.prepare_request,
-            target: self.target.summary(),
-            signal: self.signal,
-            state: self.state,
-            result: self.result.clone(),
-            age_ms: ns_to_ms(now_ns.saturating_sub(self.updated_ns)),
-        }
     }
 
     pub(crate) fn confirmation_view(
@@ -231,7 +211,7 @@ impl ActionRegistry {
     pub(crate) fn active(&self) -> usize {
         self.records
             .iter()
-            .filter(|record| !record.state.is_terminal() && !record.recovered)
+            .filter(|record| !record.state.is_terminal())
             .count()
     }
 
@@ -246,12 +226,12 @@ impl ActionRegistry {
         let terminal = self
             .records
             .iter()
-            .filter(|record| record.state.is_terminal() || record.recovered)
+            .filter(|record| record.state.is_terminal())
             .count();
         let mut excess = terminal.saturating_sub(MAX_RECENT_ACTIONS);
         // Oldest terminal records go first; holding a pidfd keeps a record.
         self.records.retain(|record| {
-            let removable = (record.state.is_terminal() || record.recovered) && !record.handle_held;
+            let removable = record.state.is_terminal() && !record.handle_held;
             if excess > 0 && removable {
                 excess -= 1;
                 false
@@ -308,9 +288,6 @@ mod tests {
             send_deadline_ns: None,
             exit: None,
             revoked: None,
-            result: String::new(),
-            updated_ns: 0,
-            recovered: false,
         }
     }
 

@@ -423,10 +423,7 @@ impl StaticInputs {
             intervals,
             actions: Arc::new(ActionsView {
                 confirmation: None,
-                recent: Vec::new(),
                 audit: PersistenceStatus::healthy(PersistenceKind::Audit),
-                actions_available: false,
-                unavailable_reason: Some("replay namespace is read-only".to_owned()),
                 unknown_outcomes: 0,
             }),
             history: Arc::new(history_view(

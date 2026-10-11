@@ -28,27 +28,24 @@ pub enum Partition {
     HotState,
     /// 300 s full-resolution canonical history.
     RawHistory,
-    /// 24 h minute rollups, segments, bridges and the gap index.
+    /// Each series' bookkeeping, its segments and the gap index (D-90).
     Aggregates,
     /// All live wire/decoded/collection buffers.
     Ingress,
     /// View projections, formatted caches and retired frames.
     Presentation,
-    /// Pinned snapshots, scan scratch and query results.
-    HistoryQuery,
     /// Commands/results, archive journal, log buffer and safety reserve.
     Reserve,
 }
 
 impl Partition {
-    pub const ALL: [Partition; 8] = [
+    pub const ALL: [Partition; 7] = [
         Partition::Catalog,
         Partition::HotState,
         Partition::RawHistory,
         Partition::Aggregates,
         Partition::Ingress,
         Partition::Presentation,
-        Partition::HistoryQuery,
         Partition::Reserve,
     ];
 
@@ -57,13 +54,16 @@ impl Partition {
         match self {
             Self::Catalog => 24,
             Self::HotState => 16,
-            Self::RawHistory => 32,
-            // RUNTIME.md §6's 96 MiB plus the 32 MiB of the raw candidate
-            // retention, which nothing read (D-84).
-            Self::Aggregates => 128,
+            // RUNTIME.md §6's 32 MiB plus what the aggregates and the
+            // removed history query partition no longer hold (D-98): raw
+            // steps are the one share that grows with the sampling rate and
+            // the series count.
+            Self::RawHistory => 144,
+            // No minute buckets any more (D-90), only bookkeeping, segments
+            // and gaps (D-98).
+            Self::Aggregates => 32,
             Self::Ingress => 8,
             Self::Presentation => 12,
-            Self::HistoryQuery => 16,
             Self::Reserve => 20,
         }
     }
@@ -76,8 +76,7 @@ impl Partition {
             Self::Aggregates => 3,
             Self::Ingress => 4,
             Self::Presentation => 5,
-            Self::HistoryQuery => 6,
-            Self::Reserve => 7,
+            Self::Reserve => 6,
         }
     }
 
@@ -89,7 +88,6 @@ impl Partition {
             Self::Aggregates => "aggregates",
             Self::Ingress => "ingress",
             Self::Presentation => "presentation",
-            Self::HistoryQuery => "history_query",
             Self::Reserve => "reserve",
         }
     }
@@ -98,13 +96,13 @@ impl Partition {
 /// Byte limits per partition. Scaling is exact: `share_mib * limit_mib * 4096`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PartitionLimits {
-    limits: [u64; 8],
+    limits: [u64; Partition::ALL.len()],
 }
 
 impl PartitionLimits {
     /// Limits for a total budget of `memory_limit_mib` MiB.
     pub fn for_memory_limit_mib(memory_limit_mib: u64) -> Self {
-        let mut limits = [0u64; 8];
+        let mut limits = [0u64; Partition::ALL.len()];
         for partition in Partition::ALL {
             // share/256 of the budget; MIB/256 == 4096 keeps this exact.
             limits[partition.index()] = partition
@@ -158,7 +156,7 @@ impl PartitionCounters {
 
 struct LedgerInner {
     limits: PartitionLimits,
-    counters: [PartitionCounters; 8],
+    counters: [PartitionCounters; Partition::ALL.len()],
 }
 
 impl LedgerInner {
@@ -232,16 +230,7 @@ impl ByteLedger {
         Self {
             inner: Arc::new(LedgerInner {
                 limits,
-                counters: [
-                    PartitionCounters::new(),
-                    PartitionCounters::new(),
-                    PartitionCounters::new(),
-                    PartitionCounters::new(),
-                    PartitionCounters::new(),
-                    PartitionCounters::new(),
-                    PartitionCounters::new(),
-                    PartitionCounters::new(),
-                ],
+                counters: std::array::from_fn(|_| PartitionCounters::new()),
             }),
         }
     }
@@ -614,7 +603,8 @@ mod tests {
     fn partitions_scale_exactly_and_sum_to_total() {
         let reference = PartitionLimits::for_memory_limit_mib(256);
         assert_eq!(reference.total(), 256 * MIB);
-        assert_eq!(reference.limit(Partition::Aggregates), 128 * MIB);
+        assert_eq!(reference.limit(Partition::RawHistory), 144 * MIB);
+        assert_eq!(reference.limit(Partition::Aggregates), 32 * MIB);
         assert_eq!(reference.limit(Partition::Ingress), 8 * MIB);
         let small = PartitionLimits::for_memory_limit_mib(64);
         assert_eq!(small.total(), 64 * MIB);

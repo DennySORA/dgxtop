@@ -188,6 +188,41 @@ class CheckValidationTests(unittest.TestCase):
         self.assertIn("AT17: dgxtop-core::query::tests::moved does not resolve (dgxtop-core has no module query)", problems)
         self.assertNotIn("does not resolve", "\n".join(check_validation.check(document, self.evidence)))
 
+    def test_a_cited_test_must_still_be_defined_in_the_sources(self) -> None:
+        workspace = self.workspace()
+        (workspace / "crates/core/src/budget/mod.rs").write_text("#[test]\nfn kept() {}\n")
+        (workspace / "scripts").mkdir()
+        (workspace / "scripts/test_tools.py").write_text("def test_kept(self):\n    pass\n")
+        self.tests["AT17"] = (
+            "`dgxtop-core::budget::tests::{kept, deleted}`, `dgxtop-core::budget::tests::renamed`, "
+            "`scripts/test_tools.py::ToolsTests::test_kept`"
+        )
+        self.tests["AT18"] = ""
+        problems = check_validation.check(self.write(), self.evidence, workspace)
+        stale = [problem for problem in problems if "names no test in the sources" in problem]
+        self.assertIn(
+            "AT17: dgxtop-core::budget::tests::{kept, deleted} names no test in the sources (deleted)", stale
+        )
+        self.assertIn("AT17: dgxtop-core::budget::tests::renamed names no test in the sources (renamed)", stale)
+        self.assertFalse(any("test_kept" in problem for problem in stale), stale)
+        self.assertFalse(any(problem.startswith("AT18") for problem in stale), "a removed row cites nothing")
+        self.assertEqual(check_validation.stale_citations({"AT01": ""}, set()), [])
+        self.assertNotIn(
+            "names no test", "\n".join(check_validation.check(self.write(), self.evidence)), "needs a workspace"
+        )
+
+    def test_definitions_are_read_from_rust_and_python_sources_only(self) -> None:
+        workspace = self.workspace()
+        (workspace / "tests").mkdir()
+        (workspace / "tests/suite.rs").write_text("fn rust_case() {}\n    async fn indented_case() {}\n")
+        (workspace / "tests/notes.md").write_text("fn not_code() {}\n")
+        (workspace / "spec").mkdir()
+        (workspace / "spec/tool.py").write_text("def outside_the_sources(): pass\n")
+        defined = check_validation.defined_functions(workspace)
+        self.assertTrue({"rust_case", "indented_case"} <= defined)
+        self.assertNotIn("not_code", defined)
+        self.assertNotIn("outside_the_sources", defined)
+
     def test_every_case_needs_a_section(self) -> None:
         document = self.write()
         document.write_text(document.read_text().replace("### AT17 — title", "### Something else"))

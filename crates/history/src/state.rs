@@ -641,7 +641,7 @@ impl HistoryState {
 mod tests {
     use super::*;
     use dgxtop_core::history::HistoryMethod;
-    use dgxtop_core::metric::{Scalar, descriptor, ids};
+    use dgxtop_core::metric::{Scalar, ids};
     use dgxtop_core::quality::SampleKind;
     use dgxtop_core::testing::{metric_key, source_id};
 
@@ -667,7 +667,6 @@ mod tests {
     fn gauge(entity: &str, seconds: u64, value: f64) -> GaugeAppend {
         GaugeAppend {
             key: metric_key(entity, ids::GPU_TEMPERATURE, "gpu"),
-            descriptor: descriptor(ids::GPU_TEMPERATURE).unwrap(),
             identity: SegmentIdentity {
                 source_id: source_id("nvml:0:temp"),
                 source_generation: 1,
