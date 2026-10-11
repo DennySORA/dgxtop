@@ -99,7 +99,7 @@ fn evaluate_gauge(
         source_filter: query.source_filter.as_ref(),
         gaps: &pin.gaps,
         now_ns: guard.now(),
-        grid: pin.grid,
+        grid: pin.query_minutes(),
     };
     let Some(stat) = stat else {
         guard.admit_estimate(
@@ -119,13 +119,18 @@ fn evaluate_gauge(
         window,
         floors,
         rollup_boundary(query.resolution_ms, &floors),
-        pin.grid,
+        pin.query_minutes(),
     );
     guard.admit_estimate(
         gauge::gauge_scan_estimate(&inputs, &plan),
         &suggestion(query),
     )?;
-    let mut grid = choose_grid(query.resolution_ms, window, &plan, (cap, pin.grid));
+    let mut grid = choose_grid(
+        query.resolution_ms,
+        window,
+        &plan,
+        (cap, pin.query_minutes()),
+    );
     for _ in 0..MAX_REGRIDS {
         let mut sink = PointSink::new(cap);
         match grid {
@@ -147,7 +152,7 @@ fn evaluate_gauge(
             grid,
             window,
             (cap, grid_alignment(&plan)),
-            pin.grid,
+            pin.query_minutes(),
         ));
     }
     Err(too_many_points(query))
@@ -169,7 +174,7 @@ fn evaluate_counter(
         segments: &pin.segments,
         source_filter: query.source_filter.as_ref(),
         gaps: &pin.gaps,
-        grid: pin.grid,
+        grid: pin.query_minutes(),
     };
     if query.stat == HistoryStat::Raw {
         guard.admit_estimate(
@@ -189,14 +194,19 @@ fn evaluate_counter(
         window,
         floors,
         rollup_boundary(query.resolution_ms, &floors),
-        pin.grid,
+        pin.query_minutes(),
     );
     plan.absorb_crossings(|boundary| inputs.crossing_at(boundary));
     guard.admit_estimate(
         counter::counter_scan_estimate(&inputs, &plan),
         &suggestion(query),
     )?;
-    let mut grid = choose_grid(query.resolution_ms, window, &plan, (cap, pin.grid));
+    let mut grid = choose_grid(
+        query.resolution_ms,
+        window,
+        &plan,
+        (cap, pin.query_minutes()),
+    );
     for _ in 0..MAX_REGRIDS {
         let mut sink = PointSink::new(cap);
         match grid {
@@ -217,7 +227,7 @@ fn evaluate_counter(
             grid,
             window,
             (cap, grid_alignment(&plan)),
-            pin.grid,
+            pin.query_minutes(),
         ));
     }
     Err(too_many_points(query))

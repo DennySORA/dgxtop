@@ -15,17 +15,19 @@
 use crate::records::BUCKET_NS;
 
 /// Minute boundaries on the boot clock: boot 0 and `phase_ns + k × 60 s`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Where no grid is known yet the holder says so (`Option`): there is no
+/// default grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MinuteGrid {
     /// The first boundary after boot 0, below one minute.
     phase_ns: u64,
 }
 
 impl MinuteGrid {
-    /// Boundaries on whole minutes of the boot clock (tests and
-    /// compositions without a wall clock).
-    #[cfg(test)]
-    pub(crate) const BOOT: Self = Self { phase_ns: 0 };
+    /// Boundaries on whole minutes of the boot clock: the grid of a boot
+    /// that fell on a whole UTC minute, and the only minutes there are for
+    /// laying out query points before the boot is paired with UTC.
+    pub(crate) const BOOT_CLOCK: Self = Self { phase_ns: 0 };
 
     /// The grid whose boundaries fall on whole UTC minutes, given one
     /// boot-to-UTC pairing.
@@ -100,7 +102,7 @@ mod tests {
 
     #[test]
     fn the_boot_grid_cuts_whole_boot_minutes() {
-        let grid = MinuteGrid::BOOT;
+        let grid = MinuteGrid::BOOT_CLOCK;
         assert_eq!(grid.floor(0), 0);
         assert_eq!(grid.floor(BUCKET_NS - 1), 0);
         assert_eq!(grid.floor(BUCKET_NS), BUCKET_NS);

@@ -98,8 +98,6 @@ pub(crate) struct Series {
     pub counter: CounterTrack,
     pub gaps: GapList,
     pub finalized_through_ns: u64,
-    /// The boot's minutes; `None` until the boot-to-UTC pairing is known.
-    grid: Option<MinuteGrid>,
     /// Whether any finalization ran; until then `finalized_through_ns` is
     /// only the creation minute and nothing before it is final.
     finalized_any: bool,
@@ -152,7 +150,6 @@ impl Series {
             },
             gaps: GapList::new(ledger, MAX_SERIES_GAPS),
             finalized_through_ns: grid.map_or(first_time_ns, |grid| grid.floor(first_time_ns)),
-            grid,
             finalized_any: false,
             last_activity_ns: now_ns,
             capacity_truncated: false,
@@ -160,13 +157,11 @@ impl Series {
         })
     }
 
-    /// Takes the boot's minutes once they are known; the creation minute
-    /// moves onto them (nothing was final, so no row is cut again).
-    pub(crate) fn adopt_grid(&mut self, grid: MinuteGrid) {
-        if self.grid.is_some() {
-            return;
-        }
-        self.grid = Some(grid);
+    /// Moves the series onto the boot's minutes once they are known (called
+    /// once, when the grid is fixed): the creation minute moves onto them
+    /// (nothing was final, so no row is cut again).
+    pub(crate) fn settle_on_grid(&mut self, grid: MinuteGrid) {
+        debug_assert!(!self.finalized_any, "a minute was final before the grid");
         if !self.finalized_any {
             self.finalized_through_ns = grid.floor(self.finalized_through_ns);
         }
@@ -174,11 +169,6 @@ impl Series {
         // the floor raw history aged to.
         self.gauge.rollup_floor_ns = grid.floor(self.gauge.rollup_floor_ns);
         self.counter.rollup_floor_ns = grid.floor(self.counter.rollup_floor_ns);
-    }
-
-    /// The boot's minutes, when known.
-    pub(crate) fn grid(&self) -> Option<MinuteGrid> {
-        self.grid
     }
 
     /// Whether a gauge sample (or cut) at `time_ns` may be appended.
@@ -195,9 +185,9 @@ impl Series {
     /// Lets an interval that started before the series' first sample in (a
     /// batch applies its gauge first, which would otherwise make an interval
     /// ending on that minute boundary look late) while no minute is final.
-    pub(crate) fn reach_back_to(&mut self, time_ns: u64) {
+    pub(crate) fn reach_back_to(&mut self, time_ns: u64, grid: Option<MinuteGrid>) {
         if !self.finalized_any {
-            let start = self.grid.map_or(time_ns, |grid| grid.floor(time_ns));
+            let start = grid.map_or(time_ns, |grid| grid.floor(time_ns));
             self.finalized_through_ns = self.finalized_through_ns.min(start);
         }
     }
@@ -265,10 +255,13 @@ impl Series {
         Ok(())
     }
 
-    /// Computes the rollups for the minutes that ended before `horizon_ns`;
-    /// none while the boot's minutes are unknown.
-    pub(crate) fn plan_finalization(&self, horizon_ns: u64) -> Option<Finalization> {
-        let grid = self.grid?;
+    /// Computes the rollups for the minutes of `grid` that ended before
+    /// `horizon_ns` (the caller has the grid only once it is fixed).
+    pub(crate) fn plan_finalization(
+        &self,
+        horizon_ns: u64,
+        grid: MinuteGrid,
+    ) -> Option<Finalization> {
         let horizon = grid.floor(horizon_ns);
         let from = self.finalized_through_ns;
         if horizon <= from {
@@ -303,11 +296,15 @@ impl Series {
     /// The minutes not finalized yet, from the raw steps up to `now_ns`
     /// (D-82: the Overview's latest bar holds them too). Computed for a
     /// read, never stored: later samples may still change them.
-    pub(crate) fn provisional_gauge_buckets(&self, now_ns: u64) -> Vec<GaugeBucket> {
+    pub(crate) fn provisional_gauge_buckets(
+        &self,
+        now_ns: u64,
+        grid: MinuteGrid,
+    ) -> Vec<GaugeBucket> {
         let from = self.finalized_through_ns;
-        let Some(grid) = self.grid.filter(|_| now_ns > from) else {
+        if now_ns <= from {
             return Vec::new();
-        };
+        }
         let gauge_slices = self.gauge.raw.slices();
         let raw = RawGauge {
             slices: &gauge_slices,
@@ -388,8 +385,8 @@ impl Series {
     /// Moves the gauge raw floor (bucket aligned, never past the finalized
     /// horizon), keeping the newest evicted record as the carry so the step
     /// crossing the floor stays available.
-    fn advance_gauge_raw_floor(&mut self, target_ns: u64) -> usize {
-        let target = self.raw_floor_target(target_ns);
+    fn advance_gauge_raw_floor(&mut self, target_ns: u64, grid: Option<MinuteGrid>) -> usize {
+        let target = self.raw_floor_target(target_ns, grid);
         if target <= self.gauge.raw_floor_ns {
             return 0;
         }
@@ -405,7 +402,7 @@ impl Series {
         self.gauge.carry = newest_evicted
             .filter(|record| record.value.is_some() && record.stale_deadline_ns > target);
         self.gauge.raw_floor_ns = target;
-        if self.grid.is_none() {
+        if grid.is_none() {
             self.close_unsummarized(target);
             self.gauge.rollup_floor_ns = self.gauge.rollup_floor_ns.max(target);
         }
@@ -414,13 +411,13 @@ impl Series {
             .drop_front_while(|last| last.time_ns < target)
     }
 
-    fn advance_counter_raw_floor(&mut self, target_ns: u64) -> usize {
-        let target = self.raw_floor_target(target_ns);
+    fn advance_counter_raw_floor(&mut self, target_ns: u64, grid: Option<MinuteGrid>) -> usize {
+        let target = self.raw_floor_target(target_ns, grid);
         if target <= self.counter.raw_floor_ns {
             return 0;
         }
         self.counter.raw_floor_ns = target;
-        if self.grid.is_none() {
+        if grid.is_none() {
             self.close_unsummarized(target);
             self.counter.rollup_floor_ns = self.counter.rollup_floor_ns.max(target);
         }
@@ -433,8 +430,8 @@ impl Series {
     /// start no later than the finalized horizon (what goes is summarized
     /// by rollups); before the grid, `target_ns` itself, because no minute
     /// can be cut yet and raw history must not wait for the wall clock.
-    fn raw_floor_target(&self, target_ns: u64) -> u64 {
-        match self.grid {
+    fn raw_floor_target(&self, target_ns: u64, grid: Option<MinuteGrid>) -> u64 {
+        match grid {
             Some(grid) => grid.floor(target_ns).min(self.finalized_through_ns),
             None => target_ns,
         }
@@ -447,9 +444,9 @@ impl Series {
     }
 
     /// Normal raw retention.
-    pub(crate) fn advance_raw_floors(&mut self, target_ns: u64) -> usize {
-        self.advance_gauge_raw_floor(target_ns)
-            .saturating_add(self.advance_counter_raw_floor(target_ns))
+    pub(crate) fn advance_raw_floors(&mut self, target_ns: u64, grid: Option<MinuteGrid>) -> usize {
+        self.advance_gauge_raw_floor(target_ns, grid)
+            .saturating_add(self.advance_counter_raw_floor(target_ns, grid))
     }
 
     fn advance_gauge_rollup_floor(&mut self, target: u64) -> usize {
@@ -479,9 +476,13 @@ impl Series {
 
     /// Normal rollup and gap retention. Once retention catches up with a
     /// capacity truncation, the truncation is no longer visible.
-    pub(crate) fn advance_rollup_floors(&mut self, target_ns: u64) -> usize {
+    pub(crate) fn advance_rollup_floors(
+        &mut self,
+        target_ns: u64,
+        grid: Option<MinuteGrid>,
+    ) -> usize {
         // Before the grid there is no rollup, but gaps still age out.
-        let target = self.grid.map_or(target_ns, |grid| grid.floor(target_ns));
+        let target = grid.map_or(target_ns, |grid| grid.floor(target_ns));
         let dropped = self
             .advance_gauge_rollup_floor(target)
             .saturating_add(self.advance_counter_rollup_floor(target))
@@ -504,15 +505,15 @@ impl Series {
     /// The raw track whose oldest chunk eviction drops next, with the
     /// floor that drops it: on the grid only a chunk whose minutes are
     /// final; before the grid any chunk (nothing can be final yet).
-    fn evictable_raw_track(&self) -> Option<RawTrack> {
+    fn evictable_raw_track(&self, grid: Option<MinuteGrid>) -> Option<RawTrack> {
         let finalized = self.finalized_through_ns;
-        let summarized = |floor: &u64| self.grid.is_none() || *floor <= finalized;
+        let summarized = |floor: &u64| grid.is_none() || *floor <= finalized;
         let gauge = self
             .gauge
             .raw
             .oldest_chunk()
             .and_then(<[GaugeSample]>::last)
-            .map(|last| match self.grid {
+            .map(|last| match grid {
                 Some(grid) => grid.end_of(last.time_ns),
                 None => last.time_ns.saturating_add(1),
             })
@@ -523,7 +524,7 @@ impl Series {
             .raw
             .oldest_chunk()
             .and_then(<[CounterSample]>::last)
-            .map(|last| self.grid.map_or(last.end_ns, |grid| grid.ceil(last.end_ns)))
+            .map(|last| grid.map_or(last.end_ns, |grid| grid.ceil(last.end_ns)))
             .filter(summarized)
             .map(RawTrack::Counter);
         match (gauge, counter) {
@@ -534,18 +535,18 @@ impl Series {
     }
 
     /// Floor the next capacity eviction of raw data would set (oldest first).
-    pub(crate) fn oldest_evictable_raw_ns(&self) -> Option<u64> {
-        self.evictable_raw_track().map(|track| match track {
+    pub(crate) fn oldest_evictable_raw_ns(&self, grid: Option<MinuteGrid>) -> Option<u64> {
+        self.evictable_raw_track(grid).map(|track| match track {
             RawTrack::Gauge(floor) | RawTrack::Counter(floor) => floor,
         })
     }
 
     /// Drops the oldest evictable raw chunk.
-    pub(crate) fn evict_oldest_raw(&mut self) -> RawEviction {
-        let (from, records, to) = match self.evictable_raw_track() {
+    pub(crate) fn evict_oldest_raw(&mut self, grid: Option<MinuteGrid>) -> RawEviction {
+        let (from, records, to) = match self.evictable_raw_track(grid) {
             Some(RawTrack::Gauge(floor)) => {
                 let from = self.gauge.raw.first().map_or(floor, |first| first.time_ns);
-                (from, self.advance_gauge_raw_floor(floor), floor)
+                (from, self.advance_gauge_raw_floor(floor, grid), floor)
             }
             Some(RawTrack::Counter(floor)) => {
                 let from = self
@@ -553,20 +554,28 @@ impl Series {
                     .raw
                     .first()
                     .map_or(floor, |first| first.start_ns);
-                (from, self.advance_counter_raw_floor(floor), floor)
+                (from, self.advance_counter_raw_floor(floor, grid), floor)
             }
             None => (0, 0, 0),
         };
-        let unsummarized = (self.grid.is_none() && records > 0).then_some((from, to));
+        let unsummarized = (grid.is_none() && records > 0).then_some((from, to));
         RawEviction {
             records,
             unsummarized,
         }
     }
 
-    fn rollup_candidates(&self) -> [Option<(u64, u64)>; 3] {
-        // Rollups exist only once the grid is known.
-        let grid = self.grid.unwrap_or_default();
+    fn rollup_candidates(&self, grid: Option<MinuteGrid>) -> [Option<(u64, u64)>; 3] {
+        // Rollups are cut only on the grid: without one there are none.
+        let Some(grid) = grid else {
+            debug_assert!(
+                self.gauge.buckets.is_empty()
+                    && self.counter.buckets.is_empty()
+                    && self.counter.bridges.is_empty(),
+                "rollups before the grid"
+            );
+            return [None; 3];
+        };
         let gauge = self
             .gauge
             .buckets
@@ -586,8 +595,8 @@ impl Series {
     }
 
     /// Start of the oldest rollup data or gap capacity eviction could drop.
-    pub(crate) fn oldest_rollup_ns(&self) -> Option<u64> {
-        self.rollup_candidates()
+    pub(crate) fn oldest_rollup_ns(&self, grid: Option<MinuteGrid>) -> Option<u64> {
+        self.rollup_candidates(grid)
             .iter()
             .flatten()
             .map(|(start, _)| *start)
@@ -596,8 +605,11 @@ impl Series {
     }
 
     /// Shortens rollups by their oldest chunk (or drops the oldest gap).
-    pub(crate) fn evict_oldest_rollup(&mut self) -> Option<RollupEviction> {
-        let candidates = self.rollup_candidates();
+    pub(crate) fn evict_oldest_rollup(
+        &mut self,
+        grid: Option<MinuteGrid>,
+    ) -> Option<RollupEviction> {
+        let candidates = self.rollup_candidates(grid);
         let oldest = candidates
             .iter()
             .enumerate()
@@ -681,11 +693,12 @@ mod tests {
     use dgxtop_core::testing::{metric_key, source_id};
 
     const SECOND: u64 = 1_000_000_000;
+    const GRID: MinuteGrid = MinuteGrid::BOOT_CLOCK;
 
     fn series(ledger: &ByteLedger) -> Series {
         let key = metric_key("cpu.package.0", ids::CPU_TEMPERATURE_PACKAGE, "package:0");
         let descriptor = descriptor(ids::CPU_TEMPERATURE_PACKAGE).unwrap();
-        Series::new(key, descriptor, (0, 0), Some(MinuteGrid::BOOT), ledger).unwrap()
+        Series::new(key, descriptor, (0, 0), Some(GRID), ledger).unwrap()
     }
 
     fn gauge_identity() -> SegmentIdentity {
@@ -724,7 +737,7 @@ mod tests {
         for second in 0..130 {
             push_gauge(&mut series, second, 50.0);
         }
-        let plan = series.plan_finalization(125 * SECOND).unwrap();
+        let plan = series.plan_finalization(125 * SECOND, GRID).unwrap();
         assert_eq!(plan.target_ns, 120 * SECOND);
         assert_eq!(plan.gauge_buckets.len(), 2);
         let mut report = HistoryReport::default();
@@ -736,7 +749,7 @@ mod tests {
             series.admit_sample(129 * SECOND),
             Err(DropReason::OutOfOrder)
         );
-        assert!(series.plan_finalization(125 * SECOND).is_none());
+        assert!(series.plan_finalization(125 * SECOND, GRID).is_none());
         let slices_bucket = series.gauge.buckets.first().copied().unwrap();
         assert_eq!(slices_bucket.covered_ns, 60 * SECOND);
         assert_eq!(slices_bucket.sample_count, 60);
@@ -754,14 +767,14 @@ mod tests {
             );
         }
         assert_eq!(
-            series.advance_raw_floors(150 * SECOND),
+            series.advance_raw_floors(150 * SECOND, Some(GRID)),
             0,
             "nothing finalized yet"
         );
-        let plan = series.plan_finalization(190 * SECOND).unwrap();
+        let plan = series.plan_finalization(190 * SECOND, GRID).unwrap();
         let mut report = HistoryReport::default();
         series.commit_finalization(plan, &mut report);
-        assert!(series.advance_raw_floors(150 * SECOND) > 0);
+        assert!(series.advance_raw_floors(150 * SECOND, Some(GRID)) > 0);
         assert_eq!(series.gauge.raw_floor_ns, 120 * SECOND);
         let carry = series.gauge.carry.unwrap();
         assert_eq!(carry.time_ns, 119 * SECOND);
@@ -774,17 +787,17 @@ mod tests {
         for second in 0..400 {
             push_gauge(&mut series, second, 1.0);
         }
-        assert!(series.oldest_evictable_raw_ns().is_none());
-        let plan = series.plan_finalization(400 * SECOND).unwrap();
+        assert!(series.oldest_evictable_raw_ns(Some(GRID)).is_none());
+        let plan = series.plan_finalization(400 * SECOND, GRID).unwrap();
         let mut report = HistoryReport::default();
         series.commit_finalization(plan, &mut report);
-        let floor = series.oldest_evictable_raw_ns().unwrap();
+        let floor = series.oldest_evictable_raw_ns(Some(GRID)).unwrap();
         assert_eq!(floor, 120 * SECOND);
-        let eviction = series.evict_oldest_raw();
+        let eviction = series.evict_oldest_raw(Some(GRID));
         assert_eq!(eviction.records, 64);
         assert_eq!(eviction.unsummarized, None, "the minutes have rollups");
         assert_eq!(series.gauge.raw_floor_ns, 120 * SECOND);
-        let eviction = series.evict_oldest_rollup().unwrap();
+        let eviction = series.evict_oldest_rollup(Some(GRID)).unwrap();
         assert_eq!(eviction.from_ns, 0);
         assert_eq!(eviction.to_ns, 360 * SECOND);
         assert!(series.capacity_truncated);
@@ -803,8 +816,8 @@ mod tests {
         }
         // The first chunk holds seconds 0 to 63.
         let floor = 63 * SECOND + 1;
-        assert_eq!(series.oldest_evictable_raw_ns(), Some(floor));
-        let eviction = series.evict_oldest_raw();
+        assert_eq!(series.oldest_evictable_raw_ns(None), Some(floor));
+        let eviction = series.evict_oldest_raw(None);
         assert_eq!(eviction.records, 64);
         assert_eq!(eviction.unsummarized, Some((0, floor)));
         assert_eq!(series.gauge.raw_floor_ns, floor);
@@ -846,7 +859,7 @@ mod tests {
             key,
             descriptor,
             (60 * SECOND, 60 * SECOND),
-            Some(MinuteGrid::BOOT),
+            Some(GRID),
             &ledger,
         )
         .unwrap();
@@ -855,13 +868,13 @@ mod tests {
             series.admit_interval(start, 60 * SECOND),
             Err(DropReason::Late)
         );
-        series.reach_back_to(start);
+        series.reach_back_to(start, Some(GRID));
         assert_eq!(series.finalized_through_ns, 0);
         assert!(series.admit_interval(start, 60 * SECOND).is_ok());
 
-        let plan = series.plan_finalization(120 * SECOND).unwrap();
+        let plan = series.plan_finalization(120 * SECOND, GRID).unwrap();
         series.commit_finalization(plan, &mut HistoryReport::default());
-        series.reach_back_to(start);
+        series.reach_back_to(start, Some(GRID));
         assert_eq!(series.finalized_through_ns, 120 * SECOND);
         assert_eq!(
             series.admit_interval(start, 60 * SECOND),

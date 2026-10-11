@@ -318,7 +318,7 @@ mod tests {
 
     const MINUTE: u64 = BUCKET_NS;
     const SECOND: u64 = 1_000_000_000;
-    const BOOT: MinuteGrid = MinuteGrid::BOOT;
+    const BOOT: MinuteGrid = MinuteGrid::BOOT_CLOCK;
 
     fn window(start: u64, end: u64) -> Window {
         Window {

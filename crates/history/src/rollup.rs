@@ -136,7 +136,7 @@ mod tests {
             steps.into_iter(),
             samples.iter(),
             (0, 120 * SECOND),
-            MinuteGrid::BOOT,
+            MinuteGrid::BOOT_CLOCK,
         );
         assert_eq!(buckets.len(), 3);
         assert_eq!((buckets[0].start_ns, buckets[0].segment), (0, 0));
@@ -192,7 +192,7 @@ mod tests {
             vec![step(50.0, 130.0, 1.0, 0)].into_iter(),
             std::iter::empty(),
             (60 * SECOND, 120 * SECOND),
-            MinuteGrid::BOOT,
+            MinuteGrid::BOOT_CLOCK,
         );
         assert_eq!(buckets.len(), 1);
         assert_eq!(buckets[0].start_ns, 60 * SECOND);
@@ -212,7 +212,7 @@ mod tests {
             interval(59_500, 60_500, 300),
             interval(60_500, 61_500, 5),
         ];
-        let rollup = counter_rollup(intervals.iter(), (0, 120 * SECOND), MinuteGrid::BOOT);
+        let rollup = counter_rollup(intervals.iter(), (0, 120 * SECOND), MinuteGrid::BOOT_CLOCK);
         assert_eq!(rollup.bridges, vec![intervals[1]]);
         assert_eq!(rollup.buckets.len(), 2);
         assert_eq!(rollup.buckets[0].total.integral(), Some(7));
@@ -220,12 +220,16 @@ mod tests {
         assert_eq!(rollup.buckets[0].covered_ns, SECOND);
         // An interval ending exactly on a boundary belongs to the bucket before.
         let edge = [interval(59_000, 60_000, 9)];
-        let rollup = counter_rollup(edge.iter(), (0, 60 * SECOND), MinuteGrid::BOOT);
+        let rollup = counter_rollup(edge.iter(), (0, 60 * SECOND), MinuteGrid::BOOT_CLOCK);
         assert!(rollup.bridges.is_empty());
         assert_eq!(rollup.buckets[0].start_ns, 0);
         // Intervals outside (from, to] are left for another pass.
         assert_eq!(
-            counter_rollup(edge.iter(), (60 * SECOND, 120 * SECOND), MinuteGrid::BOOT),
+            counter_rollup(
+                edge.iter(),
+                (60 * SECOND, 120 * SECOND),
+                MinuteGrid::BOOT_CLOCK
+            ),
             CounterRollup::default()
         );
     }
