@@ -23,7 +23,7 @@ use dgxtop_core::errors::InfraError;
 use dgxtop_core::identity::ProcessKey;
 use dgxtop_core::ports::{
     ArchiveJournal, ArchiveReceipt, ArchiveSink, AuditRepository, Collector, ConfigJob,
-    ConfigRepository, ControlCompletion, Dispatch, HistoryJob, HistoryReader, IngestionCompletion,
+    ConfigRepository, ControlCompletion, Dispatch, HistoryJob, IngestionCompletion, OverviewReader,
     ProcessActionPort, StoreJob, StoreWriter,
 };
 use dgxtop_manager::ManagerInboxes;
@@ -303,7 +303,7 @@ pub fn spawn_collector_pool(
 
 pub fn spawn_history_pool(
     config: &Config,
-    history: Arc<dyn HistoryReader>,
+    history: Arc<dyn OverviewReader>,
     clock: Arc<dyn TimeProvider>,
     completions: Completions,
 ) -> PoolHandle<HistoryJob> {
@@ -312,14 +312,14 @@ pub fn spawn_history_pool(
         usize::try_from(config.runtime.history_workers).unwrap_or(1),
         usize::try_from(config.queues.history_requests).unwrap_or(4),
         Arc::new(move |job: HistoryJob| {
-            let result = history.query(
-                &job.query,
+            let result = history.read(
+                &job.request,
                 job.deadline_boot_ns,
                 &job.cancel,
                 clock.as_ref(),
             );
             completions.control(ControlCompletion::History {
-                request_id: job.query.request_id,
+                request_id: job.request_id,
                 session_id: job.session_id,
                 session_generation: job.session_generation,
                 result,

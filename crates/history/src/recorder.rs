@@ -5,7 +5,9 @@
 //! maintenance step, so history admission, eviction and gaps happen in the
 //! same step as before the split; only the outcome the snapshot needs
 //! (counters, health, recent gaps) crosses back. Finished rows stay here,
-//! in the archive queue, until the actor drains them as journals.
+//! in the archive queue, until the actor drains them as journals; the
+//! Overview series' finished minutes also go into their sizes (D-82), and
+//! the journals carry the archive deletions those sizes allow.
 
 use std::fmt;
 
@@ -14,8 +16,13 @@ use dgxtop_core::ports::{ArchiveJournal, HistoryAppends, HistoryIngest, HistoryO
 
 use crate::archive::ArchiveQueue;
 use crate::index::HistoryWriter;
-use crate::output::HistoryReport;
+use crate::output::{ArchiveRow, HistoryReport};
+use crate::overview::OverviewTiers;
+use crate::overview::rows::{is_overview_row, tier_minutes};
 use crate::wall_clock::WallClock;
+
+/// Overview minutes kept while no boot-to-UTC pairing is known yet.
+const MAX_UNTIMED_ROWS: usize = 4096;
 
 /// Write side of the history, handed to the live state at composition.
 pub struct HistoryRecorder {
@@ -25,6 +32,10 @@ pub struct HistoryRecorder {
     archive_enabled: bool,
     /// Snapshot revision of the last ingest or publish; journals carry it.
     revision: u64,
+    overview: OverviewTiers,
+    /// Overview minutes finished before the wall clock was known.
+    untimed: Vec<ArchiveRow>,
+    now_boot_ns: u64,
 }
 
 impl fmt::Debug for HistoryRecorder {
@@ -38,19 +49,48 @@ impl fmt::Debug for HistoryRecorder {
 }
 
 impl HistoryRecorder {
-    pub(crate) fn new(writer: HistoryWriter, archive: ArchiveQueue, archive_enabled: bool) -> Self {
+    pub(crate) fn new(
+        writer: HistoryWriter,
+        archive: ArchiveQueue,
+        archive_enabled: bool,
+        overview: OverviewTiers,
+    ) -> Self {
         Self {
             writer,
             archive,
             clock: WallClock::default(),
             archive_enabled,
             revision: 0,
+            overview,
+            untimed: Vec::new(),
+            now_boot_ns: 0,
+        }
+    }
+
+    /// The Overview minutes among `rows` into their sizes, on the wall
+    /// clock; kept (bounded) until the clock is known.
+    fn feed_overview(&mut self, rows: &[ArchiveRow]) {
+        self.untimed
+            .extend(rows.iter().filter(|row| is_overview_row(row)).cloned());
+        if self.untimed.is_empty() {
+            return;
+        }
+        match tier_minutes(&self.untimed, &self.clock) {
+            Some(minutes) => {
+                self.untimed.clear();
+                self.overview.feed(minutes);
+            }
+            None => {
+                let excess = self.untimed.len().saturating_sub(MAX_UNTIMED_ROWS);
+                self.untimed.drain(..excess);
+            }
         }
     }
 
     /// Queues the report's finished rows and condenses it for the state.
     fn outcome(&mut self, mut report: HistoryReport) -> HistoryOutcome {
         let rows = std::mem::take(&mut report.archive_rows);
+        self.feed_overview(&rows);
         let archive_rows_dropped = if self.archive_enabled {
             self.archive.enqueue(rows)
         } else {
@@ -81,6 +121,7 @@ impl HistoryIngest for HistoryRecorder {
         revision: u64,
     ) -> HistoryOutcome {
         self.revision = revision;
+        self.now_boot_ns = self.now_boot_ns.max(now_boot_ns);
         let report = self.writer.apply(appends, now_boot_ns, revision);
         self.outcome(report)
     }
@@ -91,6 +132,7 @@ impl HistoryIngest for HistoryRecorder {
     }
 
     fn maintain(&mut self, now_boot_ns: u64) -> HistoryOutcome {
+        self.now_boot_ns = self.now_boot_ns.max(now_boot_ns);
         let report = self.writer.maintain(now_boot_ns);
         self.outcome(report)
     }
@@ -113,13 +155,20 @@ impl HistoryIngest for HistoryRecorder {
         if let Some(discontinuity) = self.clock.observe(boot_ns, utc_ns) {
             self.writer.note_discontinuity(discontinuity);
         }
+        self.feed_overview(&[]);
     }
 
     fn take_archive_journal(&mut self, max_bytes: u64) -> Option<ArchiveJournal> {
         if !self.archive_enabled {
             return None;
         }
-        self.archive.take(max_bytes, &self.clock, self.revision)
+        let prunes = if self.archive.knows_identity() {
+            self.overview.take_prunes(self.now_boot_ns)
+        } else {
+            Vec::new()
+        };
+        self.archive
+            .take(max_bytes, &self.clock, self.revision, prunes)
     }
 }
 
@@ -243,6 +292,62 @@ mod tests {
         let journal = history.recorder.take_archive_journal(1 << 20).unwrap();
         assert_eq!(journal.revision, 7);
         assert!(!journal.buckets.is_empty());
+    }
+
+    /// The Overview series' finalized minutes reach their sizes on the wall
+    /// clock, and a read adds the minutes not finalized yet (D-82): the
+    /// bar being filled holds every sample up to now.
+    #[test]
+    fn overview_bars_hold_finalized_and_unfinalized_minutes() {
+        use dgxtop_core::history::SeriesInEveryBoot;
+        use dgxtop_core::overview_history::{OverviewAnswer, OverviewRequest};
+        use dgxtop_core::ports::{CancelFlag, OverviewReader};
+        use dgxtop_core::process_history::Tier;
+        use dgxtop_core::testing::FakeClock;
+
+        let (mut history, _ledger) = history(false);
+        history.recorder.observe_wall_clock(0, UTC_AT_BOOT);
+        // A sample every 2 s holds until the next (it goes stale after 3).
+        let samples = 5 * 60 / 2;
+        for step in 0..samples {
+            let seconds = step * 2;
+            history
+                .recorder
+                .ingest(one_gauge(seconds, 40.0), seconds * SECOND, step + 1);
+        }
+        let now = 5 * MINUTE;
+        history.recorder.maintain(now);
+        let clock = FakeClock::new(now);
+        clock.step_utc_ns(i64::try_from(now).unwrap());
+        let series = SeriesInEveryBoot::from(&metric_key("gpu:0", ids::GPU_TEMPERATURE, "gpu"));
+        let utc_at_boot = i64::try_from(UTC_AT_BOOT).unwrap();
+        let hour = Tier::OneHour.align(utc_at_boot, 0);
+        let request = OverviewRequest::Bars {
+            series,
+            tier: Tier::OneHour,
+            from_utc_ns: hour,
+            end_utc_ns: hour + 2 * 3_600 * 1_000_000_000,
+            at_utc_ns: utc_at_boot + i64::try_from(now).unwrap(),
+        };
+        let read = |deadline, cancel: &CancelFlag| {
+            OverviewReader::read(&history.index, &request, deadline, cancel, clock.as_ref())
+        };
+        let answer = read(u64::MAX, &CancelFlag::new()).unwrap();
+        let OverviewAnswer::Bars(bars) = answer else {
+            panic!("bars asked");
+        };
+        let held: u64 = bars.bars.iter().map(|bar| bar.covered_ns).sum();
+        // From the first sample to now (the last one's step reaches now).
+        assert_eq!(held, now, "finalized and unfinalized minutes, once");
+        assert!(bars.bars.iter().all(|bar| bar.mean() == Some(40.0)));
+        assert!(
+            bars.settled_through_utc_ns > utc_at_boot,
+            "minutes were finalized"
+        );
+        let cancelled = CancelFlag::new();
+        cancelled.cancel();
+        assert!(read(u64::MAX, &cancelled).is_err());
+        assert!(read(0, &CancelFlag::new()).is_err(), "past its deadline");
     }
 
     #[test]

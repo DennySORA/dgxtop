@@ -130,7 +130,6 @@ pub fn inert_ports(
         store: Box::new(CapturingDispatch::<StoreJob>::new()),
         snapshots,
         history: Box::new(CapturingDispatch::<HistoryJob>::new()),
-        archive_reads: None,
         config: Box::new(CapturingDispatch::<ConfigJob>::new()),
         audit: Box::new(CapturingDispatch::<AuditOp>::new()),
         actions: Box::new(CapturingDispatch::<ActionOp>::new()),

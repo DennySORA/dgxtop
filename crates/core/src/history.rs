@@ -2,10 +2,10 @@
 //! (`history-result.schema.json`). Windows are half-open `[start, end)` on the
 //! boot clock of one boot; coverage is the union of valid data time.
 //!
-//! Archive reads (D-51) answer what earlier runs and boots left in the
-//! history archive: whole minutes of one gauge series over a window of the
-//! wall clock, because boots share no boot clock (STORAGE.md §3 lets UTC
-//! index and display). They are internal; the query contract stays one boot.
+//! A series in every boot ([`SeriesInEveryBoot`]) names what the archive
+//! and the Overview's sizes keep across boots (D-51, D-82): boots share no
+//! boot clock, so they are placed on the wall clock (STORAGE.md §3 lets UTC
+//! index and display). The query contract stays one boot.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -51,8 +51,6 @@ pub enum HistoryQueryError {
     Resolution,
     #[error("max_points must be 1..={0}")]
     MaxPoints(u32),
-    #[error("an archive point must span whole minutes")]
-    ArchivePoint,
 }
 
 /// One bounded history query.
@@ -153,11 +151,8 @@ impl HistoryResult {
     }
 }
 
-/// The archive keeps whole minutes, so an archive point spans at least one.
-pub const ARCHIVE_MINUTE_NS: u64 = 60_000_000_000;
-
 /// A series in every boot: its metric key without the boot.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SeriesInEveryBoot {
     pub host_id: HostId,
     pub entity_id: EntityId,
@@ -172,78 +167,6 @@ impl From<&MetricKey> for SeriesInEveryBoot {
             entity_id: key.entity_id.clone(),
             metric_id: key.metric_id.clone(),
             scope: key.scope.clone(),
-        }
-    }
-}
-
-/// The archived minutes of one gauge series that started in
-/// `[start_utc_ns, end_utc_ns)`, from every boot, merged into points
-/// `point_ns` wide on the UTC grid (multiples of `point_ns`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ArchiveQuery {
-    pub request_id: Uuid,
-    pub series: SeriesInEveryBoot,
-    pub start_utc_ns: u64,
-    pub end_utc_ns: u64,
-    /// A whole number of minutes.
-    pub point_ns: u64,
-    pub max_points: u32,
-}
-
-impl ArchiveQuery {
-    /// Validates the window, the point width and the point cap.
-    pub fn validate(&self) -> Result<(), HistoryQueryError> {
-        if self.end_utc_ns <= self.start_utc_ns {
-            return Err(HistoryQueryError::EmptyWindow);
-        }
-        if self.point_ns < ARCHIVE_MINUTE_NS || !self.point_ns.is_multiple_of(ARCHIVE_MINUTE_NS) {
-            return Err(HistoryQueryError::ArchivePoint);
-        }
-        if self.max_points == 0 || self.max_points > MAX_HISTORY_POINTS {
-            return Err(HistoryQueryError::MaxPoints(MAX_HISTORY_POINTS));
-        }
-        Ok(())
-    }
-
-    /// Start of the point holding `utc_ns`.
-    pub fn point_start(&self, utc_ns: u64) -> u64 {
-        utc_ns - utc_ns % self.point_ns.max(1)
-    }
-}
-
-/// The minutes of one archive point: their time-weighted mean, their
-/// maximum and the time they cover (never more than the point spans).
-#[derive(Debug, Clone, PartialEq)]
-pub struct ArchivePoint {
-    pub start_utc_ns: u64,
-    pub end_utc_ns: u64,
-    pub mean: Option<f64>,
-    pub max: Option<f64>,
-    pub covered_ns: u64,
-}
-
-/// The points that hold archived minutes (a point with none is left out),
-/// oldest first.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ArchiveResult {
-    pub request_id: Uuid,
-    pub points: Vec<ArchivePoint>,
-    pub covered_ns: u64,
-    /// Boots the minutes came from.
-    pub boots: u32,
-    /// The window held more points than `max_points`: the newest are kept.
-    pub truncated: bool,
-}
-
-impl ArchiveResult {
-    /// No archived minute in the window.
-    pub fn empty(request_id: Uuid) -> Self {
-        Self {
-            request_id,
-            points: Vec::new(),
-            covered_ns: 0,
-            boots: 0,
-            truncated: false,
         }
     }
 }
@@ -289,43 +212,6 @@ mod tests {
         assert!(query.validate(2000).is_err());
         query.max_points = 600;
         assert!(query.validate(500).is_err());
-    }
-
-    fn archive_query() -> ArchiveQuery {
-        let key = crate::testing::metric_key("gpu:GPU-1", "gpu.temperature", "gpu");
-        ArchiveQuery {
-            request_id: Uuid::nil(),
-            series: SeriesInEveryBoot::from(&key),
-            start_utc_ns: 10 * ARCHIVE_MINUTE_NS,
-            end_utc_ns: 70 * ARCHIVE_MINUTE_NS,
-            point_ns: 2 * ARCHIVE_MINUTE_NS,
-            max_points: 60,
-        }
-    }
-
-    #[test]
-    fn archive_queries_span_whole_minutes_on_a_utc_grid() {
-        let query = archive_query();
-        assert_eq!(query.validate(), Ok(()));
-        assert_eq!(query.series.metric_id.as_str(), "gpu.temperature");
-        assert_eq!(
-            query.point_start(13 * ARCHIVE_MINUTE_NS + 5),
-            12 * ARCHIVE_MINUTE_NS
-        );
-        let mut bad = archive_query();
-        bad.end_utc_ns = bad.start_utc_ns;
-        assert_eq!(bad.validate(), Err(HistoryQueryError::EmptyWindow));
-        let mut bad = archive_query();
-        bad.point_ns = 90_000_000_000;
-        assert_eq!(bad.validate(), Err(HistoryQueryError::ArchivePoint));
-        bad.point_ns = 1_000_000_000;
-        assert_eq!(bad.validate(), Err(HistoryQueryError::ArchivePoint));
-        let mut bad = archive_query();
-        bad.max_points = 0;
-        assert!(bad.validate().is_err());
-        bad.max_points = MAX_HISTORY_POINTS + 1;
-        assert!(bad.validate().is_err());
-        assert!(ArchiveResult::empty(Uuid::nil()).points.is_empty());
     }
 
     #[test]

@@ -419,6 +419,7 @@ mod tests {
                 reason: "timeout".to_owned(),
                 affected_count: 3,
             }],
+            prunes: Vec::new(),
             permit: None,
         }
     }

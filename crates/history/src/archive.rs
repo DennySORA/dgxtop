@@ -7,7 +7,8 @@
 //! bridges reference (the sink upserts them), so a journal never depends on
 //! an earlier one. When the queue is full the oldest rows are dropped and the
 //! dropped time is reported to the archive as an `archive_overflow` gap: the
-//! live state is never blocked by the archive.
+//! live state is never blocked by the archive. A journal also carries the
+//! deletions the Overview's sizes allow (D-82), alone when no row waits.
 
 use std::collections::{BTreeSet, VecDeque};
 
@@ -16,6 +17,7 @@ use dgxtop_core::canonical::GapRecord;
 use dgxtop_core::history::HistoryMethod;
 use dgxtop_core::identity::{BootId, HostId};
 use dgxtop_core::metric::ScalarView;
+use dgxtop_core::overview_history::ArchivePrune;
 use dgxtop_core::ports::{ArchiveJournal, ArchivedBridge, ArchivedBucket, ArchivedSegment};
 
 use dgxtop_core::clock::format_utc_ns;
@@ -64,6 +66,9 @@ pub(crate) struct ArchiveQueue {
     account: Account,
     /// Time range of rows dropped since the last journal.
     overflow: Option<(u64, u64)>,
+    /// Host and boot of the latest row queued: a journal of deletions
+    /// alone is stamped with them.
+    identity: Option<(String, String)>,
 }
 
 fn row_span(row: &ArchiveRow) -> (u64, u64) {
@@ -95,7 +100,13 @@ impl ArchiveQueue {
             rows: VecDeque::new(),
             account: Account::new(ledger, Partition::Reserve),
             overflow: None,
+            identity: None,
         }
+    }
+
+    /// Whether a host and boot are known to stamp a journal with.
+    pub(crate) fn knows_identity(&self) -> bool {
+        self.identity.is_some()
     }
 
     fn note_overflow(&mut self, (start, end): (u64, u64)) {
@@ -119,6 +130,9 @@ impl ArchiveQueue {
     pub(crate) fn enqueue(&mut self, rows: Vec<ArchiveRow>) -> u64 {
         let mut dropped = 0u64;
         for row in rows {
+            if let Some((host, boot)) = row_identity(&row) {
+                self.identity = Some((host.to_string(), boot.to_string()));
+            }
             let bytes = row_bytes(&row);
             loop {
                 let fits = self.account.bytes().saturating_add(bytes) <= MAX_QUEUED_BYTES;
@@ -137,16 +151,18 @@ impl ArchiveQueue {
         dropped
     }
 
-    /// Takes up to `max_bytes` of rows (at least one) of a single host/boot.
-    /// Returns `None` when nothing is queued or no boot-to-UTC mapping is
-    /// known yet (rows stay queued).
+    /// Takes up to `max_bytes` of rows (at least one) of a single host/boot,
+    /// with `prunes`. Returns `None` when nothing is queued or no
+    /// boot-to-UTC mapping is known yet (rows stay queued).
     pub(crate) fn take(
         &mut self,
         max_bytes: u64,
         clock: &WallClock,
         revision: u64,
+        prunes: Vec<ArchivePrune>,
     ) -> Option<ArchiveJournal> {
-        if !clock.is_known() || (self.rows.is_empty() && self.overflow.is_none()) {
+        let nothing = self.rows.is_empty() && self.overflow.is_none() && prunes.is_empty();
+        if !clock.is_known() || nothing {
             return None;
         }
         let (host_id, boot_id) = self
@@ -154,6 +170,7 @@ impl ArchiveQueue {
             .iter()
             .find_map(|queued| row_identity(&queued.row))
             .map(|(host, boot)| (host.to_string(), boot.to_string()))
+            .or_else(|| self.identity.clone())
             .unwrap_or_default();
         let mut collected = JournalRows {
             segment_ids: BTreeSet::new(),
@@ -198,6 +215,7 @@ impl ArchiveQueue {
             buckets: collected.buckets,
             bridges: collected.bridges,
             gaps: collected.gaps,
+            prunes,
             permit,
         })
     }
@@ -358,10 +376,12 @@ mod tests {
             0
         );
         assert!(
-            queue.take(1 << 20, &WallClock::default(), 1).is_none(),
+            queue
+                .take(1 << 20, &WallClock::default(), 1, Vec::new())
+                .is_none(),
             "no UTC mapping yet"
         );
-        let journal = queue.take(1 << 20, &clock(), 9).unwrap();
+        let journal = queue.take(1 << 20, &clock(), 9, Vec::new()).unwrap();
         assert_eq!(journal.revision, 9);
         assert_eq!(journal.segments.len(), 1);
         assert_eq!(journal.buckets.len(), 2);
@@ -376,17 +396,44 @@ mod tests {
                 .as_ref()
                 .is_some_and(|permit| permit.bytes() == 2 * ROW_BYTES)
         );
-        assert!(queue.take(1 << 20, &clock(), 10).is_none());
+        assert!(queue.take(1 << 20, &clock(), 10, Vec::new()).is_none());
         drop(journal);
         assert_eq!(ledger.used(Partition::Reserve), 0);
         queue.enqueue(vec![bucket_row(&segment, 2)]);
-        let later = queue.take(1 << 20, &clock(), 11).unwrap();
+        let later = queue.take(1 << 20, &clock(), 11, Vec::new()).unwrap();
         assert_eq!(
             later.segments.len(),
             1,
             "a later journal repeats the segment row"
         );
         assert_eq!(later.segments[0].segment_id, later.buckets[0].segment_id);
+    }
+
+    /// Deletions the Overview's sizes allow travel in a journal of their
+    /// own when no row waits, stamped with the latest host and boot (D-82).
+    #[test]
+    fn prunes_travel_alone_with_the_latest_identity() {
+        let ledger = ByteLedger::for_memory_limit_mib(64);
+        let mut queue = ArchiveQueue::new(&ledger);
+        let prune = ArchivePrune {
+            series: dgxtop_core::history::SeriesInEveryBoot::from(&segment().key),
+            before_utc_ns: 1_790_000_000_000_000_000,
+        };
+        assert!(!queue.knows_identity());
+        assert!(queue.take(1 << 20, &clock(), 1, Vec::new()).is_none());
+        queue.enqueue(vec![bucket_row(&segment(), 0)]);
+        assert!(queue.knows_identity());
+        let rows = queue.take(1 << 20, &clock(), 2, Vec::new()).unwrap();
+        assert!(rows.prunes.is_empty());
+        let alone = queue
+            .take(1 << 20, &clock(), 3, vec![prune.clone()])
+            .unwrap();
+        assert_eq!(alone.prunes, vec![prune]);
+        assert!(alone.buckets.is_empty());
+        assert_eq!(
+            (alone.host_id.as_str(), alone.boot_id.as_str()),
+            ("test-host", "fake-boot")
+        );
     }
 
     #[test]
@@ -408,10 +455,10 @@ mod tests {
             bridge(Scalar::from_u64(300)),
             bridge(Scalar::from_f64(1.5).unwrap()),
         ]);
-        let first = queue.take(1, &clock(), 1).unwrap();
+        let first = queue.take(1, &clock(), 1, Vec::new()).unwrap();
         assert_eq!(first.buckets.len(), 1);
         assert!(first.bridges.is_empty());
-        let rest = queue.take(1 << 20, &clock(), 2).unwrap();
+        let rest = queue.take(1 << 20, &clock(), 2, Vec::new()).unwrap();
         assert_eq!(rest.bridges.len(), 1);
         assert_eq!(rest.bridges[0].delta, 300);
         assert_eq!(rest.gaps.len(), 1);
@@ -431,7 +478,7 @@ mod tests {
         let dropped = queue.enqueue(rows);
         assert!(dropped > 0);
         assert!(ledger.used(Partition::Reserve) <= ledger.limits().limit(Partition::Reserve));
-        let journal = queue.take(u64::MAX, &clock(), 1).unwrap();
+        let journal = queue.take(u64::MAX, &clock(), 1, Vec::new()).unwrap();
         assert!(
             journal
                 .gaps

@@ -78,6 +78,14 @@ fn window_of<B: Bucket>(
     (end.saturating_sub(columns.saturating_mul(step)), end)
 }
 
+/// The buckets of `tier` that start in the window `[start, end)`, each with
+/// what the finer sizes still fill of its time; the ones holding nothing are
+/// left out (a gap). The Overview's charts share one window, the bars of
+/// the local clock ending with the one being filled now (D-82).
+pub fn bars_in<B: Bucket>(series: &TieredSeries<B>, tier: Tier, window: (i64, i64)) -> Vec<B> {
+    collect(series, tier, window)
+}
+
 /// The buckets of `tier` in the window, the latest with what its sources
 /// fill.
 fn collect<B: Bucket>(series: &TieredSeries<B>, tier: Tier, (start, end): (i64, i64)) -> Vec<B> {

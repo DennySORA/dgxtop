@@ -148,6 +148,7 @@ fn journal(
         buckets,
         bridges: Vec::new(),
         gaps: Vec::new(),
+        prunes: Vec::new(),
         permit: None,
     }
 }

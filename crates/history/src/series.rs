@@ -260,6 +260,27 @@ impl Series {
         })
     }
 
+    /// The minutes not finalized yet, from the raw steps up to `now_ns`
+    /// (D-82: the Overview's latest bar holds them too). Computed for a
+    /// read, never stored: later samples may still change them.
+    pub(crate) fn provisional_gauge_buckets(&self, now_ns: u64) -> Vec<GaugeBucket> {
+        let from = self.finalized_through_ns;
+        if now_ns <= from {
+            return Vec::new();
+        }
+        let gauge_slices = self.gauge.raw.slices();
+        let raw = RawGauge {
+            slices: &gauge_slices,
+            carry: self.gauge.carry,
+            floor_ns: self.gauge.raw_floor_ns,
+        };
+        let steps = StepIter::covering(raw, from, now_ns).take_while(|step| step.start_ns < now_ns);
+        let samples = gauge_slices
+            .iter_from(gauge_slices.seek_start(from.max(self.gauge.raw_floor_ns)))
+            .take_while(|record| record.time_ns < now_ns);
+        rollup::gauge_buckets(steps, samples, from, now_ns)
+    }
+
     /// Aggregates bytes storing `finalization` will reserve.
     pub(crate) fn finalization_cost(&self, finalization: &Finalization) -> u64 {
         self.gauge
@@ -277,12 +298,12 @@ impl Series {
             )
     }
 
-    /// Stores computed rollups. Rows are produced only when an archive is
-    /// configured; a bucket that cannot be stored is reported as lost time.
+    /// Stores computed rollups and reports them as finished rows (the
+    /// archive and the Overview's sizes take them, D-82); a bucket that
+    /// cannot be stored is reported as lost time.
     pub(crate) fn commit_finalization(
         &mut self,
         finalization: Finalization,
-        archive: bool,
         report: &mut HistoryReport,
     ) -> Vec<(u64, u64)> {
         let mut lost = Vec::new();
@@ -290,7 +311,7 @@ impl Series {
             if self.gauge.buckets.try_push(bucket).is_err() {
                 report.gauge_drops.record(DropReason::Capacity);
                 lost.push((bucket.start_ns, bucket.start_ns.saturating_add(BUCKET_NS)));
-            } else if archive && let Some(segment) = self.segments.get(bucket.segment) {
+            } else if let Some(segment) = self.segments.get(bucket.segment) {
                 report.archive_rows.push(ArchiveRow::GaugeBucket {
                     segment: segment.clone(),
                     bucket,
@@ -301,7 +322,7 @@ impl Series {
             if self.counter.buckets.try_push(bucket).is_err() {
                 report.interval_drops.record(DropReason::Capacity);
                 lost.push((bucket.start_ns, bucket.start_ns.saturating_add(BUCKET_NS)));
-            } else if archive && let Some(segment) = self.segments.get(bucket.segment) {
+            } else if let Some(segment) = self.segments.get(bucket.segment) {
                 report.archive_rows.push(ArchiveRow::CounterBucket {
                     segment: segment.clone(),
                     bucket,
@@ -312,7 +333,7 @@ impl Series {
             if self.counter.bridges.try_push(bridge).is_err() {
                 report.interval_drops.record(DropReason::Capacity);
                 lost.push((bridge.start_ns, bridge.end_ns));
-            } else if archive && let Some(segment) = self.segments.get(bridge.segment) {
+            } else if let Some(segment) = self.segments.get(bridge.segment) {
                 report.archive_rows.push(ArchiveRow::Bridge {
                     segment: segment.clone(),
                     bridge,
@@ -618,11 +639,7 @@ mod tests {
         assert_eq!(plan.target_ns, 120 * SECOND);
         assert_eq!(plan.gauge_buckets.len(), 2);
         let mut report = HistoryReport::default();
-        assert!(
-            series
-                .commit_finalization(plan, true, &mut report)
-                .is_empty()
-        );
+        assert!(series.commit_finalization(plan, &mut report).is_empty());
         assert_eq!(report.archive_rows.len(), 2);
         assert_eq!(series.finalized_through_ns, 120 * SECOND);
         assert_eq!(series.admit_sample(119 * SECOND), Err(DropReason::Late));
@@ -654,7 +671,7 @@ mod tests {
         );
         let plan = series.plan_finalization(190 * SECOND).unwrap();
         let mut report = HistoryReport::default();
-        series.commit_finalization(plan, false, &mut report);
+        series.commit_finalization(plan, &mut report);
         assert!(series.advance_raw_floors(150 * SECOND) > 0);
         assert_eq!(series.gauge.raw_floor_ns, 120 * SECOND);
         let carry = series.gauge.carry.unwrap();
@@ -671,7 +688,7 @@ mod tests {
         assert!(series.oldest_evictable_raw_ns().is_none());
         let plan = series.plan_finalization(400 * SECOND).unwrap();
         let mut report = HistoryReport::default();
-        series.commit_finalization(plan, false, &mut report);
+        series.commit_finalization(plan, &mut report);
         let floor = series.oldest_evictable_raw_ns().unwrap();
         assert_eq!(floor, 120 * SECOND);
         assert_eq!(series.evict_oldest_raw(), 64);
@@ -724,7 +741,7 @@ mod tests {
         assert!(series.admit_interval(start, 60 * SECOND).is_ok());
 
         let plan = series.plan_finalization(120 * SECOND).unwrap();
-        series.commit_finalization(plan, false, &mut HistoryReport::default());
+        series.commit_finalization(plan, &mut HistoryReport::default());
         series.reach_back_to(start);
         assert_eq!(series.finalized_through_ns, 120 * SECOND);
         assert_eq!(

@@ -27,7 +27,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 
-use self::axis::{Tick, render_axis, ticks};
+use self::axis::{Tick, clock_ticks, render_axis};
 use self::layout::{HistoryLayout, plan};
 use self::panels::{Panel, Strip, panels};
 use self::runs::render_runs;
@@ -187,13 +187,13 @@ fn render_history(
         output,
     );
     if let Some(axis) = rows.next_row() {
-        // A window reaching back before boot starts at boot.
-        let span_seconds = window.end_ns.saturating_sub(window.start_ns) / 1_000_000_000;
+        // The bars follow the local clock (D-82), so the axis reads it.
+        let span = (utc_i64(window.start_ns), utc_i64(window.end_ns));
         render_axes(
             frame,
             axis,
             &layout,
-            |width| ticks(span_seconds, width),
+            |width| clock_ticks(span, history.utc_offset_s, width),
             context,
         );
     }
@@ -444,6 +444,11 @@ fn recorded_note(history: &HistoryView) -> Option<String> {
         recorded_text(recorded / 1_000_000_000),
         format_span_ns(history.requested_span_ns)
     ))
+}
+
+/// A wall-clock time of the view as the axis takes it.
+fn utc_i64(utc_ns: u64) -> i64 {
+    i64::try_from(utc_ns).unwrap_or(i64::MAX)
 }
 
 #[cfg(test)]

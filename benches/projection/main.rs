@@ -596,6 +596,7 @@ fn history_view(snapshot: &ImmutableSnapshot, now_ns: u64) -> HistoryView {
         requested_span_ns: SPAN_NS,
         start_utc_ns: start,
         end_utc_ns: now_ns,
+        utc_offset_s: 0,
         charts,
         summaries: Vec::new(),
         disk: DiskHistory::Off,

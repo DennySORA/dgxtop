@@ -2,10 +2,15 @@ use super::*;
 use dgxtop_core::clock::NANOS_PER_SECOND;
 use dgxtop_core::commands::SortKey;
 use dgxtop_core::errors::ErrorCode;
-use dgxtop_core::history::{ArchivePoint, HistoryMethod, HistoryPoint};
-use dgxtop_core::metric::{CanonicalUnit, Scalar};
 use dgxtop_core::testing::{CapturingDispatch, FakeClock, metric_key};
-use dgxtop_core::view::HistoryWindowSummary;
+
+const SECOND: u64 = NANOS_PER_SECOND;
+const NOW: u64 = 100_000 * SECOND;
+const MINUTE: i64 = 60 * 1_000_000_000;
+const HOUR: i64 = 60 * MINUTE;
+/// A plot of 60 columns inside an 86-column terminal (D-50): a bar each.
+const COLUMNS: u16 = 86;
+const BARS: i64 = 60;
 
 /// A pick of `charts` and no statistics.
 fn picks(charts: Vec<HistoryChartSpec>) -> HistoryPicks {
@@ -15,41 +20,30 @@ fn picks(charts: Vec<HistoryChartSpec>) -> HistoryPicks {
     }
 }
 
-const SECOND: u64 = NANOS_PER_SECOND;
-const NOW: u64 = 100_000 * SECOND;
-/// A 120-column plot: one panel 144 columns wide inside the border, less
-/// its gutter and legend (D-50).
-/// 60 columns of plot: a 1 m bar each is an hour (D-78).
-const COLUMNS: u16 = 86;
-
 struct Bench {
     service: HistoryService,
     port: CapturingDispatch<HistoryJob>,
-    archive: CapturingDispatch<ArchiveReadJob>,
     clock: Arc<FakeClock>,
     session: SessionId,
 }
 
 fn bench(max_inflight: usize) -> Bench {
-    bench_with_archive(max_inflight, None)
+    bench_at(max_inflight, 0)
 }
 
-/// A bench whose archive holds the time before boot time `since` (D-51).
-fn bench_with_archive(max_inflight: usize, since: Option<u64>) -> Bench {
+/// A bench whose local clock is `utc_offset_s` east of UTC.
+fn bench_at(max_inflight: usize, utc_offset_s: i32) -> Bench {
     let port = CapturingDispatch::new();
-    let archive = CapturingDispatch::new();
     let clock = FakeClock::new(NOW);
     let mut service = HistoryService::new(
         Box::new(port.clone()),
-        since.map(|since_boot_ns| ArchiveSide {
-            port: Box::new(archive.clone()),
-            since_boot_ns,
-        }),
         clock.clone(),
         HistorySettings {
             max_inflight,
             deadline_ms: 200,
             max_points: 2000,
+            utc_offset_s,
+            kept_on_disk: true,
         },
         1000,
     );
@@ -58,30 +52,13 @@ fn bench_with_archive(max_inflight: usize, since: Option<u64>) -> Bench {
     Bench {
         service,
         port,
-        archive,
         clock,
         session,
     }
 }
 
-impl Bench {
-    /// The wall-clock time of boot time `boot_ns`.
-    fn utc(&self, boot_ns: u64) -> u64 {
-        Wall::now(self.clock.as_ref()).utc_of(boot_ns)
-    }
-}
-
-/// The session on `view` with the Overview History's bar size `bars`, and
-/// after it, optionally, the Process History's (`"6h 30m"`, D-80).
-fn state(view: ViewKind, bars: &str) -> SessionState {
-    use dgxtop_core::process_history::BarSize;
-    let mut tokens = bars.split_whitespace();
-    let overview_bar = tokens
-        .next()
-        .map_or(BarSize::OneMinute, |token| BarSize::parse(token).unwrap());
-    let process_bar = tokens
-        .next()
-        .map_or(BarSize::Auto, |token| BarSize::parse(token).unwrap());
+/// The session on `view` with the Overview History's bar size `bar`.
+fn state(view: ViewKind, bar: &str) -> SessionState {
     SessionState {
         session_id: SessionId::new("s1").unwrap(),
         view,
@@ -90,8 +67,8 @@ fn state(view: ViewKind, bars: &str) -> SessionState {
         filter: String::new(),
         sort: SortKey::GpuMemory,
         ascending: false,
-        overview_bar,
-        process_bar,
+        overview_bar: BarSize::parse(bar).unwrap_or(BarSize::OneMinute),
+        process_bar: BarSize::Auto,
     }
 }
 
@@ -113,26 +90,48 @@ fn read_rate(entity: &str) -> HistoryChartSpec {
     }
 }
 
+fn gpu_series(kind: HistoryChartKind, metric: &str) -> HistoryChartSpec {
+    HistoryChartSpec {
+        kind,
+        subject: "0 · NVIDIA L4".to_owned(),
+        key: metric_key("gpu:GPU-a", metric, "gpu"),
+        scale_max: None,
+    }
+}
+
+/// A bar starting at `start` holding `minutes` minutes at `value`.
+#[allow(clippy::cast_precision_loss)]
+fn bar(start: i64, minutes: u64, value: f64) -> OverviewBucket {
+    let covered = minutes * 60 * SECOND;
+    OverviewBucket::gauge(
+        start,
+        covered,
+        value * covered as f64,
+        (value, value + 5.0),
+        12,
+    )
+}
+
+fn bars_answer(bars: Vec<OverviewBucket>, settled_through: i64, epoch: u64) -> OverviewAnswer {
+    OverviewAnswer::Bars(OverviewBars {
+        epoch,
+        settled_through_utc_ns: settled_through,
+        bars,
+        kept_on_disk: true,
+        store_issue: None,
+    })
+}
+
 impl Bench {
-    /// The session on the history view with `charts` picked.
-    fn open(&mut self, filter: &str, charts: &[HistoryChartSpec]) {
-        self.open_with_stats(filter, charts, &[]);
+    fn now_utc(&self) -> i64 {
+        i64::try_from(self.clock.now_utc_ns()).unwrap()
     }
 
     /// The session on the history view with `charts` and the statistics of
     /// `stats` picked.
-    fn open_with_stats(
-        &mut self,
-        filter: &str,
-        charts: &[HistoryChartSpec],
-        stats: &[HistoryChartSpec],
-    ) {
-        self.service.sync_session(
-            &self.session,
-            &state(ViewKind::History, filter),
-            COLUMNS,
-            NOW,
-        );
+    fn open_with(&mut self, bar: &str, charts: &[HistoryChartSpec], stats: &[HistoryChartSpec]) {
+        self.service
+            .sync_session(&self.session, &state(ViewKind::History, bar), COLUMNS, NOW);
         let picked = HistoryPicks {
             charts: charts.to_vec(),
             stats: stats.to_vec(),
@@ -140,186 +139,249 @@ impl Bench {
         self.service.update_charts(1, move |_| picked.clone(), NOW);
     }
 
-    fn answer(&mut self, job: &HistoryJob, values: &[Option<f64>]) -> Option<SessionId> {
+    fn open(&mut self, bar: &str, charts: &[HistoryChartSpec]) {
+        self.open_with(bar, charts, &[]);
+    }
+
+    fn answer(&mut self, job: &HistoryJob, answer: OverviewAnswer) -> Option<SessionId> {
         self.service.on_result(
-            job.query.request_id,
+            job.request_id,
             &self.session,
             job.session_generation,
-            Ok(result_for(job, values)),
+            Ok(answer),
         )
     }
-}
 
-fn result_for(job: &HistoryJob, values: &[Option<f64>]) -> HistoryResult {
-    let span = job.query.span_ns();
-    let step = span / u64::try_from(values.len().max(1)).unwrap();
-    let points = values
-        .iter()
-        .enumerate()
-        .map(|(index, value)| {
-            let start = job.query.start_boot_ns + step * u64::try_from(index).unwrap();
-            HistoryPoint {
-                start_boot_ns: start,
-                end_boot_ns: start + step,
-                value: value.map(|number| Scalar::from_f64(number).unwrap()),
-                covered_ns: if value.is_some() { step } else { 0 },
-                method: HistoryMethod::TimeWeightedStep,
-                source_ids: Vec::new(),
-                reason: None,
-            }
-        })
-        .collect();
-    HistoryResult {
-        schema_version: 1,
-        request_id: job.query.request_id,
-        key: job.query.key.clone(),
-        start_boot_ns: job.query.start_boot_ns,
-        end_boot_ns: job.query.end_boot_ns,
-        covered_ns: span / 2,
-        coverage_ratio: 0.5,
-        truncated: false,
-        points,
-        source_changes: Vec::new(),
-        clock_discontinuities: Vec::new(),
-        snapshot_revision: 1,
-        next_start_boot_ns: None,
+    fn sent(&mut self, now: u64) -> Vec<HistoryJob> {
+        self.service.tick(now, false);
+        self.port.take()
     }
 }
 
+fn bars_request(job: &HistoryJob) -> (Tier, i64, i64, i64) {
+    match &job.request {
+        OverviewRequest::Bars {
+            tier,
+            from_utc_ns,
+            end_utc_ns,
+            at_utc_ns,
+            ..
+        } => (*tier, *from_utc_ns, *end_utc_ns, *at_utc_ns),
+        OverviewRequest::Windows { .. } => panic!("bars expected"),
+    }
+}
+
+/// Every chart reads the same bars: one per plot column, aligned to the
+/// local clock, the last one being filled now.
 #[test]
-fn every_chart_queries_one_window_at_a_bounded_resolution() {
-    let mut bench = bench(4);
-    assert!(bench.service.sync_session(
-        &bench.session,
-        &state(ViewKind::History, ""),
-        COLUMNS,
-        NOW
-    ));
-    // On the view the session waits for its charts.
-    assert!(bench.service.wants_charts(1));
-    assert_eq!(bench.service.tick(NOW, false).dispatched, 0);
-    let dirty =
-        bench
-            .service
-            .update_charts(1, |_| picks(vec![cpu(), read_rate("blockdev:8:0")]), NOW);
-    assert_eq!(dirty, vec![bench.session.clone()]);
-    assert!(!bench.service.wants_charts(1));
-    assert!(bench.service.wants_charts(2), "a new snapshot picks again");
-    let tick = bench.service.tick(NOW, false);
-    assert_eq!(tick.dispatched, 4, "bounded by queues.history_requests");
-    let jobs = bench.port.take();
-    // The mean and, since a 30 s point merges samples, the maximum.
-    let purposes: Vec<(&str, HistoryStat)> = jobs
-        .iter()
-        .map(|job| (job.query.key.metric_id.as_str(), job.query.stat))
-        .collect();
-    assert_eq!(
-        purposes,
-        vec![
-            ("cpu.utilization.total", HistoryStat::Mean),
-            ("cpu.utilization.total", HistoryStat::Max),
-            ("disk.read.bytes_per_second", HistoryStat::Mean),
-            ("disk.read.bytes_per_second", HistoryStat::Max),
-        ]
-    );
+fn every_chart_reads_the_same_local_clock_bars() {
+    let mut bench = bench_at(4, 8 * 3_600);
+    bench.open("1h", &[cpu(), read_rate("blockdev:8:0")]);
+    let jobs = bench.sent(NOW);
+    assert_eq!(jobs.len(), 2);
+    let now = bench.now_utc();
+    let local_hour = Tier::OneHour.align(now, 8 * HOUR);
     for job in &jobs {
-        assert_eq!(job.query.end_boot_ns, NOW, "one time axis for all charts");
-        assert_eq!(
-            job.query.span_ns(),
-            3_600 * SECOND,
-            "default 1 m bars, 60 of them"
-        );
-        assert_eq!(job.query.resolution_ms, 60_000, "a point a bar");
-        assert!(job.query.max_points <= 61);
-        assert_eq!(job.deadline_boot_ns, NOW + 200 * NANOS_PER_MILLI);
+        let (tier, from, end, at) = bars_request(job);
+        assert_eq!(tier, Tier::OneHour);
+        assert_eq!(end, local_hour + HOUR, "the bar being filled is the last");
+        assert_eq!(from, end - BARS * HOUR, "a bar per column");
+        assert_eq!(at, now);
     }
     let view = bench.service.view(&bench.session);
-    assert_eq!(view.window_label, "1m");
-    assert_eq!(view.end_utc_ns, bench.utc(NOW));
-    assert_eq!(view.end_utc_ns - view.start_utc_ns, 3_600 * SECOND);
-    assert_eq!(view.disk, DiskHistory::Off);
+    assert_eq!(view.window_label, "1h");
+    assert_eq!(view.requested_span_ns, (BARS * HOUR).unsigned_abs());
+    assert_eq!(view.end_utc_ns, u64::try_from(local_hour + HOUR).unwrap());
+    assert_eq!(view.utc_offset_s, 8 * 3_600);
     assert!(view.charts.iter().all(|chart| chart.pending));
-    assert_eq!(view.charts[1].subject, "blockdev:8:0");
 }
 
-/// The filter's first token is the bar size (D-78): a bar of it for each
-/// column; the Process History's after it changes nothing here (D-77).
+/// A round's view is built once its last answer arrived: bars as points
+/// (a bar is the mean of what it holds, a missing bar is a gap), the
+/// chart's mean, peak and time held merged from them.
 #[test]
-fn a_bar_size_charts_a_bar_a_column() {
+fn a_round_is_drawn_once_all_its_answers_arrived() {
     let mut bench = bench(4);
-    bench.open("6h 30m", &[cpu()]);
-    bench.service.tick(NOW, false);
-    let jobs = bench.port.take();
-    assert!(!jobs.is_empty());
-    for job in &jobs {
-        // 60 bars of 6 h reach before boot: memory answers from boot on.
-        assert_eq!(job.query.start_boot_ns, 0);
-        assert_eq!(job.query.resolution_ms, 6 * 3_600_000);
-    }
-    let view = bench.service.view(&bench.session);
-    assert_eq!(view.window_label, "6h");
-    assert_eq!(view.requested_span_ns, 60 * 6 * 3_600 * SECOND);
-    // 24 h bars: 60 days asked; memory answers from boot.
-    bench.open("24h", &[cpu()]);
-    bench.service.tick(NOW, false);
+    bench.open("1h", &[cpu(), read_rate("blockdev:8:0")]);
+    let jobs = bench.sent(NOW);
+    let (_, from, end, _) = bars_request(&jobs[0]);
+    let open = end - HOUR;
+    // Two hours ago a 45-minute hour, an hour ago nothing, now 20 minutes.
+    let answered = vec![bar(open - 2 * HOUR, 45, 30.0), bar(open, 20, 60.0)];
+    assert_eq!(bench.answer(&jobs[0], bars_answer(answered, open, 0)), None);
     assert!(
-        bench
-            .port
-            .take()
-            .iter()
-            .all(|job| job.query.resolution_ms == 86_400_000)
+        bench.service.view(&bench.session).charts[0].pending,
+        "not drawn yet"
     );
-}
-
-#[test]
-fn results_give_points_mean_peak_and_coverage_and_late_ones_are_dropped() {
-    let mut bench = bench(4);
-    bench.open("1m", &[cpu()]);
-    bench.service.tick(NOW, false);
-    let jobs = bench.port.take();
-    let by_stat = |stat| jobs.iter().find(|job| job.query.stat == stat).unwrap();
-    let (mean, max) = (by_stat(HistoryStat::Mean), by_stat(HistoryStat::Max));
-    assert_eq!(
-        bench.answer(mean, &[Some(10.0), None, None, Some(30.0)]),
-        Some(bench.session.clone())
-    );
-    bench.answer(max, &[Some(15.0), None, None, Some(45.0)]);
+    let done = bench.answer(&jobs[1], bars_answer(Vec::new(), i64::MIN, 0));
+    assert_eq!(done, Some(bench.session.clone()));
     let view = bench.service.view(&bench.session);
     let chart = &view.charts[0];
     assert!(!chart.pending);
-    assert_eq!(chart.points.len(), 4);
-    assert_eq!(
-        (chart.points[0].mean, chart.points[3].max),
-        (Some(10.0), Some(45.0))
+    let spans: Vec<(i64, i64, Option<f64>)> = chart
+        .points
+        .iter()
+        .map(|point| {
+            let start = i64::try_from(point.start_utc_ns).unwrap();
+            let end = i64::try_from(point.end_utc_ns).unwrap();
+            ((start - open) / HOUR, (end - start) / MINUTE, point.mean)
+        })
+        .collect();
+    assert_eq!(spans, vec![(-2, 60, Some(30.0)), (0, 60, Some(60.0))]);
+    assert_eq!(chart.points[0].max, Some(35.0));
+    assert_eq!(chart.covered_ns, Some(65 * 60 * SECOND));
+    let mean = (30.0 * 45.0 + 60.0 * 20.0) / 65.0;
+    assert!((chart.mean.unwrap() - mean).abs() < 1e-9);
+    assert_eq!(chart.peak, Some(65.0));
+    assert!(chart.display_downsampled, "a bar merges samples");
+    assert_eq!(view.charts[1].covered_ns, Some(0), "nothing recorded");
+    assert_eq!(view.start_utc_ns, u64::try_from(from).unwrap());
+    // A late answer of the same round is stale.
+    assert_eq!(bench.answer(&jobs[0], bars_answer(Vec::new(), 0, 0)), None);
+}
+
+/// Bars that no longer change are kept: the next round reads only from
+/// the first one that may; when the history's past changes, the whole
+/// window is read again in the same round.
+#[test]
+fn settled_bars_are_kept_and_only_the_rest_is_read() {
+    let mut bench = bench(4);
+    bench.open("1h", &[cpu()]);
+    let first = bench.sent(NOW).pop().unwrap();
+    let (_, window_start, end, _) = bars_request(&first);
+    let open = end - HOUR;
+    let settled = open + 20 * MINUTE;
+    let old = bar(open - HOUR, 60, 10.0);
+    bench.answer(
+        &first,
+        bars_answer(vec![old, bar(open, 20, 40.0)], settled, 1),
     );
-    assert_eq!(chart.points[1].mean, None, "a gap stays a gap");
-    assert_eq!(chart.mean, Some(20.0), "time-weighted over covered points");
-    assert_eq!(chart.peak, Some(45.0), "from the bucket maxima");
-    assert_eq!(chart.coverage_ratio, Some(0.5));
-    assert!(chart.display_downsampled);
-    assert_eq!(chart.unit, CanonicalUnit::Percent);
-    // A window change makes the results still in flight stale.
-    bench.service.tick(NOW, false);
-    let pending = bench.port.take();
-    bench.service.sync_session(
+    // The next round, a minute later.
+    let later = NOW + 61 * SECOND;
+    bench.clock.advance_ns(61 * SECOND);
+    let next = bench.sent(later).pop().unwrap();
+    let (_, from, _, _) = bars_request(&next);
+    assert_eq!(from, open, "only the bar being filled is read again");
+    bench.answer(
+        &next,
+        bars_answer(vec![bar(open, 21, 41.0)], settled + MINUTE, 1),
+    );
+    let chart = &bench.service.view(&bench.session).charts[0];
+    let means: Vec<Option<f64>> = chart.points.iter().map(|point| point.mean).collect();
+    assert_eq!(
+        means,
+        vec![Some(10.0), Some(41.0)],
+        "the kept bar and the new"
+    );
+    // The history's past changed (its startup compression finished).
+    bench.clock.advance_ns(61 * SECOND);
+    let changed = bench.sent(later + 61 * SECOND).pop().unwrap();
+    assert_eq!(
+        bench.answer(&changed, bars_answer(vec![bar(open, 22, 42.0)], settled, 2)),
+        None,
+        "read again before drawing"
+    );
+    let again = bench.sent(later + 61 * SECOND).pop().unwrap();
+    let (_, from, _, _) = bars_request(&again);
+    assert_eq!(from, window_start, "the whole window");
+    let full = vec![bar(open - 3 * HOUR, 60, 5.0), bar(open, 22, 42.0)];
+    assert!(
+        bench
+            .answer(&again, bars_answer(full, settled, 2))
+            .is_some()
+    );
+    let chart = &bench.service.view(&bench.session).charts[0];
+    assert_eq!(chart.points.len(), 2);
+    assert_eq!(chart.points[0].mean, Some(5.0));
+}
+
+/// Each GPU series' statistics are one read for its four windows, merged
+/// by the history from aligned buckets; energy is the power's integral.
+/// They refresh once a minute and a bar size change keeps them.
+#[test]
+fn statistics_are_one_read_per_series_for_four_windows() {
+    let mut bench = bench(8);
+    let power = gpu_series(HistoryChartKind::GpuPower, "gpu.power.draw");
+    let util = gpu_series(HistoryChartKind::GpuUtilization, "gpu.utilization.compute");
+    bench.open_with("1m", &[cpu()], &[util, power]);
+    let jobs = bench.sent(NOW);
+    let (charts, stats): (Vec<HistoryJob>, Vec<HistoryJob>) = jobs
+        .into_iter()
+        .partition(|job| matches!(job.request, OverviewRequest::Bars { .. }));
+    assert_eq!((charts.len(), stats.len()), (1, 2), "charts first");
+    let OverviewRequest::Windows { spans_ns, .. } = &stats[1].request else {
+        panic!("windows expected");
+    };
+    let hour = HOUR.unsigned_abs();
+    assert_eq!(spans_ns, &vec![hour, 6 * hour, 12 * hour, 24 * hour]);
+    let window = |minutes: u64| bar(0, minutes, 200.0);
+    let windows = vec![window(60), window(300), window(300), window(300)];
+    bench.answer(&stats[0], OverviewAnswer::Windows(windows.clone()));
+    bench.answer(&stats[1], OverviewAnswer::Windows(windows));
+    let view = bench.service.view(&bench.session);
+    let power_rows: Vec<&HistoryWindowSummary> = view
+        .summaries
+        .iter()
+        .filter(|summary| summary.kind == HistoryChartKind::GpuPower)
+        .collect();
+    let labels: Vec<&str> = power_rows
+        .iter()
+        .map(|row| row.window_label.as_str())
+        .collect();
+    assert_eq!(labels, vec!["1h", "6h", "12h", "24h"]);
+    assert_eq!(power_rows[1].covered_ns, Some(300 * 60 * SECOND));
+    assert_eq!(power_rows[1].mean, Some(200.0));
+    assert_eq!(power_rows[1].peak, Some(205.0));
+    let joules = 200.0 * 300.0 * 60.0;
+    assert!((power_rows[1].integral.unwrap() - joules).abs() < 1e-6);
+    assert!((power_rows[1].coverage_ratio.unwrap() - 300.0 / 360.0).abs() < 1e-9);
+    assert!(view.summaries.iter().all(|row| !row.pending));
+    let util_row = view
+        .summaries
+        .iter()
+        .find(|row| row.kind == HistoryChartKind::GpuUtilization)
+        .unwrap();
+    assert_eq!(util_row.integral, None, "energy only for power");
+    // A bar size change reads the charts again and keeps the statistics.
+    assert!(bench.service.sync_session(
         &bench.session,
         &state(ViewKind::History, "5m"),
         COLUMNS,
-        NOW,
+        NOW
+    ));
+    let jobs = bench.sent(NOW);
+    assert!(
+        jobs.iter()
+            .all(|job| matches!(job.request, OverviewRequest::Bars { .. }))
     );
-    for job in &pending {
-        assert!(job.cancel.is_cancelled());
-        assert_eq!(bench.answer(job, &[Some(1.0)]), None);
-    }
-    assert!(bench.service.view(&bench.session).charts[0].pending);
+    assert!(
+        bench
+            .service
+            .view(&bench.session)
+            .summaries
+            .iter()
+            .all(|row| row.mean.is_some())
+    );
+    // Once a minute.
+    assert!(
+        bench
+            .sent(NOW + 30 * SECOND)
+            .iter()
+            .all(|job| { !matches!(job.request, OverviewRequest::Windows { .. }) })
+    );
+    let refreshed = bench.sent(NOW + 61 * SECOND);
+    let reads = refreshed
+        .iter()
+        .filter(|job| matches!(job.request, OverviewRequest::Windows { .. }))
+        .count();
+    assert_eq!(reads, 2);
 }
 
 #[test]
-fn a_new_series_restarts_the_queries_and_a_new_scale_only_redraws() {
+fn a_new_series_restarts_the_reads_and_a_new_scale_only_redraws() {
     let mut bench = bench(4);
     bench.open("1m", &[cpu()]);
-    bench.service.tick(NOW, false);
-    let first = bench.port.take();
+    let first = bench.sent(NOW);
     let mut rescaled = cpu();
     rescaled.scale_max = Some(50.0);
     let dirty = bench
@@ -331,7 +393,6 @@ fn a_new_series_restarts_the_queries_and_a_new_scale_only_redraws() {
         bench.service.view(&bench.session).charts[0].scale_max,
         Some(50.0)
     );
-    assert!(bench.answer(&first[0], &[Some(1.0)]).is_some());
     // The pick receives what the session shows, and a new device restarts.
     bench.service.update_charts(
         3,
@@ -341,58 +402,43 @@ fn a_new_series_restarts_the_queries_and_a_new_scale_only_redraws() {
         },
         NOW,
     );
-    assert!(first[1].cancel.is_cancelled());
-    assert_eq!(bench.answer(&first[1], &[Some(1.0)]), None);
+    assert!(first[0].cancel.is_cancelled());
+    assert_eq!(bench.answer(&first[0], bars_answer(Vec::new(), 0, 0)), None);
     let view = bench.service.view(&bench.session);
     assert_eq!(view.charts.len(), 1);
     assert!(view.charts[0].pending);
-    // An unchanged pick changes nothing.
     assert!(
         bench
             .service
             .update_charts(4, |request| picks(request.shown.to_vec()), NOW)
-            .is_empty()
+            .is_empty(),
+        "an unchanged pick changes nothing"
     );
 }
 
 #[test]
 fn timeouts_and_errors_show_on_their_chart_and_leaving_cancels() {
     let mut bench = bench(1);
-    bench.open("", &[cpu(), read_rate("blockdev:8:0")]);
-    bench.service.tick(NOW, false);
-    let job = bench.port.take().pop().unwrap();
+    bench.open("1m", &[cpu(), read_rate("blockdev:8:0")]);
+    let job = bench.sent(NOW).pop().unwrap();
     // Overdue: the slot is reclaimed and the error shows on the chart.
-    let later = NOW + 400 * NANOS_PER_MILLI;
+    let later = NOW + 400 * dgxtop_core::clock::NANOS_PER_MILLI;
     let tick = bench.service.tick(later, false);
     assert_eq!(tick.expired, 1);
     assert!(job.cancel.is_cancelled());
-    assert_eq!(tick.dispatched, 1, "the next query uses the freed slot");
-    let view = bench.service.view(&bench.session);
-    assert_eq!(
-        view.charts[0].error.as_deref(),
-        Some("history query timed out")
-    );
-    assert!(!view.charts[0].pending);
-    // The freed slot went to chart 0's maximum; answered, the next goes to
-    // chart 1's mean, whose refusal shows on chart 1 only.
-    let maximum = bench.port.take().pop().unwrap();
-    assert_eq!(maximum.query.stat, HistoryStat::Max);
-    bench.answer(&maximum, &[Some(1.0)]);
-    bench.service.tick(later, false);
+    assert_eq!(tick.dispatched, 1, "the next read uses the freed slot");
     let next = bench.port.take().pop().unwrap();
     assert_eq!(
-        (next.query.stat, next.query.key.metric_id.as_str()),
-        (HistoryStat::Mean, "disk.read.bytes_per_second")
+        next.request.series().metric_id.as_str(),
+        "disk.read.bytes_per_second"
     );
-    bench.service.on_result(
-        next.query.request_id,
+    let done = bench.service.on_result(
+        next.request_id,
         &bench.session,
         next.session_generation,
-        Err(ErrorDetail::new(
-            dgxtop_core::errors::ErrorCode::QueryTooLarge,
-            "scan limit",
-        )),
+        Err(ErrorDetail::new(ErrorCode::Unavailable, "history stopped")),
     );
+    assert!(done.is_some(), "the round is over: drawn");
     let view = bench.service.view(&bench.session);
     let errors: Vec<Option<&str>> = view
         .charts
@@ -401,8 +447,9 @@ fn timeouts_and_errors_show_on_their_chart_and_leaving_cancels() {
         .collect();
     assert_eq!(
         errors,
-        vec![Some("history query timed out"), Some("scan limit")]
+        vec![Some("history read timed out"), Some("history stopped")]
     );
+    assert!(view.charts.iter().all(|chart| !chart.pending));
     assert!(bench.service.sync_session(
         &bench.session,
         &state(ViewKind::Overview, ""),
@@ -416,356 +463,73 @@ fn timeouts_and_errors_show_on_their_chart_and_leaving_cancels() {
         later
     ));
     assert!(!bench.service.wants_charts(9), "only sessions on the view");
+    assert!(
+        bench.sent(later + 120 * SECOND).is_empty(),
+        "other views read nothing"
+    );
     bench.service.cancel_all();
     assert_eq!(bench.service.inflight_count(), 0);
     bench.service.close_session(&bench.session);
     assert!(bench.service.view(&bench.session).charts.is_empty());
 }
 
-fn gpu_series(entity: &str, kind: HistoryChartKind, metric: &str) -> HistoryChartSpec {
-    HistoryChartSpec {
-        kind,
-        subject: format!("{} · NVIDIA L4", entity.trim_start_matches("gpu:")),
-        key: metric_key(entity, metric, "gpu"),
-        scale_max: None,
-    }
-}
-
-/// GPU A's utilization and power, summarized over 1 h to 24 h.
-fn gpu_stats() -> Vec<HistoryChartSpec> {
-    vec![
-        gpu_series(
-            "gpu:GPU-a",
-            HistoryChartKind::GpuUtilization,
-            "gpu.utilization.compute",
-        ),
-        gpu_series("gpu:GPU-a", HistoryChartKind::GpuPower, "gpu.power.draw"),
-    ]
-}
-
-/// Whether a job draws a chart of the 1 h window (30 s points) rather than
-/// summarizing a whole window.
-fn charts_one_hour(job: &HistoryJob) -> bool {
-    job.query.resolution_ms == 60_000
-}
-
+/// Where the history before this run comes from follows what the history
+/// says: on disk, failed with its reason, or only while dgxtop runs.
 #[test]
-fn the_history_view_summarizes_each_gpu_over_four_windows_once_a_minute() {
-    let mut bench = bench(64);
-    bench.open_with_stats("1m", &[cpu()], &gpu_stats());
-    bench.service.tick(NOW, false);
-    let jobs = bench.port.take();
-    let (charted, summarized): (Vec<&HistoryJob>, Vec<&HistoryJob>) =
-        jobs.iter().partition(|job| charts_one_hour(job));
-    // The chart's mean and maximum go first, then two series, four windows,
-    // the mean and the maximum of each.
-    assert!(jobs.iter().take(2).all(charts_one_hour));
-    assert_eq!(charted.len(), 2);
-    assert_eq!(summarized.len(), 2 * 4 * 2);
-    let mut spans: Vec<u64> = summarized
-        .iter()
-        .map(|job| job.query.span_ns() / SECOND)
-        .collect();
-    spans.sort_unstable();
-    spans.dedup();
-    assert_eq!(spans, vec![3_600, 21_600, 43_200, 86_400]);
-    for job in &summarized {
-        assert_eq!(job.query.end_boot_ns, NOW);
-        assert_eq!(
-            u64::from(job.query.resolution_ms) * 1_000_000,
-            job.query.span_ns(),
-            "one point over the whole window"
-        );
-        assert_eq!(job.query.max_points, 2);
-    }
-    for job in &jobs {
-        let power = job.query.key.metric_id.as_str() == "gpu.power.draw";
-        let value = match (power, job.query.stat) {
-            (true, HistoryStat::Mean) => 100.0,
-            (true, _) => 250.0,
-            (false, HistoryStat::Mean) => 40.0,
-            (false, _) => 90.0,
-        };
-        bench.answer(job, &[Some(value)]);
-    }
-    let view = bench.service.view(&bench.session);
-    assert_eq!(view.charts.len(), 1, "the statistics draw no chart");
-    assert_eq!(view.summaries.len(), 4 * 2);
-    let hour: Vec<&HistoryWindowSummary> = view
-        .summaries
-        .iter()
-        .filter(|summary| summary.window_label == "1h")
-        .collect();
-    assert_eq!(
-        hour.iter().map(|summary| summary.kind).collect::<Vec<_>>(),
-        vec![HistoryChartKind::GpuUtilization, HistoryChartKind::GpuPower]
-    );
-    assert!(
-        hour.iter()
-            .all(|summary| summary.subject == "GPU-a · NVIDIA L4")
-    );
-    let power = hour[1];
-    assert_eq!((power.mean, power.peak), (Some(100.0), Some(250.0)));
-    assert_eq!(power.coverage_ratio, Some(0.5));
-    assert_eq!(power.unit, CanonicalUnit::Watts);
-    // 100 W over the covered hour (one point covering it all) is 360 kJ.
-    assert_eq!(power.integral, Some(360_000.0));
-    assert_eq!(hour[0].integral, None, "only power has an energy");
-    assert!(view.summaries.iter().all(|summary| !summary.pending));
-    // The chart refreshes at its resolution (a minute), as the statistics.
-    bench.service.tick(NOW + 30 * SECOND, false);
-    assert!(bench.port.take().is_empty());
-    bench.service.tick(NOW + 60 * SECOND, false);
-    assert_eq!(bench.port.take().len(), 2 + 2 * 4 * 2);
-}
-
-#[test]
-fn new_statistics_restart_only_their_queries_and_other_views_query_nothing() {
-    let mut bench = bench(64);
-    bench.open_with_stats("1m", &[cpu()], &gpu_stats());
-    bench.service.tick(NOW, false);
-    let first = bench.port.take();
-    // A second GPU appears: the statistics query again, the chart goes on.
-    let mut more = gpu_stats();
-    more.push(gpu_series(
-        "gpu:GPU-b",
-        HistoryChartKind::GpuUtilization,
-        "gpu.utilization.compute",
-    ));
-    let dirty = bench.service.update_charts(
-        2,
-        move |request| HistoryPicks {
-            charts: request.shown.to_vec(),
-            stats: more.clone(),
-        },
-        NOW,
-    );
-    assert_eq!(dirty, vec![bench.session.clone()]);
-    let (charted, summarized): (Vec<&HistoryJob>, Vec<&HistoryJob>) =
-        first.iter().partition(|job| charts_one_hour(job));
-    assert!(charted.iter().all(|job| !job.cancel.is_cancelled()));
-    assert!(summarized.iter().all(|job| job.cancel.is_cancelled()));
-    assert!(bench.answer(charted[0], &[Some(1.0)]).is_some());
-    assert_eq!(bench.answer(summarized[0], &[Some(1.0)]), None, "stale");
-    let view = bench.service.view(&bench.session);
-    assert_eq!(view.summaries.len(), 3 * 4);
-    assert!(view.summaries.iter().all(|summary| summary.pending));
-    // The GPU view and the other views query no history (D-48).
-    assert!(bench.service.sync_session(
-        &bench.session,
-        &state(ViewKind::GpuDetail, ""),
-        COLUMNS,
-        NOW
-    ));
-    assert!(!bench.service.wants_charts(3));
-    bench.service.tick(NOW + 120 * SECOND, false);
-    assert!(bench.port.take().is_empty());
-    let left = bench.service.view(&bench.session);
-    assert!(left.summaries.iter().all(|summary| !summary.pending));
-}
-
-const MINUTE: u64 = 60 * SECOND;
-
-impl Bench {
-    /// Answers an archive read with `points` of (minutes before this run's
-    /// start, mean, covered minutes), each as wide as it covers.
-    fn answer_archive(&mut self, job: &ArchiveReadJob, points: &[(u64, f64, u64)]) {
-        let seam = job.query.end_utc_ns;
-        let result = ArchiveResult {
-            request_id: job.query.request_id,
-            points: points
-                .iter()
-                .map(|(before, mean, covered)| ArchivePoint {
-                    start_utc_ns: seam - before * MINUTE,
-                    end_utc_ns: seam - before * MINUTE + covered * MINUTE,
-                    mean: Some(*mean),
-                    max: Some(mean + 1.0),
-                    covered_ns: covered * MINUTE,
-                })
-                .collect(),
-            covered_ns: points.iter().map(|point| point.2 * MINUTE).sum(),
-            boots: 1,
-            truncated: false,
-        };
-        self.service.on_archive_result(
-            job.query.request_id,
-            &self.session,
-            job.session_generation,
-            Ok(result),
-        );
-    }
-}
-
-#[test]
-fn the_time_before_this_run_is_read_from_the_archive_once_a_generation() {
-    // This run started half an hour ago.
-    let since = NOW - 30 * MINUTE;
-    let mut bench = bench_with_archive(4, Some(since));
-    bench.open("1m", &[cpu(), read_rate("blockdev:8:0")]);
-    bench.service.tick(NOW, false);
-    let reads = bench.archive.take();
-    assert_eq!(reads.len(), 2, "one read per chart");
-    for read in &reads {
-        assert_eq!(read.query.end_utc_ns, bench.utc(since), "up to this run");
-        assert_eq!(read.query.start_utc_ns, bench.utc(NOW) - 60 * MINUTE);
-        // The view's 1 m bars in the archive's whole minutes.
-        assert_eq!(read.query.point_ns, MINUTE);
-        assert_eq!(read.deadline_boot_ns, NOW + 200 * NANOS_PER_MILLI);
-    }
-    assert_eq!(
-        reads[0].query.series,
-        SeriesInEveryBoot::from(&cpu().key),
-        "the series in every boot"
-    );
-    for read in &reads {
-        bench.answer_archive(read, &[(5, 40.0, 1)]);
-    }
-    // Refresh rounds read memory again, never the archive.
-    for second in 1..=120 {
-        bench.service.tick(NOW + second * SECOND, false);
-    }
-    assert!(!bench.port.take().is_empty());
-    assert!(bench.archive.take().is_empty());
-    // A new window is a new generation: read again, at its resolution.
-    bench.service.sync_session(
-        &bench.session,
-        &state(ViewKind::History, "5m"),
-        COLUMNS,
-        NOW + 121 * SECOND,
-    );
-    bench.service.tick(NOW + 121 * SECOND, false);
-    let again = bench.archive.take();
-    assert_eq!(again.len(), 2);
-    assert!(again.iter().all(|read| read.query.point_ns == 5 * MINUTE));
-}
-
-#[test]
-fn archived_minutes_lead_the_chart_on_the_wall_clock() {
-    let since = NOW - 30 * MINUTE;
-    let mut bench = bench_with_archive(4, Some(since));
-    bench.open("1m", &[cpu()]);
-    bench.service.tick(NOW, false);
-    for job in bench.port.take() {
-        // This run: two values over its half hour, 15 minutes each.
-        bench.service.on_result(
-            job.query.request_id,
-            &bench.session,
-            job.session_generation,
-            Ok(HistoryResult {
-                points: vec![
-                    point(since, 15 * MINUTE, 20.0),
-                    point(since + 15 * MINUTE, 15 * MINUTE, 60.0),
-                ],
-                covered_ns: 30 * MINUTE,
-                ..result_for(&job, &[])
-            }),
-        );
-    }
-    let read = bench.archive.take().remove(0);
-    // Ten minutes recorded by an earlier run, 20 and 11 minutes before
-    // this one.
-    bench.answer_archive(&read, &[(20, 80.0, 5), (11, 100.0, 5)]);
-    let view = bench.service.view(&bench.session);
-    assert_eq!(view.disk, DiskHistory::On);
-    assert_eq!(view.end_utc_ns - view.start_utc_ns, 60 * MINUTE);
-    let chart = &view.charts[0];
-    let starts: Vec<u64> = chart
-        .points
-        .iter()
-        .map(|point| (view.end_utc_ns - point.start_utc_ns) / MINUTE)
-        .collect();
-    assert_eq!(starts, vec![50, 41, 30, 15], "oldest first, minutes ago");
-    assert_eq!(chart.covered_ns, Some(40 * MINUTE));
-    // (80×5 + 100×5 + 20×15 + 60×15) / 40.
-    assert!(
-        (chart.mean.unwrap() - 52.5).abs() < 1e-9,
-        "{:?}",
-        chart.mean
-    );
-    assert_eq!(chart.peak, Some(101.0));
-}
-
-#[test]
-fn a_failed_archive_read_shows_and_is_asked_again_next_round() {
-    let mut bench = bench_with_archive(4, Some(NOW - 30 * MINUTE));
-    bench.open("1m", &[cpu()]);
-    bench.service.tick(NOW, false);
-    let read = bench.archive.take().remove(0);
-    bench.service.on_archive_result(
-        read.query.request_id,
-        &bench.session,
-        read.session_generation,
-        Err(ErrorDetail::new(ErrorCode::Unavailable, "disk on fire")),
-    );
-    let view = bench.service.view(&bench.session);
-    assert_eq!(view.disk, DiskHistory::Failed("disk on fire".to_owned()));
-    // Not again on every tick, only with the next round (1 m bars
-    // refresh every minute).
-    bench.service.tick(NOW + SECOND, false);
-    assert!(bench.archive.take().is_empty());
-    bench.service.tick(NOW + 60 * SECOND, false);
-    let retry = bench.archive.take();
-    assert_eq!(retry.len(), 1);
-    bench.answer_archive(&retry[0], &[]);
-    assert_eq!(bench.service.view(&bench.session).disk, DiskHistory::On);
-    // A late answer to a read of an older generation is dropped.
-    assert_eq!(
-        bench.service.on_archive_result(
-            read.query.request_id,
-            &bench.session,
-            read.session_generation,
-            Ok(ArchiveResult::empty(read.query.request_id)),
-        ),
-        None
-    );
-}
-
-#[test]
-fn archive_reads_run_two_at_a_time_and_time_out() {
-    let mut bench = bench_with_archive(64, Some(NOW - 30 * MINUTE));
-    let charts = vec![cpu(), read_rate("a"), read_rate("b"), read_rate("c")];
-    bench.open("1m", &charts);
-    bench.service.tick(NOW, false);
-    assert_eq!(bench.archive.take().len(), MAX_ARCHIVE_INFLIGHT);
-    // Past the deadline and its grace: the slots free up, the view says
-    // why and the next reads go out.
-    bench.service.tick(NOW + 400 * NANOS_PER_MILLI, false);
-    let view = bench.service.view(&bench.session);
-    assert_eq!(
-        view.disk,
-        DiskHistory::Failed("history archive read timed out".to_owned())
-    );
-    assert_eq!(bench.archive.take().len(), MAX_ARCHIVE_INFLIGHT);
-}
-
-#[test]
-fn without_an_archive_the_window_starts_at_boot_and_nothing_is_read() {
-    // Booted 10 minutes before the bench's now: a 1 h window is charted
-    // from boot (D-50).
+fn the_disk_state_follows_the_history() {
     let mut bench = bench(4);
-    bench.clock.set_boot_ns(10 * MINUTE);
-    bench.service.sync_session(
-        &bench.session,
-        &state(ViewKind::History, "1m"),
-        COLUMNS,
-        10 * MINUTE,
+    bench.open("1m", &[cpu()]);
+    assert_eq!(bench.service.view(&bench.session).disk, DiskHistory::On);
+    let job = bench.sent(NOW).pop().unwrap();
+    let failing = OverviewAnswer::Bars(OverviewBars {
+        epoch: 0,
+        settled_through_utc_ns: i64::MIN,
+        bars: Vec::new(),
+        kept_on_disk: true,
+        store_issue: Some("history tiers: disk full".to_owned()),
+    });
+    bench.answer(&job, failing);
+    assert_eq!(
+        bench.service.view(&bench.session).disk,
+        DiskHistory::Failed("history tiers: disk full".to_owned())
     );
-    let view = bench.service.view(&bench.session);
-    assert_eq!(view.disk, DiskHistory::Off);
-    assert_eq!(view.end_utc_ns - view.start_utc_ns, 10 * MINUTE);
-    bench.service.tick(10 * MINUTE, false);
-    assert!(bench.archive.take().is_empty());
+    bench.clock.advance_ns(61 * SECOND);
+    let job = bench.sent(NOW + 61 * SECOND).pop().unwrap();
+    let off = OverviewAnswer::Bars(OverviewBars {
+        epoch: 0,
+        settled_through_utc_ns: i64::MIN,
+        bars: Vec::new(),
+        kept_on_disk: false,
+        store_issue: None,
+    });
+    bench.answer(&job, off);
+    assert_eq!(bench.service.view(&bench.session).disk, DiskHistory::Off);
 }
 
-/// A memory point of `covered` time at `value` starting at boot `start`.
-fn point(start: u64, covered: u64, value: f64) -> HistoryPoint {
-    HistoryPoint {
-        start_boot_ns: start,
-        end_boot_ns: start + covered,
-        value: Some(Scalar::from_f64(value).unwrap()),
-        covered_ns: covered,
-        method: HistoryMethod::TimeWeightedStep,
-        source_ids: Vec::new(),
-        reason: None,
-    }
+/// A throttled session refreshes three times slower; the bars' refresh
+/// follows their size between 5 s and a minute.
+#[test]
+fn refreshes_follow_the_bar_size_and_slow_down_when_throttled() {
+    let mut bench = bench(4);
+    bench.open("1m", &[cpu()]);
+    bench.sent(NOW);
+    assert_eq!(
+        bench.service.next_deadline(),
+        Some(NOW + 200_000_000 + RESULT_GRACE_NS)
+    );
+    let first = bench.port.take();
+    assert!(first.is_empty());
+    bench.service.tick(NOW + 61 * SECOND, true);
+    let refreshed = bench.port.take();
+    assert_eq!(refreshed.len(), 1, "a minute bar refreshes every minute");
+    bench.service.tick(NOW + 125 * SECOND, false);
+    assert!(
+        bench.port.take().is_empty(),
+        "three times slower while throttled"
+    );
+    assert_eq!(
+        BarGrid::new(BarSize::OneDay, 10).refresh_ms(),
+        MAX_REFRESH_MS
+    );
+    assert_eq!(BarGrid::new(BarSize::Auto, 10).bar, BarSize::OneMinute);
 }

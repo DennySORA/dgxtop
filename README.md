@@ -67,15 +67,20 @@ GPUs first, shows the whole machine around them, and keeps the history.
   their names. The color comes from the name, so a job gets the same color after it or dgxtop
   restarts, unless another running process already holds it.
 - **History.** Charts on one time axis, one bar per column, each bar the average of 1, 5, 10 or
-  30 minutes or 1, 2, 4, 6, 8, 12, 18 or 24 hours (`w` / `W`):
+  30 minutes or 1, 2, 4, 6, 8, 12, 18 or 24 hours (`w` / `W`) of the local clock: a 1-hour bar is
+  15:00–16:00, a 24-hour bar a day, the latest bar the one being filled now. A bar is the average
+  of the time it holds (dgxtop started at 15:15: the 15:00 bar is 15:15–16:00), and a time
+  without data stays a gap:
   - CPU, memory, disks and network;
   - each GPU's utilization, memory, temperature and power;
   - now, average and maximum for every chart;
   - each GPU's last 1, 6, 12 and 24 hours, with the energy it used;
   - each colored process's part of the memory charts.
 
-  History is saved on disk for 7 days and survives restarts and reboots. The per-process parts are
-  kept in memory, for as long as dgxtop runs.
+  History is saved on disk and survives restarts and reboots, with no age limit: each bar size
+  keeps its latest 300 bars, the older time lives on in the coarser sizes, so the 24-hour bars
+  reach back 300 days. The 1-hour to 24-hour statistics are merged from those bars too. The
+  per-process parts are kept in memory, for as long as dgxtop runs.
 - **Process History.** Every GPU process dgxtop saw, the latest start first: when it started and
   how long it ran, its GPUs, peak GPU memory and RAM, GPU and CPU use in the load colors, its most
   child processes, and how it ended: still running, stopped by dgxtop, killed by a signal
@@ -225,7 +230,8 @@ Command-line values override saved settings only for the current run.
 | Purpose | Location |
 |---|---|
 | Configuration | `$XDG_CONFIG_HOME/dgxtop/v2/config.json` (`~/.config/dgxtop/v2/config.json`) |
-| History (7 days, at most 1 GiB) | `$XDG_STATE_HOME/dgxtop/v2/history.sqlite3` (`~/.local/state/...`) |
+| History, every bar size (at most 64 MiB) | `$XDG_STATE_HOME/dgxtop/v2/history_tiers.sqlite3` (`~/.local/state/...`) |
+| History's recent minutes (at most 7 days and 1 GiB) | `$XDG_STATE_HOME/dgxtop/v2/history.sqlite3` |
 | Process History (at most 64 MiB; `store.process_history_enabled`, unset following the archive) | `$XDG_STATE_HOME/dgxtop/v2/process_history.sqlite3` and `process_recent.json` |
 | Log of process actions | `$XDG_STATE_HOME/dgxtop/v2/audit.sqlite3` |
 | Log file and instance lock | `$XDG_STATE_HOME/dgxtop/v2/` |

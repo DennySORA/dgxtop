@@ -28,15 +28,16 @@ use dgxtop_core::diagnostics::Diagnostics;
 use dgxtop_core::identity::{AdapterId, BootId, HostId};
 use dgxtop_core::naming;
 use dgxtop_core::observation::AdapterManifest;
+use dgxtop_core::overview_history::{HistoryTierCompletion, HistoryTierJob};
 use dgxtop_core::ports::{
-    ArchiveGapCause, ArchiveJournal, ArchiveOutcome, ArchiveReadJob, ArchiveReader, ArchiveSink,
-    AuditRepository, Collector, ConfigJob, ConfigRepository, ControlCompletion, Dispatch,
-    HistoryJob, HistoryReader, IngestionCompletion, LogLevel, Logger, ProcessHistoryCompletion,
-    ProcessHistoryInput, ProcessHistoryJob, ProcessHistoryReader, ProcessHistoryStore,
-    ProcessProbe, ProcessProbeJob, StoreJob, StoreWriter, TelemetryPort,
+    ArchiveGapCause, ArchiveJournal, ArchiveOutcome, ArchiveReader, ArchiveSink, AuditRepository,
+    Collector, ConfigJob, ConfigRepository, ControlCompletion, Dispatch, HistoryJob,
+    HistoryTierStore, IngestionCompletion, LogLevel, Logger, OverviewReader,
+    ProcessHistoryCompletion, ProcessHistoryInput, ProcessHistoryJob, ProcessHistoryReader,
+    ProcessHistoryStore, ProcessProbe, ProcessProbeJob, StoreJob, StoreWriter, TelemetryPort,
 };
 use dgxtop_core::quality::Namespace;
-use dgxtop_history::{ProcessHistory, ProcessHistoryPorts, ProcessHistorySettings};
+use dgxtop_history::{OverviewTiers, ProcessHistory, ProcessHistoryPorts, ProcessHistorySettings};
 use dgxtop_manager::presentation::HostFacts;
 use dgxtop_manager::{
     Manager, ManagerChannels, ManagerPorts, ManagerSetup, ProcessHistoryHandles, SessionHandle,
@@ -56,6 +57,7 @@ use dgxtop_runtime::timezone::local_utc_offset_s;
 use dgxtop_store::archive::{ArchiveLimits, SqliteArchive, SqliteArchiveReader};
 use dgxtop_store::audit::{AuditLimits, SqliteAuditRepository};
 use dgxtop_store::config::FileConfigRepository;
+use dgxtop_store::history_tiers::SqliteHistoryTiers;
 use dgxtop_store::lock::InstanceLock;
 use dgxtop_store::paths::StatePaths;
 use dgxtop_store::process_history::ProcessHistoryFiles;
@@ -87,8 +89,9 @@ const FRONTEND_EXIT_GRACE: Duration = Duration::from_secs(5);
 const SIGNAL_POLL: Duration = Duration::from_millis(200);
 /// Cadence of the bounded wait for the frontend once a signal arrived.
 const FRONTEND_EXIT_POLL: Duration = Duration::from_millis(50);
-/// Archive reads queued for the reader: the Manager runs two at a time.
-const ARCHIVE_READ_QUEUE: usize = 4;
+/// History tier jobs waiting (D-82): the history sends one startup read at
+/// a time and a journal of closed buckets per finished minute.
+const HISTORY_TIERS_QUEUE: usize = 16;
 /// Probe jobs waiting (D-76); the process actor keeps one in flight.
 const PROCESS_PROBE_QUEUE: usize = 2;
 /// Inputs waiting for the history's process actor (D-79): a table each
@@ -512,6 +515,18 @@ impl Wiring {
             effective.store.archive_enabled && sqlite_ok,
         )
         .into_parts();
+        // The Overview's sizes follow the local clock and are kept with the
+        // archive (D-82); both before the hot store feeds them.
+        history_index
+            .overview()
+            .set_utc_offset(local_utc_offset_s());
+        self.spawn_history_tiers(
+            effective,
+            paths,
+            sqlite_ok,
+            (history_index.overview().clone(), host_id.clone()),
+            &mut workers,
+        )?;
         let archive = self.spawn_archive(
             effective,
             paths,
@@ -533,13 +548,6 @@ impl Wiring {
         let history =
             self.spawn_history(effective, Arc::new(history_index), completions.clone())?;
         workers.push(Box::new(("history".to_owned(), history.clone())));
-        let archive_reads = self.spawn_archive_reader(
-            effective,
-            paths,
-            sqlite_ok,
-            completions.clone(),
-            &mut workers,
-        )?;
         let config = spawn_config(config_repository, completions.clone())?;
         workers.push(Box::new(("config".to_owned(), config.clone())));
         let audit = self.spawn_audit(effective, paths, sqlite_ok, completions.clone())?;
@@ -597,8 +605,6 @@ impl Wiring {
             store: Box::new(store),
             snapshots: Arc::new(snapshots),
             history: Box::new(history),
-            archive_reads: archive_reads
-                .map(|port| Box::new(port) as Box<dyn Dispatch<ArchiveReadJob>>),
             config: Box::new(config),
             audit: Box::new(audit),
             actions: Box::new(actions),
@@ -756,49 +762,46 @@ impl Wiring {
         .map_err(|error| StartError::failure(error.to_string()))
     }
 
-    /// The history view's reader of the archive (D-51): one actor with a
-    /// read-only connection of its own, so a slow disk never holds up the
-    /// archive writer or the memory queries.
-    fn spawn_archive_reader(
+    /// The history's store of the Overview's sizes (D-82), on with the
+    /// archive: one actor with the tiers database and a read-only reader of
+    /// the archive, answering the history directly (the Manager never sees
+    /// these jobs). Attached before the hot store starts, so live minutes
+    /// wait for the startup load.
+    fn spawn_history_tiers(
         &self,
         effective: &Config,
         paths: &StatePaths,
         sqlite_ok: bool,
-        completions: Completions,
+        (overview, host_id): (OverviewTiers, HostId),
         workers: &mut Vec<Box<dyn StopOnShutdown>>,
-    ) -> Result<Option<PoolHandle<ArchiveReadJob>>, StartError> {
+    ) -> Result<(), StartError> {
         if !(effective.store.archive_enabled && sqlite_ok) {
-            return Ok(None);
+            return Ok(());
         }
-        let clock = Arc::clone(&self.clock);
+        let files = HistoryTierFiles {
+            tiers: SqliteHistoryTiers::open(&paths.history_tiers_database, Arc::clone(&self.clock)),
+            archive: SqliteArchiveReader::new(&paths.history_database),
+        };
+        let answer = overview.clone();
         let handle = spawn_actor(
-            "archive-reader",
-            ARCHIVE_READ_QUEUE,
-            SqliteArchiveReader::new(&paths.history_database),
-            move |reader: &mut SqliteArchiveReader, job: ArchiveReadJob| {
-                let result = reader.read(
-                    &job.query,
-                    job.deadline_boot_ns,
-                    &job.cancel,
-                    clock.as_ref(),
-                );
-                completions.control(ControlCompletion::ArchiveRead {
-                    request_id: job.query.request_id,
-                    session_id: job.session_id,
-                    session_generation: job.session_generation,
-                    result,
-                });
+            "history-tiers",
+            HISTORY_TIERS_QUEUE,
+            files,
+            move |files: &mut HistoryTierFiles, job: HistoryTierJob| {
+                answer.on_store(files.run(job));
             },
         )
         .map_err(|error| StartError::failure(error.to_string()))?;
-        workers.push(Box::new(("archive-reader".to_owned(), handle.clone())));
-        Ok(Some(handle))
+        workers.push(Box::new(("history-tiers".to_owned(), handle.clone())));
+        let run_start_utc_ns = i64::try_from(self.clock.now_utc_ns()).unwrap_or(i64::MAX);
+        overview.attach_store(Box::new(handle), host_id, run_start_utc_ns);
+        Ok(())
     }
 
     fn spawn_history(
         &self,
         effective: &Config,
-        history: Arc<dyn HistoryReader>,
+        history: Arc<dyn OverviewReader>,
         completions: Completions,
     ) -> Result<PoolHandle<HistoryJob>, StartError> {
         let clock = Arc::clone(&self.clock);
@@ -807,14 +810,14 @@ impl Wiring {
             usize::try_from(effective.runtime.history_workers).unwrap_or(1),
             usize::try_from(effective.queues.history_requests).unwrap_or(4),
             Arc::new(move |job: HistoryJob| {
-                let result = history.query(
-                    &job.query,
+                let result = history.read(
+                    &job.request,
                     job.deadline_boot_ns,
                     &job.cancel,
                     clock.as_ref(),
                 );
                 completions.control(ControlCompletion::History {
-                    request_id: job.query.request_id,
+                    request_id: job.request_id,
                     session_id: job.session_id,
                     session_generation: job.session_generation,
                     result,
@@ -1229,6 +1232,31 @@ fn wait_for_flag(flag: &AtomicBool, timeout: Duration) -> bool {
             return false;
         }
         std::thread::sleep(remaining.min(FRONTEND_EXIT_POLL));
+    }
+}
+
+/// The history tier actor's state (D-82): the tiers database and the
+/// archive's reader, each answering the job the history sent.
+struct HistoryTierFiles {
+    tiers: SqliteHistoryTiers,
+    archive: SqliteArchiveReader,
+}
+
+impl HistoryTierFiles {
+    fn run(&mut self, job: HistoryTierJob) -> HistoryTierCompletion {
+        match job {
+            HistoryTierJob::Load => HistoryTierCompletion::Loaded(self.tiers.load()),
+            HistoryTierJob::Append(journal) => {
+                HistoryTierCompletion::Appended(self.tiers.append(&journal))
+            }
+            HistoryTierJob::ListArchived(list) => {
+                HistoryTierCompletion::Listed(self.archive.archived_series(&list))
+            }
+            HistoryTierJob::ReadArchived(read) => {
+                let result = self.archive.archived_minutes(&read);
+                HistoryTierCompletion::ArchivedRead { read, result }
+            }
+        }
     }
 }
 

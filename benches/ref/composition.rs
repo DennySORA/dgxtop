@@ -37,11 +37,11 @@ use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::config::Config;
 use dgxtop_core::diagnostics::Diagnostics;
 use dgxtop_core::errors::ErrorDetail;
-use dgxtop_core::history::{HistoryQuery, HistoryResult};
-use dgxtop_core::identity::{AdapterId, MetricKey, ProcessKey};
+use dgxtop_core::identity::{AdapterId, ProcessKey};
+use dgxtop_core::overview_history::{OverviewAnswer, OverviewRequest};
 use dgxtop_core::ports::{
     AuditRepository, CancelFlag, Collector, ConfigJob, ConfigRepository, ControlCompletion,
-    Dispatch, DispatchError, HistoryJob, HistoryReader, IngestionCompletion, LogLevel, Logger,
+    Dispatch, DispatchError, HistoryJob, IngestionCompletion, LogLevel, Logger, OverviewReader,
     ProcessActionPort, ProcessHistoryInput, ProcessHistoryReader, StoreJob, StoreWriter,
 };
 use dgxtop_core::quality::Namespace;
@@ -74,38 +74,31 @@ const SHUTDOWN_BUDGET: Duration = Duration::from_secs(3);
 
 /// History reader the bench can swap once the preloaded store is ready.
 pub struct SwitchableHistory {
-    current: RwLock<Arc<dyn HistoryReader>>,
+    current: RwLock<Arc<dyn OverviewReader>>,
 }
 
 impl SwitchableHistory {
-    pub fn new(initial: Arc<dyn HistoryReader>) -> Self {
+    pub fn new(initial: Arc<dyn OverviewReader>) -> Self {
         Self {
             current: RwLock::new(initial),
         }
     }
 
-    pub fn switch_to(&self, reader: Arc<dyn HistoryReader>) {
+    pub fn switch_to(&self, reader: Arc<dyn OverviewReader>) {
         *self.current.write().unwrap_or_else(PoisonError::into_inner) = reader;
     }
 }
 
-impl HistoryReader for SwitchableHistory {
-    fn query(
+impl OverviewReader for SwitchableHistory {
+    fn read(
         &self,
-        query: &HistoryQuery,
+        request: &OverviewRequest,
         deadline_boot_ns: u64,
         cancel: &CancelFlag,
         clock: &dyn TimeProvider,
-    ) -> Result<HistoryResult, ErrorDetail> {
+    ) -> Result<OverviewAnswer, ErrorDetail> {
         let reader = Arc::clone(&self.current.read().unwrap_or_else(PoisonError::into_inner));
-        reader.query(query, deadline_boot_ns, cancel, clock)
-    }
-
-    fn series(&self) -> Vec<MetricKey> {
-        self.current
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .series()
+        reader.read(request, deadline_boot_ns, cancel, clock)
     }
 }
 
@@ -262,7 +255,7 @@ impl RefComposition {
         let collectors = wiring.spawn_collectors(&config, collector_registry.clone())?;
         workers.push(Box::new(NamedPool("collector", collectors.clone())));
         let history_pool =
-            wiring.spawn_history(&config, Arc::clone(&history) as Arc<dyn HistoryReader>)?;
+            wiring.spawn_history(&config, Arc::clone(&history) as Arc<dyn OverviewReader>)?;
         workers.push(Box::new(NamedPool("history", history_pool.clone())));
         let config_actor = wiring.spawn_config(repository)?;
         workers.push(Box::new(NamedPool("config", config_actor.clone())));
@@ -344,7 +337,6 @@ impl RefComposition {
                 pool: history_pool,
                 probes: Arc::clone(&inputs.probes),
             }),
-            archive_reads: None,
             config: Box::new(config_actor),
             audit: Box::new(audit),
             actions: Box::new(actions),
@@ -551,7 +543,7 @@ impl Wiring {
     fn spawn_history(
         &self,
         config: &Config,
-        reader: Arc<dyn HistoryReader>,
+        reader: Arc<dyn OverviewReader>,
     ) -> BenchResult<PoolHandle<HistoryJob>> {
         let clock = Arc::clone(&self.clock);
         let completions = self.completions.clone();
@@ -561,15 +553,15 @@ impl Wiring {
             usize::try_from(config.runtime.history_workers).unwrap_or(1),
             usize::try_from(config.queues.history_requests).unwrap_or(4),
             Arc::new(move |job: HistoryJob| {
-                let result = reader.query(
-                    &job.query,
+                let result = reader.read(
+                    &job.request,
                     job.deadline_boot_ns,
                     &job.cancel,
                     clock.as_ref(),
                 );
-                probes.on_history_result(&job.query.request_id, &result);
+                probes.on_history_result(&job.request_id, &result);
                 completions.control(ControlCompletion::History {
-                    request_id: job.query.request_id,
+                    request_id: job.request_id,
                     session_id: job.session_id,
                     session_generation: job.session_generation,
                     result,
@@ -660,7 +652,7 @@ struct TimedHistoryDispatch {
 
 impl Dispatch<HistoryJob> for TimedHistoryDispatch {
     fn try_dispatch(&self, job: HistoryJob) -> Result<(), DispatchError> {
-        let request_id = job.query.request_id;
+        let request_id = job.request_id;
         self.probes.on_history_dispatch(request_id, Instant::now());
         let result = self.pool.try_dispatch(job);
         if result.is_err() {

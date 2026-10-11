@@ -53,14 +53,14 @@ htop 以 CPU 為主，nvtop 和 nvidia-smi 只在你盯著的時候顯示 GPU。
 
   GPU 不回報的值不會佔一行。
 - **GPU 程序。** 所有使用 GPU 的程序，以及所在的 GPU、類型（運算或圖形）、GPU 記憶體、CPU 與 RAM。程序以它執行的內容命名，而不只是執行檔：`python -m vllm.entrypoints.openai.api_server` 顯示為 `vllm.api_server`，在 `ComfyUI` 資料夾執行的 `python main.py` 顯示為 `ComfyUI/main`。可依 GPU 或名稱篩選、依任一欄排序，確認後即可結束程序。佔用 GPU 記憶體最多的八個程序各有一種顏色：記憶體與 VRAM 長條、圖表中它們的部分，以及名稱旁的標記，都用同一種顏色。顏色由名稱決定，所以同一個工作在它或 dgxtop 重新啟動後仍是同一種顏色，除非另一個執行中的程序已經用了它。
-- **歷史紀錄。** 圖表共用一條時間軸，每欄一根 bar，一根是 1、5、10、30 分鐘或 1、2、4、6、8、12、18、24 小時的平均（`w` / `W`）：
+- **歷史紀錄。** 圖表共用一條時間軸，每欄一根 bar，一根是本地時鐘上 1、5、10、30 分鐘或 1、2、4、6、8、12、18、24 小時的平均（`w` / `W`）：1 小時的 bar 是 15:00–16:00，24 小時的 bar 是一天，最新一根是正在累積的那根。一根 bar 是它實際涵蓋時間的平均（dgxtop 在 15:15 啟動時，15:00 那根是 15:15–16:00），沒有資料的時間保持空白：
   - CPU、記憶體、磁碟與網路；
   - 每張 GPU 的使用率、記憶體、溫度與功耗；
   - 每張圖都標出目前值、平均與最大值；
   - 每張 GPU 最近 1、6、12、24 小時的統計與耗電量；
   - 每個上色程序在記憶體圖表中的部分。
 
-  歷史寫入磁碟保存 7 天，重開程式或重開機都還在。各程序的部分保存在記憶體中，只在 dgxtop 執行期間記錄。
+  歷史寫入磁碟，重開程式或重開機都還在，也沒有保存天數限制：每種 bar 大小保留最新 300 根，更舊的時間保存在更粗的大小裡，所以 24 小時的 bar 可回溯 300 天。1～24 小時的統計也由這些 bar 合併而成。各程序的部分保存在記憶體中，只在 dgxtop 執行期間記錄。
 - **程序歷史（Process History）。** dgxtop 看過的每個 GPU 程序，最新啟動的排最前：啟動時間與執行多久、使用的 GPU、GPU 記憶體與 RAM 峰值、以負載顏色標示的 GPU 與 CPU 使用率、最多同時有幾個子程序，以及它如何結束：仍在執行、被 dgxtop 停止、被訊號結束（`SIGKILL`、`SIGTERM`…）、以結束碼退出、很可能是 OOM killer，或看不到原因而結束。打開一個程序，可看到完整命令列（`e` 展開全部、`y` 複製）、工作目錄、執行檔、父程序、nice 值與 cgroup、啟動與結束時間，以及與 Overview History 相同排版、附平均與最大值的圖表：程序本身與子程序的 CPU 和記憶體、swap、GPU 使用率與記憶體、執行緒、子程序與開啟的檔案數、磁碟讀寫，以及主機網路。`w`/`W` 設定一根 bar 代表多少時間：1、5、10、30 分鐘，1、2、4、6、8、12、18、24 小時，或 `auto`（能顯示整個執行期間的最細刻度）。每種大小保留最新 300 根，更舊的已合併在更粗的大小裡，所以不論執行多久，一個程序最多約佔 1 MB，也不會因為時間久而被刪除；只有 64 MiB 的資料庫快滿時，才會先刪除結束最久的程序。
 - **整台機器。** 每顆核心的 CPU 使用率、硬體有回報時的 CPU 溫度與功耗、記憶體與 swap、磁碟流量與檔案系統容量、網路流量。
 - **為 DGX Spark 打造。** GB10 與 CPU 共用記憶體：dgxtop 會顯示 GPU 程序與系統本身（OS）各佔用多少系統 RAM、取自 GB10 各叢集感測器的 CPU 溫度，以及 GB10 的 NVLink-C2C 連線。提供原生 aarch64 版本。
@@ -181,7 +181,8 @@ dgxtop --version --verbose   # 版本、commit、工具鏈、target、SQLite run
 | 用途 | 位置 |
 |---|---|
 | 設定 | `$XDG_CONFIG_HOME/dgxtop/v2/config.json`（`~/.config/dgxtop/v2/config.json`） |
-| 歷史（7 天、最多 1 GiB） | `$XDG_STATE_HOME/dgxtop/v2/history.sqlite3`（`~/.local/state/...`） |
+| 歷史，各種 bar 大小（最多 64 MiB） | `$XDG_STATE_HOME/dgxtop/v2/history_tiers.sqlite3`（`~/.local/state/...`） |
+| 歷史的近期分鐘資料（最多 7 天、1 GiB） | `$XDG_STATE_HOME/dgxtop/v2/history.sqlite3` |
 | 程序歷史（最多 64 MiB；`store.process_history_enabled`，未設定時跟著 archive） | `$XDG_STATE_HOME/dgxtop/v2/process_history.sqlite3` 與 `process_recent.json` |
 | 程序操作紀錄 | `$XDG_STATE_HOME/dgxtop/v2/audit.sqlite3` |
 | 日誌與執行個體鎖 | `$XDG_STATE_HOME/dgxtop/v2/` |

@@ -83,20 +83,6 @@ impl ControlCore {
                 Some(session) => self.sessions.mark_dirty(&session),
                 None => self.count_stale("history"),
             },
-            ControlCompletion::ArchiveRead {
-                request_id,
-                session_id,
-                session_generation,
-                result,
-            } => match self.history.on_archive_result(
-                request_id,
-                &session_id,
-                session_generation,
-                result,
-            ) {
-                Some(session) => self.sessions.mark_dirty(&session),
-                None => self.count_stale("history_archive"),
-            },
         }
     }
 

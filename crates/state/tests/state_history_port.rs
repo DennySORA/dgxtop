@@ -120,6 +120,7 @@ impl HistoryIngest for RecordingHistory {
             buckets: Vec::new(),
             bridges: Vec::new(),
             gaps: Vec::new(),
+            prunes: Vec::new(),
             permit: None,
         })
     }

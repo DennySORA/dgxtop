@@ -20,6 +20,10 @@ const PROCESS_HISTORY_UPGRADE_FROM_2: &str = include_str!("../process_history/up
 pub const SCHEMA_USER_VERSION: i64 = 2;
 /// `PRAGMA user_version` of the process history's DDL.
 pub const PROCESS_HISTORY_USER_VERSION: i64 = 3;
+/// The Overview History tiers' DDL (D-82), dgxtop's own.
+pub const HISTORY_TIERS_DDL: &str = include_str!("../history_tiers/schema.sql");
+/// `PRAGMA user_version` of the tiers' DDL.
+pub const HISTORY_TIERS_USER_VERSION: i64 = 1;
 
 /// Which SQLite partition a database belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +31,7 @@ pub enum SchemaKind {
     Audit,
     History,
     ProcessHistory,
+    HistoryTiers,
 }
 
 impl SchemaKind {
@@ -35,6 +40,7 @@ impl SchemaKind {
             Self::Audit => AUDIT_DDL,
             Self::History => HISTORY_DDL,
             Self::ProcessHistory => PROCESS_HISTORY_DDL,
+            Self::HistoryTiers => HISTORY_TIERS_DDL,
         }
     }
 
@@ -43,6 +49,7 @@ impl SchemaKind {
         match self {
             Self::Audit | Self::History => SCHEMA_USER_VERSION,
             Self::ProcessHistory => PROCESS_HISTORY_USER_VERSION,
+            Self::HistoryTiers => HISTORY_TIERS_USER_VERSION,
         }
     }
 
@@ -59,6 +66,7 @@ impl SchemaKind {
             Self::Audit => "audit",
             Self::History => "history",
             Self::ProcessHistory => "process history",
+            Self::HistoryTiers => "history tiers",
         }
     }
 
@@ -88,6 +96,7 @@ impl SchemaKind {
                 "idx_process_runs_seen",
                 "idx_process_buckets_time",
             ],
+            Self::HistoryTiers => &["tier_series", "tier_buckets", "idx_tier_series_last"],
         }
     }
 }
@@ -350,6 +359,24 @@ mod tests {
             Err(SchemaRefusal::Unknown(_))
         ));
         assert!(PROCESS_HISTORY_DDL.contains("PRAGMA user_version = 3;"));
+    }
+
+    /// The tiers are dgxtop's own partition at version 1 (D-82): applied
+    /// idempotently, a newer one refused, no upgrade path yet.
+    #[test]
+    fn the_history_tiers_apply_at_version_1() {
+        let connection = Connection::open_in_memory().unwrap();
+        apply_ddl(&connection, SchemaKind::HistoryTiers).unwrap();
+        apply_ddl(&connection, SchemaKind::HistoryTiers).unwrap();
+        assert_eq!(user_version(&connection).unwrap(), 1);
+        assert_eq!(
+            plan(&connection, SchemaKind::HistoryTiers).unwrap(),
+            Ok(SchemaPlan::Current)
+        );
+        let full = names(SchemaKind::HistoryTiers.objects());
+        let tiers = |version| classify(SchemaKind::HistoryTiers, version, &full, &full);
+        assert_eq!(tiers(2), Err(SchemaRefusal::Future { found: 2 }));
+        assert!(HISTORY_TIERS_DDL.contains("PRAGMA user_version = 1;"));
     }
 
     #[test]

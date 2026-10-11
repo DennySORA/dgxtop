@@ -8,11 +8,15 @@
 //! caller keeps running from memory and records an archive gap. When an
 //! append would exceed the hard budget, the oldest data is evicted first;
 //! age-based retention (default 7 days) removes old buckets and cascades to
-//! empty segments.
+//! empty segments. The history's compression also asks, through the
+//! journals, to delete the Overview series' minutes its coarser sizes hold
+//! (D-82), so for those the retention is only an upper bound.
 //!
-//! The history view reads the archive back through [`SqliteArchiveReader`]
-//! (D-51), a read-only connection of its own, for the time before this run.
+//! The history reads the archive back through [`SqliteArchiveReader`]
+//! (D-51, D-82), a read-only connection of its own, to compress the minutes
+//! earlier runs left into the Overview's sizes.
 
+mod backfill;
 mod limits;
 mod queries;
 mod reader;

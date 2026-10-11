@@ -34,7 +34,7 @@ use crate::config::ConfigurationService;
 use crate::effects::Effects;
 use crate::error::ManagerError;
 use crate::events::{EVENT_LOG_CAPACITY, EventFeed, EventRecorder};
-use crate::history::{ArchiveSide, HistoryService, HistorySettings};
+use crate::history::{HistoryService, HistorySettings};
 use crate::hosts::HostTable;
 use crate::ingestion::trends::TrendRecorder;
 use crate::ingestion::{IngestionPorts, IngestionService, IngestionSettings, collection_limits};
@@ -169,19 +169,15 @@ impl ControlCore {
                 job_timeout_ns: ms_to_ns(u64::from(fast_ms)).saturating_mul(JOB_TIMEOUT_PERIODS),
             },
         );
-        // The archive answers for the time before this run (D-51).
-        let archive_reads = ports.archive_reads.map(|port| ArchiveSide {
-            port,
-            since_boot_ns: now,
-        });
         let history = HistoryService::new(
             ports.history,
-            archive_reads,
             Arc::clone(&ports.clock),
             HistorySettings {
                 max_inflight: usize::try_from(effective.queues.history_requests).unwrap_or(1),
                 deadline_ms: effective.runtime.history_deadline_ms,
                 max_points: effective.store.max_history_points,
+                utc_offset_s: setup.facts.utc_offset_s,
+                kept_on_disk: effective.store.archive_enabled,
             },
             fast_ms,
         );

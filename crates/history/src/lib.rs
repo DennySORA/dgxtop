@@ -20,8 +20,14 @@
 //!
 //! The state feeds it through the `HistoryIngest` port ([`HistoryRecorder`])
 //! inside each commit, so history never lags the snapshot; the Manager reads
-//! it through `HistoryReader` ([`HistoryIndex`]); the archive receives the
-//! finished rows as `ArchiveJournal`s drained from the recorder.
+//! it through `HistoryReader` and `OverviewReader` ([`HistoryIndex`]); the
+//! archive receives the finished rows as `ArchiveJournal`s drained from the
+//! recorder.
+//!
+//! The Overview series are also kept in every bar size ([`OverviewTiers`],
+//! D-82), fed by the same finished minutes, kept on disk through the store
+//! port and compressed from the archive at startup, so the Overview has no
+//! age limit from the archive.
 //!
 //! The GPU processes' runs and memory are its process actor's
 //! ([`ProcessHistory`]): the Manager hands it the committed process tables
@@ -35,6 +41,7 @@ pub(crate) mod chunk;
 pub(crate) mod gaps;
 mod index;
 pub(crate) mod output;
+mod overview;
 pub(crate) mod pin;
 mod process;
 mod query;
@@ -57,6 +64,7 @@ use dgxtop_core::sampling::SamplingTiming;
 
 pub use index::HistoryIndex;
 pub(crate) use index::HistoryWriter;
+pub use overview::OverviewTiers;
 pub use process::{
     ProcessHistory, ProcessHistoryPorts, ProcessHistorySettings, PublishedProcessHistory,
 };
@@ -87,15 +95,18 @@ impl History {
         let timing = SamplingTiming::from_sampling(sampling);
         let settings = settings::history_settings(store, &timing, archive_enabled);
         let shared = Arc::new(RwLock::new(HistoryState::new(settings, ledger)));
+        let overview = OverviewTiers::new();
         let index = HistoryIndex::new(
             Arc::clone(&shared),
             ledger.clone(),
             settings::query_limits(store, runtime),
+            overview.clone(),
         );
         let recorder = HistoryRecorder::new(
             HistoryWriter::new(shared),
             ArchiveQueue::new(ledger),
             archive_enabled,
+            overview,
         );
         Self { recorder, index }
     }

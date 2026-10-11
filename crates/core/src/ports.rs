@@ -10,9 +10,10 @@
 //! * Collectors are pure (`Collector::collect`).
 //! * State (D-79): `StoreWriter` (HotStore actor only) and `SnapshotReader`.
 //! * History (D-79): `HistoryIngest`, through which the live state hands
-//!   each commit to the history, and `HistoryReader`.
+//!   each commit to the history, `HistoryReader` and `OverviewReader`
+//!   (D-82); `HistoryTierStore` keeps the Overview's sizes.
 //! * Store: `ConfigRepository`, `AuditRepository`, `ArchiveSink`,
-//!   `ArchiveReader` (D-51).
+//!   `ArchiveReader` (D-51), `HistoryTierStore` (D-82).
 //! * Runtime: `Dispatch<J>` submits jobs to fixed workers without blocking;
 //!   results come back as `IngestionCompletion` / `ControlCompletion`.
 //! * UI: `SessionPort` (commands, projections, results) and
@@ -42,12 +43,16 @@ use crate::clock::TimeProvider;
 use crate::commands::{CommandEnvelope, CommandRejection, CommandResult};
 use crate::config::{Config, ConfigError, ValidationIssue};
 use crate::errors::{ErrorDetail, InfraError};
-use crate::history::{ArchiveQuery, ArchiveResult, HistoryQuery, HistoryResult};
+use crate::history::{HistoryQuery, HistoryResult};
 use crate::identity::{
     AdapterId, CollectorId, EntityId, MetricKey, ProcessKey, SessionId, SourceId,
 };
 use crate::observation::{
     AdapterHealth, AdapterManifest, CatalogDelta, DiscoverRequest, ObservationBatch, ReadPlan,
+};
+use crate::overview_history::{
+    ArchivePrune, ArchivedMinutes, ArchivedMinutesRead, ArchivedSeriesList, OverviewAnswer,
+    OverviewRequest, StoredTierSeries, TierJournal,
 };
 use crate::process_history::{
     ProcessHistoryJournal, ProcessHistoryLoad, RecentHistory, RunBucketRow,
@@ -135,6 +140,21 @@ pub trait HistoryReader: Send + Sync {
 
     /// Series currently held (for the history module's series picker).
     fn series(&self) -> Vec<MetricKey>;
+}
+
+/// The Overview History's reads (D-82): the bars of a size and the window
+/// statistics of one series, answered from the history's own sizes.
+/// Bounded like the history reader: `TimedOut` past the deadline,
+/// `Cancelled` when the flag is set; a series the history does not hold
+/// answers with no bars.
+pub trait OverviewReader: Send + Sync {
+    fn read(
+        &self,
+        request: &OverviewRequest,
+        deadline_boot_ns: u64,
+        cancel: &CancelFlag,
+        clock: &dyn TimeProvider,
+    ) -> Result<OverviewAnswer, ErrorDetail>;
 }
 
 /// Everything whose change cuts a history segment.
@@ -253,18 +273,29 @@ pub trait HistoryIngest: Send {
     fn take_archive_journal(&mut self, max_bytes: u64) -> Option<ArchiveJournal>;
 }
 
-/// Reader of the history archive (D-51): the minutes earlier runs and
-/// boots left on disk, for the history view. Bounded like the history
-/// reader: `TimedOut` past the deadline, `Cancelled` when the flag is set; an
-/// archive that does not exist yet answers with no points.
+/// Reader of the history archive (D-51, D-82): the minutes earlier runs
+/// and boots left on disk, which the history compresses into the
+/// Overview's sizes at startup: which series earlier runs left, and their
+/// minutes oldest first, a bounded page at a time. An archive that does not
+/// exist yet holds none.
 pub trait ArchiveReader: Send {
-    fn read(
+    fn archived_series(
         &mut self,
-        query: &ArchiveQuery,
-        deadline_boot_ns: u64,
-        cancel: &CancelFlag,
-        clock: &dyn TimeProvider,
-    ) -> Result<ArchiveResult, ErrorDetail>;
+        list: &ArchivedSeriesList,
+    ) -> Result<Vec<crate::history::SeriesInEveryBoot>, InfraError>;
+    fn archived_minutes(
+        &mut self,
+        read: &ArchivedMinutesRead,
+    ) -> Result<ArchivedMinutes, InfraError>;
+}
+
+/// The history's own store of the Overview series' buckets of every size
+/// (D-82): it executes what the history asks, nothing more.
+pub trait HistoryTierStore: Send {
+    /// Every series' kept buckets, read once at startup.
+    fn load(&mut self) -> Result<Vec<StoredTierSeries>, InfraError>;
+    /// Writes closed buckets and keeps the latest of each (series, size).
+    fn append(&mut self, journal: &TierJournal) -> Result<(), InfraError>;
 }
 
 /// Where the effective configuration came from at load.
@@ -403,6 +434,9 @@ pub struct ArchiveJournal {
     pub buckets: Vec<ArchivedBucket>,
     pub bridges: Vec<ArchivedBridge>,
     pub gaps: Vec<GapRecord>,
+    /// Minutes the history's compression holds in its coarser sizes, to be
+    /// deleted (D-82).
+    pub prunes: Vec<ArchivePrune>,
     pub permit: Option<BytePermit>,
 }
 
@@ -609,21 +643,11 @@ pub enum StoreJob {
     Maintain,
 }
 
-/// One history query job.
+/// One Overview History read of a session's history view (D-82).
 #[derive(Debug, Clone)]
 pub struct HistoryJob {
-    pub query: HistoryQuery,
-    pub session_id: SessionId,
-    /// Session generation; results for an older generation are dropped.
-    pub session_generation: u64,
-    pub deadline_boot_ns: u64,
-    pub cancel: CancelFlag,
-}
-
-/// One archive read job for a session's history view (D-51).
-#[derive(Debug, Clone)]
-pub struct ArchiveReadJob {
-    pub query: ArchiveQuery,
+    pub request_id: Uuid,
+    pub request: OverviewRequest,
     pub session_id: SessionId,
     /// Session generation; results for an older generation are dropped.
     pub session_generation: u64,
@@ -731,18 +755,12 @@ pub enum ControlCompletion {
         outcome: ArchiveOutcome,
         status: Option<PersistenceStatus>,
     },
+    /// An Overview History read for a session's history view (D-82).
     History {
         request_id: Uuid,
         session_id: SessionId,
         session_generation: u64,
-        result: Result<HistoryResult, ErrorDetail>,
-    },
-    /// An archive read for a session's history view (D-51).
-    ArchiveRead {
-        request_id: Uuid,
-        session_id: SessionId,
-        session_generation: u64,
-        result: Result<ArchiveResult, ErrorDetail>,
+        result: Result<OverviewAnswer, ErrorDetail>,
     },
 }
 
