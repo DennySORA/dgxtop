@@ -316,6 +316,13 @@ struct HostSchedule {
 }
 
 impl HostSchedule {
+    /// A read request is in flight: more groups of its cycle may arrive.
+    fn reads(&self) -> bool {
+        self.inflight
+            .as_ref()
+            .is_some_and(|inflight| matches!(inflight.kind, RequestKind::Read { .. }))
+    }
+
     fn new(manifest: &AdapterManifest, settings: &SchedulerSettings, now_ns: u64) -> Self {
         let adapter = manifest.adapter_id.as_str();
         let mut host = Self {
@@ -864,13 +871,14 @@ impl SamplingScheduler {
     pub(crate) fn busy_adapters(&self) -> std::collections::BTreeSet<AdapterId> {
         self.hosts
             .iter()
-            .filter(|host| {
-                host.inflight
-                    .as_ref()
-                    .is_some_and(|inflight| matches!(inflight.kind, RequestKind::Read { .. }))
-            })
+            .filter(|host| host.reads())
             .map(|host| host.adapter_id.clone())
             .collect()
+    }
+
+    /// Whether some adapter has a read in flight.
+    pub(crate) fn has_read_in_flight(&self) -> bool {
+        self.hosts.iter().any(HostSchedule::reads)
     }
 
     pub(crate) fn new(

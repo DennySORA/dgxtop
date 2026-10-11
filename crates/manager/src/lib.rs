@@ -23,6 +23,7 @@ mod hosts;
 mod ingestion;
 mod manager;
 mod overload;
+mod pacing;
 mod policy;
 pub mod presentation;
 mod process;

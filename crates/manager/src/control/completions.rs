@@ -68,7 +68,7 @@ impl ControlCore {
                 status,
             } => {
                 if self.archive.on_outcome(revision, &outcome, status) {
-                    self.sessions.mark_all_dirty();
+                    self.sessions.mark_all_data_changed(now.boot_ns);
                 }
             }
             ControlCompletion::History {
@@ -102,7 +102,7 @@ impl ControlCore {
             }
             ControlCompletion::ProcessHistory(completion) => {
                 if self.process_history.on_completion(completion, now) {
-                    self.sessions.mark_all_dirty();
+                    self.sessions.mark_all_data_changed(now.boot_ns);
                 }
             }
         }
@@ -563,7 +563,7 @@ impl ControlCore {
                 for event in &batch.events {
                     self.emit_collector_event(event, batch.batch_id, now);
                 }
-                self.sessions.mark_all_dirty();
+                self.sessions.mark_all_data_changed(now);
                 self.pump_collectors(now);
             }
             CommitOutcome::Retrying { gaps, .. } => {

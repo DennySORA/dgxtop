@@ -1,10 +1,11 @@
-//! PresentationService: frame pacing and byte accounting of projections
+//! PresentationService: frame intervals and byte accounting of projections
 //! (RUNTIME.md §5 presentation row, AT13).
 //!
-//! The view models themselves are built by `crate::presentation`; this
-//! service decides *when* a session gets one (dirty + at most `viewer.fps`
-//! per second, ≤ 2 fps outside the normal overload state) and makes sure every
-//! published projection holds a presentation-partition `BytePermit`. A whole
+//! The view models themselves are built by `crate::presentation`;
+//! `crate::pacing` decides *when* a session gets one (data at most
+//! `viewer.fps` per second, ≤ 2 fps outside the normal overload state) and
+//! this service makes sure every published projection holds a
+//! presentation-partition `BytePermit`. A whole
 //! `runtime.max_projection_bytes` is reserved *before* a model is built
 //! (AT21: the peak is admitted before it is allocated) and shrunk to the
 //! measured size afterwards. A frame the ledger cannot admit is skipped
@@ -114,13 +115,12 @@ pub(crate) fn frame_interval_ns(fps: u32) -> u64 {
     NANOS_PER_SECOND.div_ceil(u64::from(fps.max(1)))
 }
 
-/// Spacing of data-driven projections in the normal state.
+/// Spacing of input-driven projections in the normal state.
 const PROJECTION_INTERVAL_NS: u64 = 50 * NANOS_PER_MILLI;
 
-/// Minimum spacing of published projections. In the normal state they
-/// follow data changes (PERFORMANCE.md §2: read_finished -> published
-/// revision p95 <= 100 ms) while the viewer renders at most `fps` frames per
-/// second from the latest slot (UI.md §4); outside it they follow the
+/// Minimum spacing of any two projections, what input waits for. In the
+/// normal state a key is answered within 50 ms while data frames follow
+/// `fps` (UI.md §4, `crate::pacing`); outside it everything follows the
 /// reduced frame rate to shed work (RUNTIME.md §7).
 pub(crate) fn projection_interval_ns(normal: bool, fps: u32) -> u64 {
     let frame = frame_interval_ns(fps);
