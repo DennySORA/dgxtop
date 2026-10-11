@@ -23,6 +23,7 @@
 
 #![forbid(unsafe_code)]
 
+mod clipboard;
 pub mod controller;
 pub mod format;
 pub mod modules;

@@ -8,14 +8,10 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use dgxtop_core::identity::EntityId;
-use dgxtop_core::metric::CanonicalUnit;
-use dgxtop_core::view::{
-    HistoryChartKind, HistoryPart, HistoryProcessView, HistoryView, ProcessShare,
-};
+use dgxtop_core::view::{HistoryChartKind, HistoryPart, HistoryView, ProcessShare};
 
 use super::ProcessMemoryBook;
 use super::gpu_directory::GpuDirectory;
-use super::labels::note_text;
 use super::processes::display_name;
 use crate::process_memory::TrackedProcess;
 
@@ -61,9 +57,9 @@ pub(crate) struct ProcessHistoryInputs<'a> {
 }
 
 /// `history` with the tracked processes' parts of its memory charts (each
-/// GPU's memory and, when a GPU shares the RAM, the memory used) and what
-/// each held on each GPU over the window. Shared unchanged when no process
-/// is tracked.
+/// GPU's memory and, when a GPU shares the RAM, the memory used). Shared
+/// unchanged when no process is tracked; the runs themselves are the
+/// Process History's (D-76).
 pub(crate) fn with_process_parts(
     history: Arc<HistoryView>,
     inputs: &ProcessHistoryInputs<'_>,
@@ -74,16 +70,6 @@ pub(crate) fn with_process_parts(
     }
     let window = boot_window(&history, inputs.boot_to_utc_ns);
     let unified = unified_gpus(inputs.directory);
-    let scales: Vec<(EntityId, Option<f64>)> = history
-        .charts
-        .iter()
-        .filter(|chart| chart.kind == HistoryChartKind::GpuMemory)
-        .map(|chart| (chart.series.entity_id.clone(), chart.scale_max))
-        .collect();
-    let processes = window_summaries(&tracked, inputs, window, &scales);
-    if processes.is_empty() {
-        return history;
-    }
     let mut view = (*history).clone();
     for chart in &mut view.charts {
         let gpu = chart.series.entity_id.clone();
@@ -95,7 +81,9 @@ pub(crate) fn with_process_parts(
             _ => continue,
         };
     }
-    view.processes = processes;
+    if view.charts.iter().all(|chart| chart.parts.is_empty()) {
+        return history;
+    }
     Arc::new(view)
 }
 
@@ -131,66 +119,6 @@ fn parts(
                 })
         })
         .collect()
-}
-
-/// What each tracked process held on each GPU over `window`, the largest
-/// mean first; a GPU it held nothing on in the window is left out.
-fn window_summaries(
-    tracked: &[TrackedProcess<'_>],
-    inputs: &ProcessHistoryInputs<'_>,
-    window: (u64, u64),
-    scales: &[(EntityId, Option<f64>)],
-) -> Vec<HistoryProcessView> {
-    let mut summaries: Vec<HistoryProcessView> = tracked
-        .iter()
-        .flat_map(|process| {
-            inputs
-                .book
-                .gpus_of(process.key)
-                .into_iter()
-                .filter_map(move |gpu| {
-                    let held = inputs.book.held_on(process.key, gpu, window);
-                    (held.covered_ns > 0).then(|| HistoryProcessView {
-                        slot: process.slot,
-                        pid: process.pid,
-                        name: display_name(process.name),
-                        command: note_text(process.command),
-                        gpu_label: inputs.directory.label_of(gpu),
-                        unit: CanonicalUnit::Bytes,
-                        mean: held.mean(),
-                        peak: held.peak.map(bytes_value),
-                        listed_ns: held.covered_ns,
-                        running: process.is_listed(),
-                        means: inputs.book.part_means(
-                            process.key,
-                            |id| id == gpu,
-                            window,
-                            inputs.cells,
-                        ),
-                        scale_max: scales
-                            .iter()
-                            .find(|(id, _)| id == gpu)
-                            .and_then(|(_, scale)| *scale),
-                    })
-                })
-        })
-        .collect();
-    summaries.sort_by(|left, right| {
-        right
-            .mean
-            .unwrap_or(0.0)
-            .total_cmp(&left.mean.unwrap_or(0.0))
-            .then(left.slot.cmp(&right.slot))
-            .then_with(|| left.gpu_label.cmp(&right.gpu_label))
-    });
-    summaries
-}
-
-/// A byte count as a value of the view (exact below 2^53 bytes).
-fn bytes_value(bytes: u64) -> f64 {
-    #[allow(clippy::cast_precision_loss)]
-    let value = bytes as f64;
-    value
 }
 
 #[cfg(test)]
@@ -304,8 +232,9 @@ mod tests {
         )
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn gib(count: u64) -> Option<f64> {
-        Some(bytes_value(count * GIB))
+        Some((count * GIB) as f64)
     }
 
     /// Each process's share of a bar is what it holds on the bar's GPUs,
@@ -329,10 +258,9 @@ mod tests {
     }
 
     /// The memory charts get each process's part in its color; the memory
-    /// used takes the unified GPU's parts only, other charts none. The
-    /// table lists each process on each GPU, the largest mean first.
+    /// used takes the unified GPU's parts only, other charts none.
     #[test]
-    fn memory_charts_get_each_process_part_and_the_window_its_means() {
+    fn memory_charts_get_each_process_part() {
         let fixture = fixture();
         // A wall clock 1000 s ahead of the boot clock gives the same parts.
         for offset in [0, 1_000] {
@@ -351,28 +279,6 @@ mod tests {
             assert_eq!(parts(1), vec![(serve, vec![gib(1); 2])]);
             assert_eq!(parts(2), parts(0), "RAM the unified GPU holds");
             assert!(view.charts[3].parts.is_empty());
-            let listed: Vec<(&str, &str, Option<f64>, u64)> = view
-                .processes
-                .iter()
-                .map(|process| {
-                    (
-                        process.name.as_str(),
-                        process.gpu_label.as_str(),
-                        process.mean,
-                        process.listed_ns,
-                    )
-                })
-                .collect();
-            assert_eq!(
-                listed,
-                vec![
-                    ("train", "GPU 0", gib(6), 20 * SECOND),
-                    ("serve", "GPU 0", gib(2), 20 * SECOND),
-                    ("serve", "GPU 1", gib(1), 20 * SECOND),
-                ]
-            );
-            assert!(view.processes.iter().all(|process| process.running));
-            assert_eq!(view.processes[0].peak, gib(6));
         }
     }
 

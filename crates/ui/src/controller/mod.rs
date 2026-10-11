@@ -31,6 +31,8 @@ use dgxtop_core::identity::{EntityId, ModuleId, ProcessKey, SessionId};
 use dgxtop_core::ports::SessionPort;
 use dgxtop_core::view::{BannerLevel, ViewModel};
 
+use crate::num::saturate_u16;
+
 pub use confirmation::{ConfirmationInput, MAX_CONFIRMATION_TTL};
 pub use filter::{FilterEdit, FilterEditError};
 pub use keymap::{KeyAction, ModeKind};
@@ -127,6 +129,8 @@ pub struct Controller {
     scroll: BTreeMap<ModuleId, u16>,
     /// Each module's inner tab (D-72).
     tabs: BTreeMap<ModuleId, u8>,
+    /// A command line to copy with the next frame (D-76).
+    clipboard: Option<String>,
 }
 
 impl Default for Controller {
@@ -173,6 +177,7 @@ impl Controller {
             busy_notified: false,
             expanded: BTreeSet::new(),
             scroll: BTreeMap::new(),
+            clipboard: None,
             tabs: BTreeMap::new(),
         }
     }
@@ -390,8 +395,16 @@ impl Controller {
                 }
             }
             KeyAction::HistoryDown | KeyAction::HistoryUp | KeyAction::HistoryOpen => {
-                self.navigate_history(action)
+                self.navigate_history(action, context);
             }
+            KeyAction::HistoryExpandCommand => {
+                if self.history_page() == 2
+                    && let Ok(history) = ModuleId::new(HISTORY_MODULE_ID)
+                {
+                    self.toggle_expanded(history);
+                }
+            }
+            KeyAction::HistoryCopyCommand => self.copy_command(context),
             KeyAction::FilterApply => self.finish_filter(true, context),
             KeyAction::FilterClear => self.finish_filter(false, context),
         }
@@ -757,22 +770,66 @@ impl Controller {
         }
     }
 
-    /// The process history (D-72, D-75): `j`/`k` move the cursor and Enter
-    /// opens or closes the process under it. Presentation only.
-    fn navigate_history(&mut self, action: KeyAction) {
+    /// The process history (D-72, D-75, D-76): `j`/`k` move the cursor over
+    /// the runs and Enter opens or closes the run under it. The run under
+    /// the cursor is the session's selection, so the Manager details it.
+    fn navigate_history(&mut self, action: KeyAction, context: &ControllerContext<'_>) {
         let Ok(history) = ModuleId::new(HISTORY_MODULE_ID) else {
             return;
         };
-        let tab = self.tabs.get(&history).copied().unwrap_or(0);
-        match action {
-            KeyAction::HistoryOpen if tab > 0 => {
-                self.tabs.insert(history, if tab == 1 { 2 } else { 1 });
-                self.bump();
-            }
-            KeyAction::HistoryDown if tab > 0 => self.scroll_module(history, true),
-            KeyAction::HistoryUp if tab > 0 => self.scroll_module(history, false),
-            _ => {}
+        let tab = self.history_page();
+        if tab == 0 {
+            return;
         }
+        let Some(runs) = context
+            .model
+            .and_then(|model| model.modules.process_history.as_deref())
+        else {
+            return;
+        };
+        let last = saturate_u16(runs.runs.len().saturating_sub(1));
+        let cursor = self.scroll.get(&history).copied().unwrap_or(0).min(last);
+        let moved = match action {
+            KeyAction::HistoryOpen => {
+                self.tabs
+                    .insert(history.clone(), if tab == 1 { 2 } else { 1 });
+                cursor
+            }
+            KeyAction::HistoryDown => cursor.saturating_add(1).min(last),
+            KeyAction::HistoryUp => cursor.saturating_sub(1),
+            _ => return,
+        };
+        self.scroll.insert(history, moved);
+        self.bump();
+        if let Some(run) = crate::modules::cursor_run(runs, moved) {
+            let key = run.key.clone();
+            self.update_fields(context, |fields| fields.selected_process = Some(key));
+        }
+    }
+
+    /// Queues the opened run's command line for the clipboard (D-76).
+    fn copy_command(&mut self, context: &ControllerContext<'_>) {
+        if self.history_page() != 2 {
+            return;
+        }
+        let command = context
+            .model
+            .and_then(|model| model.modules.process_history.as_deref())
+            .and_then(|runs| runs.opened.as_ref())
+            .map(|opened| opened.info.command.clone())
+            .filter(|command| !command.is_empty());
+        let (level, text) = match &command {
+            Some(_) => (BannerLevel::Info, "command line copied to the clipboard"),
+            None => (BannerLevel::Warning, "no command line to copy"),
+        };
+        self.notices.push(level, text, context.now);
+        self.clipboard = command;
+        self.bump();
+    }
+
+    /// The text to copy with the next frame, once.
+    pub fn take_clipboard(&mut self) -> Option<String> {
+        self.clipboard.take()
     }
 
     /// Scrolls a module's scrollable part one line (presentation only; the

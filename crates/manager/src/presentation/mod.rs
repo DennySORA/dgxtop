@@ -135,6 +135,9 @@ pub struct HostFacts {
     pub version: String,
     /// `Some("replay")` when running a replay fixture (simulated data).
     pub namespace_label: Option<String>,
+    /// Local time's offset from UTC at startup, seconds east, for the
+    /// times of the Process History (D-76).
+    pub utc_offset_s: i32,
 }
 
 /// Settings presentation inputs.
@@ -355,6 +358,7 @@ fn build_modules(
                 colors: inputs.process_memory,
                 opened: context.session.selected_process.as_ref(),
                 kept_on_disk: context.process_history_kept,
+                utc_offset_s: context.facts.utc_offset_s,
             },
         )));
     }

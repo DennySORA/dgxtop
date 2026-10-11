@@ -404,6 +404,7 @@ impl StaticInputs {
                 cpu_model: Some("synthetic REF host".to_owned()),
                 version: dgxtop::version::BuildInfo::current().version.to_owned(),
                 namespace_label: Some("replay (simulated data)".to_owned()),
+                utc_offset_s: 0,
             },
             first_gpu: catalog
                 .entities
@@ -564,7 +565,6 @@ fn history_view(snapshot: &ImmutableSnapshot, now_ns: u64) -> HistoryView {
         end_utc_ns: now_ns,
         charts,
         summaries: Vec::new(),
-        processes: Vec::new(),
         disk: DiskHistory::Off,
         error: None,
     }

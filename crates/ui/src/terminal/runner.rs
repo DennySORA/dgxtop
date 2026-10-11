@@ -379,6 +379,14 @@ impl TuiLoop {
                 .set_size(Size::new(columns, rows));
         }
         let full_redraw = self.scheduler.full_redraw_pending();
+        // A copied command line goes out with this frame (D-76); a frame
+        // that fails takes it with it, as a terminal would lose it anyway.
+        if let Some(text) = self.controller.take_clipboard() {
+            let _ = std::io::Write::write_all(
+                &mut self.output.writer(),
+                &crate::clipboard::osc52(&text),
+            );
+        }
         let started = self.clock.now();
         let cleared = !full_redraw || self.terminal.clear().is_ok();
         let ui = self.controller.ui_state(now);

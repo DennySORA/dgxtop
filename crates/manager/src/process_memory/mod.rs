@@ -27,6 +27,7 @@ use dgxtop_core::canonical::{ProcessRow, ProcessTable};
 use dgxtop_core::clock::{NANOS_PER_SECOND, ms_to_ns};
 use dgxtop_core::identity::{EntityId, ProcessKey};
 
+#[cfg(test)]
 pub(crate) use self::buckets::Held;
 use self::buckets::TimeBuckets;
 #[cfg(test)]
@@ -48,8 +49,6 @@ pub(crate) struct TrackedProcess<'a> {
     pub(crate) key: &'a ProcessKey,
     pub(crate) pid: i32,
     pub(crate) name: &'a str,
-    /// Its command line as last listed (D-73); empty when unknown.
-    pub(crate) command: &'a str,
     /// Bytes on each GPU in the newest table; empty when it is not listed.
     pub(crate) current: &'a [(EntityId, u64)],
 }
@@ -72,7 +71,6 @@ impl TrackedProcess<'_> {
 struct ProcessRecord {
     pid: i32,
     name: String,
-    command: String,
     current: Vec<(EntityId, u64)>,
     gpus: BTreeMap<EntityId, TimeBuckets>,
 }
@@ -185,14 +183,10 @@ impl ProcessMemoryBook {
                 .or_insert_with(|| ProcessRecord {
                     pid: row.key.pid.get(),
                     name: row.name.clone(),
-                    command: String::new(),
                     current: Vec::new(),
                     gpus: BTreeMap::new(),
                 });
             record.name.clone_from(&row.name);
-            if !row.command.is_empty() {
-                record.command.clone_from(&row.command);
-            }
             record.current = gpus;
         }
         self.pending = Some(Pending { at_ns, held });
@@ -215,7 +209,6 @@ impl ProcessMemoryBook {
                     key,
                     pid: record.pid,
                     name: &record.name,
-                    command: &record.command,
                     current: &record.current,
                 })
             })
@@ -230,6 +223,7 @@ impl ProcessMemoryBook {
     }
 
     /// The GPUs `key` held memory on in its record.
+    #[cfg(test)]
     pub(crate) fn gpus_of(&self, key: &ProcessKey) -> Vec<&EntityId> {
         self.processes
             .get(key)
@@ -239,6 +233,7 @@ impl ProcessMemoryBook {
 
     /// What `key` held on `gpu` over `[start, end)` (boot clock): its mean
     /// over the time it was listed, that time and its peak.
+    #[cfg(test)]
     pub(crate) fn held_on(
         &self,
         key: &ProcessKey,

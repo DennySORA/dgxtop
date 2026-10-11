@@ -349,7 +349,6 @@ pub(crate) fn empty_history() -> HistoryView {
         end_utc_ns: 300_000_000_000,
         charts: Vec::new(),
         summaries: Vec::new(),
-        processes: Vec::new(),
         disk: DiskHistory::Off,
         error: None,
     }

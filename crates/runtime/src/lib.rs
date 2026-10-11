@@ -36,6 +36,7 @@ pub mod signals;
 pub mod stats;
 pub mod supervisor;
 pub mod terminal;
+pub mod timezone;
 
 pub use broker::{Admission, BrokerKey, ReadBroker};
 pub use clock::{

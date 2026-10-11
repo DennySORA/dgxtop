@@ -770,7 +770,6 @@ pub(crate) fn history_view() -> HistoryView {
             ),
         ],
         summaries: gpu_window_stats(),
-        processes: Vec::new(),
         disk: DiskHistory::On,
         error: None,
     }
@@ -985,7 +984,7 @@ pub(crate) fn full_modules(with_confirmation: bool) -> ModuleViews {
         network: Some(Arc::new(network_view())),
         processes: Some(Arc::new(processes_view(12, 0, 12))),
         history: Some(Arc::new(history_view())),
-        process_history: None,
+        process_history: Some(Arc::new(process_history_view())),
         sources: Some(Arc::new(sources_view())),
         settings: Some(Arc::new(settings_view())),
         actions: Some(Arc::new(actions_view(with_confirmation))),
@@ -1011,5 +1010,89 @@ pub(crate) fn view_model(view: ViewKind, frame_revision: u64) -> ViewModel {
         banners: Vec::new(),
         enabled_modules: Vec::new(),
         permit: None,
+    }
+}
+
+/// 2026-10-04T00:00:00Z, the start of the process history fixture's runs.
+pub(crate) const RUNS_UTC: i64 = 1_791_072_000_000_000_000;
+
+/// Two runs, the newest first: `ComfyUI/main` (pid 42), killed by dgxtop
+/// after 30 min and opened with its charts, and `acme_llm.train` (pid 41),
+/// running for 2 h in color 0.
+pub(crate) fn process_history_view() -> dgxtop_core::view::ProcessHistoryView {
+    use dgxtop_core::action::Signal;
+    use dgxtop_core::process_history::{EndCause, RunEnd, RunInfo, RunMetric};
+    use dgxtop_core::view::{ProcessHistoryView, RunChartView, RunDetailView, RunRowView};
+    const MINUTE: i64 = 60 * 1_000_000_000;
+    let ended = RunEnd {
+        utc_ns: RUNS_UTC + 90 * MINUTE,
+        cause: EndCause::SignaledByDgxtop(Signal::Sigkill),
+    };
+    let killed = RunRowView {
+        key: process_key(42, 9_000),
+        name: "ComfyUI/main".to_owned(),
+        started_utc_ns: RUNS_UTC + 60 * MINUTE,
+        runtime_ns: 30 * 60 * 1_000_000_000,
+        live: false,
+        end: Some(ended),
+        gpus: vec!["GPU 0".to_owned()],
+        peak_gpu_memory: Some(9.0 * GIB),
+        mean_gpu_utilization: Some(35.0),
+        mean_cpu: Some(110.0),
+        slot: None,
+    };
+    let training = RunRowView {
+        key: process_key(41, 100),
+        name: "acme_llm.train".to_owned(),
+        started_utc_ns: RUNS_UTC,
+        runtime_ns: 2 * 3600 * 1_000_000_000,
+        live: true,
+        end: None,
+        gpus: vec!["GPU 0".to_owned(), "GPU 1".to_owned()],
+        peak_gpu_memory: Some(61.8 * GIB),
+        mean_gpu_utilization: Some(97.0),
+        mean_cpu: Some(100.0),
+        slot: Some(0),
+    };
+    let charts = RunMetric::ALL
+        .iter()
+        .map(|metric| RunChartView {
+            metric: *metric,
+            unit: match metric {
+                RunMetric::Cpu | RunMetric::GpuUtilization => CanonicalUnit::Percent,
+                RunMetric::Memory | RunMetric::GpuMemory => CanonicalUnit::Bytes,
+                _ => CanonicalUnit::BytesPerSecond,
+            },
+            means: (0..30).map(|minute| Some(f64::from(minute))).collect(),
+            mean: Some(14.5),
+            peak: Some(29.0),
+        })
+        .collect();
+    let opened = RunDetailView {
+        info: RunInfo {
+            key: killed.key.clone(),
+            name: killed.name.clone(),
+            command: "/venv/bin/python main.py --listen 0.0.0.0 --port 8188 --output-directory /srv/comfy/out --preview-method auto"
+                .to_owned(),
+            cwd: "/home/u/code/ComfyUI".to_owned(),
+            uid: Some(1000),
+            gpus: killed.gpus.clone(),
+            started_utc_ns: killed.started_utc_ns,
+            last_seen_utc_ns: ended.utc_ns,
+            end: Some(ended),
+        },
+        live: false,
+        slot: None,
+        first_utc_ns: killed.started_utc_ns,
+        step_ns: 60 * 1_000_000_000,
+        charts,
+        loading: false,
+    };
+    ProcessHistoryView {
+        runs: vec![killed, training],
+        more_runs: 0,
+        opened: Some(opened),
+        kept_on_disk: true,
+        utc_offset_s: 8 * 3600,
     }
 }

@@ -38,6 +38,7 @@ pub(crate) struct Held {
 
 impl Held {
     /// Time-weighted mean over the time covered.
+    #[cfg(test)]
     pub(crate) fn mean(&self) -> Option<f64> {
         #[allow(clippy::cast_precision_loss)]
         let covered = self.covered_ns as f64;

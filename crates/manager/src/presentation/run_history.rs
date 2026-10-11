@@ -23,6 +23,7 @@ pub(crate) struct RunHistoryInputs<'a> {
     pub(crate) colors: &'a ProcessMemoryBook,
     pub(crate) opened: Option<&'a ProcessKey>,
     pub(crate) kept_on_disk: bool,
+    pub(crate) utc_offset_s: i32,
 }
 
 pub(crate) fn build_process_history_view(inputs: &RunHistoryInputs<'_>) -> ProcessHistoryView {
@@ -49,6 +50,7 @@ pub(crate) fn build_process_history_view(inputs: &RunHistoryInputs<'_>) -> Proce
         more_runs,
         opened,
         kept_on_disk: inputs.kept_on_disk,
+        utc_offset_s: inputs.utc_offset_s,
     }
 }
 
@@ -237,6 +239,7 @@ mod tests {
             colors: &ProcessMemoryBook::new(1000),
             opened,
             kept_on_disk: true,
+            utc_offset_s: 0,
         })
     }
 

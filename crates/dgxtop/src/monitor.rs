@@ -48,6 +48,7 @@ use dgxtop_runtime::supervisor::{
     HostLaunch, HostSpec, Supervisor, SupervisorConfig, SupervisorHandle,
 };
 use dgxtop_runtime::terminal::{NonBlockingTerminal, TtyInputGate};
+use dgxtop_runtime::timezone::local_utc_offset_s;
 use dgxtop_store::archive::{ArchiveLimits, SqliteArchive, SqliteArchiveReader};
 use dgxtop_store::audit::{AuditLimits, SqliteAuditRepository};
 use dgxtop_store::config::FileConfigRepository;
@@ -999,6 +1000,7 @@ fn host_facts(namespace: Namespace) -> HostFacts {
         version: BuildInfo::current().version.to_owned(),
         namespace_label: (namespace == Namespace::Replay)
             .then(|| "replay (simulated data)".to_owned()),
+        utc_offset_s: local_utc_offset_s(),
     }
 }
 

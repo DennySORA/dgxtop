@@ -439,10 +439,11 @@ fn arrows_act_on_the_page_they_are_pressed_on() {
 }
 
 /// `4` opens the Process History tab and `3` the Overview History one; in
-/// the process pages `j`/`k` move the cursor and Enter opens and closes a
-/// process (D-72, D-75). Only the tab switches send a view command.
+/// the process pages `j`/`k` move the cursor over the runs, clamped to the
+/// list, and Enter opens and closes a run (D-72, D-75, D-76). The run under
+/// the cursor becomes the history view's selection.
 #[test]
-fn history_process_pages_navigate_without_a_command() {
+fn history_process_pages_navigate_and_select_the_run() {
     let mut harness = Harness::new(ViewKind::History);
     let history = ModuleId::new(crate::modules::HISTORY_MODULE_ID).unwrap();
     let state = |harness: &Harness| {
@@ -454,8 +455,20 @@ fn history_process_pages_navigate_without_a_command() {
     };
     harness.keys(&[key('j'), code(KeyCode::Enter)]);
     assert_eq!(state(&harness), (0, 0), "the system page has no cursor");
-    harness.keys(&[key('4'), key('j'), key('j'), key('k')]);
-    assert_eq!(state(&harness), (1, 1));
+    harness.keys(&[key('4'), key('j'), key('j'), key('k'), key('j')]);
+    assert_eq!(
+        state(&harness),
+        (1, 1),
+        "two runs: the cursor stops at the last"
+    );
+    let training = test_fixtures::process_history_view().runs[1].key.clone();
+    let (view, _, selected, _, _) = harness.last_session();
+    assert_eq!(view, ViewKind::History);
+    assert_eq!(
+        selected,
+        Some(training),
+        "the run under the cursor is selected"
+    );
     harness.keys(&[code(KeyCode::Enter)]);
     assert_eq!(state(&harness), (2, 1));
     harness.keys(&[code(KeyCode::Enter)]);
@@ -470,6 +483,37 @@ fn history_process_pages_navigate_without_a_command() {
         "{:?}",
         harness.submitted()
     );
+}
+
+/// In an opened run `e` shows the whole command line and `y` queues it for
+/// the clipboard once; on the list neither does anything (D-76).
+#[test]
+fn an_opened_run_expands_and_copies_its_command() {
+    let mut harness = Harness::new(ViewKind::History);
+    let history = ModuleId::new(crate::modules::HISTORY_MODULE_ID).unwrap();
+    harness.keys(&[key('4'), key('e'), key('y')]);
+    assert!(
+        harness.controller.take_clipboard().is_none(),
+        "the list copies nothing"
+    );
+    assert!(
+        !harness
+            .controller
+            .ui_state(harness.now)
+            .expanded
+            .contains(&history)
+    );
+    harness.keys(&[code(KeyCode::Enter), key('e'), key('y')]);
+    assert!(
+        harness
+            .controller
+            .ui_state(harness.now)
+            .expanded
+            .contains(&history)
+    );
+    let copied = harness.controller.take_clipboard().unwrap();
+    assert!(copied.starts_with("/venv/bin/python main.py"), "{copied}");
+    assert!(harness.controller.take_clipboard().is_none(), "once");
 }
 
 #[test]

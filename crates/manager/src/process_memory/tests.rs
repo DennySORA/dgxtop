@@ -267,27 +267,3 @@ fn the_hold_follows_the_sampling_interval() {
     let held = book.held_on(&key(9), &gpu(GPU_A), (0, 20 * SECOND));
     assert_eq!(held.covered_ns, 10 * SECOND);
 }
-
-/// A tracked process keeps the command line it was last listed with
-/// (D-73), also once it exits; a table without one keeps the last.
-#[test]
-fn a_tracked_process_keeps_its_last_command_line() {
-    let mut book = ProcessMemoryBook::new(1000);
-    let mut first = row(10, "train", &[(GPU_A, Some(GIB))]);
-    first.command = "python train.py --lr 3e-4".to_owned();
-    book.record(&table(1, 1, vec![first]));
-    let command = |book: &ProcessMemoryBook| book.tracked()[0].command.to_owned();
-    assert_eq!(command(&book), "python train.py --lr 3e-4");
-    book.record(&table(2, 2, vec![row(10, "train", &[(GPU_A, Some(GIB))])]));
-    assert_eq!(
-        command(&book),
-        "python train.py --lr 3e-4",
-        "an empty one keeps it"
-    );
-    book.record(&table(3, 3, Vec::new()));
-    assert_eq!(
-        command(&book),
-        "python train.py --lr 3e-4",
-        "kept after it exits"
-    );
-}

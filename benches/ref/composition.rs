@@ -299,6 +299,7 @@ impl RefComposition {
                 cpu_model: None,
                 version: BuildInfo::current().version.to_owned(),
                 namespace_label: Some("replay (simulated data)".to_owned()),
+                utc_offset_s: 0,
             },
             namespace: Namespace::Replay,
         };

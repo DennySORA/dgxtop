@@ -568,33 +568,6 @@ pub struct HistoryPart {
     pub means: Vec<Option<f64>>,
 }
 
-/// What a tracked process held on one GPU over the history view's window
-/// (D-64), recorded while dgxtop runs.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct HistoryProcessView {
-    pub slot: u8,
-    pub pid: i32,
-    pub name: String,
-    /// The command line as last listed, cleaned and bounded (D-73).
-    pub command: String,
-    /// `GPU 0`.
-    pub gpu_label: String,
-    pub unit: CanonicalUnit,
-    /// Time-weighted mean over the time the process was listed.
-    pub mean: Option<f64>,
-    pub peak: Option<f64>,
-    /// Time the process was listed in the window.
-    pub listed_ns: u64,
-    /// Listed in the newest process list.
-    pub running: bool,
-    /// What it held on that GPU in each even cell of the view's window, on
-    /// the grid of the charts' points (D-72); `None` where no process list
-    /// was recorded.
-    pub means: Vec<Option<f64>>,
-    /// Top of the scale of that GPU's memory chart.
-    pub scale_max: Option<f64>,
-}
-
 /// Rows of runs a Process History projection carries at most.
 pub const MAX_RUN_ROWS: usize = 200;
 /// Points a run chart carries at most.
@@ -610,6 +583,8 @@ pub struct ProcessHistoryView {
     pub opened: Option<RunDetailView>,
     /// Runs outlive dgxtop (its stores are on).
     pub kept_on_disk: bool,
+    /// Local time's offset from UTC, seconds east.
+    pub utc_offset_s: i32,
 }
 
 /// One run in the list.
@@ -678,9 +653,6 @@ pub struct HistoryView {
     pub charts: Vec<HistoryChartView>,
     /// Each GPU's statistics over the last 1 h, 6 h, 12 h and 24 h (D-48).
     pub summaries: Vec<HistoryWindowSummary>,
-    /// The tracked processes on each GPU over the window, largest mean
-    /// first (D-64).
-    pub processes: Vec<HistoryProcessView>,
     pub disk: DiskHistory,
     /// Why there is nothing to chart (no history service, no series yet).
     pub error: Option<String>,

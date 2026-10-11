@@ -1139,7 +1139,6 @@ impl HistoryService {
                 .collect(),
             summaries: self.summaries_of(&session.stats, session.active, wall),
             // The presentation adds the processes (D-64).
-            processes: Vec::new(),
             disk: match (&self.archive, &session.disk_failure) {
                 (None, _) => DiskHistory::Off,
                 (Some(_), None) => DiskHistory::On,
@@ -1398,7 +1397,6 @@ fn empty_view() -> HistoryView {
         end_utc_ns: 0,
         charts: Vec::new(),
         summaries: Vec::new(),
-        processes: Vec::new(),
         disk: DiskHistory::Off,
         error: None,
     }

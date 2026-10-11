@@ -148,7 +148,7 @@ pub fn format_utc_rfc3339(unix_ns: i128) -> String {
 
 /// Gregorian date of a day count since 1970-01-01 (Howard Hinnant's
 /// `civil_from_days`).
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
+pub fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let shifted = days + 719_468;
     let era = shifted.div_euclid(146_097);
     let day_of_era = shifted.rem_euclid(146_097);
