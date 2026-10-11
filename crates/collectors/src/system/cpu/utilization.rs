@@ -17,12 +17,12 @@ use dgxtop_core::identity::MetricKey;
 use dgxtop_core::metric::{Scalar, ids, native};
 use dgxtop_core::quality::Freshness;
 
-use crate::context::{Record, Session};
-use crate::counter::{self, CounterReading};
-use crate::counter_inputs;
-use crate::formulas;
-use crate::reasons;
-use crate::values::{self, Evidence};
+use crate::shared::context::{Record, Session};
+use crate::shared::counter::{self, CounterReading};
+use crate::shared::counter_inputs;
+use crate::shared::formulas;
+use crate::shared::reasons;
+use crate::shared::values::{self, Evidence};
 
 /// `/proc/stat` fields in formula order.
 const FIELDS: [&str; 8] = [

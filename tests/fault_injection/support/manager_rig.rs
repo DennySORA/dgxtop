@@ -135,6 +135,7 @@ pub fn inert_ports(
         audit: Box::new(CapturingDispatch::<AuditOp>::new()),
         actions: Box::new(CapturingDispatch::<ActionOp>::new()),
         process_probe: None,
+        probe_deriver: Arc::new(dgxtop_core::testing::IdleProbeDeriver),
         process_history: None,
         logger: Arc::new(MemoryLogger::default()),
         diagnostics: Diagnostics::new(),

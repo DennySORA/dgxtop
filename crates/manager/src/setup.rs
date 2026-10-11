@@ -19,7 +19,8 @@ use dgxtop_core::identity::{BootId, HostId, PidNamespace};
 use dgxtop_core::observation::AdapterManifest;
 use dgxtop_core::ports::{
     AdapterJob, ArchiveReadJob, Collector, ConfigJob, ControlCompletion, Dispatch, HistoryJob,
-    IngestionCompletion, Logger, ProcessHistoryJob, ProcessProbeJob, SnapshotReader, StoreJob,
+    IngestionCompletion, Logger, ProbeDeriver, ProcessHistoryJob, ProcessProbeJob, SnapshotReader,
+    StoreJob,
 };
 use dgxtop_core::quality::Namespace;
 
@@ -54,6 +55,9 @@ pub struct ManagerPorts {
     /// The process probe of the process history (D-76); `None` where no
     /// live process can be probed (replays, tests).
     pub process_probe: Option<Box<dyn Dispatch<ProcessProbeJob>>>,
+    /// Makes the values of the probe's readings for the process history
+    /// (D-79: the process collector's transformation).
+    pub probe_deriver: Arc<dyn ProbeDeriver>,
     /// The process history's stores (D-76); `None` keeps it in memory.
     pub process_history: Option<Box<dyn Dispatch<ProcessHistoryJob>>>,
     pub logger: Arc<dyn Logger>,

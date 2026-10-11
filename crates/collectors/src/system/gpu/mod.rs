@@ -19,14 +19,14 @@ use dgxtop_core::observation::Observation;
 use dgxtop_core::ports::Collector;
 use dgxtop_core::quality::{Freshness, RawKind, ReadStatus};
 
-use crate::arbitration::{self, Candidate, CatalogMapping, Deadlines};
-use crate::context::{self, CollectorSpec, Record, Route, Session};
-use crate::counter_inputs::{self, Step};
-use crate::formulas::{self, Selections};
-use crate::gpu_processes::{self, GpuProcesses, PROCESS_GPU_METRICS};
-use crate::output::Subject;
-use crate::reasons;
-use crate::values::{self, Evidence};
+use crate::process::gpu_processes::{self, GpuProcesses, PROCESS_GPU_METRICS};
+use crate::shared::arbitration::{self, Candidate, CatalogMapping, Deadlines};
+use crate::shared::context::{self, CollectorSpec, Record, Route, Session};
+use crate::shared::counter_inputs::{self, Step};
+use crate::shared::formulas::{self, Selections};
+use crate::shared::output::Subject;
+use crate::shared::reasons;
+use crate::shared::values::{self, Evidence};
 
 fn accepts(metric: &MetricDescriptor) -> bool {
     metric.domain == Domain::Gpu || PROCESS_GPU_METRICS.contains(&metric.id)
@@ -72,7 +72,7 @@ impl Collector for GpuCollector {
     }
 
     fn consumes(&self, adapter_id: &AdapterId, read_group: &str) -> bool {
-        crate::routes_to(adapter_id, read_group, SPEC.id)
+        crate::shared::routes_to(adapter_id, read_group, SPEC.id)
     }
 
     fn collect(&self, plan: &CollectionPlan) -> CollectionBatch {

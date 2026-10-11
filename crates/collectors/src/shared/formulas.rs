@@ -8,11 +8,11 @@ use dgxtop_core::identity::MetricKey;
 use dgxtop_core::metric::Scalar;
 use dgxtop_core::quality::Freshness;
 
-use crate::arbitration::Selection;
-use crate::context::Session;
-use crate::counter_inputs::is_fresh;
-use crate::reasons;
-use crate::values::{self, Evidence};
+use crate::shared::arbitration::Selection;
+use crate::shared::context::Session;
+use crate::shared::counter_inputs::is_fresh;
+use crate::shared::reasons;
+use crate::shared::values::{self, Evidence};
 
 /// Selections already computed in this job, by key (`None`: no value).
 pub(crate) type Selections = BTreeMap<MetricKey, Option<Selection>>;

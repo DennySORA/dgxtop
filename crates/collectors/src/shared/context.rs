@@ -22,11 +22,13 @@ use dgxtop_core::observation::{
 };
 use dgxtop_core::quality::RawKind;
 
-use crate::arbitration::{self, Candidate, CatalogMapping, Deadlines, Outcome, Request, Selection};
-use crate::output::{Output, Subject};
-use crate::reasons;
-use crate::state_bounds;
-use crate::values::ValueContext;
+use crate::shared::arbitration::{
+    self, Candidate, CatalogMapping, Deadlines, Outcome, Request, Selection,
+};
+use crate::shared::output::{Output, Subject};
+use crate::shared::reasons;
+use crate::shared::state_bounds;
+use crate::shared::values::ValueContext;
 
 /// Period group of `RawKind::Static` sources: their values are refreshed by
 /// discovery, so `naming::static_period_key` names their period.

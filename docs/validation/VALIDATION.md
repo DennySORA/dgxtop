@@ -194,7 +194,7 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 | F2 NaN/Inf rejected | `dgxtop-core::metric::tests::non_finite_scalars_are_rejected` |  |
 | F3 unknown unit rejected | `dgxtop-core::metric::tests::unknown_and_unverified_units_are_rejected` |  |
 | F4 PID ≤ 0 or > i32::MAX rejected | `dgxtop-core::identity::tests::pid_range_is_enforced`, `contracts::invalid_pids_are_rejected_by_rust_and_schema` | Rust types and JSON Schema |
-| F5 different scopes never merged | `dgxtop-core::identity::tests::different_scope_is_different_key`, `dgxtop-collectors::arbitration::tests::soc_scope_is_a_different_key_and_never_competes`, `dgxtop-collectors::cpu::tests::architecture_example_soc_scope_is_published_separately`, `replay::package_temperature_alias_counts_once_and_soc_stays_separate` |  |
+| F5 different scopes never merged | `dgxtop-core::identity::tests::different_scope_is_different_key`, `dgxtop-collectors::shared::arbitration::tests::soc_scope_is_a_different_key_and_never_competes`, `dgxtop-collectors::system::cpu::tests::architecture_example_soc_scope_is_published_separately`, `replay::package_temperature_alias_counts_once_and_soc_stays_separate` |  |
 
 <a id="at03"></a>
 
@@ -204,12 +204,12 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 stable selection within tolerance | `dgxtop-collectors::arbitration::tests::{agreeing_independent_sources_select_by_profile_rank, outcome_is_independent_of_candidate_order}` | Order independence is a property test |
-| S2 an alias counts once | `dgxtop-collectors::arbitration::tests::confirmed_alias_is_counted_once_and_keeps_an_inconsistency_hint`, `replay::package_temperature_alias_counts_once_and_soc_stays_separate` |  |
-| S3 switching needs 3 wins and 5 s | `dgxtop-collectors::arbitration::tests::healthy_source_switches_only_after_three_wins_and_five_seconds`, `dgxtop-collectors::arbitration::hysteresis::tests::challenger_needs_three_wins_and_five_seconds` |  |
-| F1 68 °C package and 42 °C SoC stay apart | `dgxtop-collectors::arbitration::tests::soc_scope_is_a_different_key_and_never_competes`, `dgxtop-collectors::cpu::tests::architecture_example_soc_scope_is_published_separately` |  |
-| F2 a conflict has value null | `dgxtop-collectors::arbitration::tests::independent_disagreement_is_a_conflict_never_an_average`, `replay::independent_sources_beyond_tolerance_are_a_conflict_without_value` |  |
-| F3 a pin never overrides a fault or conflict | `dgxtop-collectors::arbitration::tests::{unusable_pin_is_unavailable_and_never_silently_replaced, pin_never_hides_a_conflict}` |  |
+| S1 stable selection within tolerance | `dgxtop-collectors::shared::arbitration::tests::{agreeing_independent_sources_select_by_profile_rank, outcome_is_independent_of_candidate_order}` | Order independence is a property test |
+| S2 an alias counts once | `dgxtop-collectors::shared::arbitration::tests::confirmed_alias_is_counted_once_and_keeps_an_inconsistency_hint`, `replay::package_temperature_alias_counts_once_and_soc_stays_separate` |  |
+| S3 switching needs 3 wins and 5 s | `dgxtop-collectors::shared::arbitration::tests::healthy_source_switches_only_after_three_wins_and_five_seconds`, `dgxtop-collectors::shared::arbitration::hysteresis::tests::challenger_needs_three_wins_and_five_seconds` |  |
+| F1 68 °C package and 42 °C SoC stay apart | `dgxtop-collectors::shared::arbitration::tests::soc_scope_is_a_different_key_and_never_competes`, `dgxtop-collectors::system::cpu::tests::architecture_example_soc_scope_is_published_separately` |  |
+| F2 a conflict has value null | `dgxtop-collectors::shared::arbitration::tests::independent_disagreement_is_a_conflict_never_an_average`, `replay::independent_sources_beyond_tolerance_are_a_conflict_without_value` |  |
+| F3 a pin never overrides a fault or conflict | `dgxtop-collectors::shared::arbitration::tests::{unusable_pin_is_unavailable_and_never_silently_replaced, pin_never_hides_a_conflict}` |  |
 
 <a id="at04"></a>
 
@@ -219,11 +219,11 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 a true 0 stays 0 | `dgxtop-collectors::arbitration::tests::true_zero_is_a_value_not_a_missing_sentinel`, `dgxtop-adapters/adapters_c_hwmon::zero_celsius_is_kept_as_a_valid_reading`, `dgxtop-manager::presentation::cell::tests::true_zero_is_a_value_not_missing` |  |
-| S2 read fresh, measurement time unknown | `dgxtop-collectors::arbitration::tests::missing_device_timestamp_means_read_fresh_measurement_unknown` |  |
-| F1 timeout/fault/unsupported/stale never 0 | `dgxtop-collectors::arbitration::tests::{failed_reads_and_stale_values_are_never_zero, faulted_fallback_is_excluded_and_the_valid_source_selected}`, `dgxtop-ui::format::cell::tests::missing_states_render_their_labels_never_zero` |  |
-| F2 an alarm is not a fault | `dgxtop-collectors::arbitration::tests::alarm_keeps_the_hot_reading`, `dgxtop-adapters/adapters_c_hwmon::alarm_flag_keeps_high_reading_and_quality` |  |
-| F3 replay never enters live history | `dgxtop-collectors::arbitration::tests::replay_is_rejected_by_a_live_policy_and_accepted_by_a_replay_policy`, `dgxtop-collectors::network::tests::replayed_counters_feed_no_live_interval`, `dgxtop-store/store_hot_commit::at05_invalid_namespace_unit_and_unknown_metrics_reject_the_whole_batch` | The live store rejects simulated values |
+| S1 a true 0 stays 0 | `dgxtop-collectors::shared::arbitration::tests::true_zero_is_a_value_not_a_missing_sentinel`, `dgxtop-adapters/adapters_c_hwmon::zero_celsius_is_kept_as_a_valid_reading`, `dgxtop-manager::presentation::cell::tests::true_zero_is_a_value_not_missing` |  |
+| S2 read fresh, measurement time unknown | `dgxtop-collectors::shared::arbitration::tests::missing_device_timestamp_means_read_fresh_measurement_unknown` |  |
+| F1 timeout/fault/unsupported/stale never 0 | `dgxtop-collectors::shared::arbitration::tests::{failed_reads_and_stale_values_are_never_zero, faulted_fallback_is_excluded_and_the_valid_source_selected}`, `dgxtop-ui::format::cell::tests::missing_states_render_their_labels_never_zero` |  |
+| F2 an alarm is not a fault | `dgxtop-collectors::shared::arbitration::tests::alarm_keeps_the_hot_reading`, `dgxtop-adapters/adapters_c_hwmon::alarm_flag_keeps_high_reading_and_quality` |  |
+| F3 replay never enters live history | `dgxtop-collectors::shared::arbitration::tests::replay_is_rejected_by_a_live_policy_and_accepted_by_a_replay_policy`, `dgxtop-collectors::system::network::tests::replayed_counters_feed_no_live_interval`, `dgxtop-store/store_hot_commit::at05_invalid_namespace_unit_and_unknown_metrics_reject_the_whole_batch` | The live store rejects simulated values |
 
 <a id="at05"></a>
 
@@ -262,11 +262,11 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 1000 → 1300 B in 3 s = 100 B/s, 300 total | `dgxtop-collectors::counter::tests::bytes_1000_to_1300_over_3s_is_100_per_second_and_300_total`, `dgxtop-collectors::network::tests::byte_rate_uses_actual_elapsed_time_and_emits_exact_interval`, `dgxtop-store/store_hot_history::at07_counter_interval_total_is_exact` |  |
+| S1 1000 → 1300 B in 3 s = 100 B/s, 300 total | `dgxtop-collectors::shared::counter::tests::bytes_1000_to_1300_over_3s_is_100_per_second_and_300_total`, `dgxtop-collectors::system::network::tests::byte_rate_uses_actual_elapsed_time_and_emits_exact_interval`, `dgxtop-store/store_hot_history::at07_counter_interval_total_is_exact` |  |
 | S2 changing the sampling rate keeps old totals | `dgxtop-store/store_hot_history::at07_changing_the_sampling_interval_keeps_old_totals`, `dgxtop-store/store_hot_properties::totals_of_disjoint_windows_add_up_to_their_union` |  |
 | S3 coverage is exact | `dgxtop-store/store_hot_history::at07_coverage_is_exact_and_gaps_are_never_zero_filled`, `dgxtop-store/store_hot_properties::gauge_time_weighted_mean_matches_the_reference` |  |
-| F1 counter reset | `dgxtop-collectors::counter::tests::reset_generation_boot_and_interval_changes_are_gaps`, `dgxtop-collectors::network::tests::counter_reset_is_never_a_negative_or_zero_rate` |  |
-| F2 generation change | `dgxtop-collectors::network::tests::recreated_interface_restarts_from_warmup`, `dgxtop-store/store_hot_history::at07_generation_changes_cut_segments_and_utc_steps_are_discontinuities` |  |
+| F1 counter reset | `dgxtop-collectors::shared::counter::tests::reset_generation_boot_and_interval_changes_are_gaps`, `dgxtop-collectors::system::network::tests::counter_reset_is_never_a_negative_or_zero_rate` |  |
+| F2 generation change | `dgxtop-collectors::system::network::tests::recreated_interface_restarts_from_warmup`, `dgxtop-store/store_hot_history::at07_generation_changes_cut_segments_and_utc_steps_are_discontinuities` |  |
 | F3 UTC going backwards | `dgxtop-store/store_hot_history::at07_generation_changes_cut_segments_and_utc_steps_are_discontinuities` | PARTIAL: gauges only |
 | F4 a different boot | `dgxtop-collectors::tests::boot_change_restarts_counters_at_warmup`, `dgxtop-store/store_hot_history::at07_other_boots_are_separate_series_and_unknown_boots_are_empty` |  |
 | F5 a 2 h gap stays out of the last hour | `dgxtop-store/store_hot_history::at07_two_hour_gap_does_not_leak_into_the_last_hour` |  |
@@ -295,10 +295,10 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 
 | Clause | Tests | Note |
 |---|---|---|
-| S1 same host CPU/RSS across two GPUs | `dgxtop-collectors::process::tests::one_process_on_two_gpus_is_one_host_row_with_two_links`, `dgxtop-ui::viewer::tests::processes_view_follows_the_reference_columns_and_marks_the_selection` |  |
-| S2 host data read once per cycle | `dgxtop-manager::scheduler::tests::cadences_follow_period_classes_and_discovery_interval`, `dgxtop-adapters/adapters_a_process::paging_is_consistent_within_a_cycle_and_resnapshots_the_next_cycle`, `dgxtop-collectors::process::tests::one_process_on_two_gpus_is_one_host_row_with_two_links` | Composition |
-| F1 new start ticks: no inherited CPU base | `dgxtop-collectors::process::tests::reused_pid_with_new_start_time_never_inherits_the_old_base`, `dgxtop-collectors::process::tests::gpu_entry_of_an_older_instance_is_not_linked_to_a_reused_pid` |  |
-| F2 graphics + compute not double-counted | `dgxtop-collectors::process::tests::merged_compute_and_graphics_association_is_one_link`, `adapters_b_nvml::compute_and_graphics_of_one_pid_are_one_association` |  |
+| S1 same host CPU/RSS across two GPUs | `dgxtop-collectors::process::table::tests::one_process_on_two_gpus_is_one_host_row_with_two_links`, `dgxtop-ui::viewer::tests::processes_view_follows_the_reference_columns_and_marks_the_selection` |  |
+| S2 host data read once per cycle | `dgxtop-manager::scheduler::tests::cadences_follow_period_classes_and_discovery_interval`, `dgxtop-adapters/adapters_a_process::paging_is_consistent_within_a_cycle_and_resnapshots_the_next_cycle`, `dgxtop-collectors::process::table::tests::one_process_on_two_gpus_is_one_host_row_with_two_links` | Composition |
+| F1 new start ticks: no inherited CPU base | `dgxtop-collectors::process::table::tests::reused_pid_with_new_start_time_never_inherits_the_old_base`, `dgxtop-collectors::process::table::tests::gpu_entry_of_an_older_instance_is_not_linked_to_a_reused_pid` |  |
+| F2 graphics + compute not double-counted | `dgxtop-collectors::process::table::tests::merged_compute_and_graphics_association_is_one_link`, `adapters_b_nvml::compute_and_graphics_of_one_pid_are_one_association` |  |
 | F3 an exited process is marked unavailable | `dgxtop-manager::presentation::processes::tests::selection_follows_the_process_key_when_rows_reorder`, `dgxtop-manager::presentation::processes::tests::a_selection_hidden_by_a_filter_is_not_reported_as_exited`, `dgxtop-manager::presentation::processes::tests::only_processes_using_a_gpu_are_listed`, `dgxtop-ui::modules::processes::tests::an_exited_selection_is_reported_as_unavailable` | D-26, D-36 |
 
 <a id="at10"></a>
@@ -413,7 +413,7 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 | S4 policy revision | `dgxtop-ui::viewer::tests::sources_view_explains_arbitration` |  |
 | S5 action states are clear | `dgxtop-ui::viewer::tests::actions_view_never_says_terminated`, `dgxtop-manager::process::tests::unknown_outcomes_from_recovery_are_surfaced_and_never_resent` |  |
 | F1 unknown is never success-coloured or 0 | `dgxtop-ui::format::cell::tests::missing_states_render_their_labels_never_zero`, `dgxtop-ui::viewer::tests::missing_topics_render_no_data_instead_of_zero` |  |
-| F2 a fixed value is only a suspect diagnostic | `dgxtop-collectors::arbitration::tests::an_unchanged_reading_is_only_a_suspect_diagnostic_never_fake_data` |  |
+| F2 a fixed value is only a suspect diagnostic | `dgxtop-collectors::shared::arbitration::tests::an_unchanged_reading_is_only_a_suspect_diagnostic_never_fake_data` |  |
 | F3 history gaps are visible | `dgxtop-ui::modules::history::strip::tests::columns_follow_time_and_keep_gaps_and_peaks`, `dgxtop-ui::widgets::sparkline::tests::gaps_are_blank_and_zero_is_lowest_bar`, `dgxtop-manager::presentation::history::tests::gaps_and_discontinuities_are_never_bridged` |  |
 
 <a id="at17"></a>
@@ -427,7 +427,7 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 | S1 bounded labels | `dgxtop-core::diagnostics::tests::labels_are_bounded`, `dgxtop-manager::scheduler::tests::refused_dispatches_are_deferrals_labelled_by_reason` | Deferred dispatches carry one of three reasons (D-37) |
 | S2 every queue/latency/quota/coverage metric output |  | NOT IMPLEMENTED (feature gap) |
 | S3 cmdline and environment secrets never on disk | `dgxtop-store::audit::records::tests::intent_row_keeps_only_identity_uid_and_basename`, `dgxtop-core::text::tests::audit_command_names_drop_paths_but_keep_kernel_slashes`, `dgxtop-adapters::procfs::command::tests::{option_values_never_become_a_name, other_interpreters_skip_option_values}`, `adapters_a_process::processes_are_named_by_what_they_run_and_command_lines_are_read_once`, `dgxtop-store::process_history::tests::runs_and_buckets_survive_a_restart` | PARTIAL: the procfs adapter reads cmdline to name a process (D-65, D-73); by owner decision the process history stores the cleaned, bounded command line, working folder and program of GPU processes (the latest 2000 runs, D-77) in its private 0600 database (D-76); environ is never read; no disk scan |
-| F1 100 000 short-lived PIDs stay bounded | `dgxtop-core::diagnostics::tests::labels_are_bounded`, `dgxtop-manager::results::tests::capacity_evicts_oldest_completed_but_never_pending`, `dgxtop-collectors::process::tests::bases_stay_bounded_under_heavy_process_churn` |  |
+| F1 100 000 short-lived PIDs stay bounded | `dgxtop-core::diagnostics::tests::labels_are_bounded`, `dgxtop-manager::results::tests::capacity_evicts_oldest_completed_but_never_pending`, `dgxtop-collectors::process::table::tests::bases_stay_bounded_under_heavy_process_churn` |  |
 | F2 control characters escaped | `dgxtop-core::text::tests::audit_escapes_keep_hostile_bytes_visible_and_unambiguous`, `dgxtop-store::audit::records::tests::intent_rows_keep_an_escaped_command_name_with_its_slashes` | D-20 |
 | F3 a full debug log counts drops | `dgxtop-runtime::logger::file::tests::pressure_drops_low_priority_first_and_counts_errors_separately` |  |
 

@@ -13,7 +13,7 @@ use dgxtop_core::testing::{ObservationBuilder, metric_key, source_id};
 use proptest::prelude::*;
 
 use super::*;
-use crate::reasons;
+use crate::shared::reasons;
 use crate::testkit::{MILLISECOND, SECOND, policy, replay_policy};
 
 const NOW: u64 = 42 * SECOND;

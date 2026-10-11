@@ -16,11 +16,11 @@ use dgxtop_core::naming;
 use dgxtop_core::ports::Collector;
 use dgxtop_core::quality::Freshness;
 
-use crate::context::{self, CollectorSpec, Route, Session};
-use crate::counter_inputs::{self, Step};
-use crate::formulas::{self, Difference, Selections};
-use crate::reasons;
-use crate::values::{self, Evidence};
+use crate::shared::context::{self, CollectorSpec, Route, Session};
+use crate::shared::counter_inputs::{self, Step};
+use crate::shared::formulas::{self, Difference, Selections};
+use crate::shared::reasons;
+use crate::shared::values::{self, Evidence};
 
 /// Raw diskstats counter, the canonical unit of its delta and the rate it feeds.
 const COUNTERS: [(&str, CanonicalUnit, Option<&str>); 6] = [
@@ -103,7 +103,7 @@ impl Collector for DiskCollector {
     }
 
     fn consumes(&self, adapter_id: &AdapterId, read_group: &str) -> bool {
-        crate::routes_to(adapter_id, read_group, SPEC.id)
+        crate::shared::routes_to(adapter_id, read_group, SPEC.id)
     }
 
     fn collect(&self, plan: &CollectionPlan) -> CollectionBatch {

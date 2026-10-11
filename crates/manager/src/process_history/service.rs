@@ -10,7 +10,8 @@ use dgxtop_core::action::Signal;
 use dgxtop_core::canonical::ProcessTable;
 use dgxtop_core::identity::{BootId, ProcessKey};
 use dgxtop_core::ports::{
-    Dispatch, LogLevel, Logger, ProcessHistoryCompletion, ProcessHistoryJob, ProcessProbeJob,
+    Dispatch, LogLevel, Logger, ProbeDeriver, ProcessHistoryCompletion, ProcessHistoryJob,
+    ProcessProbeJob,
 };
 use dgxtop_core::process_history::ProcessHistoryJournal;
 use dgxtop_core::process_probe::ProbeReport;
@@ -25,10 +26,12 @@ pub(crate) const SAVE_EVERY_NS: u64 = 30 * NANOS_PER_SECOND;
 const MAX_BACKLOG_BUCKETS: usize = 8192;
 const LOG_TARGET: &str = "manager.process_history";
 
-/// The ports of the process history; either may be absent (no probe in a
-/// replay, no stores with the archive off).
+/// The ports of the process history; the probe and the stores may be
+/// absent (no probe in a replay, no stores with the archive off).
 pub(crate) struct ProcessHistoryPorts {
     pub(crate) probe: Option<Box<dyn Dispatch<ProcessProbeJob>>>,
+    /// Makes the values of the probe's readings (D-79).
+    pub(crate) probe_deriver: Arc<dyn ProbeDeriver>,
     pub(crate) store: Option<Box<dyn Dispatch<ProcessHistoryJob>>>,
 }
 
@@ -41,6 +44,7 @@ enum Load {
 pub(crate) struct ProcessHistoryService {
     book: ProcessHistoryBook,
     probe: Option<Box<dyn Dispatch<ProcessProbeJob>>>,
+    probe_deriver: Arc<dyn ProbeDeriver>,
     store: Option<Box<dyn Dispatch<ProcessHistoryJob>>>,
     logger: Arc<dyn Logger>,
     probing: bool,
@@ -62,6 +66,7 @@ impl ProcessHistoryService {
         Self {
             book: ProcessHistoryBook::new(boot_id).with_utc_offset(utc_offset_s),
             probe: ports.probe,
+            probe_deriver: ports.probe_deriver,
             store: ports.store,
             logger,
             probing: false,
@@ -101,7 +106,7 @@ impl ProcessHistoryService {
 
     pub(crate) fn on_probe(&mut self, report: &ProbeReport, now: Now) {
         self.probing = false;
-        self.book.on_probe(report, now);
+        self.book.on_probe(report, now, &*self.probe_deriver);
     }
 
     /// dgxtop sent `signal` to `key`.
@@ -255,7 +260,7 @@ mod tests {
     use std::sync::Arc;
 
     use dgxtop_core::process_history::ProcessHistoryLoad;
-    use dgxtop_core::testing::{CapturingDispatch, MemoryLogger, boot_id};
+    use dgxtop_core::testing::{CapturingDispatch, IdleProbeDeriver, MemoryLogger, boot_id};
 
     use super::*;
     use crate::test_support::{gpu_process, process_table};
@@ -281,6 +286,7 @@ mod tests {
         let service = ProcessHistoryService::new(
             ProcessHistoryPorts {
                 probe: Some(Box::new(probe.clone())),
+                probe_deriver: Arc::new(IdleProbeDeriver),
                 store: Some(Box::new(store.clone())),
             },
             (boot_id("boot-test"), 0),

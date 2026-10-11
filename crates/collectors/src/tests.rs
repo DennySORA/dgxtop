@@ -12,7 +12,7 @@ use dgxtop_core::observation::{BatchStatus, Observation};
 use dgxtop_core::ports::Collector;
 use dgxtop_core::testing::{boot_id, metric_key, source_id};
 
-use crate::reasons;
+use crate::shared::reasons;
 use crate::testkit::{PlanBuilder, SECOND, collect, limits, reading, value_of};
 use crate::{NetworkCollector, collector_for, default_collectors};
 

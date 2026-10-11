@@ -459,6 +459,7 @@ pub(crate) fn harness_ports(options: &HarnessOptions) -> (ManagerPorts, Ports) {
         audit: Box::new(ports.audit.clone()),
         actions: Box::new(ports.actions.clone()),
         process_probe: None,
+        probe_deriver: Arc::new(dgxtop_core::testing::IdleProbeDeriver),
         process_history: None,
         logger: ports.logger.clone(),
         diagnostics: ports.diagnostics.clone(),

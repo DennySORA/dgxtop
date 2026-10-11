@@ -8,7 +8,7 @@ use dgxtop_core::metric::{MetricDescriptor, Scalar, ScalarView, descriptor};
 use dgxtop_core::observation::Observation;
 use dgxtop_core::quality::{Freshness, Namespace, Quality, SampleKind, SelectionState};
 
-use crate::reasons;
+use crate::shared::reasons;
 
 /// Per-job constants stamped on every value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,7 +41,7 @@ impl Evidence {
         }
     }
 
-    pub fn of_selection(selection: &crate::arbitration::Selection) -> Self {
+    pub fn of_selection(selection: &crate::shared::arbitration::Selection) -> Self {
         Self {
             source_id: selection.source_id.clone(),
             generation: selection.generation,

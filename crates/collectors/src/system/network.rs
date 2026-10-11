@@ -9,9 +9,9 @@ use dgxtop_core::metric::{CanonicalUnit, Domain, MetricDescriptor, MetricRole, i
 use dgxtop_core::naming;
 use dgxtop_core::ports::Collector;
 
-use crate::context::{self, CollectorSpec, Route, Session};
-use crate::counter_inputs::{self, Step};
-use crate::formulas::{self, Selections};
+use crate::shared::context::{self, CollectorSpec, Route, Session};
+use crate::shared::counter_inputs::{self, Step};
+use crate::shared::formulas::{self, Selections};
 
 const CUMULATIVE_COUNTS: [&str; 6] = [
     ids::NET_RX_PACKETS,
@@ -64,7 +64,7 @@ impl Collector for NetworkCollector {
     }
 
     fn consumes(&self, adapter_id: &AdapterId, read_group: &str) -> bool {
-        crate::routes_to(adapter_id, read_group, SPEC.id)
+        crate::shared::routes_to(adapter_id, read_group, SPEC.id)
     }
 
     fn collect(&self, plan: &CollectionPlan) -> CollectionBatch {
@@ -113,7 +113,7 @@ fn preferred_step<'s, 'a>(steps: &'s [Step<'a>]) -> Option<&'s Step<'a>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reasons;
+    use crate::shared::reasons;
     use crate::testkit::{PlanBuilder, SECOND, collect, number, reading, value_of};
     use dgxtop_core::identity::MetricKey;
     use dgxtop_core::metric::native;

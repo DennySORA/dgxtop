@@ -17,7 +17,7 @@ use dgxtop_core::identity::{EntityId, MetricKey};
 use dgxtop_core::metric::ids;
 use dgxtop_core::naming::entity;
 
-use crate::context::{Record, Session};
+use crate::shared::context::{Record, Session};
 
 /// Process metrics NVML reports per `(GPU, PID)`.
 pub(crate) const PROCESS_GPU_METRICS: [&str; 2] =

@@ -6,7 +6,8 @@
 //! compression, D-79) and asks the
 //! process probe about the live runs: their command line, working folder
 //! and details once, their IO counters, threads, swap, open files and
-//! descendants each cycle (D-77), and, for a run the table no longer lists,
+//! descendants each cycle (D-77), which a [`ProbeDeriver`] turns into the
+//! samples' values (D-79), and, for a run the table no longer lists,
 //! whether it ended and how ([`ending`]). Closed buckets and changed
 //! runs leave through [`ProcessHistoryBook::take_journal`] for the
 //! long-term store; the short-term file takes [`ProcessHistoryBook::recent`].
@@ -23,13 +24,14 @@ use dgxtop_compression::{RunSample, RunSeries};
 use dgxtop_core::action::Signal;
 use dgxtop_core::canonical::{ProcessRow, ProcessTable};
 use dgxtop_core::identity::{BootId, EntityId, ProcessKey};
+use dgxtop_core::ports::ProbeDeriver;
 use dgxtop_core::process_history::{
     EndCause, MAX_LISTED_RUNS, MAX_LIVE_RUNS, ProcessHistoryJournal, ProcessHistoryLoad,
     RUN_METRICS, RecentHistory, RecentRun, RunBucket, RunBucketRow, RunEnd, RunInfo, RunMetric,
     Tier,
 };
 use dgxtop_core::process_probe::{
-    ChildUsage, IoCounters, ProbeLiveness, ProbeReading, ProbeReport, ProbeTarget,
+    ProbeLiveness, ProbeReading, ProbeReport, ProbeState, ProbeTarget, ProbedValues,
 };
 
 use self::ending::{EndEvidence, end_cause};
@@ -79,34 +81,18 @@ impl Run {
     }
 
     /// What the last probe read of it, while it runs.
-    pub(crate) fn probed(&self) -> Probed {
+    pub(crate) fn probed(&self) -> ProbedValues {
         self.live
             .as_ref()
-            .map_or_else(Probed::default, |live| live.probed)
+            .map_or_else(ProbedValues::default, |live| live.probe.values)
     }
-}
-
-/// What the last probe of a live run read, as the samples take it; `None`
-/// where it could not be read.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub(crate) struct Probed {
-    /// Read and written, bytes per second.
-    pub(crate) disk: [Option<f64>; 2],
-    pub(crate) threads: Option<f64>,
-    pub(crate) children: Option<f64>,
-    /// Percent of one core.
-    pub(crate) children_cpu: Option<f64>,
-    pub(crate) children_memory: Option<f64>,
-    pub(crate) swap: Option<f64>,
-    pub(crate) open_files: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default)]
 struct Live {
-    io: Option<(IoCounters, u64)>,
-    /// The descendants' CPU ticks at the last probe, and when it read them.
-    child_ticks: Option<(u64, u64)>,
-    probed: Probed,
+    /// What the last probe reading gave, and the bases the next one's
+    /// rates count from.
+    probe: ProbeState,
     text_read: bool,
     missing_since_boot_ns: Option<u64>,
     /// Restored at startup and not listed since: if it is gone, it ended
@@ -228,9 +214,9 @@ impl ProcessHistoryBook {
             .collect()
     }
 
-    /// Takes what the probe read: texts, IO rates, and the end of each run
-    /// it found ended.
-    pub(crate) fn on_probe(&mut self, report: &ProbeReport, now: Now) {
+    /// Takes what the probe read: texts, the values `deriver` makes of the
+    /// readings (D-79), and the end of each run it found ended.
+    pub(crate) fn on_probe(&mut self, report: &ProbeReport, now: Now, deriver: &dyn ProbeDeriver) {
         let oom_rose = matches!(
             (self.oom_kills, report.oom_kills),
             (Some(before), Some(after)) if after > before
@@ -239,7 +225,7 @@ impl ProcessHistoryBook {
             self.oom_kills = report.oom_kills;
         }
         for reading in &report.readings {
-            self.take_reading(reading, report.read_boot_ns, oom_rose, now);
+            self.take_reading(reading, (report.read_boot_ns, now), oom_rose, deriver);
         }
     }
 
@@ -378,9 +364,9 @@ impl ProcessHistoryBook {
     fn take_reading(
         &mut self,
         reading: &ProbeReading,
-        read_boot_ns: u64,
+        (read_boot_ns, now): (u64, Now),
         oom_rose: bool,
-        now: Now,
+        deriver: &dyn ProbeDeriver,
     ) {
         let signal = self.signal_of(&reading.key, now);
         let clk_tck = self.clk_tck;
@@ -392,13 +378,7 @@ impl ProcessHistoryBook {
         };
         if reading.liveness == ProbeLiveness::Running {
             take_text(&mut run.info, live, reading, &mut run.changed);
-            take_io(live, reading.io, read_boot_ns);
-            take_children(live, reading.children, (read_boot_ns, clk_tck));
-            #[allow(clippy::cast_precision_loss)]
-            let count = |value: Option<u64>| value.map(|value| value as f64);
-            live.probed.threads = count(reading.threads);
-            live.probed.swap = count(reading.swap_bytes);
-            live.probed.open_files = count(reading.open_files);
+            live.probe = deriver.derive(&live.probe, reading, read_boot_ns, clk_tck);
             return;
         }
         // The probe read the process itself after the table did: gone is
@@ -685,63 +665,6 @@ fn take_text(info: &mut RunInfo, live: &mut Live, reading: &ProbeReading, change
         info.details.clone_from(details);
         *changed = true;
     }
-}
-
-/// The disk rates since the previous reading; a counter that went back
-/// (another process behind a reused key cannot, but a kernel may reset)
-/// gives no rate.
-fn take_io(live: &mut Live, io: Option<IoCounters>, read_boot_ns: u64) {
-    let Some(io) = io else {
-        live.io = None;
-        live.probed.disk = [None, None];
-        return;
-    };
-    if let Some((before, at)) = live.io {
-        let elapsed = read_boot_ns.saturating_sub(at);
-        if elapsed > 0 {
-            #[allow(clippy::cast_precision_loss)]
-            let rate = |now: u64, then: u64| {
-                now.checked_sub(then)
-                    .map(|bytes| bytes as f64 * NANOS_PER_SECOND as f64 / elapsed as f64)
-            };
-            live.probed.disk = [
-                rate(io.read_bytes, before.read_bytes),
-                rate(io.write_bytes, before.write_bytes),
-            ];
-        }
-    }
-    live.io = Some((io, read_boot_ns));
-}
-
-/// The descendants' count and memory as read, and their CPU since the
-/// previous reading as percent of one core. Their time drops when one
-/// leaves the tree unreaped (a daemon, an orphan): that reading gives no
-/// rate, and the next one counts from it.
-fn take_children(
-    live: &mut Live,
-    children: Option<ChildUsage>,
-    (read_boot_ns, clk_tck): (u64, Option<u64>),
-) {
-    #[allow(clippy::cast_precision_loss)]
-    let count = |value: u64| value as f64;
-    let Some(children) = children else {
-        live.child_ticks = None;
-        live.probed.children = None;
-        live.probed.children_cpu = None;
-        live.probed.children_memory = None;
-        return;
-    };
-    live.probed.children = Some(count(children.processes));
-    live.probed.children_memory = children.rss_bytes.map(count);
-    live.probed.children_cpu = live.child_ticks.and_then(|(before, at)| {
-        let ticks = children.cpu_ticks.checked_sub(before)?;
-        let elapsed = read_boot_ns
-            .checked_sub(at)
-            .filter(|elapsed| *elapsed > 0)?;
-        let per_second = clk_tck.filter(|ticks| *ticks > 0)?;
-        Some(count(ticks) * 100.0 * count(NANOS_PER_SECOND) / count(per_second) / count(elapsed))
-    });
-    live.child_ticks = Some((children.cpu_ticks, read_boot_ns));
 }
 
 #[cfg(test)]

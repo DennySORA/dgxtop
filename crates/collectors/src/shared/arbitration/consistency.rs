@@ -18,7 +18,7 @@ use dgxtop_core::quality::RawKind;
 use super::Assessed;
 use super::assess::confirmed_origin;
 use super::ranking::Ranking;
-use crate::reasons;
+use crate::shared::reasons;
 
 /// Findings of the pairwise comparison.
 #[derive(Debug, Clone, PartialEq, Default)]

@@ -11,11 +11,11 @@ use dgxtop_core::identity::{MetricKey, Scope};
 use dgxtop_core::metric::{Scalar, ids};
 use dgxtop_core::naming::entity;
 
-use crate::arbitration::Selection;
-use crate::context::Session;
-use crate::formulas::{self, Selections};
-use crate::reasons;
-use crate::values::{self, Evidence};
+use crate::shared::arbitration::Selection;
+use crate::shared::context::Session;
+use crate::shared::formulas::{self, Selections};
+use crate::shared::reasons;
+use crate::shared::values::{self, Evidence};
 
 /// GB10's cluster sensors of one package, as the thermal profile scopes
 /// them.

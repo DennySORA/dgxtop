@@ -17,6 +17,7 @@ use dgxtop_adapters::common::RootedFiles;
 use dgxtop_adapters::process_action::PidfdActionAdapter;
 use dgxtop_adapters::procfs::{HostConstants, ProcfsProcessProbe};
 use dgxtop_adapters::replay::ReplayAdapter;
+use dgxtop_collectors::process::ProcessProbeDeriver;
 use dgxtop_collectors::registry::default_collectors;
 use dgxtop_core::action::{ActionOp, AuditOp};
 use dgxtop_core::budget::{ByteLedger, Partition, QueueGate};
@@ -557,6 +558,7 @@ impl Wiring {
             actions: Box::new(actions),
             process_probe: process_probe
                 .map(|port| Box::new(port) as Box<dyn Dispatch<ProcessProbeJob>>),
+            probe_deriver: Arc::new(ProcessProbeDeriver),
             process_history: process_history
                 .map(|port| Box::new(port) as Box<dyn Dispatch<ProcessHistoryJob>>),
             logger: Arc::clone(&self.logger),

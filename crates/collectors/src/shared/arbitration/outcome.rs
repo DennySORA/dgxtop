@@ -12,8 +12,8 @@ use dgxtop_core::quality::{Freshness, Namespace, Quality, SampleKind, SelectionS
 use super::consistency::Consistency;
 use super::ranking::Ranking;
 use super::{Assessed, Decision, Outcome, Selection};
-use crate::reasons;
-use crate::values::{bounded_candidate_ids, history_eligible};
+use crate::shared::reasons;
+use crate::shared::values::{bounded_candidate_ids, history_eligible};
 
 pub(super) struct Parts<'r, 'c, 'a> {
     pub key: &'r MetricKey,
