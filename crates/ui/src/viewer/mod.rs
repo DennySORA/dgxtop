@@ -90,7 +90,7 @@ impl Viewer {
         }
     }
 
-    /// Viewer over the ten built-in modules.
+    /// Viewer over the built-in modules.
     pub fn builtin() -> Self {
         Self::new(ModuleRegistry::builtin())
     }

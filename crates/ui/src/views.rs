@@ -1,9 +1,9 @@
-//! Views the interface offers, as tabs in order (D-36, D-44, D-75). Process
+//! Views the interface offers, as tabs in order (D-36, D-75, D-91). Process
 //! work (select, sort, filter, terminate) happens in the overview's process
-//! table; source diagnostics and the action record are not offered (a
-//! pending confirmation is a banner in every view and each signal's outcome
-//! a notice). The Manager still accepts every view kind; the interface
-//! simply never navigates to a hidden one.
+//! table; a pending confirmation is a banner in every view and each
+//! signal's outcome a notice. The Processes, Sources and Actions view kinds
+//! stay in the command contract but are removed: no tab shows them and the
+//! Manager refuses them (D-91).
 //!
 //! The view kinds are fixed by the command contract, so the two history
 //! tabs are one view, `History`, on two pages of its module: the overview's
@@ -111,7 +111,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sources_processes_and_actions_are_not_offered() {
+    fn the_retired_views_are_not_offered() {
         assert_eq!(Tab::of(ViewKind::Sources, 0), None);
         assert_eq!(Tab::of(ViewKind::Processes, 0), None);
         assert_eq!(Tab::of(ViewKind::Actions, 0), None);

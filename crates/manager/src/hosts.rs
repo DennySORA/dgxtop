@@ -1,9 +1,9 @@
 //! Adapter host table fed by runtime `HostStatus` completions.
 //!
 //! The table is bounded to the adapters of the setup. It drives scheduling
-//! (generation and dispatchability), the header/sources views and the
-//! protected-pid list of the ProcessService (managed hosts may never be
-//! signalled by a user action).
+//! (generation and dispatchability), the header, the Settings data sources
+//! block (D-91) and the protected-pid list of the ProcessService (managed
+//! hosts may never be signalled by a user action).
 
 use std::collections::BTreeMap;
 
