@@ -1,0 +1,18 @@
+[package]
+name = "dgxtop-history"
+description = "dgxtop history: collects committed data, classifies and keeps it, decides what is saved, answers history reads and follows GPU process runs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+dgxtop-core.workspace = true
+
+[dev-dependencies]
+dgxtop-core = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

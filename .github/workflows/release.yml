@@ -34,7 +34,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --all-features --locked
       - run: cargo metadata --format-version 1 --locked > metadata.json
-      - run: python3 spec/dgxtop-v2/tools/check_boundaries.py metadata.json
+      - run: python3 scripts/check_boundaries.py metadata.json
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - run: python3 scripts/check_validation.py
       # Declared licenses of the locked dependencies, for the SBOM.

@@ -1,0 +1,18 @@
+[package]
+name = "dgxtop-state"
+description = "dgxtop in-memory live state: the committed snapshot, collector state, candidate evidence and short trends; cleared on restart"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+dgxtop-core.workspace = true
+
+[dev-dependencies]
+dgxtop-core = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

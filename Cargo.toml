@@ -5,6 +5,9 @@ members = [
     "crates/runtime",
     "crates/adapters",
     "crates/collectors",
+    "crates/state",
+    "crates/history",
+    "crates/compression",
     "crates/store",
     "crates/manager",
     "crates/ui",
@@ -20,11 +23,15 @@ repository = "https://github.com/DennySORA/dgxtop"
 
 [workspace.dependencies]
 # Workspace crates. Only the `dgxtop` composition root may depend on more than
-# `dgxtop-core`; spec/dgxtop-v2/tools/check_boundaries.py enforces this.
+# `dgxtop-core` (and the pure `dgxtop-compression`, D-79);
+# scripts/check_boundaries.py enforces this.
 dgxtop-core = { path = "crates/core", version = "2.0.2" }
 dgxtop-runtime = { path = "crates/runtime", version = "2.0.2" }
 dgxtop-adapters = { path = "crates/adapters", version = "2.0.2" }
 dgxtop-collectors = { path = "crates/collectors", version = "2.0.2" }
+dgxtop-state = { path = "crates/state", version = "2.0.2" }
+dgxtop-history = { path = "crates/history", version = "2.0.2" }
+dgxtop-compression = { path = "crates/compression", version = "2.0.2" }
 dgxtop-store = { path = "crates/store", version = "2.0.2" }
 dgxtop-manager = { path = "crates/manager", version = "2.0.2" }
 dgxtop-ui = { path = "crates/ui", version = "2.0.2" }

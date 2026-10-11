@@ -12,7 +12,7 @@ ci:
 boundaries:
     mkdir -p target
     cargo metadata --format-version 1 --locked > target/metadata.json
-    python3 spec/dgxtop-v2/tools/check_boundaries.py target/metadata.json
+    python3 scripts/check_boundaries.py target/metadata.json
 
 # Hardware suites (real procfs/sysfs, NVML, pidfd on disposable children).
 hardware:

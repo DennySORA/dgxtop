@@ -58,14 +58,26 @@ fn code_lines(dir: &Path) -> Vec<(PathBuf, String)> {
     lines
 }
 
-const IMPLEMENTATION_CRATES: [&str; 6] = [
+const IMPLEMENTATION_CRATES: [&str; 9] = [
     "runtime",
     "adapters",
     "collectors",
+    "state",
+    "history",
+    "compression",
     "store",
     "manager",
     "ui",
 ];
+
+/// Workspace crates a crate may use beside core (D-79): the history uses the
+/// pure compression.
+fn allowed_edges(crate_dir: &str) -> &'static [&'static str] {
+    match crate_dir {
+        "history" => &["dgxtop-compression"],
+        _ => &[],
+    }
+}
 
 #[test]
 fn implementation_crates_depend_on_no_workspace_crate_but_core() {
@@ -73,6 +85,7 @@ fn implementation_crates_depend_on_no_workspace_crate_but_core() {
         let workspace_edges: Vec<String> = production_dependencies(crate_dir)
             .into_iter()
             .filter(|name| name.starts_with("dgxtop") && name != "dgxtop-core")
+            .filter(|name| !allowed_edges(crate_dir).contains(&name.as_str()))
             .collect();
         assert!(
             workspace_edges.is_empty(),
@@ -95,7 +108,14 @@ fn core_and_the_viewer_carry_no_system_or_driver_dependencies() {
             "core depends on {name}"
         );
     }
-    for crate_dir in ["ui", "collectors", "manager"] {
+    for crate_dir in [
+        "ui",
+        "collectors",
+        "manager",
+        "state",
+        "history",
+        "compression",
+    ] {
         let dependencies = production_dependencies(crate_dir);
         for name in forbidden_everywhere_but_infrastructure {
             assert!(
@@ -109,9 +129,18 @@ fn core_and_the_viewer_carry_no_system_or_driver_dependencies() {
 #[test]
 fn collectors_manager_and_viewer_never_touch_files_processes_or_sockets() {
     // Collectors only compute, the Manager reaches I/O through ports, and the
-    // Controller/Viewer only translate input and draw (AT01, AT05, AT11).
+    // Controller/Viewer only translate input and draw (AT01, AT05, AT11);
+    // the state, the history and the compression keep data in memory and
+    // reach files through the store's ports (D-79).
     let forbidden = ["std::fs", "std::process", "std::net", "Command::new"];
-    for crate_dir in ["collectors", "manager", "ui"] {
+    for crate_dir in [
+        "collectors",
+        "manager",
+        "ui",
+        "state",
+        "history",
+        "compression",
+    ] {
         let source = repository().join("crates").join(crate_dir).join("src");
         for (path, line) in code_lines(&source) {
             for pattern in forbidden {
