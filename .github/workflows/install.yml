@@ -1,0 +1,89 @@
+name: Install
+
+# Installs a published release with the README's command on the Linux systems
+# the README names, and checks that musl hosts are refused. Runs when a release
+# is published and on request; it builds and publishes nothing.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag to install, such as v2.0.0 (empty: the latest release)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  VERSION: ${{ github.event.release.tag_name || inputs.version }}
+  INSTALLER: https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh
+
+jobs:
+  hosts:
+    name: install on ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Install with the README command and run the binary
+        run: |
+          curl -fsSL "$INSTALLER" | bash -s -- ${VERSION:+--version "$VERSION"}
+          "$HOME/.local/bin/dgxtop" --version --verbose | tee version.txt
+          if [ -n "$VERSION" ]; then grep -qxF "dgxtop ${VERSION#v}" version.txt; fi
+          grep -qE '^target: (x86_64|aarch64)-unknown-linux-gnu$' version.txt
+
+  distributions:
+    name: install on ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # glibc 2.36
+          - image: debian:12
+            prepare: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl
+          # glibc 2.34, the floor the builds are held to
+          - image: rockylinux:9
+            prepare: dnf install -y --setopt=install_weak_deps=False tar gzip && command -v curl
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    steps:
+      - name: Prepare the image
+        run: ${{ matrix.prepare }}
+      - name: Install with the README command and run the binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          getconf GNU_LIBC_VERSION
+          curl -fsSL "$INSTALLER" | bash -s -- ${VERSION:+--version "$VERSION"}
+          "$HOME/.local/bin/dgxtop" --version --verbose | tee version.txt
+          if [ -n "$VERSION" ]; then grep -qxF "dgxtop ${VERSION#v}" version.txt; fi
+          grep -qxF 'target: x86_64-unknown-linux-gnu' version.txt
+
+  musl:
+    name: refuse musl (alpine)
+    runs-on: ubuntu-24.04
+    container: alpine:3.20
+    steps:
+      - name: Prepare the image
+        shell: sh
+        run: apk add --no-cache bash curl
+      - name: The installer refuses musl before installing anything
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "$INSTALLER" -o install.sh
+          refused() {
+            if bash install.sh ${VERSION:+--version "$VERSION"} 2> err.txt; then
+              echo "install.sh installed on musl ($1)"; return 1
+            fi
+            cat err.txt
+            grep -q 'no musl fallback' err.txt && test ! -e "$HOME/.local/bin/dgxtop"
+          }
+          refused "Alpine"
+          # Without /etc/alpine-release only musl's own `ldd --version` tells.
+          rm /etc/alpine-release
+          refused "musl ldd"
