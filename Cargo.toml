@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2.0.0"
+version = "2.0.1"
 edition = "2024"
 rust-version = "1.92"
 license = "Apache-2.0"
@@ -21,13 +21,13 @@ repository = "https://github.com/DennySORA/dgxtop"
 [workspace.dependencies]
 # Workspace crates. Only the `dgxtop` composition root may depend on more than
 # `dgxtop-core`; spec/dgxtop-v2/tools/check_boundaries.py enforces this.
-dgxtop-core = { path = "crates/core", version = "2.0.0" }
-dgxtop-runtime = { path = "crates/runtime", version = "2.0.0" }
-dgxtop-adapters = { path = "crates/adapters", version = "2.0.0" }
-dgxtop-collectors = { path = "crates/collectors", version = "2.0.0" }
-dgxtop-store = { path = "crates/store", version = "2.0.0" }
-dgxtop-manager = { path = "crates/manager", version = "2.0.0" }
-dgxtop-ui = { path = "crates/ui", version = "2.0.0" }
+dgxtop-core = { path = "crates/core", version = "2.0.1" }
+dgxtop-runtime = { path = "crates/runtime", version = "2.0.1" }
+dgxtop-adapters = { path = "crates/adapters", version = "2.0.1" }
+dgxtop-collectors = { path = "crates/collectors", version = "2.0.1" }
+dgxtop-store = { path = "crates/store", version = "2.0.1" }
+dgxtop-manager = { path = "crates/manager", version = "2.0.1" }
+dgxtop-ui = { path = "crates/ui", version = "2.0.1" }
 
 # DTO / serialization (allowed in core).
 serde = { version = "1.0.229", features = ["derive", "rc"] }
