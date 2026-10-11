@@ -66,7 +66,8 @@ GPUs first, shows the whole machine around them, and keeps the history.
   color: their parts of the memory and VRAM bars and charts use it, and so does the marker beside
   their names. The color comes from the name, so a job gets the same color after it or dgxtop
   restarts, unless another running process already holds it.
-- **History.** Charts from 5 minutes to 24 hours on one time axis:
+- **History.** Charts on one time axis, one bar per column, each bar the average of 1, 5, 10 or
+  30 minutes or 1, 2, 4, 6, 8, 12, 18 or 24 hours (`w` / `W`):
   - CPU, memory, disks and network;
   - each GPU's utilization, memory, temperature and power;
   - now, average and maximum for every chart;
@@ -118,7 +119,7 @@ GPUs.
 
 ### History
 
-The overview's resources over 5 minutes to 24 hours (`w` / `W`), in paired panels on one time
+The overview's resources as bars of 1 minute to 24 hours (`w` / `W`), in paired panels on one time
 axis, with each GPU's last 1, 6, 12 and 24 hours below.
 
 <img src="docs/images/screenshots/dgx-spark-history.png" alt="History view of the DGX Spark over one hour: CPU, memory, GPU utilization, GPU memory, temperature, power with energy, disk and network" width="100%">
@@ -201,7 +202,7 @@ Each panel names its own keys at the right of its title; the footer keeps the gl
 |---|---|
 | `q`, `Ctrl-C` | Quit (`q` is text while editing a filter; `Ctrl-C` always quits) |
 | `1`–`5`, `Tab`, `Shift-Tab` | Overview, GPU, Overview History, Process History, Settings |
-| `w` / `W`, `→` / `←` | Next / previous history window (5m, 1h, 6h, 12h, 24h); in an opened run, the bar size |
+| `w` / `W`, `→` / `←` | Next / previous bar size of the history charts (1m to 24h); in an opened run, its bar size |
 | `j`/`k`, `Enter` | In Process History, choose a run and open or close it |
 | `e` / `y` | In an opened run, show the whole command line / copy it (OSC 52) |
 | `c` | Show / hide the CPU sensors and per-core bars (or click the CPU panel) |

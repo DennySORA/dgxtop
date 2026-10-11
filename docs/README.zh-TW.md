@@ -53,7 +53,7 @@ htop 以 CPU 為主，nvtop 和 nvidia-smi 只在你盯著的時候顯示 GPU。
 
   GPU 不回報的值不會佔一行。
 - **GPU 程序。** 所有使用 GPU 的程序，以及所在的 GPU、類型（運算或圖形）、GPU 記憶體、CPU 與 RAM。程序以它執行的內容命名，而不只是執行檔：`python -m vllm.entrypoints.openai.api_server` 顯示為 `vllm.api_server`，在 `ComfyUI` 資料夾執行的 `python main.py` 顯示為 `ComfyUI/main`。可依 GPU 或名稱篩選、依任一欄排序，確認後即可結束程序。佔用 GPU 記憶體最多的八個程序各有一種顏色：記憶體與 VRAM 長條、圖表中它們的部分，以及名稱旁的標記，都用同一種顏色。顏色由名稱決定，所以同一個工作在它或 dgxtop 重新啟動後仍是同一種顏色，除非另一個執行中的程序已經用了它。
-- **歷史紀錄。** 5 分鐘到 24 小時的圖表共用一條時間軸：
+- **歷史紀錄。** 圖表共用一條時間軸，每欄一根 bar，一根是 1、5、10、30 分鐘或 1、2、4、6、8、12、18、24 小時的平均（`w` / `W`）：
   - CPU、記憶體、磁碟與網路；
   - 每張 GPU 的使用率、記憶體、溫度與功耗；
   - 每張圖都標出目前值、平均與最大值；
@@ -86,7 +86,7 @@ htop 以 CPU 為主，nvtop 和 nvidia-smi 只在你盯著的時候顯示 GPU。
 
 ### 歷史
 
-總覽的各項資源在 5 分鐘到 24 小時之間（`w` / `W`），以成對的面板共用一條時間軸；下方是每張 GPU 最近 1、6、12、24 小時的統計。
+總覽的各項資源以 1 分鐘到 24 小時一根的 bar 呈現（`w` / `W`），以成對的面板共用一條時間軸；下方是每張 GPU 最近 1、6、12、24 小時的統計。
 
 <img src="images/screenshots/dgx-spark-history.png" alt="DGX Spark 一小時的歷史：CPU、記憶體、GPU 使用率、GPU 記憶體、溫度、功耗與耗電量、磁碟與網路" width="100%">
 
@@ -158,7 +158,7 @@ dgxtop --version --verbose   # 版本、commit、工具鏈、target、SQLite run
 |---|---|
 | `q`、`Ctrl-C` | 離開（編輯篩選時 `q` 是文字；`Ctrl-C` 一律離開） |
 | `1`–`5`、`Tab`、`Shift-Tab` | 總覽、GPU、Overview History、Process History、設定 |
-| `w` / `W`、`→` / `←` | 下一個／上一個歷史時窗（5m、1h、6h、12h、24h）；在已開啟的程序中切換 bar 大小 |
+| `w` / `W`、`→` / `←` | 下一個／上一個歷史圖表的 bar 大小（1m～24h）；在已開啟的程序中切換它的 bar 大小 |
 | `j`/`k`、`Enter` | 在 Process History 選擇程序並開啟或關閉 |
 | `e` / `y` | 在開啟的程序中展開完整命令列／複製（OSC 52） |
 | `c` | 顯示／隱藏 CPU 感測器與各核心長條（也可點擊 CPU 面板） |
