@@ -52,9 +52,6 @@ impl ProcessService {
                     }),
                 );
             }
-            if position < MAX_RECENT_ACTIONS {
-                self.records.push(recovered_record(intent, &reason, now));
-            }
         }
     }
     pub(super) fn note_audit_failure(&mut self, failure: &AuditFailure, now: Now) {
@@ -162,31 +159,5 @@ impl ProcessService {
             self.audit_backlog.pop_front();
             self.audit_outstanding = self.audit_outstanding.saturating_add(1);
         }
-    }
-}
-
-fn recovered_record(intent: RecoveredIntent, reason: &str, now: Now) -> ActionRecord {
-    ActionRecord {
-        prepare_request: intent.request_id,
-        session_id: None,
-        session_digest: String::new(),
-        prepare_payload: String::new(),
-        target: intent.process_key,
-        signal: intent.signal,
-        state: ActionState::Unknown,
-        token: None,
-        expires_ns: 0,
-        policy_revision: 0,
-        prepared: None,
-        handle_held: false,
-        release_wanted: false,
-        prepare_deadline_ns: None,
-        confirm: None,
-        send_deadline_ns: None,
-        exit: None,
-        revoked: None,
-        result: sanitize_message(reason),
-        updated_ns: now.boot_ns,
-        recovered: true,
     }
 }

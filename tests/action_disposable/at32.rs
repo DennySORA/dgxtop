@@ -31,7 +31,7 @@ const EXIT_WATCH: Duration = Duration::from_secs(10);
 fn prepared_child(options: StackOptions) -> (ActionStack, DisposableChild, Prepared) {
     let child = DisposableChild::sleeping();
     let stack = ActionStack::start(options);
-    stack.await_available();
+    stack.await_audit_ready();
     let target = stack.publish(&child);
     let prepared = stack.prepared(&target);
     (stack, child, prepared)
@@ -147,7 +147,7 @@ fn at32_crash_after_a_durable_intent_is_unknown_after_restart_and_never_resent()
 
     // Run 1: the process dies right after the intent's COMMIT.
     let first = ActionStack::start_in(Arc::clone(&state), StackOptions::default());
-    first.await_available();
+    first.await_audit_ready();
     let target = first.publish(&child);
     let prepared = first.prepared(&target);
     first.faults().audit.crash_after_next_intent_commit();
@@ -179,19 +179,19 @@ fn at32_crash_after_a_durable_intent_is_unknown_after_restart_and_never_resent()
 
     // Run 2: recovered as unknown, shown, and never resent.
     let second = ActionStack::start_in(stopped.state(), StackOptions::default());
-    let view = second
+    second.await_audit_ready();
+    second
         .session()
         .await_actions("the recovered unknown outcome", |view| {
-            view.actions_available && view.unknown_outcomes == 1
+            view.unknown_outcomes == 1
         });
-    let recovered = view
-        .recent
-        .iter()
-        .find(|record| record.request_id == lost_confirm)
-        .expect("the recovered action is listed");
-    assert_eq!(recovered.state, ActionState::Unknown);
-    assert_eq!(recovered.target, target.summary());
-    assert!(recovered.result.contains("never retried"), "{recovered:?}");
+    let recovered = second
+        .steps()
+        .recovered_intents()
+        .expect("the recovery succeeded");
+    assert_eq!(recovered.len(), 1, "{recovered:?}");
+    assert_eq!(recovered[0].request_id, lost_confirm);
+    assert_eq!(recovered[0].process_key, target);
     let recovery_events = second.action_events(&[lost_confirm]);
     assert_eq!(kinds(&recovery_events), ["ActionOutcomeUnknown"]);
     assert!(
@@ -223,7 +223,7 @@ fn at32_crash_after_a_durable_intent_is_unknown_after_restart_and_never_resent()
     let fresh_confirm = second.confirm(&fresh.token);
     assert_signal_sent(&second.result(fresh_confirm));
     assert_one_sigterm_to(&second, &mut child);
-    second.await_record(fresh.request_id, ActionState::ExitObserved);
+    second.await_outcome(fresh_confirm, ActionState::ExitObserved);
     let mut trail = second.stop().audit_trail();
     let lost = trail.record(lost_confirm).expect("the lost intent");
     assert_eq!(lost.state, ActionState::Unknown);
@@ -236,7 +236,7 @@ fn at32_crash_after_a_durable_intent_is_unknown_after_restart_and_never_resent()
 fn at32_signal_sent_is_reported_without_waiting_for_exit() {
     let mut child = DisposableChild::ignoring_sigterm();
     let stack = ActionStack::start(StackOptions::default());
-    stack.await_available();
+    stack.await_audit_ready();
     let prepared = stack.prepared(&stack.publish(&child));
 
     let confirm_id = stack.confirm(&prepared.token);
@@ -245,14 +245,14 @@ fn at32_signal_sent_is_reported_without_waiting_for_exit() {
         child.is_running(),
         "\"sent\" is reported while the process lives"
     );
-    stack.await_record(prepared.request_id, ActionState::SignalSent);
+    stack.await_outcome(confirm_id, ActionState::SignalSent);
 
     // Exit is watched for at most 10 s, then reported apart as still running.
     stack
         .clock()
         .advance(EXIT_WATCH + Duration::from_millis(500));
-    let concluded = stack.await_record(prepared.request_id, ActionState::StillRunning);
-    assert!(concluded.result.contains("still running"), "{concluded:?}");
+    let concluded = stack.await_outcome(confirm_id, ActionState::StillRunning);
+    assert!(concluded.contains("still running"), "{concluded:?}");
     assert!(child.is_running());
     stack.settle();
     let steps = stack.steps();

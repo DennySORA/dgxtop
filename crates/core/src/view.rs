@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
-use crate::action::{ActionState, PersistenceStatus, Signal};
+use crate::action::{PersistenceStatus, Signal};
 use crate::budget::BytePermit;
 use crate::canonical::GpuUsageKind;
 use crate::commands::{SortKey, ViewKind};
@@ -779,22 +779,9 @@ pub struct ConfirmationView {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ActionRecordView {
-    pub request_id: uuid::Uuid,
-    pub target: String,
-    pub signal: Signal,
-    pub state: ActionState,
-    pub result: String,
-    pub age_ms: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionsView {
     pub confirmation: Option<ConfirmationView>,
-    pub recent: Vec<ActionRecordView>,
     pub audit: PersistenceStatus,
-    pub actions_available: bool,
-    pub unavailable_reason: Option<String>,
     pub unknown_outcomes: u32,
 }
 

@@ -4,9 +4,7 @@
 
 use std::sync::Arc;
 
-use dgxtop_core::action::{
-    ActionState, ConfirmationToken, PersistenceKind, PersistenceStatus, Signal,
-};
+use dgxtop_core::action::{ConfirmationToken, PersistenceKind, PersistenceStatus, Signal};
 use dgxtop_core::canonical::GpuUsageKind;
 use dgxtop_core::commands::{SortKey, ViewKind};
 use dgxtop_core::config::{Theme, ValueOrigin};
@@ -16,9 +14,9 @@ use dgxtop_core::quality::{Quality, SampleKind};
 pub(crate) use dgxtop_core::testing::metric_key;
 use dgxtop_core::testing::test_process_key;
 use dgxtop_core::view::{
-    ActionRecordView, ActionsView, CellState, ConfirmationView, ConflictView, CoreView, CpuView,
-    DiskDeviceView, DiskHistory, DiskView, FilesystemView, FrequencyGroup, GpuCard, GpuDetails,
-    GpuView, HeaderView, HistoryChartKind, HistoryChartView, HistoryPointView, HistoryView,
+    ActionsView, CellState, ConfirmationView, ConflictView, CoreView, CpuView, DiskDeviceView,
+    DiskHistory, DiskView, FilesystemView, FrequencyGroup, GpuCard, GpuDetails, GpuView,
+    HeaderView, HistoryChartKind, HistoryChartView, HistoryPointView, HistoryView,
     HistoryWindowSummary, HostState, HostStatus, InterfaceView, LabeledCell, LastGoodView,
     MemoryView, MetricCell, ModuleViews, NetworkView, OverloadState, ProcessGpuView,
     ProcessRowView, ProcessesView, SessionState, SettingField, SettingsView, Trend, ViewModel,
@@ -864,27 +862,7 @@ pub(crate) fn actions_view(with_confirmation: bool) -> ActionsView {
             expires_in_ms: 9_000,
             warning: "SIGTERM asks the process to exit; unsaved work may be lost".into(),
         }),
-        recent: vec![
-            ActionRecordView {
-                request_id: TEST_REQUEST_ID.try_into().unwrap(),
-                target: "pid 4000 · trainer".into(),
-                signal: Signal::Sigterm,
-                state: ActionState::SignalSent,
-                result: "signal delivered".into(),
-                age_ms: 30_000,
-            },
-            ActionRecordView {
-                request_id: TEST_REQUEST_ID.try_into().unwrap(),
-                target: "pid 3999 · old".into(),
-                signal: Signal::Sigterm,
-                state: ActionState::Unknown,
-                result: "crash before outcome".into(),
-                age_ms: 600_000,
-            },
-        ],
         audit: PersistenceStatus::healthy(PersistenceKind::Audit),
-        actions_available: true,
-        unavailable_reason: None,
         unknown_outcomes: 1,
     }
 }

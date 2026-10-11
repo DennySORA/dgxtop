@@ -29,7 +29,7 @@ const FOREIGN_PID_NAMESPACE: &str = "pid:[4026539999]";
 
 fn ready_stack(options: StackOptions) -> ActionStack {
     let stack = ActionStack::start(options);
-    stack.await_available();
+    stack.await_audit_ready();
     stack
 }
 
@@ -68,8 +68,7 @@ fn at10_confirmed_sigterm_reaches_only_the_disposable_child_after_one_durable_in
     let status = child.wait_for_exit(EXIT_WAIT);
     assert_eq!(status.signal(), Some(libc::SIGTERM));
     // "Exit observed" is a separate, later report.
-    let exited = stack.await_record(prepared.request_id, ActionState::ExitObserved);
-    assert_eq!(exited.signal, Signal::Sigterm);
+    stack.await_outcome(confirm_id, ActionState::ExitObserved);
 
     stack.settle();
     let steps = stack.steps();
@@ -132,7 +131,7 @@ fn at10_root_session_sends_nothing() {
         caller_euid: Some(0),
         ..StackOptions::default()
     });
-    stack.await_unavailable("root sessions");
+    stack.await_audit_ready();
     let target = stack.publish(&child);
     let prepare_id = stack.prepare(&target, Signal::Sigterm);
     let refused = stack.result(prepare_id);
@@ -169,10 +168,12 @@ fn at10_read_only_or_disabled_actions_send_nothing() {
     for (options, reason) in cases {
         let mut child = DisposableChild::sleeping();
         let stack = ActionStack::start(options);
-        stack.await_unavailable(reason);
+        stack.await_audit_ready();
         let target = stack.publish(&child);
         let prepare_id = stack.prepare(&target, Signal::Sigterm);
-        assert_rejected(&stack.result(prepare_id), ErrorCode::CapabilityDenied);
+        let refused = stack.result(prepare_id);
+        assert_rejected(&refused, ErrorCode::CapabilityDenied);
+        assert!(refused.message.contains(reason), "{refused:?}");
         assert_nothing_sent(&stack, &mut [&mut child]);
         assert_eq!(stack.steps().prepares_dispatched(), 0, "{reason}");
         let mut trail = stack.stop().audit_trail();
@@ -337,7 +338,7 @@ fn at10_expired_confirmation_sends_nothing() {
         .advance_to(prepared.expires_boot_ns + 1_000_000);
     let confirm_id = stack.confirm(&prepared.token);
     assert_rejected(&stack.result(confirm_id), ErrorCode::ConfirmationExpired);
-    stack.await_record(prepared.request_id, ActionState::Expired);
+    stack.settle();
     assert_nothing_sent(&stack, &mut [&mut child]);
     assert!(
         stack.steps().intents_requested().is_empty(),
@@ -360,10 +361,15 @@ fn at10_unavailable_audit_store_sends_nothing() {
         audit: AuditBackend::Unavailable,
         ..StackOptions::default()
     });
-    stack.await_unavailable("audit store unavailable");
+    stack.await_audit_refusing();
     let target = stack.publish(&child);
     let prepare_id = stack.prepare(&target, Signal::Sigterm);
-    assert_rejected(&stack.result(prepare_id), ErrorCode::Unavailable);
+    let refused = stack.result(prepare_id);
+    assert_rejected(&refused, ErrorCode::Unavailable);
+    assert!(
+        refused.message.contains("audit store unavailable"),
+        "{refused:?}"
+    );
     assert_nothing_sent(&stack, &mut [&mut child]);
     let steps = stack.steps();
     assert_eq!(steps.prepares_dispatched(), 0, "refused before the worker");

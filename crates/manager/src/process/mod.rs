@@ -52,8 +52,8 @@ use audit::AttemptFacts;
 pub(crate) use capability::{ActionIdentity, ActionPolicy};
 use capability::{AuditReadiness, Denial, availability_problem, capability_context, check_target};
 use record::{
-    ActionRecord, ActionRegistry, ConfirmContext, ExitWatch, MAX_INFLIGHT_ACTIONS,
-    MAX_RECENT_ACTIONS, RevokeReason, irreversible_warning,
+    ActionRecord, ActionRegistry, ConfirmContext, ExitWatch, MAX_INFLIGHT_ACTIONS, RevokeReason,
+    irreversible_warning,
 };
 
 /// The action worker must verify a target within this time.
@@ -220,9 +220,6 @@ impl ProcessService {
             send_deadline_ns: None,
             exit: None,
             revoked: None,
-            result: "verifying target".to_owned(),
-            updated_ns: now.boot_ns,
-            recovered: false,
         });
         fx.mark_all_dirty();
     }
@@ -245,7 +242,7 @@ impl ProcessService {
             let prepare_request = self.records.get(index).map(|record| record.prepare_request);
             self.audit_refused_confirm(&command, &denial, prepare_request, now);
             if let Some(state) = end_state {
-                self.close_unconfirmed(index, state, &denial.reason, now);
+                self.close_unconfirmed(index, state);
             }
             fx.reply(CommandResult::rejected(
                 command.request_id,
@@ -530,7 +527,6 @@ impl ProcessService {
 
     /// The projection for one session (never contains the token).
     pub(crate) fn view_for(&self, session_id: &SessionId, now_ns: u64) -> Arc<ActionsView> {
-        let denial = self.availability();
         let confirmation = self
             .records
             .iter()
@@ -542,16 +538,8 @@ impl ProcessService {
                     irreversible_warning(record.signal, self.unknown_outcomes),
                 )
             });
-        let recent = self
-            .records
-            .iter()
-            .rev()
-            .take(MAX_RECENT_ACTIONS)
-            .map(|record| record.recent_view(now_ns))
-            .collect();
         Arc::new(ActionsView {
             confirmation,
-            recent,
             audit: self
                 .audit_status
                 .clone()
@@ -560,8 +548,6 @@ impl ProcessService {
                     detail: Some("audit status pending".to_owned()),
                     ..PersistenceStatus::healthy(PersistenceKind::Audit)
                 }),
-            actions_available: denial.is_none(),
-            unavailable_reason: denial.map(|denial| denial.reason),
             unknown_outcomes: self.unknown_outcomes,
         })
     }
@@ -746,7 +732,7 @@ impl ProcessService {
         };
         record.token = Some(token.clone());
         record.expires_ns = expires_ns;
-        record.set_state(ActionState::Prepared, "awaiting confirmation", now.boot_ns);
+        record.state = ActionState::Prepared;
         let request_id = record.prepare_request;
         let reason = format!(
             "{} prepared for {}",
@@ -785,7 +771,7 @@ impl ProcessService {
             return;
         };
         record.prepare_deadline_ns = None;
-        record.set_state(ActionState::Rejected, &detail.message, now.boot_ns);
+        record.state = ActionState::Rejected;
         let request_id = record.prepare_request;
         let payload = record.prepare_payload.clone();
         let digest = record.session_digest.clone();
@@ -867,8 +853,7 @@ impl ProcessService {
     /// the prepare request id, so the ending is a new attempt row that names
     /// the prepare (reusing the id would be dropped as a duplicate).
     fn end_unconfirmed(&mut self, index: usize, state: ActionState, reason: &str, now: Now) {
-        let Some((prepare_request, digest)) = self.close_unconfirmed(index, state, reason, now)
-        else {
+        let Some((prepare_request, digest)) = self.close_unconfirmed(index, state) else {
             return;
         };
         let detail = format!("{reason} (prepare request {prepare_request})");
@@ -887,15 +872,9 @@ impl ProcessService {
 
     /// Moves a prepared action to its terminal state and closes its
     /// descriptor; returns the prepare request id and session digest.
-    fn close_unconfirmed(
-        &mut self,
-        index: usize,
-        state: ActionState,
-        reason: &str,
-        now: Now,
-    ) -> Option<(Uuid, String)> {
+    fn close_unconfirmed(&mut self, index: usize, state: ActionState) -> Option<(Uuid, String)> {
         let record = self.records.get_mut(index)?;
-        record.set_state(state, reason, now.boot_ns);
+        record.state = state;
         let facts = (record.prepare_request, record.session_digest.clone());
         self.release(index);
         Some(facts)
@@ -949,11 +928,7 @@ impl ProcessService {
             return;
         };
         // The atomic consumption of the token: prepared -> confirming.
-        record.set_state(
-            ActionState::Confirming,
-            "recording audit intent",
-            now.boot_ns,
-        );
+        record.state = ActionState::Confirming;
         let intent_id = Uuid::new_v4();
         record.confirm = Some(ConfirmContext {
             request_id: command.request_id,
@@ -984,11 +959,7 @@ impl ProcessService {
                     if let Some(confirm) = record.confirm.as_mut() {
                         confirm.intent_dispatched = true;
                     }
-                    record.set_state(
-                        ActionState::IntentPending,
-                        "waiting for a durable audit intent",
-                        now.boot_ns,
-                    );
+                    record.state = ActionState::IntentPending;
                 }
             }
             Err(error) => {
@@ -1011,11 +982,7 @@ impl ProcessService {
         let Some(record) = self.records.get_mut(index) else {
             return;
         };
-        record.set_state(
-            ActionState::Cancelled,
-            "cancelled before sending; no signal sent",
-            now.boot_ns,
-        );
+        record.state = ActionState::Cancelled;
         let pending_confirm = record
             .confirm
             .as_mut()
@@ -1223,11 +1190,7 @@ impl ProcessService {
         let (Some(confirm), Some(handle)) = (record.confirm.clone(), record.handle()) else {
             return;
         };
-        record.set_state(
-            ActionState::IntentCommitted,
-            "audit intent durable",
-            now.boot_ns,
-        );
+        record.state = ActionState::IntentCommitted;
         fx.event(
             confirm.request_id,
             EventKind::ActionIntentCommitted(ActionEventPayload {
@@ -1248,7 +1211,7 @@ impl ProcessService {
         match self.actions.try_dispatch(op) {
             Ok(()) => {
                 if let Some(record) = self.records.get_mut(index) {
-                    record.set_state(ActionState::Sending, "signal being sent", now.boot_ns);
+                    record.state = ActionState::Sending;
                     record.send_deadline_ns = Some(send_deadline.saturating_add(SEND_GRACE_NS));
                 }
             }
@@ -1274,7 +1237,7 @@ impl ProcessService {
         let Some(record) = self.records.get_mut(index) else {
             return;
         };
-        record.set_state(state, &denial.reason, now.boot_ns);
+        record.state = state;
         let pending_confirm = record
             .confirm
             .as_mut()
@@ -1350,11 +1313,7 @@ impl ProcessService {
         if previous == ActionState::Unknown {
             // Reported after the unknown verdict: record the truth, but the
             // descriptor is gone, so exit cannot be watched any more.
-            record.set_state(
-                ActionState::StillRunning,
-                "signal sent (reported late); exit not observed",
-                now.boot_ns,
-            );
+            record.state = ActionState::StillRunning;
             self.append_outcome(
                 index,
                 ActionState::SignalSent,
@@ -1364,11 +1323,7 @@ impl ProcessService {
             );
             return;
         }
-        record.set_state(
-            ActionState::SignalSent,
-            "signal sent; waiting for the process to exit",
-            now.boot_ns,
-        );
+        record.state = ActionState::SignalSent;
         record.exit = Some(ExitWatch {
             next_poll_ns: now.boot_ns.saturating_add(EXIT_POLL_NS),
             until_ns: now.boot_ns.saturating_add(EXIT_WATCH_NS),
@@ -1423,11 +1378,7 @@ impl ProcessService {
         watch.last = Some(observation);
         if observation == ExitObservation::ExitObserved {
             record.exit = None;
-            record.set_state(
-                ActionState::ExitObserved,
-                "process exit observed",
-                now.boot_ns,
-            );
+            record.state = ActionState::ExitObserved;
             let intent_id = record.intent_id();
             fx.event(
                 request_id,

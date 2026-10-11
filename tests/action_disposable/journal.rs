@@ -6,7 +6,7 @@ use std::os::fd::RawFd;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use dgxtop_core::action::{ActionState, SignalOutcome};
+use dgxtop_core::action::{ActionState, PersistenceState, RecoveredIntent, SignalOutcome};
 use dgxtop_core::errors::ErrorCode;
 use uuid::Uuid;
 
@@ -28,7 +28,14 @@ pub enum Step {
     OutcomeRecorded {
         request_id: Uuid,
         state: ActionState,
+        detail: String,
     },
+    /// The audit store answered the startup recovery (`None`: it failed).
+    RecoveryAnswered {
+        recovered: Option<Vec<RecoveredIntent>>,
+    },
+    /// The audit store reported its status.
+    StatusReported { state: PersistenceState },
     /// `pidfd_open(pid, 0)` returned (`fd` is `None` on failure).
     PidfdOpened { pid: i32, fd: Option<RawFd> },
     /// The adapter finished a prepare (`error` is `None` on success).
@@ -120,7 +127,40 @@ impl Steps {
                 Step::OutcomeRecorded {
                     request_id: recorded,
                     state,
+                    ..
                 } if *recorded == request_id => Some(*state),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Detail of the outcome row written for one intent in `state`.
+    pub fn outcome_detail(&self, request_id: Uuid, state: ActionState) -> Option<String> {
+        self.0.iter().find_map(|step| match step {
+            Step::OutcomeRecorded {
+                request_id: recorded,
+                state: written,
+                detail,
+            } if *recorded == request_id && *written == state => Some(detail.clone()),
+            _ => None,
+        })
+    }
+
+    /// Intents the audit store's successful recovery marked unknown
+    /// (`None` while no recovery succeeded).
+    pub fn recovered_intents(&self) -> Option<Vec<RecoveredIntent>> {
+        self.0.iter().find_map(|step| match step {
+            Step::RecoveryAnswered { recovered } => recovered.clone(),
+            _ => None,
+        })
+    }
+
+    /// States the audit store reported, oldest first.
+    pub fn statuses_reported(&self) -> Vec<PersistenceState> {
+        self.0
+            .iter()
+            .filter_map(|step| match step {
+                Step::StatusReported { state } => Some(*state),
                 _ => None,
             })
             .collect()

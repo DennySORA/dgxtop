@@ -44,7 +44,7 @@ fn at39_manager_invariant_failure_fails_stop_and_never_sends() {
         AdjustableFreeSpace::plenty(),
         Gate::open(),
     );
-    rig.wait_until_actions_available();
+    rig.wait_until_audit_is_healthy();
     let token = rig.prepare();
 
     rig.snapshots.inject_invariant_failure();
@@ -97,7 +97,7 @@ fn at39_shutdown_with_hung_config_and_audit_storage_is_bounded_and_honest() {
             }
         },
     );
-    rig.wait_until_actions_available();
+    rig.wait_until_audit_is_healthy();
     let token = rig.prepare();
 
     // The audit disk hangs under a confirmed action, the config disk under

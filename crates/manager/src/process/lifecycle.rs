@@ -106,7 +106,7 @@ impl ProcessService {
             reason.to_owned()
         };
         record.exit = None;
-        record.set_state(ActionState::StillRunning, &text, now.boot_ns);
+        record.state = ActionState::StillRunning;
         self.release(index);
         self.append_outcome(index, ActionState::StillRunning, "Ok", &text, now);
     }
@@ -115,7 +115,7 @@ impl ProcessService {
             return;
         };
         record.send_deadline_ns = None;
-        record.set_state(ActionState::Unknown, reason, now.boot_ns);
+        record.state = ActionState::Unknown;
         let request_id = record.confirm_request();
         let intent_id = record.intent_id();
         let pending_confirm = record

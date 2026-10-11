@@ -317,10 +317,7 @@ pub(crate) fn host_status(adapter: &str, state: HostState, detail: Option<&str>)
 pub(crate) fn empty_actions() -> ActionsView {
     ActionsView {
         confirmation: None,
-        recent: Vec::new(),
         audit: PersistenceStatus::healthy(PersistenceKind::Audit),
-        actions_available: true,
-        unavailable_reason: None,
         unknown_outcomes: 0,
     }
 }

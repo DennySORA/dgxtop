@@ -320,19 +320,16 @@ fn at06_at31_audit_below_low_water_refuses_actions_before_the_action_worker() {
         AdjustableFreeSpace::below_low_water(),
         Gate::open(),
     );
-    let view = rig.actions_view("the audit refusing new records", |actions| {
+    rig.actions_view("the audit refusing new records", |actions| {
         actions.audit.state == PersistenceState::Failed
     });
-    assert!(!view.actions_available);
-    assert!(
-        view.unavailable_reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("audit store unavailable")),
-        "{view:?}"
-    );
     let prepare = rig.manager.execute(rig.prepare_signal());
     assert_eq!(prepare.status, CommandStatus::Rejected);
     assert_eq!(prepare.code, ResultCode::from(ErrorCode::Unavailable));
+    assert!(
+        prepare.message.contains("audit store unavailable"),
+        "{prepare:?}"
+    );
     assert!(prepare.confirmation_token.is_none());
     assert!(
         rig.actions.calls().is_empty(),
@@ -346,7 +343,7 @@ fn at06_at31_low_water_after_prepare_refuses_the_intent_and_recovers() {
     let _serial = serial();
     let free_space = AdjustableFreeSpace::plenty();
     let mut rig = ActionRig::start(&action_config(), free_space.clone(), Gate::open());
-    rig.wait_until_actions_available();
+    rig.wait_until_audit_is_healthy();
     let token = rig.prepare();
 
     // The disk crosses the low-water mark between prepare and confirm: the
@@ -373,7 +370,7 @@ fn at06_at31_low_water_after_prepare_refuses_the_intent_and_recovers() {
 
     // Space is back: the Manager re-checks the audit and actions work again.
     free_space.restore();
-    rig.wait_until_actions_available();
+    rig.wait_until_audit_is_healthy();
     let token = rig.prepare();
     let sent = rig.manager.submit(CommandBody::ConfirmSignal {
         confirmation_token: token,
@@ -411,7 +408,7 @@ fn at06_at39_stuck_audit_times_out_the_intent_and_its_late_receipt_never_sends()
     config.runtime.audit_intent_deadline_ms = 300;
     let intent_gate = Gate::open();
     let mut rig = ActionRig::start(&config, AdjustableFreeSpace::plenty(), intent_gate.clone());
-    rig.wait_until_actions_available();
+    rig.wait_until_audit_is_healthy();
     let token = rig.prepare();
 
     intent_gate.close();
