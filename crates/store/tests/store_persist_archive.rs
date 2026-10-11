@@ -19,8 +19,7 @@ use dgxtop_core::history::{HistoryMethod, SeriesInEveryBoot};
 use dgxtop_core::metric::CanonicalUnit;
 use dgxtop_core::overview_history::ArchivePrune;
 use dgxtop_core::ports::{
-    ArchiveExpiry, ArchiveJournal, ArchiveSink, ArchiveWhenFull, ArchivedBridge, ArchivedBucket,
-    ArchivedSegment,
+    ArchiveExpiry, ArchiveJournal, ArchiveSink, ArchivedBridge, ArchivedBucket, ArchivedSegment,
 };
 use dgxtop_core::quality::SampleKind;
 use dgxtop_core::testing::{FakeClock, metric_key, source_id};
@@ -167,7 +166,6 @@ fn journal(
         gaps: Vec::new(),
         prunes: Vec::new(),
         expire: None,
-        when_full: ArchiveWhenFull::EvictOldest,
         permit: None,
     }
 }
@@ -867,67 +865,4 @@ fn only_an_expiry_request_deletes_old_rows() {
         "seg-old went with it"
     );
     assert_eq!(archive.stats().buckets_expired, 1);
-}
-
-/// A journal that asks to be refused when the budget is reached deletes
-/// nothing to make room (D-96).
-#[test]
-fn a_full_archive_refuses_a_journal_that_does_not_ask_for_eviction() {
-    let fixture = Fixture::new("refuse-when-full");
-    let limits = ArchiveLimits {
-        limit_bytes: 768 * KIB,
-        wal_checkpoint_bytes: 64 * KIB,
-        wal_stop_bytes: 128 * KIB,
-        batch_rows: 64,
-        batch_bytes: 16 * KIB,
-        ..ArchiveLimits::default()
-    };
-    let mut archive = fixture.open(limits);
-    let started = minute_utc(&fixture, 3000);
-    archive
-        .append(journal(1, vec![segment("seg-a", &started)], Vec::new()))
-        .unwrap();
-    let mut refused = None;
-    for first in (0..3000u64).step_by(50) {
-        let buckets: Vec<ArchivedBucket> = (first..first + 50)
-            .map(|minute| {
-                let utc = minute_utc(&fixture, 3000 - i128::from(minute));
-                let mut entry = bucket("seg-a", minute * MINUTE_NS, &utc, &utc);
-                entry.reason_code = Some("x".repeat(100));
-                entry
-            })
-            .collect();
-        let mut full = journal(2 + first, Vec::new(), buckets);
-        full.when_full = ArchiveWhenFull::Refuse;
-        if let Err(error) = archive.append(full) {
-            refused = Some(error);
-            break;
-        }
-    }
-    assert_eq!(
-        refused,
-        Some(InfraError::DiskFull {
-            operation: "archive.limit"
-        })
-    );
-    assert_eq!(archive.stats().buckets_evicted, 0);
-    let status = archive.status();
-    assert_eq!(status.state, PersistenceState::Degraded);
-    assert_eq!(
-        status.detail.as_deref(),
-        Some("archive budget cannot hold this batch")
-    );
-    let oldest: String = fixture
-        .reader()
-        .query_row(
-            "SELECT min(start_boot_ns) FROM history_buckets",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(
-        parse_fixed_width(&oldest).unwrap(),
-        0,
-        "the oldest minute stays"
-    );
 }

@@ -213,26 +213,30 @@ fn the_store_never_lets_a_series_go_on_its_own() {
     let scratch = Scratch::new("retain");
     let mut store = scratch.open();
     let mut usages = Vec::new();
-    for (entity, start) in [("gpu:old", 0), ("gpu:new", 1_000 * MINUTE)] {
+    for (entity, start) in [
+        ("gpu:old", 0),
+        ("gpu:mid", 500 * MINUTE),
+        ("gpu:new", 1_000 * MINUTE),
+    ] {
         let rows = (0..300)
             .map(|minute| row(entity, Tier::OneMinute, gauge(start + minute * MINUTE, 1.0)))
             .collect();
         usages.push(store.append(&journal(rows)).unwrap());
     }
     let loaded = store.load().unwrap();
-    assert_eq!(loaded.len(), 2, "nothing was forgotten");
+    assert_eq!(loaded.len(), 3, "nothing was forgotten");
     assert!(loaded.iter().all(|stored| stored.buckets.len() == 300));
     assert_eq!(usages[0].series, 1);
-    assert_eq!(usages[1].series, 2);
-    assert!(usages[1].used_bytes > usages[0].used_bytes, "{usages:?}");
-    assert!(usages[1].used_bytes > 40 * 1024, "past the old limit");
+    assert_eq!(usages[2].series, 3);
+    assert!(usages[2].used_bytes > usages[0].used_bytes, "{usages:?}");
+    assert!(usages[2].used_bytes > 40 * 1024, "past the old limit");
     let forgotten = store
         .append(&TierJournal {
             forget: vec![series("gpu:old")],
             ..journal(Vec::new())
         })
         .unwrap();
-    assert_eq!(forgotten.series, 1, "the journal's deletion is counted");
+    assert_eq!(forgotten.series, 2, "the journal's deletion is counted");
     let idle = store.append(&journal(Vec::new())).unwrap();
     assert_eq!(idle, forgotten, "an empty journal reports what is held");
 }
@@ -276,7 +280,11 @@ fn a_database_of_another_format_starts_empty() {
     for (label, stamp, kept) in [
         ("same", current, true),
         ("unstamped", 0, false),
-        ("newer", crate::sqlite::format_stamp(2), false),
+        (
+            "newer",
+            crate::sqlite::format_stamp(SchemaKind::HistoryTiers.format_version() + 1),
+            false,
+        ),
     ] {
         let scratch = Scratch::new(label);
         let mut store = scratch.open();
@@ -296,6 +304,62 @@ fn a_database_of_another_format_starts_empty() {
         assert_eq!(store.recreated().is_none(), kept, "{label}");
         assert_eq!(store.load().unwrap().len(), usize::from(kept), "{label}");
     }
+}
+
+/// The format 1 file (with the unused `last_utc_ns` column) is deleted and
+/// created afresh (D-85, D-95): the owner accepted losing its coarse
+/// history to drop the column.
+#[test]
+fn a_format_1_database_with_last_utc_ns_is_recreated() {
+    let scratch = Scratch::new("format-1");
+    let connection = rusqlite::Connection::open(scratch.path()).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE tier_series (series_id INTEGER PRIMARY KEY, \
+             host_id TEXT NOT NULL, entity_id TEXT NOT NULL, metric_id TEXT NOT NULL, \
+             scope TEXT NOT NULL, last_utc_ns INTEGER NOT NULL, \
+             UNIQUE (host_id, entity_id, metric_id, scope)) STRICT;
+             CREATE TABLE tier_buckets (series_id INTEGER NOT NULL, tier INTEGER NOT NULL, \
+             start_utc_ns INTEGER NOT NULL, covered_ns INTEGER NOT NULL, \
+             weighted_sum REAL NOT NULL, minimum REAL, maximum REAL, \
+             sample_count INTEGER NOT NULL, total TEXT, \
+             PRIMARY KEY (series_id, tier, start_utc_ns)) STRICT, WITHOUT ROWID;
+             CREATE INDEX idx_tier_series_last ON tier_series (last_utc_ns);
+             INSERT INTO tier_series VALUES (1, 'acme', 'gpu0', 'gpu.power.draw', 'gpu', 0);
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    connection
+        .pragma_update(None, "application_id", crate::sqlite::format_stamp(1))
+        .unwrap();
+    drop(connection);
+    let mut store = scratch.open();
+    assert!(store.recreated().is_some());
+    assert!(store.load().unwrap().is_empty());
+}
+
+/// The series table holds the identity only: nothing reads a latest
+/// bucket start since the history decides which series go (D-95).
+#[test]
+fn the_series_table_has_no_last_utc_ns_column() {
+    let scratch = Scratch::new("columns");
+    let mut store = scratch.open();
+    store
+        .append(&journal(vec![row("gpu0", Tier::OneMinute, gauge(0, 1.0))]))
+        .unwrap();
+    let connection = store.connection().unwrap();
+    let mut statement = connection
+        .prepare("SELECT name FROM pragma_table_info('tier_series') ORDER BY cid")
+        .unwrap();
+    let columns: Vec<String> = statement
+        .query_map([], |found| found.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        ["series_id", "host_id", "entity_id", "metric_id", "scope"]
+    );
 }
 
 /// A full database is a full disk to the history, like the archive's

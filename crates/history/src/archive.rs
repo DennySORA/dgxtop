@@ -29,8 +29,8 @@ use dgxtop_core::ports::{
 
 use dgxtop_core::clock::format_utc_ns;
 
-use crate::archive_expiry::WHEN_FULL;
 use crate::output::ArchiveRow;
+use crate::records::{CounterBucket, CounterSample, GaugeBucket};
 use crate::segment::SegmentMeta;
 use crate::wall_clock::WallClock;
 use dgxtop_core::budget::accounted::Account;
@@ -123,6 +123,7 @@ fn row_span(row: &ArchiveRow) -> (u64, u64) {
 }
 
 /// Journal content collected from the queue front.
+#[derive(Default)]
 struct JournalRows {
     segment_ids: BTreeSet<uuid::Uuid>,
     segments: Vec<ArchivedSegment>,
@@ -230,45 +231,9 @@ impl ArchiveQueue {
         if !clock.is_known() || nothing {
             return None;
         }
-        let (host_id, boot_id) = self
-            .rows
-            .iter()
-            .find_map(|queued| row_identity(&queued.row))
-            .map(|(host, boot)| (host.to_string(), boot.to_string()))
-            .or_else(|| self.identity.clone())
-            .unwrap_or_default();
-        let mut collected = JournalRows {
-            segment_ids: BTreeSet::new(),
-            segments: Vec::new(),
-            buckets: Vec::new(),
-            bridges: Vec::new(),
-            gaps: Vec::new(),
-            bytes: 0,
-        };
-        let mut taken_bytes = 0u64;
-        while let Some(front) = self.rows.front() {
-            let same_boot = row_identity(&front.row)
-                .is_none_or(|(host, boot)| host.as_str() == host_id && boot.as_str() == boot_id);
-            let first = collected.bytes == 0;
-            if !same_boot || (!first && collected.bytes.saturating_add(front.bytes) > max_bytes) {
-                break;
-            }
-            let Some(queued) = self.rows.pop_front() else {
-                break;
-            };
-            taken_bytes = taken_bytes.saturating_add(queued.bytes);
-            collect_row(queued, clock, &mut collected);
-        }
-        if let Some((start, end)) = self.overflow.take() {
-            collected.gaps.push(GapRecord {
-                key: None,
-                adapter_id: None,
-                start_boot_ns: start,
-                end_boot_ns: end.max(start.saturating_add(1)),
-                reason: "archive_overflow".to_owned(),
-                affected_count: 1,
-            });
-        }
+        let (host_id, boot_id) = self.journal_identity();
+        let (mut collected, taken_bytes) = self.take_rows(max_bytes, (&host_id, &boot_id), clock);
+        collected.gaps.extend(self.take_overflow_gap());
         let permit = self
             .account
             .split_off(taken_bytes.min(self.account.bytes()));
@@ -282,10 +247,72 @@ impl ArchiveQueue {
             gaps: collected.gaps,
             prunes,
             expire,
-            when_full: WHEN_FULL,
             permit,
         })
     }
+
+    /// The host and boot of the oldest queued row that names one, else of
+    /// the latest row queued (a journal of deletions alone).
+    fn journal_identity(&self) -> (String, String) {
+        self.rows
+            .iter()
+            .find_map(|queued| row_identity(&queued.row))
+            .map(|(host, boot)| (host.to_string(), boot.to_string()))
+            .or_else(|| self.identity.clone())
+            .unwrap_or_default()
+    }
+
+    /// Pops the front rows of `identity` while they fit `max_bytes` (the
+    /// first always does); returns them with their queued bytes.
+    fn take_rows(
+        &mut self,
+        max_bytes: u64,
+        identity: (&str, &str),
+        clock: &WallClock,
+    ) -> (JournalRows, u64) {
+        let mut collected = JournalRows::default();
+        let mut taken_bytes = 0u64;
+        while self
+            .rows
+            .front()
+            .is_some_and(|front| front_joins(front, &collected, identity, max_bytes))
+        {
+            let Some(queued) = self.rows.pop_front() else {
+                break;
+            };
+            taken_bytes = taken_bytes.saturating_add(queued.bytes);
+            collect_row(queued, clock, &mut collected);
+        }
+        (collected, taken_bytes)
+    }
+
+    /// The `archive_overflow` gap of the rows dropped since the last
+    /// journal, if any were.
+    fn take_overflow_gap(&mut self) -> Option<GapRecord> {
+        let (start, end) = self.overflow.take()?;
+        Some(GapRecord {
+            key: None,
+            adapter_id: None,
+            start_boot_ns: start,
+            end_boot_ns: end.max(start.saturating_add(1)),
+            reason: "archive_overflow".to_owned(),
+            affected_count: 1,
+        })
+    }
+}
+
+/// Whether the queue's front row joins this journal: of its host and boot
+/// (or of none), and within `max_bytes` unless it is the first row.
+fn front_joins(
+    front: &QueuedRow,
+    collected: &JournalRows,
+    (host_id, boot_id): (&str, &str),
+    max_bytes: u64,
+) -> bool {
+    let same_boot = row_identity(&front.row)
+        .is_none_or(|(host, boot)| host.as_str() == host_id && boot.as_str() == boot_id);
+    let first = collected.bytes == 0;
+    same_boot && (first || collected.bytes.saturating_add(front.bytes) <= max_bytes)
 }
 
 fn utc_text(clock: &WallClock, boot_ns: u64) -> String {
@@ -318,72 +345,104 @@ fn collect_row(queued: QueuedRow, clock: &WallClock, collected: &mut JournalRows
     match queued.row {
         ArchiveRow::GaugeBucket { segment, bucket } => {
             ensure_segment(&segment, clock, collected);
-            let covered = bucket.covered_ns > 0;
-            collected.buckets.push(ArchivedBucket {
-                segment_id: segment.uuid.to_string(),
-                start_boot_ns: bucket.start_ns,
-                end_boot_ns: bucket.end_ns,
-                start_utc: utc_text(clock, bucket.start_ns),
-                end_utc: utc_text(clock, bucket.end_ns),
-                covered_ns: bucket.covered_ns,
-                weighted_sum: covered.then_some(bucket.weighted_sum),
-                minimum: covered.then_some(bucket.minimum),
-                maximum: covered.then_some(bucket.maximum),
-                counter_delta: None,
-                sample_count: bucket.sample_count,
-                method: if covered {
-                    HistoryMethod::TimeWeightedStep
-                } else {
-                    HistoryMethod::Gap
-                },
-                reason_code: None,
-            });
+            collected
+                .buckets
+                .push(archived_gauge_bucket(&segment, &bucket, clock));
         }
         ArchiveRow::CounterBucket { segment, bucket } => {
             ensure_segment(&segment, clock, collected);
-            let exact = bucket.total.integral();
-            collected.buckets.push(ArchivedBucket {
-                segment_id: segment.uuid.to_string(),
-                start_boot_ns: bucket.start_ns,
-                end_boot_ns: bucket.end_ns,
-                start_utc: utc_text(clock, bucket.start_ns),
-                end_utc: utc_text(clock, bucket.end_ns),
-                covered_ns: bucket.covered_ns,
-                weighted_sum: None,
-                minimum: None,
-                maximum: None,
-                counter_delta: exact,
-                sample_count: bucket.interval_count,
-                method: HistoryMethod::CounterDelta,
-                reason_code: exact
-                    .is_none()
-                    .then(|| "non_integral_counter_delta".to_owned()),
-            });
+            collected
+                .buckets
+                .push(archived_counter_bucket(&segment, &bucket, clock));
         }
         ArchiveRow::Bridge { segment, bridge } => {
-            // Bridges are archived only when integral: the archive column is
-            // an exact decimal and a float delta must not pose as exact.
-            if let ScalarView::U64(delta) = bridge.delta.view() {
-                ensure_segment(&segment, clock, collected);
-                collected.bridges.push(ArchivedBridge {
-                    segment_id: segment.uuid.to_string(),
-                    start_boot_ns: bridge.start_ns,
-                    end_boot_ns: bridge.end_ns,
-                    delta: u128::from(delta),
-                });
-            } else {
-                collected.gaps.push(GapRecord {
-                    key: Some(segment.key.clone()),
-                    adapter_id: None,
-                    start_boot_ns: bridge.start_ns,
-                    end_boot_ns: bridge.end_ns,
-                    reason: "non_integral_bridge".to_owned(),
-                    affected_count: 1,
-                });
-            }
+            collect_bridge(&segment, &bridge, clock, collected);
         }
         ArchiveRow::Gap(gap) => collected.gaps.push(gap),
     }
+}
+
+/// A gauge minute; one that holds no time is archived as a gap bucket.
+fn archived_gauge_bucket(
+    segment: &SegmentMeta,
+    bucket: &GaugeBucket,
+    clock: &WallClock,
+) -> ArchivedBucket {
+    let covered = bucket.covered_ns > 0;
+    ArchivedBucket {
+        segment_id: segment.uuid.to_string(),
+        start_boot_ns: bucket.start_ns,
+        end_boot_ns: bucket.end_ns,
+        start_utc: utc_text(clock, bucket.start_ns),
+        end_utc: utc_text(clock, bucket.end_ns),
+        covered_ns: bucket.covered_ns,
+        weighted_sum: covered.then_some(bucket.weighted_sum),
+        minimum: covered.then_some(bucket.minimum),
+        maximum: covered.then_some(bucket.maximum),
+        counter_delta: None,
+        sample_count: bucket.sample_count,
+        method: if covered {
+            HistoryMethod::TimeWeightedStep
+        } else {
+            HistoryMethod::Gap
+        },
+        reason_code: None,
+    }
+}
+
+/// A counter minute; a total that is not integral is archived without its
+/// delta and with the reason.
+fn archived_counter_bucket(
+    segment: &SegmentMeta,
+    bucket: &CounterBucket,
+    clock: &WallClock,
+) -> ArchivedBucket {
+    let exact = bucket.total.integral();
+    ArchivedBucket {
+        segment_id: segment.uuid.to_string(),
+        start_boot_ns: bucket.start_ns,
+        end_boot_ns: bucket.end_ns,
+        start_utc: utc_text(clock, bucket.start_ns),
+        end_utc: utc_text(clock, bucket.end_ns),
+        covered_ns: bucket.covered_ns,
+        weighted_sum: None,
+        minimum: None,
+        maximum: None,
+        counter_delta: exact,
+        sample_count: bucket.interval_count,
+        method: HistoryMethod::CounterDelta,
+        reason_code: exact
+            .is_none()
+            .then(|| "non_integral_counter_delta".to_owned()),
+    }
+}
+
+/// Bridges are archived only when integral: the archive column is an exact
+/// decimal and a float delta must not pose as exact, so it becomes a gap.
+fn collect_bridge(
+    segment: &SegmentMeta,
+    bridge: &CounterSample,
+    clock: &WallClock,
+    collected: &mut JournalRows,
+) {
+    let ScalarView::U64(delta) = bridge.delta.view() else {
+        collected.gaps.push(GapRecord {
+            key: Some(segment.key.clone()),
+            adapter_id: None,
+            start_boot_ns: bridge.start_ns,
+            end_boot_ns: bridge.end_ns,
+            reason: "non_integral_bridge".to_owned(),
+            affected_count: 1,
+        });
+        return;
+    };
+    ensure_segment(segment, clock, collected);
+    collected.bridges.push(ArchivedBridge {
+        segment_id: segment.uuid.to_string(),
+        start_boot_ns: bridge.start_ns,
+        end_boot_ns: bridge.end_ns,
+        delta: u128::from(delta),
+    });
 }
 
 #[cfg(test)]
@@ -697,5 +756,78 @@ mod tests {
                 .iter()
                 .any(|gap| gap.reason == "archive_overflow")
         );
+    }
+
+    /// A gauge minute that holds no time is archived as a gap bucket, with
+    /// no mean or extremes posing as measured.
+    #[test]
+    fn an_empty_gauge_minute_is_archived_as_a_gap_bucket() {
+        let segment = segment();
+        let empty = GaugeBucket::empty(0, BUCKET_NS, 0);
+        let archived = archived_gauge_bucket(&segment, &empty, &clock());
+        assert_eq!(archived.method, HistoryMethod::Gap);
+        assert_eq!(
+            (archived.weighted_sum, archived.minimum, archived.maximum),
+            (None, None, None)
+        );
+        assert_eq!(
+            Some(archived.start_utc),
+            format_utc_ns(UTC_ON_A_WHOLE_MINUTE_NS)
+        );
+    }
+
+    /// A counter minute keeps its exact total; one with a float delta is
+    /// archived without a total and says why.
+    #[test]
+    fn a_counter_minute_is_exact_or_says_why_not() {
+        let segment = segment();
+        let mut exact = CounterBucket::empty(0, BUCKET_NS, 0);
+        exact.total.add_delta(Scalar::from_u64(300));
+        let archived = archived_counter_bucket(&segment, &exact, &clock());
+        assert_eq!(archived.method, HistoryMethod::CounterDelta);
+        assert_eq!(archived.counter_delta, Some(300));
+        assert_eq!(archived.reason_code, None);
+
+        let mut float = exact;
+        float.total.add_delta(Scalar::from_f64(1.5).unwrap());
+        let archived = archived_counter_bucket(&segment, &float, &clock());
+        assert_eq!(archived.counter_delta, None);
+        assert_eq!(
+            archived.reason_code.as_deref(),
+            Some("non_integral_counter_delta")
+        );
+    }
+
+    /// A journal holds one boot: the rows of the next boot wait for the
+    /// next journal, however much room is left.
+    #[test]
+    fn a_journal_stops_at_the_next_boot() {
+        let ledger = ByteLedger::for_memory_limit_mib(64);
+        let mut queue = ArchiveQueue::new(&ledger);
+        let first_boot = segment();
+        let mut next_key = first_boot.key.clone();
+        next_key.boot_id = dgxtop_core::testing::boot_id("acme-boot-2");
+        let next_boot = Arc::new(SegmentMeta {
+            uuid: Uuid::new_v4(),
+            key: next_key,
+            identity: first_boot.identity.clone(),
+            unit: first_boot.unit,
+            started_ns: 0,
+        });
+        queue.enqueue(vec![
+            bucket_row(&first_boot, 0),
+            bucket_row(&next_boot, 1),
+            bucket_row(&first_boot, 2),
+        ]);
+        let first = queue
+            .take(1 << 20, &clock(), 1, (Vec::new(), None))
+            .unwrap();
+        assert_eq!(first.boot_id, "fake-boot");
+        assert_eq!(first.buckets.len(), 1);
+        let second = queue
+            .take(1 << 20, &clock(), 2, (Vec::new(), None))
+            .unwrap();
+        assert_eq!(second.boot_id, "acme-boot-2");
+        assert_eq!(second.buckets.len(), 1);
     }
 }

@@ -337,13 +337,9 @@ mod tests {
     /// The history decides the archive's age limit (D-96): its first
     /// journal asks to expire what is older than
     /// `store.archive_retention_days`, the next ones within ten minutes ask
-    /// nothing, and after ten minutes a journal of the expiry alone comes;
-    /// every journal lets the oldest minutes give way when the archive is
-    /// full.
+    /// nothing, and after ten minutes a journal of the expiry alone comes.
     #[test]
     fn the_history_asks_the_archive_to_expire_old_rows_every_ten_minutes() {
-        use dgxtop_core::ports::ArchiveWhenFull;
-
         let (mut history, _ledger) = history(true);
         history.recorder.observe_wall_clock(0, UTC_AT_BOOT);
         for minute in 0..3 {
@@ -355,7 +351,6 @@ mod tests {
         let now = 5 * MINUTE;
         history.recorder.maintain(now);
         let first = history.recorder.take_archive_journal(1 << 20).unwrap();
-        assert_eq!(first.when_full, ArchiveWhenFull::EvictOldest);
         let expiry = first.expire.expect("the first journal asks for the expiry");
         let week = 7 * 86_400 * i128::from(SECOND);
         assert_eq!(
