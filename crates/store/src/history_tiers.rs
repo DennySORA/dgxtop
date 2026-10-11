@@ -8,7 +8,7 @@
 //! integrity checked before any write, a file of another format recreated
 //! (D-85), `max_page_count`); one still unusable makes every call fail with
 //! its reason and the history goes on in memory. A failed call maps like
-//! every partition's ([`crate::sqlite::Writer`]): corruption stops the
+//! every partition's (`sqlite::Writer`): corruption stops the
 //! database until the next start recreates it.
 //! No series expires by age: past [`MAX_USED_BYTES`] the series written
 //! longest ago give way.

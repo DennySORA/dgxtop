@@ -4,8 +4,9 @@
 //!
 //! * Version gate: runtime `sqlite3_libversion_number() >= 3051003` and equal
 //!   to the build-time headers ([`ensure_sqlite_version`]).
-//! * Connections: WAL, `synchronous` FULL (audit) / NORMAL (archive),
-//!   `cache_size` -2048 / -4096 KiB, `busy_timeout` 100 / 50 ms, foreign keys
+//! * Connections: WAL, `synchronous` FULL (audit) / NORMAL (the archive,
+//!   the tiers and the process history), `cache_size` -2048 / -4096 KiB,
+//!   `busy_timeout` 100 / 50 ms, foreign keys
 //!   on, defensive mode, untrusted schema, no URI parsing, no extension
 //!   loading, `O_NOFOLLOW` on the database path, and only prepared
 //!   statements with bound parameters for data.
@@ -19,6 +20,13 @@
 //! * Capacity: db + `-wal` + `-shm`, `max_page_count` on the main file,
 //!   PASSIVE checkpoints only from the writer connection, never FULL/TRUNCATE
 //!   checkpoints or VACUUM on the hot path.
+//! * Failures: one classification (`FaultKind`) and one mapping to
+//!   `InfraError` for every partition (`Writer`); corruption stops the
+//!   partition until the next start recreates the file. The audit maps the
+//!   same classes to its own `AuditFailure` codes.
+//!
+//! The shared statements (`drain`, `BucketTable::keep_latest`) only
+//! execute what their callers decide to keep or delete.
 
 mod capacity;
 mod connection;

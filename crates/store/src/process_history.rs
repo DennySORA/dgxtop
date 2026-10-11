@@ -8,7 +8,7 @@
 //! format, schema and integrity checked before any write, a file of
 //! another format recreated (D-85), `max_page_count`); one still unusable
 //! makes every call fail with its reason, and the history stays in memory.
-//! A failed call maps like every partition's ([`crate::sqlite::Writer`]):
+//! A failed call maps like every partition's (`sqlite::Writer`):
 //! corruption stops the database until the next start recreates it. A
 //! bucket packs 12 bytes a metric; a run keeps at most 300 buckets a size,
 //! so at most about a megabyte however long it runs.

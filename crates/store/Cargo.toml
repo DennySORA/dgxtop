@@ -1,6 +1,6 @@
 [package]
 name = "dgxtop-store"
-description = "dgxtop storage: config repository, SQLite audit, process history and optional archive, lock and paths"
+description = "dgxtop storage: SQLite and file I/O only (archive, history tiers, audit, process history, config file, instance lock, state paths)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

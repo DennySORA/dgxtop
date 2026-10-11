@@ -1,4 +1,5 @@
-//! SQLite runtime gate (AT31) and the verbatim, idempotent spec DDL.
+//! SQLite runtime gate (AT31), the verbatim spec DDL and every
+//! partition's idempotent initialization.
 
 // Test helpers panic on setup failures; the lints target production code.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -12,6 +13,8 @@ use dgxtop_core::ports::{ArchiveSink, AuditRepository};
 use dgxtop_core::testing::FakeClock;
 use dgxtop_store::archive::{ArchiveLimits, SqliteArchive};
 use dgxtop_store::audit::{AuditLimits, SqliteAuditRepository};
+use dgxtop_store::history_tiers::SqliteHistoryTiers;
+use dgxtop_store::process_history::ProcessHistoryFiles;
 use dgxtop_store::sqlite::{
     AUDIT_DDL, HISTORY_DDL, MIN_SQLITE_VERSION_NUMBER, SchemaKind, SqliteGateError,
     StatvfsFreeSpace, check_version_number, check_versions, ensure_sqlite_version,
@@ -30,8 +33,6 @@ impl TempDir {
         std::fs::create_dir_all(&path).unwrap();
         // Like the real state directory: a file is recreated only in a
         // private one (D-85).
-        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o700))
-            .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         Self(path)
     }
@@ -80,12 +81,24 @@ fn ddl_is_the_spec_contract_verbatim() {
     assert_eq!(SchemaKind::History.ddl(), history);
 }
 
+/// Every partition gets its DDL and format stamp once; reopening keeps
+/// the file as it is.
 #[test]
-fn both_partitions_initialize_once_and_reopen_idempotently() {
+fn every_partition_initializes_once_and_reopens_idempotently() {
     let dir = TempDir::new("schema");
     let audit_path = dir.0.join("audit.sqlite3");
     let history_path = dir.0.join("history.sqlite3");
+    let tiers_path = dir.0.join("history_tiers.sqlite3");
+    let process_path = dir.0.join("process_history.sqlite3");
     for _ in 0..3 {
+        let tiers = SqliteHistoryTiers::open(&tiers_path);
+        assert_eq!(tiers.recreated(), None);
+        let process = ProcessHistoryFiles::open(
+            &process_path,
+            &dir.0.join("process_recent.json"),
+            FakeClock::new(1),
+        );
+        assert_eq!(process.recreated(), None);
         let mut audit = SqliteAuditRepository::open(
             &audit_path,
             AuditLimits::default(),
@@ -106,12 +119,18 @@ fn both_partitions_initialize_once_and_reopen_idempotently() {
     for (path, kind) in [
         (&audit_path, SchemaKind::Audit),
         (&history_path, SchemaKind::History),
+        (&tiers_path, SchemaKind::HistoryTiers),
+        (&process_path, SchemaKind::ProcessHistory),
     ] {
         let connection = Connection::open(path).unwrap();
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, kind.user_version(), "{}", kind.label());
+        let stamp: i32 = connection
+            .query_row("PRAGMA application_id", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(stamp, kind.format_stamp(), "{}", kind.label());
         for object in kind.objects() {
             let present: i64 = connection
                 .query_row(
