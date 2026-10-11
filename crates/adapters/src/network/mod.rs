@@ -26,6 +26,9 @@ use self::interfaces::{
     read_interface,
 };
 use crate::common::{RecordFactory, SystemFiles};
+#[cfg(any(test, feature = "test-support"))]
+use crate::procfs::CatalogStats;
+use crate::procfs::availability_of;
 use crate::procfs::catalog::{
     CatalogBook, CatalogConfig, KeyContext, LiveSource, Selected, SnapshotBuilder,
 };
@@ -34,7 +37,6 @@ use crate::procfs::mechanics::{
     plan_target, rejected_discovery, rejected_plan,
 };
 use crate::procfs::records::removed_record;
-use crate::procfs::{CatalogStats, availability_of};
 use crate::registry::{AdapterOptions, compile_time_adapter_id, kernel_file_manifest};
 
 pub use self::interfaces::LOOPBACK_ATTRIBUTE;
@@ -103,7 +105,8 @@ impl NetworkAdapter {
         }
     }
 
-    /// Size of the catalog bookkeeping (diagnostics, boundedness tests).
+    /// Size of the catalog bookkeeping (boundedness tests).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn catalog_stats(&self) -> CatalogStats {
         self.book.stats()
     }

@@ -26,6 +26,7 @@ use dgxtop_core::quality::{Availability, RawKind, ReadStatus, Support};
 
 use self::mountinfo::{MountClass, MountEntry, MountTable, classify, parse_mountinfo};
 use crate::common::{RecordFactory, SystemFiles};
+use crate::procfs::availability_of;
 use crate::procfs::catalog::{
     CatalogBook, CatalogConfig, EntityParts, KeyContext, LiveSource, Selected, SnapshotBuilder,
     SourceDraft, SourceSpec, source_draft,
@@ -37,7 +38,6 @@ use crate::procfs::mechanics::{
 use crate::procfs::records::{
     ReadWindow, deferred_record, failed_record, removed_record, u64_outcome_record,
 };
-use crate::procfs::{CatalogStats, availability_of};
 use crate::registry::{AdapterOptions, compile_time_adapter_id, kernel_file_manifest};
 
 pub use self::capacity::{CapacityFigures, CapacityProbe, StatvfsProbe};
@@ -182,11 +182,6 @@ impl FilesystemAdapter {
             shut_down: false,
             options,
         }
-    }
-
-    /// Size of the catalog bookkeeping (diagnostics, boundedness tests).
-    pub fn catalog_stats(&self) -> CatalogStats {
-        self.book.stats()
     }
 
     fn discover_snapshot(&mut self, request: &DiscoverRequest, now_boot_ns: u64) -> CatalogDelta {

@@ -46,6 +46,7 @@ use self::process::{MAX_SCANNED_PROCESSES, ProcessMemo, ProcessScan};
 use crate::common::{RecordFactory, SystemFiles, read_status_of};
 use crate::registry::{AdapterOptions, compile_time_adapter_id, kernel_file_manifest};
 
+#[cfg(any(test, feature = "test-support"))]
 pub use self::catalog::CatalogStats;
 pub use self::host::HostConstants;
 pub use self::probe::ProcfsProcessProbe;
@@ -136,7 +137,8 @@ impl ProcfsAdapter {
         }
     }
 
-    /// Size of the catalog bookkeeping (diagnostics, boundedness tests).
+    /// Size of the catalog bookkeeping (boundedness tests).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn catalog_stats(&self) -> CatalogStats {
         self.book.stats()
     }

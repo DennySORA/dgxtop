@@ -7,7 +7,6 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use dgxtop_core::clock::{TimeProvider, ms_to_ns};
 use dgxtop_core::identity::{AdapterId, ReadGroup, SourceId};
@@ -112,19 +111,19 @@ impl SystemFiles for RootedFiles {
 }
 
 /// Wrapper counting reads per path (metadata cache / probe throttle tests).
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub struct CountingFiles<F> {
     inner: F,
     reads: std::sync::Mutex<BTreeMap<String, u64>>,
-    total: AtomicU64,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl<F: SystemFiles> CountingFiles<F> {
     pub fn new(inner: F) -> Self {
         Self {
             inner,
             reads: std::sync::Mutex::new(BTreeMap::new()),
-            total: AtomicU64::new(0),
         }
     }
 
@@ -149,12 +148,7 @@ impl<F: SystemFiles> CountingFiles<F> {
             .sum()
     }
 
-    pub fn total_reads(&self) -> u64 {
-        self.total.load(Ordering::Relaxed)
-    }
-
     fn count(&self, path: &str) {
-        self.total.fetch_add(1, Ordering::Relaxed);
         *self
             .reads
             .lock()
@@ -164,6 +158,7 @@ impl<F: SystemFiles> CountingFiles<F> {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl<F: SystemFiles> SystemFiles for CountingFiles<F> {
     fn read_to_string(&self, path: &str) -> io::Result<String> {
         self.count(path);

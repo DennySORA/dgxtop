@@ -152,16 +152,6 @@ pub enum ReplayError {
     Encode(String),
 }
 
-impl ReplayError {
-    /// Violation code of an invalid fixture.
-    pub fn violation_code(&self) -> Option<&'static str> {
-        match self {
-            Self::Invalid(violation) => Some(violation.code),
-            _ => None,
-        }
-    }
-}
-
 /// A sample value: finite `f64` (JSON number) or exact `u64` (decimal string).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FixtureValue {
