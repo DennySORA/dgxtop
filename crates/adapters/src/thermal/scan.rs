@@ -16,7 +16,9 @@ use dgxtop_core::naming;
 use dgxtop_core::observation::{Attribute, EntityKind};
 use dgxtop_core::quality::RawKind;
 
-use super::profile::{ThermalHostFacts, X86_PKG_TEMP_TYPE, classify, is_arm_cpu_zone};
+use super::profile::{
+    ACPI_ZONE_TYPE, ThermalHostFacts, X86_PKG_TEMP_TYPE, classify, gb10_cluster, is_arm_cpu_zone,
+};
 use crate::common::{SystemFiles, reason_of};
 use crate::hwmon::engine::{ScanContext, Scanner, codes};
 use crate::hwmon::mapping::resolve;
@@ -40,6 +42,8 @@ const MAX_TRIP_POINTS: u32 = 12;
 struct ZoneMetadata {
     zone_type: String,
     device_path: Option<String>,
+    /// The ACPI path of an ACPI zone's device (`\_TZ_.TSOC`).
+    acpi_path: Option<String>,
     policy: Option<String>,
     trips: Vec<Attribute>,
     has_mode: bool,
@@ -202,12 +206,21 @@ impl ThermalScanner {
     }
 
     fn host_facts(&self, found: &[FoundZone], packages: Option<usize>) -> ThermalHostFacts {
-        let types: Vec<&str> = found
+        let zones: Vec<&ZoneMetadata> = found
             .iter()
             .filter_map(|zone| self.cache.get(&zone.instance))
+            .collect();
+        let types: Vec<&str> = zones
+            .iter()
             .map(|metadata| metadata.zone_type.as_str())
             .collect();
         ThermalHostFacts {
+            gb10_cluster_zones: zones
+                .iter()
+                .filter(|metadata| metadata.zone_type == ACPI_ZONE_TYPE)
+                .filter_map(|metadata| metadata.acpi_path.as_deref())
+                .filter(|path| gb10_cluster(path).is_some())
+                .count(),
             physical_packages: packages,
             x86_pkg_zones: types
                 .iter()
@@ -229,7 +242,7 @@ fn zone_drafts(
     metadata: &ZoneMetadata,
     key: &str,
 ) -> Option<(SourceDraft, Vec<EntityDraft>)> {
-    let mapping = classify(host, &metadata.zone_type);
+    let mapping = classify(host, &metadata.zone_type, metadata.acpi_path.as_deref());
     let resolved = resolve(context, &mapping, ADAPTER, key, CHANNEL)?;
     let zone_entity_id = naming::entity::sensor(ADAPTER, key, CHANNEL).ok()?;
     let mut entities = vec![EntityDraft {
@@ -280,6 +293,9 @@ fn zone_attributes(zone: &FoundZone, metadata: &ZoneMetadata) -> Vec<Attribute> 
     if let Some(policy) = &metadata.policy {
         attributes.push(attribute("policy", policy));
     }
+    if let Some(acpi_path) = &metadata.acpi_path {
+        attributes.push(attribute("acpi_path", acpi_path));
+    }
     attributes.extend(metadata.trips.iter().cloned());
     attributes
 }
@@ -289,8 +305,16 @@ fn read_zone_metadata(files: &dyn SystemFiles, instance: &str) -> io::Result<Zon
     let has = |name: &str| entries.iter().any(|entry| entry == name);
     let zone_type =
         read_label(files, &format!("{instance}/type"))?.unwrap_or_else(|| "unknown".to_owned());
+    let acpi_path = if zone_type == ACPI_ZONE_TYPE {
+        read_label(files, &format!("{instance}/device/path"))
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
     Ok(ZoneMetadata {
         device_path: canonical_link(files, &format!("{instance}/device"))?,
+        acpi_path,
         policy: read_label(files, &format!("{instance}/policy"))
             .ok()
             .flatten(),

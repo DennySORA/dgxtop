@@ -177,7 +177,9 @@ pub struct CpuView {
     pub iowait: MetricCell,
     pub steal: MetricCell,
     pub cores: Vec<CoreView>,
-    pub frequency_max: MetricCell,
+    /// The mean current frequency of the cores that report one now
+    /// (derived, D-67).
+    pub frequency_now: MetricCell,
     pub package_temperatures: Vec<LabeledCell>,
     pub soc_temperatures: Vec<LabeledCell>,
     pub power: Vec<LabeledCell>,

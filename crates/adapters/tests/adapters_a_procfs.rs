@@ -123,6 +123,61 @@ fn cpufreq_sources_exist_only_where_supported() {
     assert_eq!(unsupported.reason.as_deref(), Some("CPUFREQ_NOT_PRESENT"));
 }
 
+/// Where the kernel offers `cpuinfo_avg_freq` (D-67), a CPU's current
+/// frequency is what it ran at, from its hardware counters; the cppc
+/// driver's `scaling_cur_freq` under the performance governor is the
+/// requested maximum (the DGX Spark showed 3900 MHz at any load). An idle
+/// CPU has no recent counter sample (`EAGAIN`): it reports no current
+/// frequency that cycle, and the batch stays whole.
+#[test]
+fn the_current_frequency_is_the_averaged_one_where_the_kernel_offers_it() {
+    let tree = FakeTree::new("procfs-avgfreq");
+    standard_procfs(&tree);
+    let average = |cpu: u32| format!("/sys/devices/system/cpu/cpu{cpu}/cpufreq/cpuinfo_avg_freq");
+    tree.write(&average(0), "2563945\n");
+    tree.write(&average(1), "3842871\n");
+    let files = tree.faulty();
+    let clock = FakeClock::new(DISCOVERY_NS);
+    let mut adapter = procfs_with(&clock, files.clone());
+    let mut parent = ParentCatalog::default();
+    parent.sync(&mut adapter, ADAPTER);
+    assert!(parent.sources.contains_key("procfs:cpu0:cpuinfo_avg_freq"));
+    assert!(!parent.sources.contains_key("procfs:cpu0:scaling_cur_freq"));
+    clock.advance_ms(1_000);
+    let first = read_group(&mut adapter, "cpu", 1);
+    let current = find(&first, ids::CPU_FREQUENCY_CURRENT, "cpu.core.0");
+    assert_eq!(u64_value(current), 2_563_945);
+    assert_eq!(current.quality, Quality::Usable);
+    assert!(
+        current
+            .reason_codes
+            .contains(&"CPUINFO_AVG_FREQ_COUNTERS".to_owned()),
+        "{:?}",
+        current.reason_codes
+    );
+    files.inject(&average(1), 11);
+    clock.advance_ms(1_000);
+    let batches = read_all(&mut adapter, ADAPTER, "cpu", 2);
+    assert_eq!(batches[0].status, BatchStatus::Ok);
+    let idle = |records: &[dgxtop_core::observation::Observation]| {
+        !records.iter().any(|record| {
+            record.key.metric_id.as_str() == ids::CPU_FREQUENCY_CURRENT
+                && record.key.entity_id.as_str() == "cpu.core.1"
+        })
+    };
+    assert!(idle(&records(&batches)), "an idle CPU reports none");
+    // Running again, it reports again: an idle spell is no failure that
+    // defers the next read.
+    files.clear(&average(1));
+    clock.advance_ms(1_000);
+    let running = read_group(&mut adapter, "cpu", 3);
+    assert!(!idle(&running));
+    assert_eq!(
+        u64_value(find(&running, ids::CPU_FREQUENCY_CURRENT, "cpu.core.1")),
+        3_842_871
+    );
+}
+
 #[test]
 fn cpu_read_emits_counters_load_and_frequencies() {
     let (_tree, clock, mut adapter, _parent) = standard();

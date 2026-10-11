@@ -3,7 +3,6 @@
 
 use dgxtop_core::canonical::{CatalogSnapshot, Explanation, ImmutableSnapshot, SnapshotEntry};
 use dgxtop_core::identity::MetricKey;
-use dgxtop_core::metric::Scalar;
 use dgxtop_core::view::{MetricCell, Trend};
 
 use super::TrendBook;
@@ -90,18 +89,6 @@ impl<'a> MetricReader<'a> {
         entry.map_or_else(|| missing_cell(metric), |entry| self.cell_of(entry))
     }
 
-    /// Current authoritative value (selected or degraded only), for ranking.
-    pub(crate) fn current_value(entry: &SnapshotEntry) -> Option<f64> {
-        let sample = &entry.sample;
-        if !sample.selection_state.has_value() {
-            return None;
-        }
-        sample
-            .value
-            .map(Scalar::to_f64_lossy)
-            .filter(|number| number.is_finite())
-    }
-
     /// Most recent `width` trend points of a series (empty when unknown).
     pub(crate) fn trend_preferring(
         &self,
@@ -167,15 +154,5 @@ mod tests {
         let missing = reader.cell("memory.total", "memory", "system");
         assert_eq!(missing.state, CellState::Unavailable);
         assert_eq!(missing.value, None);
-        let cached = reader
-            .index()
-            .get("memory.cached", "memory", "system")
-            .unwrap();
-        assert_eq!(MetricReader::current_value(cached), None);
-        let used = reader
-            .index()
-            .get("memory.used", "memory", "system")
-            .unwrap();
-        assert_eq!(MetricReader::current_value(used), Some(42.0));
     }
 }

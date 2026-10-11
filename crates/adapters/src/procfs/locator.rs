@@ -78,6 +78,26 @@ impl LoadField {
     }
 }
 
+/// The cpufreq file a CPU's current frequency is read from (D-67).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CurrentFrequency {
+    /// `cpuinfo_avg_freq`: what the CPU ran at over its last moments, from
+    /// its hardware counters, where the kernel offers it.
+    Average,
+    /// `scaling_cur_freq`: what the cpufreq driver reports; for some
+    /// drivers the requested frequency, not the clock.
+    Scaling,
+}
+
+impl CurrentFrequency {
+    pub(crate) const fn file(self) -> &'static str {
+        match self {
+            Self::Average => "cpuinfo_avg_freq",
+            Self::Scaling => "scaling_cur_freq",
+        }
+    }
+}
+
 /// How the read path obtains one catalogued source.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ProcfsLocator {
@@ -85,8 +105,8 @@ pub(crate) enum ProcfsLocator {
     Stat { cpu: CpuLabel, column: StatColumn },
     /// A `/proc/loadavg` field.
     Load(LoadField),
-    /// `scaling_cur_freq` of logical CPU `cpu`.
-    FrequencyCurrent { cpu: u32 },
+    /// The current frequency of logical CPU `cpu`, from `current`.
+    FrequencyCurrent { cpu: u32, current: CurrentFrequency },
     /// `cpuinfo_max_freq` read at discovery (cached per generation), in kHz.
     FrequencyMaximum { khz: u64 },
     /// A `/proc/meminfo` field.

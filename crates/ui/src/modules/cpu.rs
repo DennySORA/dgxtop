@@ -238,8 +238,9 @@ fn render_utilization(frame: &mut Frame<'_>, area: Rect, cpu: &CpuView, context:
     }
 }
 
-/// `71°C  12 W  max 5500 MHz`: the first temperature and power sensor and the
-/// frequency; the expanded panel lists every sensor.
+/// `71°C  12 W  3160 MHz`: the first temperature and power sensor and the
+/// mean frequency the cores run at now (D-67); the expanded panel lists
+/// every sensor.
 fn summary_line(cpu: &CpuView, context: &DisplayContext) -> Line<'static> {
     let glance = |cell: &MetricCell| cell_spans(cell, CellDetail::GLANCE, context);
     let mut spans = Vec::new();
@@ -251,12 +252,7 @@ fn summary_line(cpu: &CpuView, context: &DisplayContext) -> Line<'static> {
         spans.extend(glance(&sensor.cell));
         spans.push(gap(context));
     }
-    spans.extend(labeled_cell(
-        "max",
-        &cpu.frequency_max,
-        CellDetail::GLANCE,
-        context,
-    ));
+    spans.extend(glance(&cpu.frequency_now));
     Line::from(spans)
 }
 

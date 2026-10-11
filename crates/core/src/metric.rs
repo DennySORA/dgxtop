@@ -721,6 +721,9 @@ pub mod ids {
     pub const CPU_FREQUENCY_MAXIMUM: &str = "cpu.frequency.maximum";
     pub const CPU_TEMPERATURE_PACKAGE: &str = "cpu.temperature.package";
     pub const CPU_TEMPERATURE_CORE: &str = "cpu.temperature.core";
+    /// A sensor of a group of a package's cores, scope `cluster:<name>`
+    /// (D-68).
+    pub const CPU_TEMPERATURE_CLUSTER: &str = "cpu.temperature.cluster";
     pub const SOC_TEMPERATURE: &str = "soc.temperature";
     pub const CPU_POWER_PACKAGE: &str = "cpu.power.package";
     pub const CPU_POWER_PLATFORM: &str = "cpu.power.platform";
@@ -970,6 +973,15 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         Cpu,
         false,
         "CPU core temperature"
+    ),
+    descriptor!(
+        ids::CPU_TEMPERATURE_CLUSTER,
+        DegC,
+        Canonical,
+        Gauge,
+        Cpu,
+        false,
+        "CPU cluster temperature"
     ),
     descriptor!(
         ids::SOC_TEMPERATURE,

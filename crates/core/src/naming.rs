@@ -8,12 +8,12 @@
 //!
 //! | Adapter | Read group | Period | Emits (metric id, native unit) |
 //! |---|---|---|---|
-//! | procfs | `cpu` | 1 s | `cpu.time.*` (ticks, counter; entity `cpu`, scope `host` for the aggregate line and entity `cpu.core.N`, scope `core:N` per logical CPU; guest fields are NOT emitted because they are already inside user/nice), `cpu.load.{1m,5m,15m}` and `cpu.tasks.{running,total}` (count; entity `host`, scope `host`), `cpu.frequency.current` (kHz, gauge, per core) |
+//! | procfs | `cpu` | 1 s | `cpu.time.*` (ticks, counter; entity `cpu`, scope `host` for the aggregate line and entity `cpu.core.N`, scope `core:N` per logical CPU; guest fields are NOT emitted because they are already inside user/nice), `cpu.load.{1m,5m,15m}` and `cpu.tasks.{running,total}` (count; entity `host`, scope `host`), `cpu.frequency.current` (kHz, gauge, per core: `cpuinfo_avg_freq` where the kernel offers it, else `scaling_cur_freq`, D-67) |
 //! | procfs | `memory` | 1 s | `memory.{total,available,buffers,cached,swap_total}`, `memory.free`, `memory.swap_free` (KiB; entity `memory`, scope `system`) |
 //! | procfs | `disk` | 1 s | `disk.{reads.completed,sectors.read,read.time,writes.completed,sectors.written,write.time}` (count / sectors_512 / milliseconds counters; entity `blockdev:MAJ:MIN`, scope `device` or `partition`) |
 //! | procfs | `process` | 1 s, paged | `process.cpu.ticks` (ticks counter) and `process.rss` (bytes) per `ProcessKey` entity (`process:NS:PID:START`, scope `process`) |
 //! | hwmon | `fast` | 1 s | temperatures (mdegC), power (uW), fans (count) mapped by profile: `cpu.temperature.package`/`core`, `cpu.power.package`, `cpu.power.cluster`, `cpu.power.platform`, else `sensor.*` (diagnostics) |
-//! | thermal | `fast` | 1 s | zone temperatures (mdegC): `cpu.temperature.package` only when the profile proves the package, `soc.temperature` for SoC zones, else `sensor.temperature` |
+//! | thermal | `fast` | 1 s | zone temperatures (mdegC): `cpu.temperature.package` only when the profile proves the package, `soc.temperature` for SoC zones, GB10's `acpitz` zones by ACPI path (`cpu.temperature.cluster` scopes `cluster:0e`…`cluster:1p`, `soc.temperature`, D-68), else `sensor.temperature` |
 //! | powercap | `fast` | 1 s | `cpu.energy.package` / `cpu.energy.platform` (uJ counters with declared modulus), else `sensor.energy` |
 //! | nvml | `fast` | 1 s | GPU utilization/temperature/power/clocks/fan/framebuffer/PCIe/encoder/decoder/process_allocated (entity `gpu:UUID`) |
 //! | nvml | `slow_health` | 5 s | `gpu.energy.total` (mJ counter), ECC, retired pages, `gpu.nvlink.active`, `gpu.power.limit`, `gpu.clock.maximum`, framebuffer total/reserved |

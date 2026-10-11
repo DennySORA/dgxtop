@@ -3,7 +3,8 @@
 //! `/proc/loadavg`, and cpufreq. `cpuinfo_max_freq` is static metadata read
 //! at discovery and cached per CPU generation, then served with each read's
 //! time; a missing or denied cpufreq is re-probed at most once per re-probe
-//! interval.
+//! interval. The current frequency is `cpuinfo_avg_freq` where the kernel
+//! offers it, else `scaling_cur_freq` (D-67).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -21,7 +22,8 @@ use super::catalog::{
 };
 use super::host::host_entity_id;
 use super::locator::{
-    DRIVER, FAMILY_CPU, LoadField, ProcfsLocator, RANK_CORE, RANK_CORE_FREQUENCY, RANK_HOST_WIDE,
+    CurrentFrequency, DRIVER, FAMILY_CPU, LoadField, ProcfsLocator, RANK_CORE, RANK_CORE_FREQUENCY,
+    RANK_HOST_WIDE,
 };
 use super::mechanics::{ReadSnapshot, ReprobeGate, TimedRead, invariant, io_failure, timed};
 use super::parse::{CpuLabel, CpuTimes, STAT_COLUMNS, StatColumn, parse_cpu_times, parse_loadavg};
@@ -36,6 +38,9 @@ const LOADAVG_PATH: &str = "/proc/loadavg";
 /// `scaling_cur_freq` semantics depend on the cpufreq driver; it is not
 /// guaranteed to be an instantaneous hardware clock.
 const CURRENT_FREQUENCY_NOTE: &str = "SCALING_CUR_FREQ_DRIVER_DEFINED";
+/// `cpuinfo_avg_freq` averages the CPU's clock over its last moments from
+/// its hardware counters.
+const AVERAGE_FREQUENCY_NOTE: &str = "CPUINFO_AVG_FREQ_COUNTERS";
 const CPU_NOT_ONLINE: &str = "CPU_NOT_ONLINE";
 
 fn cpufreq_path(cpu: u32, file: &str) -> String {
@@ -48,6 +53,7 @@ enum CpufreqState {
     Supported {
         generation: u32,
         maximum_khz: u64,
+        current: CurrentFrequency,
     },
     Unsupported {
         generation: u32,
@@ -132,6 +138,16 @@ struct CpufreqProber<'a> {
 }
 
 impl CpufreqProber<'_> {
+    /// The averaged frequency where the kernel offers it (D-67).
+    fn current_frequency(&self, cpu: u32) -> CurrentFrequency {
+        let average = cpufreq_path(cpu, CurrentFrequency::Average.file());
+        if self.files.exists(&average) {
+            CurrentFrequency::Average
+        } else {
+            CurrentFrequency::Scaling
+        }
+    }
+
     fn probe(&self, cpu: u32, generation: u32) -> CpufreqState {
         let path = cpufreq_path(cpu, "cpuinfo_max_freq");
         let read = timed(self.clock, || self.files.read_to_string(&path));
@@ -145,6 +161,7 @@ impl CpufreqProber<'_> {
                 Some(maximum_khz) => CpufreqState::Supported {
                     generation,
                     maximum_khz,
+                    current: self.current_frequency(cpu),
                 },
                 None => unsupported(ReadStatus::Unsupported, "CPUFREQ_MAX_UNPARSABLE".to_owned()),
             },
@@ -241,14 +258,18 @@ fn add_core(
     let mut sources = stat_sources(builder, keys, &entity_id, &scope, CpuLabel::Core(cpu));
     let state = cache.state(prober, cpu, incarnation.generation);
     let supported = match &state {
-        CpufreqState::Supported { maximum_khz, .. } => {
+        CpufreqState::Supported {
+            maximum_khz,
+            current,
+            ..
+        } => {
             sources.extend(frequency_sources(
                 builder,
                 keys,
                 &entity_id,
                 &scope,
                 cpu,
-                *maximum_khz,
+                (*current, *maximum_khz),
             ));
             true
         }
@@ -332,15 +353,15 @@ fn frequency_sources(
     entity_id: &EntityId,
     scope: &Scope,
     cpu: u32,
-    maximum_khz: u64,
+    (current, maximum_khz): (CurrentFrequency, u64),
 ) -> Vec<SourceDraft<ProcfsLocator>> {
     let device = format!("cpu{cpu}");
     let channels = [
         (
-            "scaling_cur_freq",
+            current.file(),
             ids::CPU_FREQUENCY_CURRENT,
             RawKind::Gauge,
-            ProcfsLocator::FrequencyCurrent { cpu },
+            ProcfsLocator::FrequencyCurrent { cpu, current },
         ),
         (
             "cpuinfo_max_freq",
@@ -491,8 +512,8 @@ impl SharedCpuFiles {
             ProcfsLocator::Load(field) => {
                 load_record(context.plan, descriptor, self.load.as_ref(), *field)
             }
-            ProcfsLocator::FrequencyCurrent { cpu } => {
-                current_frequency_record(context, descriptor, *cpu, gate)
+            ProcfsLocator::FrequencyCurrent { cpu, current } => {
+                current_frequency_record(context, descriptor, (*cpu, *current), gate)
             }
             ProcfsLocator::FrequencyMaximum { khz } => static_record(context, descriptor, *khz),
             ProcfsLocator::Memory(_) | ProcfsLocator::Disk { .. } => None,
@@ -546,10 +567,13 @@ fn load_record(
     }
 }
 
+/// The current frequency of `cpu` from `current`. A CPU idle beyond its
+/// counters' last sample has no averaged frequency (`EAGAIN`): no record
+/// that cycle, so its series goes stale rather than failing the batch.
 fn current_frequency_record(
     context: &CpuRead<'_>,
     descriptor: &SourceDescriptor,
-    cpu: u32,
+    (cpu, current): (u32, CurrentFrequency),
     gate: &mut ReprobeGate,
 ) -> Option<Observation> {
     let key = descriptor.source_id.as_str();
@@ -557,13 +581,17 @@ fn current_frequency_record(
     if let Some(failure) = gate.deferred(key, now) {
         return deferred_record(context.plan, descriptor, &failure, now);
     }
-    let path = cpufreq_path(cpu, "scaling_cur_freq");
+    let path = cpufreq_path(cpu, current.file());
     let read = timed(context.clock, || context.files.read_to_string(&path));
     let window = ReadWindow::from(&read);
     match &read.result {
         Ok(text) => {
             gate.record_success(key);
-            let notes = vec![CURRENT_FREQUENCY_NOTE.to_owned()];
+            let note = match current {
+                CurrentFrequency::Average => AVERAGE_FREQUENCY_NOTE,
+                CurrentFrequency::Scaling => CURRENT_FREQUENCY_NOTE,
+            };
+            let notes = vec![note.to_owned()];
             u64_text_record(
                 context.plan,
                 descriptor,
@@ -572,6 +600,13 @@ fn current_frequency_record(
                 window,
                 notes,
             )
+        }
+        Err(error)
+            if current == CurrentFrequency::Average
+                && error.kind() == io::ErrorKind::WouldBlock =>
+        {
+            gate.record_success(key);
+            None
         }
         Err(error) => {
             let (status, reason) = io_failure(error);

@@ -196,6 +196,108 @@ fn soc_zone_is_soc_temperature_not_cpu_package() {
     assert_eq!(value_of(&hwmon_readings[0]), 68000.0);
 }
 
+/// A GB10 host (DGX Spark): its seven zones are all `acpitz`, told apart by
+/// their ACPI paths, on one package of 20 CPUs.
+fn gb10(sysfs: &FakeSysfs, zones: &[&str]) {
+    sysfs.cpus(&[36; 20]);
+    for (index, name) in zones.iter().enumerate() {
+        let device = format!("LNXSYSTM:00/LNXTHERM:{index:02}");
+        let index = u32::try_from(index).unwrap();
+        sysfs.thermal_zone(
+            index,
+            "acpitz",
+            &format!("{}", 70_000 + index),
+            Some(&device),
+        );
+        sysfs.write(
+            &format!("/sys/devices/{device}/path"),
+            &format!("\\_TZ_.{name}\n"),
+        );
+    }
+}
+
+fn zone_id(index: usize) -> String {
+    format!("thermal:acpitz@LNXSYSTM:00/LNXTHERM:{index:02}:temp")
+}
+
+/// GB10 (D-68): the zones of its CPU clusters' E and P cores map to
+/// `cpu.temperature.cluster` and its SoC zone to `soc.temperature`, both
+/// usable (named by the firmware, not a datasheet); the GPU and uncore
+/// zones stay diagnostics. Without all four cluster zones, or on more than
+/// one package, no zone is proven.
+#[test]
+fn gb10_zones_map_by_their_acpi_paths() {
+    let names = ["TSOC", "TS0E", "TS0P", "TS1E", "TS1P", "TGPU", "TUNC"];
+    let sysfs = FakeSysfs::new("thermal-gb10");
+    gb10(&sysfs, &names);
+    let clock = clock();
+    let mut zones = adapter(&sysfs, &clock);
+    let (_, pages) = discover(&mut zones, ADAPTER, 0, deadline(&clock));
+    let catalog = sources(&pages);
+    let mapped = |index: usize| {
+        let descriptor = source(&catalog, &zone_id(index));
+        descriptor.metric.as_ref().map(|key| {
+            (
+                key.entity_id.as_str().to_owned(),
+                key.metric_id.as_str().to_owned(),
+                key.scope.as_str().to_owned(),
+                descriptor.profile_id.as_str().to_owned(),
+            )
+        })
+    };
+    let cluster = |scope: &str| {
+        Some((
+            "cpu.package.0".to_owned(),
+            ids::CPU_TEMPERATURE_CLUSTER.to_owned(),
+            scope.to_owned(),
+            "thermal-gb10".to_owned(),
+        ))
+    };
+    assert_eq!(
+        mapped(0),
+        Some((
+            "soc".to_owned(),
+            ids::SOC_TEMPERATURE.to_owned(),
+            "soc".to_owned(),
+            "thermal-gb10".to_owned(),
+        ))
+    );
+    assert_eq!(mapped(1), cluster("cluster:0e"));
+    assert_eq!(mapped(2), cluster("cluster:0p"));
+    assert_eq!(mapped(3), cluster("cluster:1e"));
+    assert_eq!(mapped(4), cluster("cluster:1p"));
+    assert_eq!(mapped(5), None, "TGPU: NVML reports the GPU");
+    assert_eq!(mapped(6), None, "TUNC");
+    let readings = records(&read_all(
+        &mut zones,
+        ADAPTER,
+        "fast",
+        1,
+        deadline(&clock),
+        Vec::new(),
+    ));
+    let hottest_p = record(&readings, &zone_id(4));
+    assert_eq!(
+        hottest_p.key.metric_id.as_str(),
+        ids::CPU_TEMPERATURE_CLUSTER
+    );
+    assert_eq!(value_of(hottest_p), 70_004.0);
+    assert_eq!(hottest_p.quality, Quality::Usable);
+
+    let partial = FakeSysfs::new("thermal-gb10-partial");
+    gb10(&partial, &["TSOC", "TS0E", "TS0P"]);
+    let mut zones = adapter(&partial, &clock);
+    let (_, pages) = discover(&mut zones, ADAPTER, 0, deadline(&clock));
+    assert!(sources(&pages).iter().all(|source| source.metric.is_none()));
+
+    let two = FakeSysfs::new("thermal-gb10-two-packages");
+    gb10(&two, &names);
+    two.cpus(&[0, 1]);
+    let mut zones = adapter(&two, &clock);
+    let (_, pages) = discover(&mut zones, ADAPTER, 0, deadline(&clock));
+    assert!(sources(&pages).iter().all(|source| source.metric.is_none()));
+}
+
 #[test]
 fn arm_cpu_thermal_is_usable_rank_two_on_one_package() {
     let sysfs = FakeSysfs::new("thermal-arm");

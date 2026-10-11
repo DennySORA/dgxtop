@@ -114,6 +114,9 @@ pub const UNIT_MISMATCH: &str = "UNIT_MISMATCH";
 pub const VALUE_OVERFLOW: &str = "VALUE_OVERFLOW";
 /// GB10 profile formula: CPU package power = `cluster:p` + `cluster:e`.
 pub const FORMULA_GB10_CLUSTER_SUM: &str = "FORMULA_GB10_CLUSTER_SUM";
+/// GB10 profile formula: CPU package temperature = the hottest of its four
+/// cluster sensors (D-68).
+pub const FORMULA_GB10_CLUSTER_MAX: &str = "FORMULA_GB10_CLUSTER_MAX";
 /// Power derived from an energy counter delta over the actual interval.
 pub const FORMULA_ENERGY_DELTA: &str = "FORMULA_ENERGY_DELTA";
 
@@ -211,6 +214,7 @@ mod tests {
             VALUE_UNCHANGED_SINCE_LAST_READ,
             PINNED_SOURCE_UNAVAILABLE,
             FORMULA_GB10_CLUSTER_SUM,
+            FORMULA_GB10_CLUSTER_MAX,
         ];
         for code in codes {
             assert!(!code.is_empty() && code.len() <= 80, "{code}");

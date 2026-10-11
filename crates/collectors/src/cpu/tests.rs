@@ -303,6 +303,75 @@ fn temperatures(hwmon: Vec<Observation>, thermal: Vec<Observation>) -> Collectio
     collect(&collector, &plan)
 }
 
+fn cluster_temperature(scope: &str) -> MetricKey {
+    metric_key("cpu.package.0", ids::CPU_TEMPERATURE_CLUSTER, scope)
+}
+
+/// GB10's four cluster sensors, the missing ones left out.
+fn gb10_clusters(celsius: [Option<f64>; 4]) -> Vec<Observation> {
+    ["cluster:0e", "cluster:0p", "cluster:1e", "cluster:1p"]
+        .iter()
+        .zip(celsius)
+        .filter_map(|(scope, celsius)| {
+            celsius.map(|celsius| {
+                millidegrees(
+                    &cluster_temperature(scope),
+                    "thermal",
+                    &format!("thermal:{scope}"),
+                    celsius * 1000.0,
+                    SECOND,
+                )
+            })
+        })
+        .collect()
+}
+
+/// GB10 (D-68): with no sensor of the package itself, the package
+/// temperature is the hottest of its four cluster sensors, a derived value
+/// that lists them, and each sensor stays a series of its own. Without all
+/// four there is no package value; a sensor of the package itself is
+/// published as measured instead.
+#[test]
+fn gb10_package_temperature_is_the_hottest_cluster() {
+    let readings = [Some(74.8), Some(78.8), Some(75.3), Some(87.6)];
+    let batch = temperatures(Vec::new(), gb10_clusters(readings));
+    let package = value_of(&batch, &package_temperature()).unwrap();
+    assert_close(package.value.unwrap().to_f64_lossy(), 87.6);
+    assert_eq!(package.sample_kind, SampleKind::Derived);
+    assert!(
+        package
+            .reason_codes
+            .contains(&reasons::FORMULA_GB10_CLUSTER_MAX.to_owned()),
+        "{:?}",
+        package.reason_codes
+    );
+    assert_eq!(package.candidate_source_ids.len(), 4);
+    assert_eq!(
+        number(&batch, &cluster_temperature("cluster:0p")),
+        Some(78.8)
+    );
+
+    let partial = temperatures(
+        Vec::new(),
+        gb10_clusters([Some(74.8), Some(78.8), None, Some(87.6)]),
+    );
+    assert_eq!(number(&partial, &package_temperature()), None);
+
+    let measured = temperatures(
+        vec![millidegrees(
+            &package_temperature(),
+            "hwmon",
+            "hwmon:package0:temp1",
+            68000.0,
+            SECOND,
+        )],
+        gb10_clusters(readings),
+    );
+    let package = value_of(&measured, &package_temperature()).unwrap();
+    assert_eq!(package.value.unwrap().to_f64_lossy(), 68.0);
+    assert_eq!(package.sample_kind, SampleKind::Measured);
+}
+
 #[test]
 fn architecture_example_soc_scope_is_published_separately() {
     let batch = temperatures(

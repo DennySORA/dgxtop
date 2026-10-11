@@ -160,7 +160,7 @@ pub(crate) fn cpu_view() -> CpuView {
         iowait: ok(0.0, CanonicalUnit::Percent),
         steal: missing(CanonicalUnit::Percent, CellState::Unsupported),
         cores,
-        frequency_max: ok(3000.0, CanonicalUnit::MHz),
+        frequency_now: ok(3000.0, CanonicalUnit::MHz),
         package_temperatures: vec![LabeledCell {
             label: "pkg0".into(),
             cell: sourced(

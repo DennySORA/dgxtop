@@ -1,15 +1,19 @@
-//! CPU module projection: host aggregate, logical cores, package and SoC
-//! temperatures, power, load and tasks. Package, core and SoC temperatures
-//! are different metrics and are never substituted for one another.
+//! CPU module projection: host aggregate, logical cores, package, cluster
+//! and SoC temperatures, power, load and tasks. Package, core, cluster and
+//! SoC temperatures are different metrics and are never substituted for one
+//! another.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use dgxtop_core::canonical::{CatalogSnapshot, SnapshotEntry};
 use dgxtop_core::identity::EntityId;
+use dgxtop_core::metric::Scalar;
 use dgxtop_core::metric::ids;
 use dgxtop_core::naming::{attributes, entity};
-use dgxtop_core::view::{CoreView, CpuView, LabeledCell, MetricCell};
+use dgxtop_core::quality::SampleKind;
+use dgxtop_core::view::{CellState, CoreView, CpuView, LabeledCell, MetricCell};
 
+use super::cell::missing_cell;
 use super::labels::{humanize_scope, label_text};
 use super::reader::MetricReader;
 
@@ -29,6 +33,7 @@ pub(crate) fn build_cpu_view(
 ) -> CpuView {
     let aggregate = |metric: &str| reader.cell(metric, entity::CPU_AGGREGATE, entity::SCOPE_HOST);
     let host = |metric: &str| reader.cell(metric, entity::HOST, entity::SCOPE_HOST);
+    let cores = core_views(reader);
     CpuView {
         model: cpu_model(reader.catalog(), fallback_model),
         total: aggregate(ids::CPU_UTILIZATION_TOTAL),
@@ -36,9 +41,9 @@ pub(crate) fn build_cpu_view(
         system: aggregate(ids::CPU_UTILIZATION_SYSTEM),
         iowait: aggregate(ids::CPU_UTILIZATION_IOWAIT),
         steal: aggregate(ids::CPU_UTILIZATION_STEAL),
-        cores: core_views(reader),
-        frequency_max: frequency_max(reader),
-        package_temperatures: labeled_rows(reader, ids::CPU_TEMPERATURE_PACKAGE),
+        frequency_now: frequency_now(&cores),
+        cores,
+        package_temperatures: temperature_rows(reader),
         soc_temperatures: labeled_rows(reader, ids::SOC_TEMPERATURE),
         power: power_rows(reader),
         load: [
@@ -152,27 +157,50 @@ fn physical_core_temperature<'a>(
     )
 }
 
-/// Host-level maximum when reported; otherwise the highest per-core maximum
-/// (an existing sample, not a computed value), else the first core's state.
-fn frequency_max(reader: &MetricReader<'_>) -> MetricCell {
-    let index = reader.index();
-    if let Some(entry) = index.get(
-        ids::CPU_FREQUENCY_MAXIMUM,
-        entity::CPU_AGGREGATE,
-        entity::SCOPE_HOST,
-    ) {
-        return reader.cell_of(entry);
-    }
-    let entries = index.entries_of_metric(ids::CPU_FREQUENCY_MAXIMUM);
-    let highest = entries
+/// The mean current frequency of the cores that report one (D-67), a
+/// derived value: the oldest and least certain of them set its age and
+/// quality. An idle core reports no current frequency; with none reporting,
+/// the first core's cell says why.
+fn frequency_now(cores: &[CoreView]) -> MetricCell {
+    let current: Vec<&MetricCell> = cores
         .iter()
-        .filter_map(|entry| MetricReader::current_value(entry).map(|value| (value, *entry)))
-        .max_by(|(left, _), (right, _)| left.total_cmp(right))
-        .map(|(_, entry)| entry);
-    reader.cell_or_missing(
-        highest.or_else(|| entries.first().copied()),
-        ids::CPU_FREQUENCY_MAXIMUM,
-    )
+        .map(|core| &core.frequency)
+        .filter(|cell| matches!(cell.state, CellState::Ok | CellState::Degraded))
+        .filter(|cell| cell.value_f64().is_some())
+        .collect();
+    let Some(first) = current.first() else {
+        return cores.first().map_or_else(
+            || missing_cell(ids::CPU_FREQUENCY_CURRENT),
+            |core| core.frequency.clone(),
+        );
+    };
+    let total: f64 = current.iter().filter_map(|cell| cell.value_f64()).sum();
+    #[allow(clippy::cast_precision_loss)]
+    let mean = total / current.len() as f64;
+    MetricCell {
+        value: Scalar::from_f64(mean).ok(),
+        kind: SampleKind::Derived,
+        quality: current
+            .iter()
+            .map(|cell| cell.quality)
+            .max()
+            .unwrap_or(first.quality),
+        age_ms: current.iter().filter_map(|cell| cell.age_ms).max(),
+        source_label: Some(format!("mean of {} cores", current.len())),
+        conflict: None,
+        last_good: None,
+        ..(*first).clone()
+    }
+}
+
+/// Package temperatures first, then the cluster sensors a package's may be
+/// derived from (GB10, D-68).
+fn temperature_rows(reader: &MetricReader<'_>) -> Vec<LabeledCell> {
+    [ids::CPU_TEMPERATURE_PACKAGE, ids::CPU_TEMPERATURE_CLUSTER]
+        .iter()
+        .flat_map(|metric| labeled_rows(reader, metric))
+        .take(MAX_LABELED_ROWS)
+        .collect()
 }
 
 /// Package power first, then platform, then CPU cluster components.
@@ -238,8 +266,6 @@ mod tests {
     use super::*;
     use crate::presentation::testkit::{Fixture, NOW, entity_record, sample};
     use dgxtop_core::observation::EntityKind;
-
-    use dgxtop_core::view::CellState;
 
     fn build(fixture: &Fixture) -> CpuView {
         let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, &fixture.trends, NOW);
@@ -309,6 +335,76 @@ mod tests {
         assert_eq!(view.cores[0].temperature.state, CellState::Unavailable);
         assert_eq!(view.cores[0].temperature.value, None);
         assert_eq!(view.cores[2].frequency.state, CellState::Unavailable);
+    }
+
+    /// The CPU runs at the mean frequency of the cores reporting one now
+    /// (D-67), a derived value; a core reporting none (idle) is left out,
+    /// and with none reporting the first core's cell says why.
+    #[test]
+    fn the_frequency_now_is_the_mean_of_the_cores_reporting_one() {
+        let mut fixture = Fixture::new();
+        for (core, mhz) in [(0_u32, 2800.0), (1, 3800.0)] {
+            fixture.add(
+                "cpu",
+                sample(
+                    "cpu.frequency.current",
+                    &format!("cpu.core.{core}"),
+                    &format!("core:{core}"),
+                )
+                .f64(mhz),
+            );
+        }
+        fixture.add(
+            "cpu",
+            sample("cpu.frequency.current", "cpu.core.2", "core:2").unavailable(),
+        );
+        let view = build(&fixture);
+        assert_eq!(view.frequency_now.value_f64(), Some(3300.0));
+        assert_eq!(view.frequency_now.kind, SampleKind::Derived);
+        assert_eq!(
+            view.frequency_now.source_label.as_deref(),
+            Some("mean of 2 cores")
+        );
+        let mut idle = Fixture::new();
+        idle.add(
+            "cpu",
+            sample("cpu.frequency.current", "cpu.core.0", "core:0").unavailable(),
+        );
+        let view = build(&idle);
+        assert_eq!(view.frequency_now.value, None);
+        assert_eq!(view.frequency_now.state, CellState::Unavailable);
+        assert_eq!(build(&Fixture::new()).frequency_now.value, None);
+    }
+
+    /// The package temperature leads, and the cluster sensors it may come
+    /// from follow it (D-68).
+    #[test]
+    fn cluster_temperatures_follow_the_package() {
+        let mut fixture = Fixture::new();
+        for (scope, celsius) in [("cluster:1p", 87.6), ("cluster:0e", 74.8)] {
+            fixture.add(
+                "cpu",
+                sample("cpu.temperature.cluster", "cpu.package.0", scope).f64(celsius),
+            );
+        }
+        fixture.add(
+            "cpu",
+            sample("cpu.temperature.package", "cpu.package.0", "package:0").f64(87.6),
+        );
+        let view = build(&fixture);
+        let rows: Vec<(&str, Option<f64>)> = view
+            .package_temperatures
+            .iter()
+            .map(|row| (row.label.as_str(), row.cell.value_f64()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("package 0", Some(87.6)),
+                ("cluster 0e", Some(74.8)),
+                ("cluster 1p", Some(87.6)),
+            ]
+        );
     }
 
     #[test]

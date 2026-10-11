@@ -1,10 +1,12 @@
 //! CPU collector: utilization breakdown from `/proc/stat` tick counters,
-//! frequency/load/task pass-through, arbitrated temperatures (package, core
-//! and SoC are distinct keys) and CPU package/platform power from energy
-//! counters, hwmon power channels and the GB10 cluster formula. `sensor.*`
-//! channels only ever appear in explanations.
+//! frequency/load/task pass-through, arbitrated temperatures (package, core,
+//! cluster and SoC are distinct keys; GB10's package from its clusters) and
+//! CPU package/platform power from energy counters, hwmon power channels
+//! and the GB10 cluster formula. `sensor.*` channels only ever appear in
+//! explanations.
 
 mod power;
+mod temperature;
 mod utilization;
 
 use dgxtop_core::canonical::{CollectionBatch, CollectionPlan};
@@ -17,11 +19,12 @@ use crate::context::{self, CollectorSpec, Route, SENSOR_PREFIX, Session};
 use crate::formulas::{self, Selections};
 
 /// Canonical CPU/SoC metrics published straight through arbitration.
-const PASS_THROUGH: [&str; 10] = [
+const PASS_THROUGH: [&str; 11] = [
     ids::CPU_FREQUENCY_CURRENT,
     ids::CPU_FREQUENCY_MAXIMUM,
     ids::CPU_TEMPERATURE_PACKAGE,
     ids::CPU_TEMPERATURE_CORE,
+    ids::CPU_TEMPERATURE_CLUSTER,
     ids::SOC_TEMPERATURE,
     ids::CPU_LOAD_1M,
     ids::CPU_LOAD_5M,
@@ -93,6 +96,7 @@ fn collect_cpu(session: &mut Session<'_>) {
         |metric| PASS_THROUGH.contains(&metric) || metric.starts_with(SENSOR_PREFIX),
         &mut selections,
     );
+    temperature::publish(session, &mut selections);
 }
 
 #[cfg(test)]
