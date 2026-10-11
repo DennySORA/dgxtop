@@ -163,7 +163,7 @@ example_round_trip!(
     "command-result.schema.json",
     CommandResult
 );
-/// D-86: the spec's default document parses; dgxtop writes it back without
+/// D-88: the spec's default document parses; dgxtop writes it back without
 /// the retired keys, which its contract no longer requires and the sealed
 /// spec still does, and everything else as the spec wrote it.
 #[test]

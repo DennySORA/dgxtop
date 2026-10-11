@@ -10,7 +10,7 @@ schema plus exactly these extensions (D-80):
 * `store.process_history_enabled`: whether the Process History is kept on
   disk, optional (unset follows `store.archive_enabled`), wherever the spec
   has the store settings (the config, and the config a command carries);
-* `store.raw_candidate_seconds` is retired (D-86): no longer required, still
+* `store.raw_candidate_seconds` is retired (D-88): no longer required, still
   accepted with the spec's range, and never written by dgxtop.
 
 Every document the spec accepts stays accepted. `--check` fails when the
@@ -27,7 +27,7 @@ SPEC = ROOT / 'spec' / 'dgxtop-v2' / 'contracts'
 OUT = ROOT / 'contracts'
 BAR_SIZES = ['auto', '1m', '5m', '10m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '18h', '24h']
 BAR = {'type': 'string', 'enum': BAR_SIZES}
-# Store keys an earlier version wrote and dgxtop ignores (D-86).
+# Store keys an earlier version wrote and dgxtop ignores (D-88).
 RETIRED_STORE_KEYS = ['raw_candidate_seconds']
 
 

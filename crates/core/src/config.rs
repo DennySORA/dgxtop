@@ -3,7 +3,7 @@
 //!
 //! Every field is required and unknown keys are rejected, except the
 //! retired keys ([`RETIRED_KEYS`]) an earlier version wrote: those are
-//! accepted with any value, ignored and never written back (D-86). The
+//! accepted with any value, ignored and never written back (D-88). The
 //! source of the
 //! defaults is `spec/dgxtop-v2/examples/config.default.json`, embedded
 //! verbatim: the REF workload's configuration ([`Config::reference`]). The
@@ -49,11 +49,11 @@ pub const BUILTIN_MODULES: [&str; 10] = [
     "actions",
 ];
 
-/// Configuration keys an earlier version wrote that this one ignores (D-86).
+/// Configuration keys an earlier version wrote that this one ignores (D-88).
 pub const RETIRED_KEYS: [&str; 1] = ["store.raw_candidate_seconds"];
 
 /// Removes the retired keys ([`RETIRED_KEYS`]) from a configuration
-/// document, so it compares with what this version writes (D-86).
+/// document, so it compares with what this version writes (D-88).
 pub fn remove_retired_keys(document: &mut serde_json::Value) {
     for path in RETIRED_KEYS {
         let Some((section, key)) = path.split_once('.') else {
@@ -70,7 +70,7 @@ pub fn remove_retired_keys(document: &mut serde_json::Value) {
 
 /// A retired key's slot in its section: whatever value a document holds is
 /// read and dropped, only that it was there is kept, so a configuration
-/// equals itself with or without it and saving leaves it out (D-86).
+/// equals itself with or without it and saving leaves it out (D-88).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RetiredKey {
     present: bool,
@@ -144,7 +144,7 @@ pub struct PinnedSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StoreConfig {
-    /// Retired (D-86): nothing retains raw candidates since D-84.
+    /// Retired (D-88): nothing retains raw candidates since D-84.
     #[serde(default, rename = "raw_candidate_seconds", skip_serializing)]
     retired_raw_candidate_seconds: RetiredKey,
     pub raw_history_seconds: u32,
@@ -344,7 +344,7 @@ impl Config {
     }
 
     /// The retired keys ([`RETIRED_KEYS`]) the parsed document carried:
-    /// ignored now and left out when the configuration is saved (D-86).
+    /// ignored now and left out when the configuration is saved (D-88).
     pub fn retired_keys_present(&self) -> Vec<&'static str> {
         let mut present = Vec::new();
         if self.store.retired_raw_candidate_seconds.present {
@@ -1260,7 +1260,7 @@ mod tests {
         assert_eq!(original, reencoded);
     }
 
-    /// D-86: a document of an earlier version with a retired key loads,
+    /// D-88: a document of an earlier version with a retired key loads,
     /// whatever the key holds, says the key was there, and is written back
     /// without it.
     #[test]

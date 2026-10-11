@@ -181,7 +181,7 @@ fn reference_document() -> Option<Value> {
 }
 
 /// Whether `config` is exactly the REF default document, apart from the
-/// keys dgxtop retired and never writes (D-86).
+/// keys dgxtop retired and never writes (D-88).
 pub fn is_reference_config(config: &Config) -> bool {
     let default = reference_document().map(|mut document| {
         remove_retired_keys(&mut document);
@@ -244,7 +244,7 @@ pub fn finish(
     let (environment, details) = environment;
     let io = |error: std::io::Error| format!("evidence: {error}");
     // The spec's evaluator compares the evidence with its default document,
-    // which still carries the keys D-86 retired.
+    // which still carries the keys D-88 retired.
     match reference_document().filter(|_| is_reference_config(config)) {
         Some(document) => evidence.write_json("config.json", &document),
         None => evidence.write_json("config.json", config),

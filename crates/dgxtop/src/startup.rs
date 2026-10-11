@@ -182,12 +182,12 @@ fn flatten(value: &serde_json::Value, prefix: String, leaves: &mut BTreeMap<Stri
     }
 }
 
-/// One notice per retired key the saved configuration still holds (D-86).
+/// One notice per retired key the saved configuration still holds (D-88).
 pub fn retired_key_notices(saved: &Config) -> Vec<String> {
     saved
         .retired_keys_present()
         .into_iter()
-        .map(|key| format!("{key} is retired and ignored (D-86); the next save leaves it out"))
+        .map(|key| format!("{key} is retired and ignored (D-88); the next save leaves it out"))
         .collect()
 }
 
