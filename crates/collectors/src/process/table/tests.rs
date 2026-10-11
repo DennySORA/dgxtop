@@ -26,7 +26,6 @@ fn host(pid: i32, start: u64, ticks: u64, rss_kib: u64, at: u64) -> Vec<Observat
         uid: Some(1000),
         ppid: Some(1),
         state: Some('S'),
-        threads: Some(4),
         reaped_ticks: Some(0),
     };
     vec![compact(pid, start, ticks, stat, at)]
@@ -254,7 +253,7 @@ fn a_process_row_carries_its_command_line() {
 }
 
 /// The compact record (D-79) gives the row everything one `stat` read
-/// says: RSS, owner, state, parent and threads.
+/// says: RSS, owner and state.
 #[test]
 fn a_compact_record_fills_the_whole_row() {
     let collector = ProcessCollector::new().unwrap();
@@ -266,8 +265,6 @@ fn a_compact_record_fills_the_whole_row() {
     assert_eq!(process.rss_bytes, Some(2048 * 1024));
     assert_eq!(process.uid, Some(1000));
     assert_eq!(process.state, Some('S'));
-    assert_eq!(process.ppid, Some(1));
-    assert_eq!(process.threads, Some(4));
     assert_eq!(process.name, "worker-42");
 }
 
@@ -286,8 +283,6 @@ fn a_compact_record_without_rss_is_missing_not_zero() {
     let process = row(&batch, 9);
     assert_eq!(process.rss_bytes, None);
     assert_eq!(process.uid, Some(7));
-    assert_eq!(process.ppid, None);
-    assert_eq!(process.threads, None);
 }
 
 /// Failed ticks (an overflowing counter) say nothing of the RSS and owner
@@ -330,7 +325,6 @@ fn a_replay_records_per_metric_still_make_rows() {
     assert_eq!(process.command, "python train.py --lr 3e-4");
     assert_eq!(process.rss_bytes, Some(10 * 1024));
     assert_eq!(process.uid, Some(1000));
-    assert_eq!(process.ppid, None, "a replay sends no parent");
 }
 
 #[test]
@@ -696,7 +690,6 @@ fn child(pid: i32, parent: i64, ticks: u64, reaped: u64, rss: Option<u64>, at: u
         uid: Some(1000),
         ppid: Some(parent),
         state: Some('S'),
-        threads: Some(1),
         reaped_ticks: Some(reaped),
     };
     compact(pid, 1, ticks, stat, at)

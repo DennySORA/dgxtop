@@ -14,7 +14,6 @@ const RSS: &str = "proc.rss:";
 const UID: &str = "proc.uid:";
 const PPID: &str = "proc.ppid:";
 const STATE: &str = "proc.state:";
-const THREADS: &str = "proc.threads:";
 const REAPED_TICKS: &str = "proc.reaped_ticks:";
 
 /// Reason codes the adapter attaches when it could not read the RSS; the
@@ -48,7 +47,6 @@ pub struct ProcessStat {
     pub ppid: Option<i64>,
     /// The state letter (`R`, `S`, `Z`, …).
     pub state: Option<char>,
-    pub threads: Option<u64>,
     /// CPU time of its reaped children (`cutime + cstime`), ticks.
     pub reaped_ticks: Option<u64>,
 }
@@ -56,7 +54,7 @@ pub struct ProcessStat {
 impl ProcessStat {
     /// The tags this stat travels as, in a fixed order.
     pub fn reason_codes(&self) -> Vec<String> {
-        let mut codes = Vec::with_capacity(6);
+        let mut codes = Vec::with_capacity(5);
         let mut push = |prefix: &str, value: Option<String>| {
             if let Some(value) = value {
                 codes.push(format!("{prefix}{value}"));
@@ -66,7 +64,6 @@ impl ProcessStat {
         push(UID, self.uid.map(|value| value.to_string()));
         push(PPID, self.ppid.map(|value| value.to_string()));
         push(STATE, self.state.map(String::from));
-        push(THREADS, self.threads.map(|value| value.to_string()));
         push(
             REAPED_TICKS,
             self.reaped_ticks.map(|value| value.to_string()),
@@ -100,8 +97,6 @@ impl ProcessStat {
         } else if let Some(value) = code.strip_prefix(STATE) {
             let mut letters = value.chars();
             self.state = letters.next().filter(|_| letters.next().is_none());
-        } else if let Some(value) = code.strip_prefix(THREADS) {
-            self.threads = value.parse().ok();
         } else if let Some(value) = code.strip_prefix(REAPED_TICKS) {
             self.reaped_ticks = value.parse().ok();
         }
@@ -119,7 +114,6 @@ mod tests {
             uid: Some(u32::MAX),
             ppid: Some(i64::from(i32::MAX)),
             state: Some('S'),
-            threads: Some(u64::MAX),
             reaped_ticks: Some(u64::MAX),
         }
     }
@@ -128,7 +122,7 @@ mod tests {
     fn a_stat_round_trips_through_its_tags() {
         let stat = full();
         let codes = stat.reason_codes();
-        assert_eq!(codes.len(), 6);
+        assert_eq!(codes.len(), 5);
         assert_eq!(ProcessStat::from_reason_codes(&codes), Some(stat));
     }
 
@@ -177,7 +171,7 @@ mod tests {
         let codes: Vec<String> = [
             "proc.rss:-1",
             "proc.state:SS",
-            "proc.threads:",
+            "proc.uid:",
             "proc.unknown:5",
             RSS_BYTES_OVERFLOW,
             "proc.ppid:1",

@@ -265,10 +265,6 @@ fn host_row(
             }),
         uid,
         state: stat.and_then(|stat| stat.state),
-        ppid: stat
-            .and_then(|stat| stat.ppid)
-            .and_then(|ppid| i32::try_from(ppid).ok()),
-        threads: stat.and_then(|stat| stat.threads),
         cpu_percent,
         rss_bytes,
         missing_reason: cpu_reason.or(rss_reason).map(str::to_owned),

@@ -3,8 +3,8 @@
 //! per ProcessKey (D-79): `process.cpu.ticks` (utime + stime from one
 //! read: a lossless decode of two same-unit counters) carrying the rest of
 //! the `stat` as [`ProcessStat`] tags: RSS (pages × page size, bytes), the
-//! owner of `/proc/<pid>` (read once per process), parent, state, threads
-//! and the reaped children's ticks.
+//! owner of `/proc/<pid>` (read once per process), parent, state and the
+//! reaped children's ticks.
 //!
 //! Convention for the process collector: the process's display name
 //! ([`command`](super::command), D-65) and its command line (D-73) travel
@@ -347,7 +347,6 @@ impl SeenProcess {
             uid: self.uid.as_ref().ok().copied(),
             ppid: self.stat.ppid,
             state: self.stat.state,
-            threads: self.stat.num_threads,
             reaped_ticks: reaped_ticks(&self.stat),
         };
         record.reason_codes.extend(stat.reason_codes());

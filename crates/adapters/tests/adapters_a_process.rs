@@ -123,7 +123,6 @@ fn process_records_carry_identity_basename_and_values() {
             uid: Some(owner),
             ppid: Some(1),
             state: Some('S'),
-            threads: Some(1),
             reaped_ticks: Some(0),
         }
     );
@@ -175,10 +174,10 @@ fn owners_are_read_once_per_process() {
     );
 }
 
-/// Parent, threads and the reaped children's time come from the same
+/// Parent, state and the reaped children's time come from the same
 /// `stat` read.
 #[test]
-fn a_record_carries_parent_threads_and_reaped_time() {
+fn a_record_carries_parent_state_and_reaped_time() {
     let tree = FakeTree::new("process-tree-fields");
     write_namespaces(&tree);
     tree.write(
@@ -192,7 +191,6 @@ fn a_record_carries_parent_threads_and_reaped_time() {
     let stat = stat_of(record);
     assert_eq!(stat.ppid, Some(4));
     assert_eq!(stat.state, Some('R'));
-    assert_eq!(stat.threads, Some(12));
     assert_eq!(stat.reaped_ticks, Some(12), "cutime + cstime");
 }
 

@@ -295,8 +295,6 @@ pub(crate) fn process_row(pid: i64, name: &str) -> ProcessRow {
         command: String::new(),
         uid: Some(1000),
         state: Some('S'),
-        ppid: None,
-        threads: None,
         descendants: None,
         cpu_percent: None,
         rss_bytes: None,

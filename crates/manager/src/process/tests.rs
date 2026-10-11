@@ -94,8 +94,6 @@ fn row(key: &ProcessKey, uid: u32) -> ProcessRow {
         command: String::new(),
         uid: Some(uid),
         state: Some('S'),
-        ppid: None,
-        threads: None,
         descendants: None,
         cpu_percent: Some(10.0),
         rss_bytes: Some(1 << 20),

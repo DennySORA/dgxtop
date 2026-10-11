@@ -328,9 +328,6 @@ pub struct ProcessRow {
     pub command: String,
     pub uid: Option<u32>,
     pub state: Option<char>,
-    /// The parent's PID; `None` when unread.
-    pub ppid: Option<i32>,
-    pub threads: Option<u64>,
     /// `None` during warmup (first sample of a ProcessKey) or when unreadable.
     pub cpu_percent: Option<f64>,
     pub rss_bytes: Option<u64>,
