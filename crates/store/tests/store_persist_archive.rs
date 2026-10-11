@@ -519,6 +519,9 @@ fn budget_evicts_the_oldest_minutes_first_and_refuses_what_cannot_fit() {
     }
     let stats = archive.stats();
     assert!(stats.buckets_evicted > 0, "{stats:?}");
+    // The status judges admission like the next append: room is made by
+    // eviction, so the archive still takes journals.
+    assert_eq!(archive.status().state, PersistenceState::Healthy);
     let reader = fixture.reader();
     let oldest: String = reader
         .query_row(
@@ -908,6 +911,12 @@ fn a_full_archive_refuses_a_journal_that_does_not_ask_for_eviction() {
         })
     );
     assert_eq!(archive.stats().buckets_evicted, 0);
+    let status = archive.status();
+    assert_eq!(status.state, PersistenceState::Degraded);
+    assert_eq!(
+        status.detail.as_deref(),
+        Some("archive budget cannot hold this batch")
+    );
     let oldest: String = fixture
         .reader()
         .query_row(
