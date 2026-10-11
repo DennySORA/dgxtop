@@ -130,18 +130,21 @@ fn recreate(
 
 /// Removes the database, `-wal` and `-shm`, only inside a private
 /// directory of ours; a symbolic link is removed as a link, never its
-/// target.
+/// target. Every file is checked before the first is removed, so a
+/// journal that cannot go never leaves it without its database.
 fn remove_database_files(path: &Path, fs: &dyn FileSystemOps) -> Result<(), String> {
     let directory = path
         .parent()
         .ok_or_else(|| "the database has no directory".to_owned())?;
     verify_private_directory(fs, directory).map_err(|error| error.to_string())?;
-    for file in [path.to_path_buf(), wal_path(path), shm_path(path)] {
-        if let Ok(facts) = fs.symlink_metadata(&file)
-            && !matches!(facts.kind, FileKind::Regular | FileKind::Symlink)
-        {
-            return Err(format!("{} is not a regular file", file.display()));
-        }
+    let files = [path.to_path_buf(), wal_path(path), shm_path(path)];
+    if let Some(blocked) = files.iter().find(|file| {
+        fs.symlink_metadata(file)
+            .is_ok_and(|facts| !matches!(facts.kind, FileKind::Regular | FileKind::Symlink))
+    }) {
+        return Err(format!("{} is not a regular file", blocked.display()));
+    }
+    for file in files {
         match fs.remove_file(&file) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -263,5 +266,66 @@ fn initialize_schema(connection: &Connection, kind: SchemaKind) -> Result<(), Op
         SchemaPlan::Initialize => Err(OpenFailure::Surroundings(Unusable::failed(
             "schema verification after initialization found an empty database",
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::fs::RealFileSystem;
+
+    struct PrivateDir(PathBuf);
+
+    impl PrivateDir {
+        fn new(label: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "dgxtop-sqlite-database-{label}-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4().simple()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for PrivateDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A journal that is no file stops the removal before anything is
+    /// deleted: the database is never left without its journals.
+    #[test]
+    fn nothing_is_removed_when_one_journal_is_not_a_file() {
+        let dir = PrivateDir::new("half");
+        let path = dir.0.join("db.sqlite3");
+        std::fs::write(&path, b"database").unwrap();
+        std::fs::write(wal_path(&path), b"wal").unwrap();
+        std::fs::create_dir(shm_path(&path)).unwrap();
+        let error = remove_database_files(&path, &RealFileSystem).unwrap_err();
+        assert!(error.contains("not a regular file"), "{error}");
+        assert!(path.exists(), "the database stays");
+        assert!(wal_path(&path).exists(), "the WAL stays");
+    }
+
+    /// The database, its journals and a link in its place go; the link's
+    /// target stays.
+    #[test]
+    fn the_database_and_its_journals_are_removed_together() {
+        let dir = PrivateDir::new("whole");
+        let path = dir.0.join("db.sqlite3");
+        let target = dir.0.join("target");
+        std::fs::write(&target, b"kept").unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        std::fs::write(wal_path(&path), b"wal").unwrap();
+        remove_database_files(&path, &RealFileSystem).unwrap();
+        assert!(path.symlink_metadata().is_err(), "the link is gone");
+        assert!(!wal_path(&path).exists());
+        assert!(target.exists(), "a link is removed as a link");
     }
 }
