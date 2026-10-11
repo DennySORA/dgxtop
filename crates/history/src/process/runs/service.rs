@@ -2,7 +2,7 @@
 //! for the probe and the stores. One probe is in flight at a time; the
 //! journal leaves every [`APPEND_EVERY_NS`] and the short-term file is
 //! replaced every [`SAVE_EVERY_NS`]. A store job refused for a full queue
-//! keeps its journal for the next turn, within [`MAX_BACKLOG_BUCKETS`].
+//! keeps its journal for the next turn, in a bounded [`Backlog`].
 //!
 //! An answer can be lost (the composition root drops one the actor's full
 //! queue does not take in time), so every job sent has a deadline: a probe
@@ -24,14 +24,13 @@ use dgxtop_core::ports::{
 use dgxtop_core::process_history::{ProcessHistoryJournal, StoreUsage};
 use dgxtop_core::process_probe::ProbeReport;
 
+use super::backlog::Backlog;
 use super::{ProcessHistoryBook, SampleInputs, retention};
 use crate::process::Now;
 
 const NANOS_PER_SECOND: u64 = 1_000_000_000;
 pub(crate) const APPEND_EVERY_NS: u64 = 10 * NANOS_PER_SECOND;
 pub(crate) const SAVE_EVERY_NS: u64 = 30 * NANOS_PER_SECOND;
-/// Buckets a backlog of refused journals keeps; older ones give way.
-const MAX_BACKLOG_BUCKETS: usize = 8192;
 /// A probe report not back after this long is taken as lost.
 const PROBE_DEADLINE_NS: u64 = 5 * NANOS_PER_SECOND;
 /// A load answer not back after this long is asked for again.
@@ -107,7 +106,10 @@ pub(crate) struct ProcessHistoryService {
     /// Writes sent and not answered yet; the shutdown waits for them.
     writing: PendingWrites,
     load: Load,
-    backlog: ProcessHistoryJournal,
+    backlog: Backlog,
+    /// Whether the journal is being refused (logged when it starts and
+    /// when it ends).
+    deferring: bool,
     next_append_ns: u64,
     next_save_ns: u64,
 }
@@ -128,7 +130,8 @@ impl ProcessHistoryService {
             probing_since_boot_ns: None,
             writing: PendingWrites::default(),
             load: Load::Done,
-            backlog: ProcessHistoryJournal::default(),
+            backlog: Backlog::default(),
+            deferring: false,
             next_append_ns: now_ns.saturating_add(APPEND_EVERY_NS),
             next_save_ns: now_ns.saturating_add(SAVE_EVERY_NS),
         }
@@ -261,7 +264,8 @@ impl ProcessHistoryService {
         }
         if now.boot_ns >= self.next_append_ns {
             self.next_append_ns = now.boot_ns.saturating_add(APPEND_EVERY_NS);
-            self.append(now);
+            // A refused journal stays in the backlog for the next turn.
+            let _ = self.append(now);
         }
         if now.boot_ns >= self.next_save_ns {
             self.next_save_ns = now.boot_ns.saturating_add(SAVE_EVERY_NS);
@@ -277,11 +281,29 @@ impl ProcessHistoryService {
 
     /// At shutdown: whatever is left, then the short-term file.
     pub(crate) fn flush(&mut self, now: Now) {
-        if self.store.is_none() || self.load != Load::Done {
+        if self.store.is_none() {
+            return;
+        }
+        if self.load != Load::Done {
+            self.warn(
+                "PROCESS_HISTORY_FLUSH_SKIPPED: the stores have not answered the load; \
+                 the journal and the short-term file stay unwritten",
+            );
             return;
         }
         self.book.touch_live();
-        self.append(now);
+        if let Err(journal) = self.append(now) {
+            self.logger.log(
+                LogLevel::Error,
+                LOG_TARGET,
+                &format!(
+                    "PROCESS_HISTORY_FLUSH_LOST: the store's queue refused the last journal \
+                     ({} runs, {} buckets)",
+                    journal.runs.len(),
+                    journal.buckets.len()
+                ),
+            );
+        }
         self.save(now);
     }
 
@@ -347,7 +369,7 @@ impl ProcessHistoryService {
     fn on_usage(&mut self, usage: StoreUsage) {
         if self.writing.deleting()
             || self.book.has_unsent_deletions()
-            || has_deletions(&self.backlog)
+            || self.backlog.has_deletions()
         {
             return;
         }
@@ -373,31 +395,38 @@ impl ProcessHistoryService {
         }
     }
 
-    fn append(&mut self, now: Now) {
-        let mut journal = std::mem::take(&mut self.backlog);
-        let fresh = self.book.take_journal();
-        journal.runs.extend(fresh.runs);
-        journal.buckets.extend(fresh.buckets);
-        journal.keep_latest.extend(fresh.keep_latest);
-        journal.forget.extend(fresh.forget);
-        journal.keep_runs = fresh.keep_runs.or(journal.keep_runs);
-        if journal.is_empty() {
-            return;
-        }
-        let Some(store) = &self.store else {
-            return;
+    /// Sends the backlog and what the book has new as one journal; one the
+    /// queue refuses goes back to the backlog and is returned.
+    fn append(&mut self, now: Now) -> Result<(), ProcessHistoryJournal> {
+        self.backlog.absorb(self.book.take_journal());
+        let journal = self.backlog.take();
+        let Some(store) = self.store.as_ref().filter(|_| !journal.is_empty()) else {
+            return Ok(());
         };
         let sent = Sent {
             boot_ns: now.boot_ns,
             deletes: has_deletions(&journal),
         };
         match store.try_dispatch(ProcessHistoryJob::Append(journal.clone())) {
-            Ok(()) => self.writing.appends.push_back(sent),
+            Ok(()) => {
+                self.writing.appends.push_back(sent);
+                if std::mem::take(&mut self.deferring) {
+                    self.logger.log(
+                        LogLevel::Info,
+                        LOG_TARGET,
+                        "PROCESS_HISTORY_APPEND_RESUMED: the store takes the journal again",
+                    );
+                }
+                Ok(())
+            }
             Err(error) => {
-                self.warn(&format!("PROCESS_HISTORY_APPEND_DEFERRED: {error}"));
-                let excess = journal.buckets.len().saturating_sub(MAX_BACKLOG_BUCKETS);
-                journal.buckets.drain(..excess);
-                self.backlog = journal;
+                if !std::mem::replace(&mut self.deferring, true) {
+                    self.warn(&format!(
+                        "PROCESS_HISTORY_APPEND_DEFERRED: {error}; kept for the next turn"
+                    ));
+                }
+                self.backlog.absorb(journal.clone());
+                Err(journal)
             }
         }
     }
@@ -599,15 +628,80 @@ mod tests {
         let Some(ProcessHistoryJob::Append(journal)) = jobs.first() else {
             panic!("{jobs:?}");
         };
+        assert_eq!(journal.runs.len(), 1, "one copy of the run, the latest");
         assert_eq!(
-            journal.runs.len(),
-            2,
-            "before the refusal, then at the flush"
-        );
-        assert_eq!(
-            i128::from(journal.runs[1].last_seen_utc_ns),
+            i128::from(journal.runs[0].last_seen_utc_ns),
             now(12).utc_ns,
             "the flush carries when a live run was last seen"
+        );
+    }
+
+    /// A store stuck for long keeps one copy of each run in the backlog,
+    /// the latest, however often the journal is refused; the refusal is
+    /// logged when it starts and when it ends, not at every turn.
+    #[test]
+    fn a_stuck_store_keeps_one_copy_of_each_run() {
+        let mut rig = rig();
+        rig.store.set_busy(true);
+        for minute in 1..=6 {
+            observe(&mut rig, minute * 60);
+            rig.service.tick(now(minute * 60 + 1));
+        }
+        rig.store.set_busy(false);
+        observe(&mut rig, 400);
+        rig.service.flush(now(400));
+        let jobs = rig.store.take();
+        let Some(ProcessHistoryJob::Append(journal)) = jobs.first() else {
+            panic!("{jobs:?}");
+        };
+        assert_eq!(journal.runs.len(), 1, "{:?}", journal.runs);
+        assert_eq!(
+            i128::from(journal.runs[0].last_seen_utc_ns),
+            now(400).utc_ns
+        );
+        let minutes = journal
+            .buckets
+            .iter()
+            .filter(|row| row.tier == dgxtop_core::tiers::Tier::OneMinute)
+            .count();
+        assert_eq!(minutes, 5, "every closed minute is kept");
+        let codes = logged(&rig);
+        let count = |wanted: &str| codes.iter().filter(|code| *code == wanted).count();
+        assert_eq!(count("PROCESS_HISTORY_APPEND_DEFERRED"), 1, "{codes:?}");
+        assert_eq!(count("PROCESS_HISTORY_APPEND_RESUMED"), 1, "{codes:?}");
+    }
+
+    /// A flush before the stores answered the load writes nothing (it would
+    /// write over what was never read) and says what it leaves unwritten.
+    #[test]
+    fn a_flush_while_the_load_is_pending_says_what_it_leaves() {
+        let mut rig = rig();
+        rig.service.start(now(0));
+        rig.store.take();
+        observe(&mut rig, 1);
+        rig.service.flush(now(2));
+        assert!(rig.store.is_empty(), "nothing written before the load");
+        assert_eq!(rig.service.writes_pending(), 0);
+        assert!(
+            logged(&rig).contains(&"PROCESS_HISTORY_FLUSH_SKIPPED".to_owned()),
+            "{:?}",
+            logged(&rig)
+        );
+    }
+
+    /// A flush whose journal the full queue refuses loses it: that is
+    /// logged as lost, not as deferred to a turn that never comes.
+    #[test]
+    fn a_refused_flush_says_its_journal_is_lost() {
+        let mut rig = rig();
+        observe(&mut rig, 1);
+        rig.store.set_busy(true);
+        rig.service.flush(now(2));
+        assert_eq!(rig.service.writes_pending(), 0);
+        let codes = logged(&rig);
+        assert!(
+            codes.contains(&"PROCESS_HISTORY_FLUSH_LOST".to_owned()),
+            "{codes:?}"
         );
     }
 

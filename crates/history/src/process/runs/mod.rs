@@ -16,6 +16,7 @@
 //! model never merges a run's buckets to list it (D-79).
 //! Nothing here performs I/O.
 
+mod backlog;
 mod ending;
 mod retention;
 mod service;
