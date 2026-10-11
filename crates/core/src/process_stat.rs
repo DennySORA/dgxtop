@@ -71,20 +71,24 @@ impl ProcessStat {
         codes
     }
 
-    /// The stat in a record's reason codes; `None` when it carries no tag
-    /// (a record of the one-metric-per-record shape, as a replay sends).
-    /// A tag whose value does not parse counts as absent.
-    pub fn from_reason_codes<'a>(codes: impl IntoIterator<Item = &'a String>) -> Option<Self> {
+    /// The stat in a record's reason codes; a field without its tag, or
+    /// whose value does not parse, is absent.
+    pub fn from_reason_codes<'a>(codes: impl IntoIterator<Item = &'a String>) -> Self {
         let mut stat = Self::default();
-        let mut tagged = false;
         for code in codes {
-            if !code.starts_with(TAG_PREFIX) {
-                continue;
+            if code.starts_with(TAG_PREFIX) {
+                stat.take(code);
             }
-            tagged = true;
-            stat.take(code);
         }
-        tagged.then_some(stat)
+        stat
+    }
+
+    /// Whether `code` is one tag of this format exactly as the encoder
+    /// writes it (a replay fixture may carry it as a sample reason).
+    pub fn is_tag(code: &str) -> bool {
+        let mut stat = Self::default();
+        stat.take(code);
+        stat.reason_codes() == [code]
     }
 
     fn take(&mut self, code: &str) {
@@ -123,7 +127,7 @@ mod tests {
         let stat = full();
         let codes = stat.reason_codes();
         assert_eq!(codes.len(), 5);
-        assert_eq!(ProcessStat::from_reason_codes(&codes), Some(stat));
+        assert_eq!(ProcessStat::from_reason_codes(&codes), stat);
     }
 
     #[test]
@@ -145,7 +149,7 @@ mod tests {
             ..ProcessStat::default()
         };
         assert_eq!(stat.reason_codes(), vec!["proc.uid:1000".to_owned()]);
-        let back = ProcessStat::from_reason_codes(&stat.reason_codes()).unwrap();
+        let back = ProcessStat::from_reason_codes(&stat.reason_codes());
         assert_eq!(back.rss_bytes, None);
         assert_eq!(back.uid, Some(1000));
     }
@@ -160,10 +164,33 @@ mod tests {
     }
 
     #[test]
+    fn only_tags_as_the_encoder_writes_them_are_tags() {
+        for code in full().reason_codes() {
+            assert!(ProcessStat::is_tag(&code), "{code}");
+        }
+        for code in [
+            "proc.rss:-1",
+            "proc.rss:007",
+            "proc.state:SS",
+            "proc.unknown:5",
+            "proc.uid:",
+            "RSS_BYTES_OVERFLOW",
+        ] {
+            assert!(!ProcessStat::is_tag(code), "{code}");
+        }
+    }
+
+    #[test]
     fn a_record_without_tags_has_no_stat() {
         let codes = vec![PAGE_SIZE_UNKNOWN.to_owned(), "gpu_usage:compute".to_owned()];
-        assert_eq!(ProcessStat::from_reason_codes(&codes), None);
-        assert_eq!(ProcessStat::from_reason_codes(&[]), None);
+        assert_eq!(
+            ProcessStat::from_reason_codes(&codes),
+            ProcessStat::default()
+        );
+        assert_eq!(
+            ProcessStat::from_reason_codes(&Vec::new()),
+            ProcessStat::default()
+        );
     }
 
     #[test]
@@ -178,7 +205,7 @@ mod tests {
         ]
         .map(str::to_owned)
         .to_vec();
-        let stat = ProcessStat::from_reason_codes(&codes).unwrap();
+        let stat = ProcessStat::from_reason_codes(&codes);
         assert_eq!(
             stat,
             ProcessStat {

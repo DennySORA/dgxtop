@@ -46,6 +46,7 @@ use dgxtop_core::identity::{
 use dgxtop_core::metric::{self, NativeUnit, native};
 use dgxtop_core::naming;
 use dgxtop_core::observation::{Attribute, EntityKind, MAX_ATTRIBUTES};
+use dgxtop_core::process_stat::ProcessStat;
 use dgxtop_core::quality::{Quality, RawKind, ReadStatus, SampleKind};
 use dgxtop_core::wire::parse_decimal_u64;
 
@@ -906,9 +907,7 @@ fn check_reasons(cycle: usize, sample: &FixtureSample) -> Result<(), FixtureViol
         && sample.reasons.iter().all(|reason| {
             !reason.is_empty()
                 && reason.len() <= MAX_REASON_BYTES
-                && reason
-                    .bytes()
-                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+                && (is_reason_code(reason) || ProcessStat::is_tag(reason))
         });
     if valid {
         Ok(())
@@ -916,11 +915,17 @@ fn check_reasons(cycle: usize, sample: &FixtureSample) -> Result<(), FixtureViol
         Err(violation(
             "SAMPLE_REASON",
             format!(
-                "cycle {cycle} {}: at most 8 reasons of [A-Z0-9_]{{1,80}}",
+                "cycle {cycle} {}: at most 8 reasons of [A-Z0-9_]{{1,80}} or process stat tags",
                 sample.source_id
             ),
         ))
     }
+}
+
+fn is_reason_code(reason: &str) -> bool {
+    reason
+        .bytes()
+        .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
 fn check_row_identity(

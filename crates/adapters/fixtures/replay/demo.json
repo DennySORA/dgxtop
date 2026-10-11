@@ -607,44 +607,6 @@
       "rows": true
     },
     {
-      "source_id": "procfs:process:rss",
-      "entity_id": "host",
-      "metric_id": "process.rss",
-      "scope": "process",
-      "native_unit": "bytes",
-      "raw_kind": "gauge",
-      "sample_kind": "simulated",
-      "read_group": "procfs.process",
-      "origin": {
-        "origin_id": null,
-        "relation": "unknown"
-      },
-      "quality": "verified",
-      "profile_id": "demo-simulated",
-      "profile_revision": 1,
-      "profile_rank": 0,
-      "rows": true
-    },
-    {
-      "source_id": "procfs:process:uid",
-      "entity_id": "host",
-      "metric_id": "process.uid",
-      "scope": "process",
-      "native_unit": "count",
-      "raw_kind": "static",
-      "sample_kind": "simulated",
-      "read_group": "procfs.process",
-      "origin": {
-        "origin_id": null,
-        "relation": "unknown"
-      },
-      "quality": "verified",
-      "profile_id": "demo-simulated",
-      "profile_revision": 1,
-      "profile_rank": 0,
-      "rows": true
-    },
-    {
       "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
       "entity_id": "gpu:GPU-5e1d0a2c-0000-4000-8000-000000000001",
       "metric_id": "process.gpu.memory_allocated",
@@ -770,55 +732,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "1000"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2147483648"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "1000",
+        "reasons": [
+          "proc.rss:2147483648",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "500"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6442450944"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "500",
+        "reasons": [
+          "proc.rss:6442450944",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "10"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "314572800"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "10",
+        "reasons": [
+          "proc.rss:314572800",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -936,55 +874,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "1095"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2164260864"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "1095",
+        "reasons": [
+          "proc.rss:2164260864",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "580"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6459228160"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "580",
+        "reasons": [
+          "proc.rss:6459228160",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "11"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "331350016"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "11",
+        "reasons": [
+          "proc.rss:331350016",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -1102,55 +1016,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "1190"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2181038080"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "1190",
+        "reasons": [
+          "proc.rss:2181038080",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "660"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6476005376"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "660",
+        "reasons": [
+          "proc.rss:6476005376",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "12"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "348127232"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "12",
+        "reasons": [
+          "proc.rss:348127232",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -1268,55 +1158,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "1285"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2197815296"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "1285",
+        "reasons": [
+          "proc.rss:2197815296",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "740"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6492782592"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "740",
+        "reasons": [
+          "proc.rss:6492782592",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "13"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "364904448"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "13",
+        "reasons": [
+          "proc.rss:364904448",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -1434,55 +1300,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "1380"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2214592512"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "1380",
+        "reasons": [
+          "proc.rss:2214592512",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "820"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6509559808"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "820",
+        "reasons": [
+          "proc.rss:6509559808",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "14"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "381681664"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "14",
+        "reasons": [
+          "proc.rss:381681664",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -1600,55 +1442,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "1475"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2147483648"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "1475",
+        "reasons": [
+          "proc.rss:2147483648",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "900"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6442450944"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "900",
+        "reasons": [
+          "proc.rss:6442450944",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "15"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "314572800"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "15",
+        "reasons": [
+          "proc.rss:314572800",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -1766,55 +1584,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "1570"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2164260864"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "1570",
+        "reasons": [
+          "proc.rss:2164260864",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "980"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6459228160"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "980",
+        "reasons": [
+          "proc.rss:6459228160",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "16"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "331350016"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "16",
+        "reasons": [
+          "proc.rss:331350016",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -1932,55 +1726,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "1665"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2181038080"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "1665",
+        "reasons": [
+          "proc.rss:2181038080",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "1060"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6476005376"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "1060",
+        "reasons": [
+          "proc.rss:6476005376",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "17"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "348127232"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "17",
+        "reasons": [
+          "proc.rss:348127232",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -2098,55 +1868,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "1760"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2197815296"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "1760",
+        "reasons": [
+          "proc.rss:2197815296",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "1140"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6492782592"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "1140",
+        "reasons": [
+          "proc.rss:6492782592",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "18"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "364904448"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "18",
+        "reasons": [
+          "proc.rss:364904448",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -2264,55 +2010,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "1855"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2214592512"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "1855",
+        "reasons": [
+          "proc.rss:2214592512",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "1220"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6509559808"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "1220",
+        "reasons": [
+          "proc.rss:6509559808",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "19"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "381681664"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "19",
+        "reasons": [
+          "proc.rss:381681664",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -2430,55 +2152,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "1950"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2147483648"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "1950",
+        "reasons": [
+          "proc.rss:2147483648",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "1300"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6442450944"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "1300",
+        "reasons": [
+          "proc.rss:6442450944",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "20"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "314572800"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "20",
+        "reasons": [
+          "proc.rss:314572800",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -2596,55 +2294,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "2045"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2164260864"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "2045",
+        "reasons": [
+          "proc.rss:2164260864",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "1380"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6459228160"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "1380",
+        "reasons": [
+          "proc.rss:6459228160",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "21"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "331350016"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "21",
+        "reasons": [
+          "proc.rss:331350016",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -2762,55 +2436,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "2140"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2181038080"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "2140",
+        "reasons": [
+          "proc.rss:2181038080",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "1460"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6476005376"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "1460",
+        "reasons": [
+          "proc.rss:6476005376",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "22"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "348127232"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "22",
+        "reasons": [
+          "proc.rss:348127232",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -2928,55 +2578,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "2235"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2197815296"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "2235",
+        "reasons": [
+          "proc.rss:2197815296",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "1540"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6492782592"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "1540",
+        "reasons": [
+          "proc.rss:6492782592",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "23"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "364904448"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "23",
+        "reasons": [
+          "proc.rss:364904448",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -3094,55 +2720,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "2330"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2214592512"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "2330",
+        "reasons": [
+          "proc.rss:2214592512",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "1620"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6509559808"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "1620",
+        "reasons": [
+          "proc.rss:6509559808",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "24"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "381681664"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "24",
+        "reasons": [
+          "proc.rss:381681664",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -3260,55 +2862,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "2425"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2147483648"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "2425",
+        "reasons": [
+          "proc.rss:2147483648",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "1700"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6442450944"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "1700",
+        "reasons": [
+          "proc.rss:6442450944",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "25"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "314572800"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "25",
+        "reasons": [
+          "proc.rss:314572800",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -3426,55 +3004,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "2520"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2164260864"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "2520",
+        "reasons": [
+          "proc.rss:2164260864",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "1780"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6459228160"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "1780",
+        "reasons": [
+          "proc.rss:6459228160",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "26"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "331350016"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "26",
+        "reasons": [
+          "proc.rss:331350016",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -3592,55 +3146,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "2615"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2181038080"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "2615",
+        "reasons": [
+          "proc.rss:2181038080",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "1860"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6476005376"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "1860",
+        "reasons": [
+          "proc.rss:6476005376",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "27"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "348127232"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "27",
+        "reasons": [
+          "proc.rss:348127232",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -3758,55 +3288,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "2710"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2197815296"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "2710",
+        "reasons": [
+          "proc.rss:2197815296",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "1940"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6492782592"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "1940",
+        "reasons": [
+          "proc.rss:6492782592",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "28"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "364904448"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "28",
+        "reasons": [
+          "proc.rss:364904448",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -3924,55 +3430,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "2805"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2214592512"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "2805",
+        "reasons": [
+          "proc.rss:2214592512",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "2020"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6509559808"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "2020",
+        "reasons": [
+          "proc.rss:6509559808",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "29"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "381681664"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "29",
+        "reasons": [
+          "proc.rss:381681664",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -4094,55 +3576,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "2900"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2147483648"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "2900",
+        "reasons": [
+          "proc.rss:2147483648",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "2100"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6442450944"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "2100",
+        "reasons": [
+          "proc.rss:6442450944",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "30"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "314572800"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "30",
+        "reasons": [
+          "proc.rss:314572800",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -4260,55 +3718,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "2995"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2164260864"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "2995",
+        "reasons": [
+          "proc.rss:2164260864",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "2180"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6459228160"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "2180",
+        "reasons": [
+          "proc.rss:6459228160",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "31"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "331350016"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "31",
+        "reasons": [
+          "proc.rss:331350016",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -4426,55 +3860,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "3090"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2181038080"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "3090",
+        "reasons": [
+          "proc.rss:2181038080",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "2260"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6476005376"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "2260",
+        "reasons": [
+          "proc.rss:6476005376",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "32"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "348127232"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "32",
+        "reasons": [
+          "proc.rss:348127232",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -4592,55 +4002,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "3185"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2197815296"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "3185",
+        "reasons": [
+          "proc.rss:2197815296",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "2340"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6492782592"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "2340",
+        "reasons": [
+          "proc.rss:6492782592",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "33"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "364904448"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "33",
+        "reasons": [
+          "proc.rss:364904448",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -4758,55 +4144,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "3280"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2214592512"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "3280",
+        "reasons": [
+          "proc.rss:2214592512",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "2420"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6509559808"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "2420",
+        "reasons": [
+          "proc.rss:6509559808",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "34"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "381681664"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "34",
+        "reasons": [
+          "proc.rss:381681664",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -4924,55 +4286,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "3375"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2147483648"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "3375",
+        "reasons": [
+          "proc.rss:2147483648",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "2500"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6442450944"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "2500",
+        "reasons": [
+          "proc.rss:6442450944",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "35"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "314572800"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "35",
+        "reasons": [
+          "proc.rss:314572800",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -5090,55 +4428,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "3470"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2164260864"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "3470",
+        "reasons": [
+          "proc.rss:2164260864",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "2580"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6459228160"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "2580",
+        "reasons": [
+          "proc.rss:6459228160",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "36"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "331350016"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "36",
+        "reasons": [
+          "proc.rss:331350016",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -5256,55 +4570,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "3565"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2181038080"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "3565",
+        "reasons": [
+          "proc.rss:2181038080",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "2660"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6476005376"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "2660",
+        "reasons": [
+          "proc.rss:6476005376",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "37"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "348127232"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "37",
+        "reasons": [
+          "proc.rss:348127232",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -5422,55 +4712,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "3660"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2197815296"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "3660",
+        "reasons": [
+          "proc.rss:2197815296",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "2740"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6492782592"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "2740",
+        "reasons": [
+          "proc.rss:6492782592",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "38"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "364904448"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "38",
+        "reasons": [
+          "proc.rss:364904448",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -5588,55 +4854,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "3755"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2214592512"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "3755",
+        "reasons": [
+          "proc.rss:2214592512",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "2820"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6509559808"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "2820",
+        "reasons": [
+          "proc.rss:6509559808",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "39"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "381681664"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "39",
+        "reasons": [
+          "proc.rss:381681664",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -5757,55 +4999,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "3850"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2147483648"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "3850",
+        "reasons": [
+          "proc.rss:2147483648",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "2900"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6442450944"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "2900",
+        "reasons": [
+          "proc.rss:6442450944",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "40"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "314572800"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "40",
+        "reasons": [
+          "proc.rss:314572800",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -5923,55 +5141,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "3945"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2164260864"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "3945",
+        "reasons": [
+          "proc.rss:2164260864",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "2980"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6459228160"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "2980",
+        "reasons": [
+          "proc.rss:6459228160",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "41"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "331350016"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "41",
+        "reasons": [
+          "proc.rss:331350016",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -6089,55 +5283,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "4040"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2181038080"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "4040",
+        "reasons": [
+          "proc.rss:2181038080",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "3060"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6476005376"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "3060",
+        "reasons": [
+          "proc.rss:6476005376",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "42"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "348127232"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "42",
+        "reasons": [
+          "proc.rss:348127232",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -6255,55 +5425,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "4135"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2197815296"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "4135",
+        "reasons": [
+          "proc.rss:2197815296",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "3140"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6492782592"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "3140",
+        "reasons": [
+          "proc.rss:6492782592",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "43"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "364904448"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "43",
+        "reasons": [
+          "proc.rss:364904448",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -6421,55 +5567,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "4230"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2214592512"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "4230",
+        "reasons": [
+          "proc.rss:2214592512",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "3220"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6509559808"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "3220",
+        "reasons": [
+          "proc.rss:6509559808",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "44"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "381681664"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "44",
+        "reasons": [
+          "proc.rss:381681664",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -6587,55 +5709,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "4325"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2147483648"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "4325",
+        "reasons": [
+          "proc.rss:2147483648",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "3300"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6442450944"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "3300",
+        "reasons": [
+          "proc.rss:6442450944",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "45"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "314572800"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "45",
+        "reasons": [
+          "proc.rss:314572800",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -6753,55 +5851,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "4420"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2164260864"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "4420",
+        "reasons": [
+          "proc.rss:2164260864",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "3380"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6459228160"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "3380",
+        "reasons": [
+          "proc.rss:6459228160",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "46"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "331350016"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "46",
+        "reasons": [
+          "proc.rss:331350016",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -6919,55 +5993,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "4515"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2181038080"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "4515",
+        "reasons": [
+          "proc.rss:2181038080",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "3460"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6476005376"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "3460",
+        "reasons": [
+          "proc.rss:6476005376",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "47"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "348127232"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "47",
+        "reasons": [
+          "proc.rss:348127232",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -7085,55 +6135,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "4610"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2197815296"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "4610",
+        "reasons": [
+          "proc.rss:2197815296",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "3540"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6492782592"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "3540",
+        "reasons": [
+          "proc.rss:6492782592",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "48"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "364904448"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "48",
+        "reasons": [
+          "proc.rss:364904448",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -7251,55 +6277,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "4705"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2214592512"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "4705",
+        "reasons": [
+          "proc.rss:2214592512",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "3620"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6509559808"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "3620",
+        "reasons": [
+          "proc.rss:6509559808",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "49"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "381681664"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "49",
+        "reasons": [
+          "proc.rss:381681664",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -7417,55 +6419,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "4800"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2147483648"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "4800",
+        "reasons": [
+          "proc.rss:2147483648",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "3700"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6442450944"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "3700",
+        "reasons": [
+          "proc.rss:6442450944",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "50"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "314572800"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "50",
+        "reasons": [
+          "proc.rss:314572800",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -7583,55 +6561,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "4895"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2164260864"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "4895",
+        "reasons": [
+          "proc.rss:2164260864",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "3780"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6459228160"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "3780",
+        "reasons": [
+          "proc.rss:6459228160",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "51"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "331350016"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "51",
+        "reasons": [
+          "proc.rss:331350016",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -7749,55 +6703,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "4990"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2181038080"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "4990",
+        "reasons": [
+          "proc.rss:2181038080",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "3860"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6476005376"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "3860",
+        "reasons": [
+          "proc.rss:6476005376",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "52"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "348127232"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "52",
+        "reasons": [
+          "proc.rss:348127232",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -7915,55 +6845,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "5085"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2197815296"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "5085",
+        "reasons": [
+          "proc.rss:2197815296",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "3940"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6492782592"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "3940",
+        "reasons": [
+          "proc.rss:6492782592",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "53"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "364904448"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "53",
+        "reasons": [
+          "proc.rss:364904448",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -8081,55 +6987,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "5180"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2214592512"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "5180",
+        "reasons": [
+          "proc.rss:2214592512",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "4020"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6509559808"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "4020",
+        "reasons": [
+          "proc.rss:6509559808",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "54"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "381681664"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "54",
+        "reasons": [
+          "proc.rss:381681664",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -8243,55 +7125,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "5275"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2147483648"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "5275",
+        "reasons": [
+          "proc.rss:2147483648",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "4100"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6442450944"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "4100",
+        "reasons": [
+          "proc.rss:6442450944",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "55"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "314572800"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "55",
+        "reasons": [
+          "proc.rss:314572800",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -8409,55 +7267,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "5370"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2164260864"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "5370",
+        "reasons": [
+          "proc.rss:2164260864",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "4180"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6459228160"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "4180",
+        "reasons": [
+          "proc.rss:6459228160",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "56"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "331350016"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "56",
+        "reasons": [
+          "proc.rss:331350016",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -8575,55 +7409,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "5465"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2181038080"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "5465",
+        "reasons": [
+          "proc.rss:2181038080",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "4260"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6476005376"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "4260",
+        "reasons": [
+          "proc.rss:6476005376",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "57"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "348127232"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "57",
+        "reasons": [
+          "proc.rss:348127232",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -8741,55 +7551,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "5560"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2197815296"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "5560",
+        "reasons": [
+          "proc.rss:2197815296",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "4340"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6492782592"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "4340",
+        "reasons": [
+          "proc.rss:6492782592",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "58"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "364904448"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "58",
+        "reasons": [
+          "proc.rss:364904448",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -8907,55 +7693,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "5655"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2214592512"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "5655",
+        "reasons": [
+          "proc.rss:2214592512",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "4420"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6509559808"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "4420",
+        "reasons": [
+          "proc.rss:6509559808",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "59"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "381681664"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "59",
+        "reasons": [
+          "proc.rss:381681664",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -9073,55 +7835,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "5750"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2147483648"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "5750",
+        "reasons": [
+          "proc.rss:2147483648",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "4500"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6442450944"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "4500",
+        "reasons": [
+          "proc.rss:6442450944",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "60"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "314572800"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "60",
+        "reasons": [
+          "proc.rss:314572800",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -9239,55 +7977,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "5845"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2164260864"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "5845",
+        "reasons": [
+          "proc.rss:2164260864",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "4580"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6459228160"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "4580",
+        "reasons": [
+          "proc.rss:6459228160",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "61"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "331350016"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "61",
+        "reasons": [
+          "proc.rss:331350016",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -9405,55 +8119,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "5940"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2181038080"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "5940",
+        "reasons": [
+          "proc.rss:2181038080",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "4660"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6476005376"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "4660",
+        "reasons": [
+          "proc.rss:6476005376",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "62"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "348127232"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "62",
+        "reasons": [
+          "proc.rss:348127232",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -9571,55 +8261,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "6035"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2197815296"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "6035",
+        "reasons": [
+          "proc.rss:2197815296",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "4740"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6492782592"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "4740",
+        "reasons": [
+          "proc.rss:6492782592",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "63"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "364904448"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "63",
+        "reasons": [
+          "proc.rss:364904448",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -9737,55 +8403,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "6130"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2214592512"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "6130",
+        "reasons": [
+          "proc.rss:2214592512",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "4820"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6509559808"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "4820",
+        "reasons": [
+          "proc.rss:6509559808",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "64"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "381681664"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "64",
+        "reasons": [
+          "proc.rss:381681664",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -9903,55 +8545,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "6225"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2147483648"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "6225",
+        "reasons": [
+          "proc.rss:2147483648",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "4900"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6442450944"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "4900",
+        "reasons": [
+          "proc.rss:6442450944",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "65"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "314572800"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "65",
+        "reasons": [
+          "proc.rss:314572800",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -10069,55 +8687,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "6320"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2164260864"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "6320",
+        "reasons": [
+          "proc.rss:2164260864",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "4980"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6459228160"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "4980",
+        "reasons": [
+          "proc.rss:6459228160",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "66"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "331350016"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "66",
+        "reasons": [
+          "proc.rss:331350016",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -10235,55 +8829,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "6415"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2181038080"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "6415",
+        "reasons": [
+          "proc.rss:2181038080",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "5060"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6476005376"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "5060",
+        "reasons": [
+          "proc.rss:6476005376",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "67"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "348127232"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "67",
+        "reasons": [
+          "proc.rss:348127232",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -10401,55 +8971,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "6510"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2197815296"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "6510",
+        "reasons": [
+          "proc.rss:2197815296",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "5140"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6492782592"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "5140",
+        "reasons": [
+          "proc.rss:6492782592",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "68"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "364904448"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "68",
+        "reasons": [
+          "proc.rss:364904448",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",
@@ -10567,55 +9113,31 @@
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:4242:90100",
         "channel": "python3",
-        "value": "6605"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "2214592512"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:4242:90100",
-        "channel": "python3",
-        "value": "1000"
+        "value": "6605",
+        "reasons": [
+          "proc.rss:2214592512",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:5150:91234",
         "channel": "torchrun",
-        "value": "5220"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "6509559808"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:5150:91234",
-        "channel": "torchrun",
-        "value": "1000"
+        "value": "5220",
+        "reasons": [
+          "proc.rss:6509559808",
+          "proc.uid:1000"
+        ]
       },
       {
         "source_id": "procfs:process:cpu.ticks",
         "entity_id": "process:pid:[4026531836]:777:1200",
         "channel": "jupyter-lab",
-        "value": "69"
-      },
-      {
-        "source_id": "procfs:process:rss",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "381681664"
-      },
-      {
-        "source_id": "procfs:process:uid",
-        "entity_id": "process:pid:[4026531836]:777:1200",
-        "channel": "jupyter-lab",
-        "value": "1001"
+        "value": "69",
+        "reasons": [
+          "proc.rss:381681664",
+          "proc.uid:1001"
+        ]
       },
       {
         "source_id": "nvml:process:GPU-5e1d0a2c-0000-4000-8000-000000000001:memory_allocated",

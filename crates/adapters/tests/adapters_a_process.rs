@@ -61,7 +61,7 @@ fn by_pid(records: &[Observation], pid: u32) -> &Observation {
 }
 
 fn stat_of(record: &Observation) -> ProcessStat {
-    ProcessStat::from_reason_codes(&record.reason_codes).unwrap_or_else(|| panic!("no stat tags"))
+    ProcessStat::from_reason_codes(&record.reason_codes)
 }
 
 /// The display name before the command line in a record's channel.

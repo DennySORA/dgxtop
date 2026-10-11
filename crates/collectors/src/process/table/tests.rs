@@ -4,7 +4,7 @@ use dgxtop_core::canonical::{CollectionBatch, CollectionLimits, GpuUsageKind, Pr
 use dgxtop_core::metric::{ids, native};
 use dgxtop_core::observation::BatchStatus;
 use dgxtop_core::observation::Observation;
-use dgxtop_core::quality::{Quality, ReadStatus};
+use dgxtop_core::quality::{Quality, ReadStatus, SampleKind};
 use dgxtop_core::testing::metric_key;
 
 use super::*;
@@ -45,30 +45,6 @@ fn compact(pid: i32, start: u64, ticks: u64, stat: ProcessStat, at: u64) -> Obse
     observation.provenance.channel = format!("worker-{pid}").into();
     observation.reason_codes = stat.reason_codes();
     observation
-}
-
-/// A replay's records of one process: ticks, RSS (KiB) and uid, one
-/// record each.
-fn legacy_host(pid: i32, start: u64, ticks: u64, rss_kib: u64, at: u64) -> Vec<Observation> {
-    let entity = entity_of(pid, start);
-    let record = |metric: &str, unit: &str, value: u64| {
-        let mut observation = reading(
-            &metric_key(&entity, metric, "process"),
-            "procfs",
-            &format!("procfs:{entity}:{metric}"),
-            at,
-        )
-        .unit(unit)
-        .u64(value)
-        .build();
-        observation.provenance.channel = format!("worker-{pid}").into();
-        observation
-    };
-    vec![
-        record(ids::PROCESS_CPU_TICKS, native::TICKS, ticks),
-        record(ids::PROCESS_RSS, native::KIB, rss_kib),
-        record(ids::PROCESS_UID, native::COUNT, 1000),
-    ]
 }
 
 /// NVML adapter convention: one source per GPU and metric (records carry
@@ -303,30 +279,6 @@ fn failed_ticks_keep_the_rest_of_the_stat() {
     assert_eq!(process.uid, Some(1000));
 }
 
-/// A replay still sends one record per metric, the command line on the
-/// uid record (D-73): its rows stay the same.
-#[test]
-fn a_replay_records_per_metric_still_make_rows() {
-    let separator = dgxtop_core::naming::PROCESS_COMMAND_SEPARATOR;
-    let procfs: Vec<Observation> = legacy_host(7, 100, 0, 10, SECOND)
-        .into_iter()
-        .map(|mut observation| {
-            if observation.key.metric_id.as_str() == ids::PROCESS_UID {
-                observation.provenance.channel =
-                    format!("worker-7{separator}python train.py --lr 3e-4\u{1b}[2J").into();
-            }
-            observation
-        })
-        .collect();
-    let collector = ProcessCollector::new().unwrap();
-    let batch = collect(&collector, &plan(procfs, vec![], SECOND + 1).build());
-    let process = row(&batch, 7);
-    assert_eq!(process.name, "worker-7");
-    assert_eq!(process.command, "python train.py --lr 3e-4");
-    assert_eq!(process.rss_bytes, Some(10 * 1024));
-    assert_eq!(process.uid, Some(1000));
-}
-
 #[test]
 fn reused_pid_with_new_start_time_never_inherits_the_old_base() {
     let batch = two_cycles(
@@ -496,23 +448,6 @@ fn missing_clk_tck_is_never_defaulted() {
             .iter()
             .any(|failure| failure.code == reasons::CLK_TCK_UNKNOWN)
     );
-}
-
-#[test]
-fn a_replay_unreadable_rss_is_missing_not_zero() {
-    let collector = ProcessCollector::new().unwrap();
-    let mut records = legacy_host(9, 1, 0, 1, SECOND);
-    records[1] = reading(
-        &metric_key(&entity_of(9, 1), ids::PROCESS_RSS, "process"),
-        "procfs",
-        "procfs:9:rss",
-        SECOND,
-    )
-    .failed(ReadStatus::PermissionDenied)
-    .build();
-    let batch = collect(&collector, &plan(records, vec![], SECOND + 1).build());
-    let process = row(&batch, 9);
-    assert_eq!(process.rss_bytes, None);
 }
 
 fn table_limits(max_processes: u32, max_links: u32) -> CollectionLimits {
@@ -834,15 +769,20 @@ fn descendants_cpu_needs_the_clock_ticks() {
     assert_eq!(descendants_of(usage, before, now, None).processes, 4);
 }
 
-/// A replay's records name no parents: no tree, no descendants.
+/// Records that name no parent make no tree: no descendants.
 #[test]
-fn a_replay_has_no_descendants() {
-    let mut procfs = legacy_host(42, 1, 0, 1, SECOND);
-    procfs.extend(legacy_host(50, 1, 0, 1, SECOND));
+fn processes_without_parents_have_no_descendants() {
+    let orphan = |pid: i32| {
+        let stat = ProcessStat {
+            rss_bytes: Some(1),
+            ..ProcessStat::default()
+        };
+        compact(pid, 1, 0, stat, SECOND)
+    };
     let collector = ProcessCollector::new().unwrap();
     let batch = collect(
         &collector,
-        &plan(procfs, on_gpu(42, SECOND), SECOND + 1).build(),
+        &plan(vec![orphan(42), orphan(50)], on_gpu(42, SECOND), SECOND + 1).build(),
     );
     assert!(!row(&batch, 42).gpu.is_empty());
     assert_eq!(row(&batch, 42).descendants, None);

@@ -1,11 +1,11 @@
 //! Process collector (AT09).
 //!
-//! Host resources are sampled ONCE per `ProcessKey` per cycle from procfs
-//! records (`process:<ns>:<pid>:<start>`): CPU% = Δticks / (CLK_TCK × dt) ×
-//! 100 (may exceed 100 on several cores), RSS bytes, numeric uid and the
-//! name carried in the provenance channel. The live adapter sends one
-//! record per process, its ticks, with the rest of its `stat` as tags
-//! ([`ProcessStat`], D-79); a replay still sends one record per metric. GPU usage from NVML
+//! Host resources are sampled ONCE per `ProcessKey` per cycle from one
+//! procfs record per process (`process:<ns>:<pid>:<start>`, D-79, D-86):
+//! its CPU ticks as the value, the rest of its `stat` as tags
+//! ([`ProcessStat`]) and the name and command line in the provenance
+//! channel. CPU% = Δticks / (CLK_TCK × dt) × 100 (may exceed 100 on several
+//! cores); RSS bytes and the numeric uid come from the tags. GPU usage from NVML
 //! (`gpupid:<UUID>:<PID>`) is joined afterwards as `(ProcessKey, GPU)` links:
 //! host resources are never repeated or multiplied per GPU, compute and
 //! graphics entries of one PID on one GPU merge into one link, and a PID is
@@ -24,14 +24,11 @@ use dgxtop_core::canonical::{
 };
 use dgxtop_core::clock::NANOS_PER_SECOND;
 use dgxtop_core::identity::{AdapterId, CollectorId, EntityId, IdentityError, ProcessKey};
-use dgxtop_core::metric::{
-    self, CanonicalUnit, Domain, MetricDescriptor, Scalar, conversion_for, ids, native,
-};
+use dgxtop_core::metric::{self, Domain, MetricDescriptor, Scalar, ids, native};
 use dgxtop_core::naming::{self, adapters, attributes, entity, groups};
 use dgxtop_core::observation::BatchStatus;
 use dgxtop_core::ports::Collector;
 use dgxtop_core::process_stat::{self, ProcessStat};
-use dgxtop_core::quality::SampleKind;
 use dgxtop_core::text::{sanitize_command_name, sanitize_display};
 
 use crate::process::gpu_processes::{self, PidRecords};
@@ -43,8 +40,6 @@ use crate::shared::counter_inputs;
 use crate::shared::output::Subject;
 use crate::shared::reasons;
 use crate::shared::state_bounds::PROCESS_BASES_PER_ROW;
-
-const HOST_METRICS: [&str; 3] = [ids::PROCESS_CPU_TICKS, ids::PROCESS_RSS, ids::PROCESS_UID];
 
 fn accepts(metric: &MetricDescriptor) -> bool {
     metric.domain == Domain::Process && metric.id != ids::PROCESS_CPU_PERCENT
@@ -139,38 +134,29 @@ fn clk_tck(session: &Session<'_>) -> Option<u64> {
         .filter(|ticks| *ticks > 0)
 }
 
-/// Newest procfs record of each host metric of one process instance.
-#[derive(Debug, Default, Clone, Copy)]
+/// The newest procfs record of one process instance (D-79): its CPU ticks
+/// as the value, the rest of its `stat` as tags, parsed once.
+#[derive(Debug, Clone, Copy)]
 struct HostSample<'a> {
-    ticks: Option<Record<'a>>,
-    rss: Option<Record<'a>>,
-    uid: Option<Record<'a>>,
+    record: Record<'a>,
+    stat: ProcessStat,
 }
 
 impl<'a> HostSample<'a> {
-    fn records(&self) -> impl Iterator<Item = Record<'a>> {
-        [self.ticks, self.rss, self.uid].into_iter().flatten()
-    }
-
-    /// The `stat` tags of the compact record; `None` for a replay's
-    /// one-metric records.
-    fn stat(&self) -> Option<ProcessStat> {
-        self.ticks
-            .and_then(|record| ProcessStat::from_reason_codes(&record.observation.reason_codes))
-    }
-
-    fn slot(&mut self, metric: &str) -> Option<&mut Option<Record<'a>>> {
-        match metric {
-            ids::PROCESS_CPU_TICKS => Some(&mut self.ticks),
-            ids::PROCESS_RSS => Some(&mut self.rss),
-            ids::PROCESS_UID => Some(&mut self.uid),
-            _ => None,
+    fn of(record: Record<'a>) -> Self {
+        Self {
+            record,
+            stat: ProcessStat::from_reason_codes(&record.observation.reason_codes),
         }
+    }
+
+    fn read_finished_boot_ns(&self) -> u64 {
+        self.record.observation.read_finished_boot_ns
     }
 }
 
 /// Visible process instances of this cycle: procfs records of the policy
-/// namespace, grouped by `ProcessKey` (one host sample per key).
+/// namespace, one per `ProcessKey` (the newest).
 fn host_samples<'a>(session: &mut Session<'a>) -> BTreeMap<ProcessKey, HostSample<'a>> {
     let namespace = session.policy().namespace;
     let mut samples: BTreeMap<ProcessKey, HostSample<'a>> = BTreeMap::new();
@@ -178,8 +164,7 @@ fn host_samples<'a>(session: &mut Session<'a>) -> BTreeMap<ProcessKey, HostSampl
         let from_procfs = record
             .route
             .is_some_and(|route| route.is(adapters::PROCFS, groups::PROCESS));
-        let metric = record.key().metric_id.as_str();
-        if !from_procfs || !HOST_METRICS.contains(&metric) {
+        if !from_procfs || record.key().metric_id.as_str() != ids::PROCESS_CPU_TICKS {
             continue;
         }
         if check_namespace(record.observation, namespace).is_err() {
@@ -196,15 +181,11 @@ fn host_samples<'a>(session: &mut Session<'a>) -> BTreeMap<ProcessKey, HostSampl
             );
             continue;
         };
-        let sample = samples.entry(process).or_default();
-        if let Some(slot) = sample.slot(metric) {
-            let newer = slot.is_none_or(|current: Record<'_>| {
-                record.observation.read_finished_boot_ns
-                    >= current.observation.read_finished_boot_ns
-            });
-            if newer {
-                *slot = Some(record);
-            }
+        let newer = samples.get(&process).is_none_or(|current| {
+            record.observation.read_finished_boot_ns >= current.read_finished_boot_ns()
+        });
+        if newer {
+            samples.insert(process, HostSample::of(record));
         }
     }
     samples
@@ -218,7 +199,7 @@ fn display_name_of(channel: &str) -> &str {
         .unwrap_or(channel)
 }
 
-/// The command line the uid record's channel carries after the name
+/// The command line a process record's channel carries after the name
 /// (D-73), cleaned and bounded; empty when there is none.
 fn command_of(channel: &str) -> String {
     channel
@@ -234,50 +215,24 @@ fn host_row(
     sample: &HostSample<'_>,
     clk_tck: Option<u64>,
 ) -> (ProcessRow, Option<ProcessBase>) {
-    let (cpu_percent, cpu_reason, base) = match sample.ticks {
-        Some(record) => cpu_percent(session, key, record, clk_tck),
-        None => (None, Some(reasons::MISSING_INPUT), None),
-    };
-    let stat = sample.stat();
-    let (rss_bytes, rss_reason) = match (stat, sample.ticks, sample.rss) {
-        (Some(stat), Some(record), _) => tagged_rss(session, record, stat.rss_bytes),
-        (None, _, Some(record)) => rss_bytes(session, record),
-        _ => (None, Some(reasons::MISSING_INPUT)),
-    };
-    let uid = match (stat, sample.ticks) {
-        (Some(stat), Some(record)) => stat.uid.filter(|_| admits_tags(session, record).is_ok()),
-        _ => sample.uid.and_then(|record| uid_of(session, record)),
-    };
-    let named = sample.ticks.or(sample.rss).or(sample.uid);
+    let record = sample.record;
+    let (cpu_percent, cpu_reason, base) = cpu_percent(session, key, record, clk_tck);
+    let admitted = admits_tags(session, record);
+    let (rss_bytes, rss_reason) = tagged_rss(session, sample, admitted);
+    let channel = &record.observation.provenance.channel;
     let row = ProcessRow {
         key: key.clone(),
-        name: named.map_or_else(
-            || "?".to_owned(),
-            |record| sanitize_command_name(display_name_of(&record.observation.provenance.channel)),
-        ),
-        // A replay's uid record carries the command line; the compact
-        // record carries it itself.
-        command: sample
-            .uid
-            .or(sample.ticks)
-            .map_or_else(String::new, |record| {
-                command_of(&record.observation.provenance.channel)
-            }),
-        uid,
-        state: stat.and_then(|stat| stat.state),
+        name: sanitize_command_name(display_name_of(channel)),
+        command: command_of(channel),
+        uid: sample.stat.uid.filter(|_| admitted.is_ok()),
+        state: sample.stat.state,
         cpu_percent,
         rss_bytes,
         missing_reason: cpu_reason.or(rss_reason).map(str::to_owned),
         gpu: Vec::new(),
         descendants: None,
-        sample_kind: named.map_or(SampleKind::Measured, |record| {
-            record.observation.sample_kind
-        }),
-        read_finished_boot_ns: sample
-            .records()
-            .map(|record| record.observation.read_finished_boot_ns)
-            .max()
-            .unwrap_or(0),
+        sample_kind: record.observation.sample_kind,
+        read_finished_boot_ns: sample.read_finished_boot_ns(),
     };
     (row, base)
 }
@@ -296,24 +251,25 @@ fn admits_tags(session: &Session<'_>, record: Record<'_>) -> Result<(), &'static
     }
 }
 
-/// The RSS a compact record's tags carry, already in bytes.
+/// The RSS a compact record's tags carry, already in bytes; the adapter's
+/// reason when it could not read it.
 fn tagged_rss(
     session: &Session<'_>,
-    record: Record<'_>,
-    bytes: Option<u64>,
+    sample: &HostSample<'_>,
+    admitted: Result<(), &'static str>,
 ) -> (Option<u64>, Option<&'static str>) {
-    if let Err(code) = admits_tags(session, record) {
+    if let Err(code) = admitted {
         return (None, Some(code));
     }
-    if !counter_inputs::is_fresh(session, record) {
+    if !counter_inputs::is_fresh(session, sample.record) {
         return (None, Some(reasons::STALE));
     }
-    match bytes {
+    match sample.stat.rss_bytes {
         Some(bytes) => (Some(bytes), None),
         None => (
             None,
             Some(
-                process_stat::rss_failure(&record.observation.reason_codes)
+                process_stat::rss_failure(&sample.record.observation.reason_codes)
                     .unwrap_or(reasons::MISSING_INPUT),
             ),
         ),
@@ -374,60 +330,17 @@ fn cpu_percent(
     }
 }
 
-fn rss_bytes(session: &Session<'_>, record: Record<'_>) -> (Option<u64>, Option<&'static str>) {
-    let candidate = session.candidate(record);
-    if let Err(reason) = arbitration::check_admission(&candidate, record.key(), session.policy()) {
-        return (
-            None,
-            Some(reasons::reject_code(
-                &reason,
-                record.observation.native_unit.as_str(),
-            )),
-        );
-    }
-    if !counter_inputs::is_fresh(session, record) {
-        return (None, Some(reasons::STALE));
-    }
-    let converted = record.observation.value.and_then(|value| {
-        conversion_for(
-            record.observation.native_unit.as_str(),
-            CanonicalUnit::Bytes,
-        )
-        .map(|conversion| conversion.apply(value))
-    });
-    match converted {
-        Some(Ok(bytes)) => match bytes.as_u64() {
-            Some(bytes) => (Some(bytes), None),
-            None => (None, Some(reasons::INVALID_VALUE)),
-        },
-        Some(Err(_)) => (None, Some(reasons::VALUE_OVERFLOW)),
-        None => (None, Some(reasons::UNKNOWN_UNIT)),
-    }
-}
-
-/// Numeric uid only; names are never resolved on the hot path.
-fn uid_of(session: &Session<'_>, record: Record<'_>) -> Option<u32> {
-    let candidate = session.candidate(record);
-    arbitration::check_admission(&candidate, record.key(), session.policy()).ok()?;
-    let value = record.observation.value.and_then(Scalar::as_u64)?;
-    u32::try_from(value).ok()
-}
-
 // ----- descendants ----------------------------------------------------------
 
-/// A process of the tree, from its compact record; a replay's records name
-/// no parent and make no tree.
+/// A process of the tree, from its compact record; one whose parent is
+/// unknown is left out.
 fn tree_node(key: &ProcessKey, sample: &HostSample<'_>) -> Option<(i64, TreeNode)> {
-    let stat = sample.stat()?;
-    let own_ticks = sample
-        .ticks
-        .and_then(|record| record.observation.value)
-        .and_then(Scalar::as_u64);
+    let own_ticks = sample.record.observation.value.and_then(Scalar::as_u64);
     let node = TreeNode {
-        parent: stat.ppid?,
+        parent: sample.stat.ppid?,
         own_ticks,
-        reaped_ticks: stat.reaped_ticks,
-        rss_bytes: stat.rss_bytes,
+        reaped_ticks: sample.stat.reaped_ticks,
+        rss_bytes: sample.stat.rss_bytes,
     };
     Some((i64::from(key.pid.get()), node))
 }
