@@ -7,7 +7,9 @@
 //! Opened like the other partitions (0600, no symlinks, format, schema and
 //! integrity checked before any write, a file of another format recreated
 //! (D-85), `max_page_count`); one still unusable makes every call fail with
-//! its reason and the history goes on in memory.
+//! its reason and the history goes on in memory. A failed call maps like
+//! every partition's (`sqlite::Writer`): corruption stops the
+//! database until the next start recreates it.
 //! No series expires by age: past [`MAX_USED_BYTES`] the series written
 //! longest ago give way.
 
@@ -21,35 +23,21 @@ use std::path::Path;
 
 use crate::fs::{FileSystemOps, RealFileSystem};
 use crate::sqlite::{
-    CapacityPolicy, ConnectionProfile, DatabaseSpec, SchemaKind, VersionGate,
-    ensure_sqlite_version, open_database,
+    DatabaseFailure, SchemaKind, VersionGate, Writer, ensure_sqlite_version, open_small_database,
 };
 
 const MIB: u64 = 1024 * 1024;
-/// The database, its WAL and shared memory together.
-const LIMIT_BYTES: u64 = 64 * MIB;
-const WAL_CHECKPOINT_BYTES: u64 = 4 * MIB;
-const WAL_STOP_BYTES: u64 = 16 * MIB;
-const MIN_FREE_DISK_BYTES: u64 = 64 * MIB;
 /// The pages in use past which the series written longest ago give way:
-/// room for the WAL below the limit. A full series (every size at 300
-/// buckets) takes about a quarter of a megabyte.
+/// room for the WAL below the 64 MiB of a small database. A full series
+/// (every size at 300 buckets) takes about a quarter of a megabyte.
 const MAX_USED_BYTES: u64 = 48 * MIB;
 
 /// The tiers database in dgxtop's state directory.
+#[derive(Debug)]
 pub struct SqliteHistoryTiers {
-    database: Result<Connection, String>,
+    database: Writer,
     recreated: Option<String>,
     max_used_bytes: u64,
-}
-
-impl std::fmt::Debug for SqliteHistoryTiers {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("SqliteHistoryTiers")
-            .field("database", &self.database.as_ref().map(|_| "open"))
-            .finish_non_exhaustive()
-    }
 }
 
 impl SqliteHistoryTiers {
@@ -60,22 +48,8 @@ impl SqliteHistoryTiers {
     }
 
     pub(crate) fn open_with(path: &Path, fs: &dyn FileSystemOps, gate: VersionGate) -> Self {
-        let spec = DatabaseSpec {
-            path,
-            kind: SchemaKind::HistoryTiers,
-            profile: ConnectionProfile::archive(WAL_CHECKPOINT_BYTES),
-            policy: CapacityPolicy {
-                limit_bytes: LIMIT_BYTES,
-                reserve_bytes: 0,
-                wal_checkpoint_bytes: WAL_CHECKPOINT_BYTES,
-                wal_stop_bytes: WAL_STOP_BYTES,
-                min_free_disk_bytes: MIN_FREE_DISK_BYTES,
-            },
-        };
-        let (database, recreated) = match open_database(&spec, fs, gate) {
-            Ok(opened) => (Ok(opened.connection), opened.recreated),
-            Err(unusable) => (Err(unusable.reason), None),
-        };
+        let opened = open_small_database(path, SchemaKind::HistoryTiers, fs, gate);
+        let (database, recreated) = Writer::new("history tiers", opened);
         Self {
             database,
             recreated,
@@ -90,9 +64,19 @@ impl SqliteHistoryTiers {
     }
 
     fn connection(&mut self) -> Result<&mut Connection, InfraError> {
-        self.database
-            .as_mut()
-            .map_err(|reason| InfraError::Unavailable(format!("history tiers database: {reason}")))
+        self.database.connection().map_err(|unusable| {
+            InfraError::Unavailable(format!("history tiers database: {}", unusable.reason))
+        })
+    }
+
+    /// Runs `call` on the database, mapping its failure (D-85: corruption
+    /// stops the database).
+    fn with_database<T>(
+        &mut self,
+        call: impl FnOnce(&mut Connection) -> Result<T, DatabaseFailure>,
+    ) -> Result<T, InfraError> {
+        let result = call(self.connection()?);
+        result.map_err(|failure| self.database.fail(&failure))
     }
 
     #[cfg(test)]
@@ -104,14 +88,15 @@ impl SqliteHistoryTiers {
 
 impl HistoryTierStore for SqliteHistoryTiers {
     fn load(&mut self) -> Result<Vec<StoredTierSeries>, InfraError> {
-        database::load(self.connection()?)
+        self.with_database(database::load)
     }
 
     fn append(&mut self, journal: &TierJournal) -> Result<(), InfraError> {
         let max_used_bytes = self.max_used_bytes;
-        let connection = self.connection()?;
-        database::append(connection, journal)?;
-        database::retain(connection, max_used_bytes)
+        self.with_database(|connection| {
+            database::append(connection, journal)?;
+            database::retain(connection, max_used_bytes)
+        })
     }
 }
 

@@ -354,10 +354,12 @@ fn buckets_pack_twelve_bytes_a_metric_and_back() {
     assert_eq!(back.value(RunMetric::OpenFiles).peak(), Some(12.0));
     assert!(database::unpack(0, &packed[..95]).is_none());
     assert!(database::unpack(0, &[]).is_none());
-    // A bucket of version 2 held the first eight metrics.
-    let older = database::unpack(MINUTE, &packed[..96]).unwrap();
-    assert_eq!(older.value(RunMetric::Cpu).mean(), Some(20.0));
-    assert_eq!(older.value(RunMetric::OpenFiles).count, 0);
+    // Only this format's layout is read: a file of another format is
+    // recreated, never upgraded (D-85).
+    assert!(database::unpack(MINUTE, &packed[..96]).is_none());
+    let mut longer = packed.clone();
+    longer.extend([0; 12]);
+    assert!(database::unpack(MINUTE, &longer).is_none());
 }
 
 /// Writes a database of this schema holding one run, stamped with
@@ -506,4 +508,134 @@ fn a_short_term_file_of_another_format_is_replaced() {
         vec!["process_recent.json".to_owned()],
         "nothing kept aside"
     );
+}
+
+/// Caps the database at the pages it has, so the next growth is
+/// `SQLITE_FULL`.
+fn fill_up(connection: &rusqlite::Connection) {
+    let _cap: i64 = connection
+        .query_row("PRAGMA max_page_count = 1", [], |row| row.get(0))
+        .unwrap();
+}
+
+/// A full database is a full disk to the history, like the archive's
+/// (one SQLite mapping for every partition).
+#[test]
+fn a_full_database_reports_disk_full() {
+    let scratch = Scratch::new("disk-full");
+    let clock = clock();
+    let now = now_utc(&clock);
+    let mut store = scratch.open(&clock);
+    store.load().unwrap();
+    fill_up(store.connection().unwrap());
+    let runs = (1..=200).map(|pid| run(pid, now, None)).collect();
+    let error = store
+        .append(&ProcessHistoryJournal {
+            runs,
+            buckets: Vec::new(),
+        })
+        .unwrap_err();
+    assert!(matches!(error, InfraError::DiskFull { .. }), "{error:?}");
+}
+
+/// A stored bucket this format never writes is reported, not dropped: the
+/// load fails with what is wrong, and the database keeps working.
+#[test]
+fn an_undecodable_bucket_fails_the_load() {
+    let scratch = Scratch::new("bad-bucket");
+    let clock = clock();
+    let now = now_utc(&clock);
+    let mut store = scratch.open(&clock);
+    store
+        .append(&ProcessHistoryJournal {
+            runs: vec![run(1, now, None)],
+            buckets: vec![row(1, Tier::OneMinute, bucket(now - MINUTE, 10.0))],
+        })
+        .unwrap();
+    store
+        .connection()
+        .unwrap()
+        .execute("UPDATE process_buckets SET aggregates = zeroblob(96)", [])
+        .unwrap();
+    let error = store.load().unwrap_err();
+    assert!(matches!(error, InfraError::Database(_)), "{error:?}");
+    assert!(error.to_string().contains("96 bytes"), "{error}");
+    let error = store.read_run(&key(1)).unwrap_err();
+    assert!(error.to_string().contains("96 bytes"), "{error}");
+    store
+        .append(&ProcessHistoryJournal {
+            runs: vec![run(1, now, None)],
+            buckets: vec![row(1, Tier::OneMinute, bucket(now - MINUTE, 10.0))],
+        })
+        .unwrap();
+    assert_eq!(
+        store.load().unwrap().buckets.len(),
+        1,
+        "rewritten, read again"
+    );
+}
+
+/// Corruption stops the database like every partition's (sqlite::Writer):
+/// later calls say why, and the short-term file still works.
+#[test]
+fn a_corrupt_database_stops_with_its_reason() {
+    let scratch = Scratch::new("corrupt");
+    let clock = clock();
+    let mut store = scratch.open(&clock);
+    let corrupt = store
+        .with_database(|_| -> Result<(), DatabaseFailure> {
+            Err(DatabaseFailure::Statement {
+                operation: "process_history.load",
+                error: rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CORRUPT),
+                    None,
+                ),
+            })
+        })
+        .unwrap_err();
+    assert!(matches!(corrupt, InfraError::Database(_)), "{corrupt:?}");
+    let error = store.load().unwrap_err();
+    assert!(matches!(error, InfraError::Unavailable(_)), "{error:?}");
+    assert!(
+        error.to_string().contains("process history stopped"),
+        "{error}"
+    );
+    let recent = RecentHistory {
+        boot_id: boot_id("boot-a"),
+        saved_utc_ns: 0,
+        runs: Vec::new(),
+    };
+    assert!(store.save_recent(&recent).is_ok());
+}
+
+/// Relative paths are refused like the archive's and the audit's: the
+/// database is unusable and says why, the short-term file is never
+/// written, and nothing is created anywhere.
+#[test]
+fn relative_paths_are_refused() {
+    let scratch = Scratch::new("relative");
+    let clock = clock();
+    let missing = format!("dgxtop-relative-{}", uuid::Uuid::new_v4().simple());
+    let relative_database = PathBuf::from(&missing).join("process_history.sqlite3");
+    let mut store = ProcessHistoryFiles::open(
+        &relative_database,
+        &scratch.0.join("process_recent.json"),
+        Arc::clone(&clock) as Arc<dyn TimeProvider>,
+    );
+    let error = store.load().unwrap_err().to_string();
+    assert!(error.contains("must be absolute"), "{error}");
+    let relative_recent = PathBuf::from(&missing).join("process_recent.json");
+    let mut store = ProcessHistoryFiles::open(
+        &scratch.0.join("process_history.sqlite3"),
+        &relative_recent,
+        Arc::clone(&clock) as Arc<dyn TimeProvider>,
+    );
+    let recent = RecentHistory {
+        boot_id: boot_id("boot-a"),
+        saved_utc_ns: 0,
+        runs: Vec::new(),
+    };
+    let error = store.save_recent(&recent).unwrap_err().to_string();
+    assert!(error.contains("must be absolute"), "{error}");
+    assert!(!PathBuf::from(&missing).exists(), "nothing is created");
 }

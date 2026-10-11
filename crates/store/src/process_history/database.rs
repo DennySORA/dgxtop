@@ -6,7 +6,6 @@
 use std::time::Duration;
 
 use dgxtop_core::action::Signal;
-use dgxtop_core::errors::InfraError;
 use dgxtop_core::identity::{BootId, HostId, Pid, PidNamespace, ProcessKey};
 use dgxtop_core::process_history::{
     Aggregate, EndCause, MAX_LISTED_RUNS, ProcessHistoryJournal, RUN_METRICS, RunBucket,
@@ -14,14 +13,18 @@ use dgxtop_core::process_history::{
 };
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
-use crate::sqlite::{StepError, TxError, describe, immediate_transaction};
+use crate::sqlite::{
+    BucketTable, DatabaseFailure, StepError, checkpoint, immediate_transaction, used_bytes,
+};
 
 /// A transaction waits this long for the write lock at most.
 const BUSY_DEADLINE: Duration = Duration::from_millis(500);
+const PROCESS_BUCKETS: BucketTable = BucketTable {
+    table: "process_buckets",
+    owner_column: "run_id",
+};
 const AGGREGATE_BYTES: usize = 12;
 const PACKED_BYTES: usize = AGGREGATE_BYTES * RUN_METRICS;
-/// The most a stored bucket may hold (the schema's limit).
-const MAX_PACKED_BYTES: usize = 1200;
 /// Ended runs whose buckets the startup load returns, the latest first.
 const ENDED_RUNS_WITH_BUCKETS: i64 = 32;
 /// Runs kept at most; the ones last seen longest ago give way.
@@ -38,7 +41,7 @@ const RUN_COLUMNS: &str = "run_id, host_id, boot_id, pid_namespace, pid, start_t
 pub(super) fn append(
     connection: &mut Connection,
     journal: &ProcessHistoryJournal,
-) -> Result<(), InfraError> {
+) -> Result<(), DatabaseFailure> {
     if journal.is_empty() {
         return Ok(());
     }
@@ -67,36 +70,25 @@ pub(super) fn append(
                     pack(&row.bucket)
                 ])?;
         }
+        // Each size keeps a run's latest `Tier::capacity` buckets (D-77):
+        // the older ones are in the coarser sizes already.
         for (run_id, tier) in touched {
-            keep_latest(transaction, run_id, tier)?;
+            let keep = u64::try_from(tier.capacity()).unwrap_or(u64::MAX);
+            PROCESS_BUCKETS.keep_latest(transaction, run_id, tier.code(), keep)?;
         }
         Ok::<_, StepError<()>>(())
     })
-    .map_err(|error| tx_error("process_history.append", error))?;
-    // The archive profile leaves checkpoints to the writer.
-    connection
-        .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()))
-        .map_err(|error| sqlite_error("process_history.checkpoint", &error))
-}
-
-/// Each size keeps a run's latest [`Tier::capacity`] buckets (D-77): the
-/// older ones are in the coarser sizes already.
-fn keep_latest(transaction: &Transaction<'_>, run_id: i64, tier: Tier) -> rusqlite::Result<()> {
-    let keep = i64::try_from(tier.capacity()).unwrap_or(i64::MAX);
-    transaction
-        .prepare_cached(
-            "DELETE FROM process_buckets WHERE run_id = ?1 AND tier = ?2 AND start_utc_ns < \
-             (SELECT start_utc_ns FROM process_buckets WHERE run_id = ?1 AND tier = ?2 \
-              ORDER BY start_utc_ns DESC LIMIT 1 OFFSET ?3)",
-        )?
-        .execute(params![run_id, tier.code(), keep - 1])?;
-    Ok(())
+    .map_err(DatabaseFailure::transaction("process_history.append"))?;
+    checkpoint(connection).map_err(DatabaseFailure::statement("process_history.checkpoint"))
 }
 
 /// Runs beyond the cap, and while the database holds more than
 /// `max_used_bytes`, the ended runs last seen longest ago (D-77: no run
 /// expires by age).
-pub(super) fn retain(connection: &mut Connection, max_used_bytes: u64) -> Result<(), InfraError> {
+pub(super) fn retain(
+    connection: &mut Connection,
+    max_used_bytes: u64,
+) -> Result<(), DatabaseFailure> {
     immediate_transaction(connection, BUSY_DEADLINE, |transaction| {
         transaction.execute(
             "DELETE FROM process_runs WHERE run_id NOT IN \
@@ -115,35 +107,27 @@ pub(super) fn retain(connection: &mut Connection, max_used_bytes: u64) -> Result
         }
         Ok::<_, StepError<()>>(())
     })
-    .map_err(|error| tx_error("process_history.retain", error))
-}
-
-/// Bytes of the pages in use (the free ones are reused before it grows).
-fn used_bytes(connection: &Connection) -> rusqlite::Result<u64> {
-    let pragma = |name: &str| -> rusqlite::Result<u64> {
-        connection
-            .query_row(&format!("PRAGMA {name}"), [], |row| row.get::<_, i64>(0))
-            .map(|value| u64::try_from(value).unwrap_or(0))
-    };
-    let pages = pragma("page_count")?.saturating_sub(pragma("freelist_count")?);
-    Ok(pages.saturating_mul(pragma("page_size")?))
+    .map_err(DatabaseFailure::transaction("process_history.retain"))
 }
 
 /// The runs the history lists (the last seen first), and the buckets of
 /// those still unfinished and of the latest ended ones.
 pub(super) fn load(
     connection: &mut Connection,
-) -> Result<(Vec<RunInfo>, Vec<RunBucketRow>), InfraError> {
+) -> Result<(Vec<RunInfo>, Vec<RunBucketRow>), DatabaseFailure> {
     let limit = i64::try_from(MAX_LISTED_RUNS).unwrap_or(i64::MAX);
     let mut statement = connection
         .prepare(&format!(
             "SELECT {RUN_COLUMNS} FROM process_runs ORDER BY last_seen_utc_ns DESC LIMIT ?1"
         ))
-        .map_err(|error| sqlite_error("process_history.load", &error))?;
+        .map_err(DatabaseFailure::statement("process_history.load"))?;
+    let failed = DatabaseFailure::statement("process_history.load");
     let runs: Vec<(i64, RunInfo)> = statement
         .query_map(params![limit], run_of)
-        .map_err(|error| sqlite_error("process_history.load", &error))?
-        .filter_map(Result::ok)
+        .map_err(&failed)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(&failed)?
+        .into_iter()
         .flatten()
         .collect();
     drop(statement);
@@ -165,7 +149,7 @@ pub(super) fn load(
 pub(super) fn read_run(
     connection: &mut Connection,
     key: &ProcessKey,
-) -> Result<Vec<RunBucketRow>, InfraError> {
+) -> Result<Vec<RunBucketRow>, DatabaseFailure> {
     let found = connection
         .prepare_cached(
             "SELECT run_id FROM process_runs WHERE host_id = ?1 AND boot_id = ?2 \
@@ -176,54 +160,52 @@ pub(super) fn read_run(
                 .query_row(key_params(key), |row| row.get::<_, i64>(0))
                 .optional()
         })
-        .map_err(|error| sqlite_error("process_history.read_run", &error))?;
+        .map_err(DatabaseFailure::statement("process_history.read_run"))?;
     match found {
         Some(run_id) => buckets_of(connection, run_id, key),
         None => Ok(Vec::new()),
     }
 }
 
+/// One run's buckets, coarsest size first and each oldest first: of each
+/// size as many as the history keeps in memory. A bucket this format
+/// never writes fails the read.
 fn buckets_of(
     connection: &Connection,
     run_id: i64,
     key: &ProcessKey,
-) -> Result<Vec<RunBucketRow>, InfraError> {
-    let read = |sql: &str, (limit, tier): (i64, i64)| -> Result<Vec<RunBucketRow>, InfraError> {
-        let mut statement = connection
-            .prepare_cached(sql)
-            .map_err(|error| sqlite_error("process_history.buckets", &error))?;
-        let rows = statement
-            .query_map(params![run_id, limit, tier], |row| {
-                let tier: i64 = row.get(0)?;
-                let start: i64 = row.get(1)?;
-                let packed: Vec<u8> = row.get(2)?;
-                Ok(Tier::from_code(tier).zip(unpack(start, &packed)))
+) -> Result<Vec<RunBucketRow>, DatabaseFailure> {
+    let failed = DatabaseFailure::statement("process_history.buckets");
+    let mut statement = connection
+        .prepare_cached(
+            "SELECT start_utc_ns, aggregates FROM process_buckets \
+             WHERE run_id = ?1 AND tier = ?2 ORDER BY start_utc_ns DESC LIMIT ?3",
+        )
+        .map_err(&failed)?;
+    let mut rows = Vec::new();
+    for tier in Tier::ALL.into_iter().skip(1).rev() {
+        let limit = i64::try_from(tier.capacity()).unwrap_or(i64::MAX);
+        let latest = statement
+            .query_map(params![run_id, tier.code(), limit], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
             })
-            .map_err(|error| sqlite_error("process_history.buckets", &error))?;
-        Ok(rows
-            .filter_map(Result::ok)
-            .flatten()
-            .map(|(tier, bucket)| RunBucketRow {
+            .map_err(&failed)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(&failed)?;
+        for (start, packed) in latest.into_iter().rev() {
+            let bucket = unpack(start, &packed).ok_or_else(|| DatabaseFailure::Row {
+                operation: "process_history.buckets",
+                detail: format!(
+                    "run {run_id} holds a {tier:?} bucket of {} bytes, not {PACKED_BYTES}",
+                    packed.len()
+                ),
+            })?;
+            rows.push(RunBucketRow {
                 key: key.clone(),
                 tier,
                 bucket,
-            })
-            .collect())
-    };
-    let mut rows = Vec::new();
-    // Coarsest first, each oldest first.
-    for tier in Tier::ALL.into_iter().skip(1).rev() {
-        // The latest of each tier, as many as the history keeps in memory.
-        let mut latest = read(
-            "SELECT tier, start_utc_ns, aggregates FROM process_buckets \
-             WHERE run_id = ?1 AND tier = ?3 ORDER BY start_utc_ns DESC LIMIT ?2",
-            (
-                i64::try_from(tier.capacity()).unwrap_or(i64::MAX),
-                tier.code(),
-            ),
-        )?;
-        latest.reverse();
-        rows.extend(latest);
+            });
+        }
     }
     Ok(rows)
 }
@@ -395,13 +377,12 @@ pub(super) fn pack(bucket: &RunBucket) -> Vec<u8> {
     packed
 }
 
-/// A stored bucket of any version: the metrics it holds, in order; the
-/// ones it does not are empty (D-77).
+/// A stored bucket, every metric in [`RunMetric`] order; `None` for any
+/// other layout (a file of another format is recreated, D-85).
+///
+/// [`RunMetric`]: dgxtop_core::process_history::RunMetric
 pub(super) fn unpack(start_utc_ns: i64, packed: &[u8]) -> Option<RunBucket> {
-    if packed.is_empty()
-        || packed.len() > MAX_PACKED_BYTES
-        || !packed.len().is_multiple_of(AGGREGATE_BYTES)
-    {
+    if packed.len() != PACKED_BYTES {
         return None;
     }
     let mut bucket = RunBucket::new(start_utc_ns);
@@ -420,19 +401,4 @@ pub(super) fn unpack(start_utc_ns: i64, packed: &[u8]) -> Option<RunBucket> {
         };
     }
     Some(bucket)
-}
-
-fn sqlite_error(operation: &'static str, error: &rusqlite::Error) -> InfraError {
-    InfraError::Database(format!("{operation}: {}", describe(error)))
-}
-
-fn tx_error(operation: &'static str, error: TxError<()>) -> InfraError {
-    match error {
-        TxError::Sqlite(error) | TxError::Commit(error) => sqlite_error(operation, &error),
-        TxError::BusyTimeout { elapsed_ms } => InfraError::Timeout {
-            operation,
-            elapsed_ms,
-        },
-        TxError::Abort(()) => InfraError::Database(format!("{operation}: aborted")),
-    }
 }

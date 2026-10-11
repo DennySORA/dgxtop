@@ -283,3 +283,83 @@ fn a_database_of_another_format_starts_empty() {
         assert_eq!(store.load().unwrap().len(), usize::from(kept), "{label}");
     }
 }
+
+/// A full database is a full disk to the history, like the archive's
+/// (one SQLite mapping for every partition).
+#[test]
+fn a_full_database_reports_disk_full() {
+    let scratch = Scratch::new("disk-full");
+    let mut store = scratch.open();
+    let _cap: i64 = store
+        .connection()
+        .unwrap()
+        .query_row("PRAGMA max_page_count = 1", [], |row| row.get(0))
+        .unwrap();
+    let rows = (0..300)
+        .map(|minute| row("gpu:0", Tier::OneMinute, gauge(minute * MINUTE, 1.0)))
+        .collect();
+    let error = store.append(&journal(rows)).unwrap_err();
+    assert!(matches!(error, InfraError::DiskFull { .. }), "{error:?}");
+}
+
+/// A stored bucket SQLite cannot hand over as this build's types is
+/// reported, not dropped: the load fails with what is wrong.
+#[test]
+fn an_unreadable_bucket_fails_the_load() {
+    let scratch = Scratch::new("bad-bucket");
+    let mut store = scratch.open();
+    store
+        .append(&journal(vec![row("gpu:0", Tier::OneMinute, gauge(0, 1.0))]))
+        .unwrap();
+    store
+        .connection()
+        .unwrap()
+        .execute("UPDATE tier_buckets SET sample_count = 1099511627776", [])
+        .unwrap();
+    let error = store.load().unwrap_err();
+    assert!(matches!(error, InfraError::Database(_)), "{error:?}");
+    assert!(
+        error.to_string().contains("history_tiers.buckets"),
+        "{error}"
+    );
+}
+
+/// Corruption stops the database like every partition's (sqlite::Writer):
+/// later calls say why.
+#[test]
+fn a_corrupt_database_stops_with_its_reason() {
+    let scratch = Scratch::new("corrupt");
+    let mut store = scratch.open();
+    let corrupt = store
+        .with_database(|_| -> Result<(), DatabaseFailure> {
+            Err(DatabaseFailure::Transaction {
+                operation: "history_tiers.append",
+                error: crate::sqlite::TxError::Commit(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_NOTADB),
+                    None,
+                )),
+            })
+        })
+        .unwrap_err();
+    assert!(matches!(corrupt, InfraError::Database(_)), "{corrupt:?}");
+    let error = store.append(&journal(Vec::new())).unwrap_err();
+    assert!(
+        error.to_string().contains("history tiers stopped"),
+        "{error}"
+    );
+    assert!(store.load().is_err());
+}
+
+/// A relative path is refused like the archive's and the audit's: the
+/// store is unusable and says why, and nothing is created anywhere.
+#[test]
+fn a_relative_path_is_refused() {
+    let relative = PathBuf::from(format!(
+        "dgxtop-relative-{}/history_tiers.sqlite3",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let mut store = SqliteHistoryTiers::open(&relative);
+    let error = store.load().unwrap_err().to_string();
+    assert!(error.contains("must be absolute"), "{error}");
+    assert!(!relative.exists());
+}

@@ -148,8 +148,6 @@ pub(crate) fn delete_expired_buckets(
         .map(changed)
 }
 
-/// `start_utc` of the `offset`-th oldest bucket (the newest when fewer
-/// exist); `None` when the table is empty.
 /// Deletes up to `limit` of `series`' minutes that started before
 /// `cutoff_utc`.
 pub(crate) fn delete_pruned_minutes(
@@ -171,6 +169,8 @@ pub(crate) fn delete_pruned_minutes(
         .map(changed)
 }
 
+/// `start_utc` of the `offset`-th oldest bucket (the newest when fewer
+/// exist); `None` when the table is empty.
 pub(crate) fn eviction_horizon(
     connection: &Connection,
     offset: i64,

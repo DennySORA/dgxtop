@@ -15,19 +15,19 @@ pub const AUDIT_DDL: &str = include_str!("../../../../spec/dgxtop-v2/contracts/a
 /// `contracts/history.sql`, applied verbatim.
 pub const HISTORY_DDL: &str = include_str!("../../../../spec/dgxtop-v2/contracts/history.sql");
 /// The process history's DDL (D-76, D-77), dgxtop's own: the spec has none.
-pub const PROCESS_HISTORY_DDL: &str = include_str!("../process_history/schema.sql");
+pub(crate) const PROCESS_HISTORY_DDL: &str = include_str!("../process_history/schema.sql");
 /// `PRAGMA user_version` written by the spec's DDL files.
-pub const SCHEMA_USER_VERSION: i64 = 2;
+const SCHEMA_USER_VERSION: i64 = 2;
 /// `PRAGMA user_version` of the process history's DDL.
-pub const PROCESS_HISTORY_USER_VERSION: i64 = 3;
+const PROCESS_HISTORY_USER_VERSION: i64 = 3;
 /// The Overview History tiers' DDL (D-82), dgxtop's own.
-pub const HISTORY_TIERS_DDL: &str = include_str!("../history_tiers/schema.sql");
+const HISTORY_TIERS_DDL: &str = include_str!("../history_tiers/schema.sql");
 /// `PRAGMA user_version` of the tiers' DDL.
-pub const HISTORY_TIERS_USER_VERSION: i64 = 1;
+const HISTORY_TIERS_USER_VERSION: i64 = 1;
 
 /// The high half of `PRAGMA application_id` in every database dgxtop
 /// writes ("DG"); the low half is the partition's format version (D-85).
-pub const FORMAT_MAGIC: i32 = 0x4447_0000;
+const FORMAT_MAGIC: i32 = 0x4447_0000;
 
 /// The `application_id` that marks `format_version` as dgxtop's.
 pub fn format_stamp(format_version: u16) -> i32 {
@@ -36,7 +36,7 @@ pub fn format_stamp(format_version: u16) -> i32 {
 
 /// The format version an `application_id` carries; `None` when it is no
 /// dgxtop stamp (a file without any stamp reads 0).
-pub fn format_of(application_id: i32) -> Option<u16> {
+fn format_of(application_id: i32) -> Option<u16> {
     if application_id & !0xFFFF == FORMAT_MAGIC {
         u16::try_from(application_id & 0xFFFF).ok()
     } else {
@@ -256,18 +256,11 @@ fn run_script(connection: &Connection, script: &str) -> rusqlite::Result<()> {
     result
 }
 
-/// `PRAGMA integrity_check(1)` or `quick_check(1)`: `None` when the database
-/// is sound, otherwise the first problem reported.
-pub(crate) fn integrity_problem(
-    connection: &Connection,
-    quick: bool,
-) -> rusqlite::Result<Option<String>> {
-    let pragma = if quick {
-        "PRAGMA quick_check(1)"
-    } else {
-        "PRAGMA integrity_check(1)"
-    };
-    let verdict: String = connection.query_row(pragma, [], |row| row.get(0))?;
+/// `PRAGMA quick_check(1)`, the open sequence's check of an existing file:
+/// `None` when the database is sound, otherwise the first problem reported
+/// (the file is then recreated, D-85).
+pub(crate) fn quick_check_problem(connection: &Connection) -> rusqlite::Result<Option<String>> {
+    let verdict: String = connection.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
     Ok((verdict != "ok").then(|| dgxtop_core::text::sanitize_message(&verdict)))
 }
 
@@ -388,8 +381,7 @@ mod tests {
                 kind.label()
             );
             assert_eq!(plan(&connection, kind).unwrap(), Ok(SchemaPlan::Current));
-            assert_eq!(integrity_problem(&connection, false).unwrap(), None);
-            assert_eq!(integrity_problem(&connection, true).unwrap(), None);
+            assert_eq!(quick_check_problem(&connection).unwrap(), None);
         }
     }
 }

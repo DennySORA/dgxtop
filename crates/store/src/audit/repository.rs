@@ -14,7 +14,6 @@ use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::ports::AuditRepository;
 use dgxtop_core::wire::parse_fixed_width;
 use rusqlite::Connection;
-use rusqlite::config::DbConfig;
 use uuid::Uuid;
 
 use super::limits::{AuditLimits, AuditOpenError};
@@ -31,9 +30,9 @@ use super::retention::delete_expired;
 use crate::fs::{FileSystemOps, RealFileSystem};
 use crate::sqlite::{
     CapacityPolicy, CapacityView, ConnectionProfile, DatabaseSpec, FaultKind, FreeSpaceProbe,
-    SchemaKind, StepError, StorageFootprint, TxError, Unusable, VersionGate, WriteClass, describe,
-    ensure_sqlite_version, fault_kind, immediate_transaction, is_rfc3339_utc, open_database,
-    pages_and_backlog, utc_cutoff,
+    SchemaKind, StepError, StorageFootprint, TxError, Unusable, VersionGate, WriteClass, Writer,
+    ensure_sqlite_version, fault_kind, fault_message, immediate_transaction, is_rfc3339_utc,
+    open_database, pages_and_backlog, path_problem, utc_cutoff,
 };
 
 /// Pages one new intent may touch: table leaf, three index leaves, page 1
@@ -86,8 +85,7 @@ pub struct SqliteAuditRepository {
     policy: CapacityPolicy,
     clock: Arc<dyn TimeProvider>,
     free_space: Arc<dyn FreeSpaceProbe>,
-    connection: Option<Connection>,
-    unusable: Option<Unusable>,
+    writer: Writer,
     last_issue: Option<String>,
     last_retention_boot_ns: Option<u64>,
     recreated: Option<String>,
@@ -99,32 +97,27 @@ impl fmt::Debug for SqliteAuditRepository {
             .debug_struct("SqliteAuditRepository")
             .field("path", &self.path)
             .field("limits", &self.limits)
-            .field("unusable", &self.unusable)
+            .field("writer", &self.writer)
             .field("last_issue", &self.last_issue)
             .finish_non_exhaustive()
     }
 }
 
 fn validate_path(path: &Path) -> Result<(), AuditOpenError> {
-    let reason = if !path.is_absolute() {
-        "must be absolute"
-    } else if path.file_name().is_none() {
-        "must name a file"
-    } else {
-        return Ok(());
-    };
-    Err(AuditOpenError::InvalidPath {
-        path: path.display().to_string(),
-        reason: reason.to_owned(),
-    })
+    match path_problem(path) {
+        Some(reason) => Err(AuditOpenError::InvalidPath {
+            path: path.display().to_string(),
+            reason: reason.to_owned(),
+        }),
+        None => Ok(()),
+    }
 }
 
 fn unusable_failure(unusable: &Unusable) -> AuditFailure {
-    let code = match unusable.state {
-        PersistenceState::ReadOnlyDiagnostic => ErrorCode::Unavailable,
-        _ => ErrorCode::PersistFailed,
-    };
-    failure(code, format!("audit unavailable: {}", unusable.reason))
+    failure(
+        ErrorCode::PersistFailed,
+        format!("audit unavailable: {}", unusable.reason),
+    )
 }
 
 /// Existing intent for the same request: the same payload yields the
@@ -190,19 +183,14 @@ impl SqliteAuditRepository {
         clock: Arc<dyn TimeProvider>,
         free_space: Arc<dyn FreeSpaceProbe>,
     ) -> Result<Self, AuditOpenError> {
-        Self::open_with_filesystem(path, limits, clock, free_space, &RealFileSystem)
-    }
-
-    /// Like [`Self::open`] with an explicit filesystem for the pre-creation
-    /// and recreation steps (fault injection).
-    pub fn open_with_filesystem(
-        path: &Path,
-        limits: AuditLimits,
-        clock: Arc<dyn TimeProvider>,
-        free_space: Arc<dyn FreeSpaceProbe>,
-        fs: &dyn FileSystemOps,
-    ) -> Result<Self, AuditOpenError> {
-        Self::open_inner(path, limits, clock, free_space, fs, ensure_sqlite_version)
+        Self::open_inner(
+            path,
+            limits,
+            clock,
+            free_space,
+            &RealFileSystem,
+            ensure_sqlite_version,
+        )
     }
 
     pub(crate) fn open_inner(
@@ -222,26 +210,20 @@ impl SqliteAuditRepository {
             profile: ConnectionProfile::audit(limits.wal_checkpoint_bytes),
             policy,
         };
-        let opened = open_database(&spec, fs, gate);
+        let (writer, recreated) = Writer::new("audit", open_database(&spec, fs, gate));
         let mut repository = Self {
             path: path.to_path_buf(),
             limits,
             policy,
             clock,
             free_space,
-            connection: None,
-            unusable: None,
+            writer,
             last_issue: None,
             last_retention_boot_ns: None,
-            recreated: None,
+            recreated,
         };
-        match opened {
-            Ok(opened) => {
-                repository.connection = Some(opened.connection);
-                repository.recreated = opened.recreated;
-                repository.maybe_run_retention();
-            }
-            Err(unusable) => repository.unusable = Some(unusable),
+        if repository.writer.unusable().is_none() {
+            repository.maybe_run_retention();
         }
         Ok(repository)
     }
@@ -282,12 +264,7 @@ impl SqliteAuditRepository {
     }
 
     fn connection(&mut self) -> Result<&mut Connection, AuditFailure> {
-        if let Some(unusable) = &self.unusable {
-            return Err(unusable_failure(unusable));
-        }
-        self.connection
-            .as_mut()
-            .ok_or_else(|| failure(ErrorCode::Unavailable, "audit database is not open"))
+        self.writer.connection().map_err(unusable_failure)
     }
 
     fn maybe_run_retention(&mut self) {
@@ -300,12 +277,13 @@ impl SqliteAuditRepository {
         }
     }
 
-    /// Classifies a SQLite error; corruption stops the partition for good.
+    /// Classifies a SQLite error like every partition does; corruption
+    /// stops the audit until the next start recreates it (D-85).
     fn sqlite_failure(&mut self, context: &str, error: &rusqlite::Error) -> AuditFailure {
-        let message = format!("{context}: {}", describe(error));
+        let message = fault_message(context, error);
         match fault_kind(error) {
             FaultKind::Corrupt => {
-                self.stop_corrupt(&message);
+                self.writer.stop_if_corrupt(error, &message);
                 failure(ErrorCode::PersistFailed, message)
             }
             FaultKind::Full => {
@@ -321,17 +299,6 @@ impl SqliteAuditRepository {
         }
     }
 
-    fn stop_corrupt(&mut self, message: &str) {
-        if let Some(connection) = self.connection.take() {
-            // Closing must not checkpoint possibly damaged pages into the file.
-            let _ignored =
-                connection.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true);
-        }
-        self.unusable = Some(Unusable::failed(format!(
-            "{message} (audit stopped; the file is recreated at the next start, D-85)"
-        )));
-    }
-
     fn tx_failure<E>(
         &mut self,
         context: &str,
@@ -341,6 +308,9 @@ impl SqliteAuditRepository {
         match error {
             TxError::Abort(reason) => on_abort(reason),
             TxError::Sqlite(error) => self.sqlite_failure(context, &error),
+            // Stricter than the shared InfraError mapping on purpose: a
+            // receipt must never stand for an intent that may be lost, so
+            // only a refusal SQLite reports before writing is certain.
             TxError::Commit(error) => {
                 let certain = matches!(fault_kind(&error), FaultKind::Full | FaultKind::Constraint);
                 let mut result = self.sqlite_failure(&format!("{context} (commit)"), &error);
@@ -417,19 +387,13 @@ impl SqliteAuditRepository {
     }
 
     fn state_and_detail(&mut self) -> (PersistenceState, Option<String>) {
-        if let Some(unusable) = &self.unusable {
-            return (unusable.state, Some(unusable.reason.clone()));
+        if let Some(unusable) = self.writer.unusable() {
+            return (PersistenceState::Failed, Some(unusable.reason.clone()));
         }
         self.maybe_run_retention();
         let view = match self.capacity_view(WriteClass::NewRecord) {
             Ok(view) => view,
-            Err(error) => {
-                let state = self
-                    .unusable
-                    .as_ref()
-                    .map_or(PersistenceState::Failed, |unusable| unusable.state);
-                return (state, Some(error.message));
-            }
+            Err(error) => return (PersistenceState::Failed, Some(error.message)),
         };
         if let Err(refusal) =
             self.policy
@@ -766,14 +730,14 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let limits = AuditLimits::default();
-        let repository = SqliteAuditRepository::open(
+        let mut repository = SqliteAuditRepository::open(
             &dir.join("audit.sqlite3"),
             limits,
             FakeClock::new(1),
             Arc::new(StatvfsFreeSpace),
         )
         .unwrap();
-        let connection = repository.connection.as_ref().unwrap();
+        let connection = repository.writer.connection().unwrap();
         assert_eq!(pragma(connection, "journal_mode"), "wal");
         assert_eq!(pragma(connection, "synchronous"), "2");
         assert_eq!(pragma(connection, "cache_size"), "-2048");
@@ -787,6 +751,42 @@ mod tests {
         let cap = limits.capacity_policy().database_page_cap(4096);
         assert_eq!(pragma(connection, "max_page_count"), cap.to_string());
         assert_eq!(pragma(connection, "user_version"), "2");
+        drop(repository);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The audit classifies SQLite failures like every partition and stops
+    /// on corruption (sqlite::Writer); it keeps its own codes and its
+    /// stricter commit rule.
+    #[test]
+    fn corruption_stops_the_audit_and_fails_closed() {
+        let dir = std::env::temp_dir().join(format!(
+            "dgxtop-audit-mapping-{}-{}",
+            std::process::id(),
+            Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut repository = SqliteAuditRepository::open(
+            &dir.join("audit.sqlite3"),
+            AuditLimits::default(),
+            FakeClock::new(1),
+            Arc::new(StatvfsFreeSpace),
+        )
+        .unwrap();
+        let sqlite = |code| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None);
+        let full = repository.sqlite_failure("audit intent", &sqlite(rusqlite::ffi::SQLITE_FULL));
+        assert_eq!(full.code, ErrorCode::CapacityExceeded);
+        let busy: TxError<()> = TxError::Commit(sqlite(rusqlite::ffi::SQLITE_BUSY));
+        let uncertain = repository.tx_failure("audit intent", busy, |()| unreachable!());
+        assert!(uncertain.commit_uncertain, "only a refusal is certain");
+        let corrupt =
+            repository.sqlite_failure("audit intent", &sqlite(rusqlite::ffi::SQLITE_CORRUPT));
+        assert_eq!(corrupt.code, ErrorCode::PersistFailed);
+        let status = repository.status();
+        assert_eq!(status.state, PersistenceState::Failed);
+        assert!(status.detail.unwrap().contains("audit stopped"));
+        let refused = repository.lookup(Uuid::from_u128(1)).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::PersistFailed);
         drop(repository);
         std::fs::remove_dir_all(dir).unwrap();
     }

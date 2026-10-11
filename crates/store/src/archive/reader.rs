@@ -19,7 +19,7 @@ use dgxtop_core::ports::ArchiveReader;
 use rusqlite::config::DbConfig;
 use rusqlite::{Connection, OpenFlags};
 
-use crate::sqlite::{FaultKind, SCHEMA_USER_VERSION, describe, fault_kind};
+use crate::sqlite::{FaultKind, SchemaKind, SchemaPlan, describe, fault_kind, plan};
 
 /// The writer holds the lock only for its short batches.
 const BUSY_TIMEOUT: Duration = Duration::from_millis(50);
@@ -29,7 +29,8 @@ enum ArchiveFile {
     /// Not opened yet, or closed after a failure: opened on the next read.
     Closed,
     Open(Connection),
-    /// A schema this build must not read (newer, or not the archive's).
+    /// A file of another format (D-85): the writer recreates it at its
+    /// next open, the reader never touches it.
     Refused(String),
 }
 
@@ -75,14 +76,15 @@ fn open(path: &Path) -> rusqlite::Result<Opened> {
     connection.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
     connection.busy_timeout(BUSY_TIMEOUT)?;
     connection.pragma_update(None, "query_only", true)?;
-    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    Ok(match version {
-        SCHEMA_USER_VERSION => Opened::Ready(connection),
-        // The writer applies the schema in one transaction right after
+    // The writer's own check (D-85): format stamp, user_version, objects.
+    Ok(match plan(&connection, SchemaKind::History)? {
+        Ok(SchemaPlan::Current) => Opened::Ready(connection),
+        // The writer applies the schema and its stamp right after
         // creating the file.
-        0 => Opened::NotYet,
-        other => Opened::Refused(format!(
-            "history archive schema version {other} is not {SCHEMA_USER_VERSION}"
+        Ok(SchemaPlan::Initialize) => Opened::NotYet,
+        Err(refusal) => Opened::Refused(format!(
+            "history archive of another format ({refusal}); the writer recreates it at \
+             its next open (D-85)"
         )),
     })
 }
