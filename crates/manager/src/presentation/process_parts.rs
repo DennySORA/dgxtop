@@ -3,7 +3,9 @@
 //! charts over the window. The history's process actor keeps the process
 //! memory record (D-79), which the HistoryService does not query, so its
 //! parts are asked for the window of the view the service built and added
-//! to it here.
+//! to it here, one cell for each of the view's bars (D-97): the record
+//! follows the same local clock and bucket sizes, so a part stacks on the
+//! bar it belongs to.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -11,6 +13,7 @@ use std::sync::Arc;
 use dgxtop_core::identity::EntityId;
 use dgxtop_core::ports::ProcessMemoryReader;
 use dgxtop_core::process_model::TrackedProcess;
+use dgxtop_core::tiers::BarSize;
 use dgxtop_core::view::{HistoryChartKind, HistoryPart, HistoryView, ProcessShare};
 
 use super::gpu_directory::GpuDirectory;
@@ -53,10 +56,8 @@ pub(crate) struct ProcessHistoryInputs<'a> {
     /// The process memory record of the history's process actor.
     pub(crate) memory: &'a dyn ProcessMemoryReader,
     pub(crate) directory: &'a GpuDirectory<'a>,
-    /// Wall clock minus boot clock: the record is on the boot clock, the
-    /// view on the wall clock (D-51).
-    pub(crate) boot_to_utc_ns: i128,
-    /// Cells of a part's grid: the points of a history chart.
+    /// Cells of a part's grid when the view names no bar size: the points
+    /// of a history chart.
     pub(crate) cells: usize,
 }
 
@@ -71,7 +72,8 @@ pub(crate) fn with_process_parts(
     if inputs.tracked.is_empty() || history.error.is_some() {
         return history;
     }
-    let window = boot_window(&history, inputs.boot_to_utc_ns);
+    let window = (history.start_utc_ns, history.end_utc_ns);
+    let cells = bars_of(&history).unwrap_or(inputs.cells);
     let unified = unified_gpus(inputs.directory);
     let mut view = (*history).clone();
     for chart in &mut view.charts {
@@ -82,7 +84,7 @@ pub(crate) fn with_process_parts(
         };
         chart.parts = inputs
             .memory
-            .parts(&gpus, window, inputs.cells)
+            .parts(&gpus, window, cells)
             .into_iter()
             .map(|part| HistoryPart {
                 slot: part.slot,
@@ -96,12 +98,12 @@ pub(crate) fn with_process_parts(
     Arc::new(view)
 }
 
-/// The view's window on the boot clock.
-fn boot_window(history: &HistoryView, boot_to_utc_ns: i128) -> (u64, u64) {
-    let boot = |utc: u64| {
-        u64::try_from(i128::from(utc).saturating_sub(boot_to_utc_ns).max(0)).unwrap_or(u64::MAX)
-    };
-    (boot(history.start_utc_ns), boot(history.end_utc_ns))
+/// The bars of the view's window: its bar size (`window_label`) into its
+/// span; `None` when the label names no size.
+fn bars_of(history: &HistoryView) -> Option<usize> {
+    let step = BarSize::parse(&history.window_label)?.step_ns()?;
+    let span = history.end_utc_ns.saturating_sub(history.start_utc_ns);
+    usize::try_from(span / step).ok().filter(|bars| *bars > 0)
 }
 
 #[cfg(test)]
@@ -182,12 +184,13 @@ mod tests {
         chart
     }
 
-    /// The window `[10 s, 30 s)` on a wall clock `offset` ahead of the boot
-    /// clock, with both GPUs' memory, the memory used and the CPU charted.
-    fn history(offset_s: u64) -> Arc<HistoryView> {
+    /// Bars of `label` over `[start_s, end_s)` of the wall clock, with both
+    /// GPUs' memory, the memory used and the CPU charted.
+    fn history(label: &str, (start_s, end_s): (u64, u64)) -> Arc<HistoryView> {
         let mut view = empty_history();
-        view.start_utc_ns = (offset_s + 10) * SECOND;
-        view.end_utc_ns = (offset_s + 30) * SECOND;
+        view.window_label = label.to_owned();
+        view.start_utc_ns = start_s * SECOND;
+        view.end_utc_ns = end_s * SECOND;
         view.charts = vec![
             memory_chart(
                 HistoryChartKind::GpuMemory,
@@ -216,7 +219,6 @@ mod tests {
         fixture: &Fixture,
         (tracked, memory): (&[TrackedProcess], &StaticProcessHistory),
         history: Arc<HistoryView>,
-        offset_s: u64,
     ) -> Arc<HistoryView> {
         let index = SnapshotLookup::new(&fixture.snapshot);
         let directory = GpuDirectory::new(&fixture.catalog, &index);
@@ -226,8 +228,7 @@ mod tests {
                 tracked,
                 memory,
                 directory: &directory,
-                boot_to_utc_ns: i128::from(offset_s * SECOND),
-                cells: 2,
+                cells: 7,
             },
         )
     }
@@ -259,52 +260,58 @@ mod tests {
 
     /// Each GPU's memory chart asks for the parts on its GPU, the memory
     /// used for those on the unified GPU, other charts for none, all over
-    /// the view's window on the boot clock.
+    /// the view's window on the wall clock, one cell for each of its bars.
     #[test]
     fn memory_charts_get_each_process_part() {
         let fixture = fixture();
         let tracked = tracked();
-        // A wall clock 1000 s ahead of the boot clock asks the same window.
-        for offset in [0, 1_000] {
+        let memory = StaticProcessHistory::new(Default::default());
+        memory.set_parts(vec![MemoryPart {
+            slot: TRAIN,
+            means: vec![gib(6); 2],
+        }]);
+        // Two one-minute bars of the local clock, far from the boot clock.
+        let window = (1_790_000_040, 1_790_000_160);
+        let view = attach(&fixture, (&tracked, &memory), history("1m", window));
+        let asked: Vec<(BTreeSet<EntityId>, (u64, u64), usize)> = memory.asked();
+        let utc = (window.0 * SECOND, window.1 * SECOND);
+        assert_eq!(
+            asked,
+            vec![
+                (BTreeSet::from([gpu(UNIFIED)]), utc, 2),
+                (BTreeSet::from([gpu(DISCRETE)]), utc, 2),
+                (BTreeSet::from([gpu(UNIFIED)]), utc, 2),
+            ],
+            "the GPUs of each memory chart"
+        );
+        let parts = |index: usize| -> Vec<(u8, Vec<Option<f64>>)> {
+            view.charts[index]
+                .parts
+                .iter()
+                .map(|part| (part.slot, part.means.clone()))
+                .collect()
+        };
+        assert_eq!(parts(0), vec![(TRAIN, vec![gib(6); 2])]);
+        assert_eq!(parts(2), parts(0), "RAM the unified GPU holds");
+        assert!(view.charts[3].parts.is_empty());
+    }
+
+    /// The cells are the view's bars: its span over its bar size; a view
+    /// that names no size (or spans less than a bar) takes the chart's
+    /// points.
+    #[test]
+    fn cells_are_the_bars_of_the_view() {
+        let fixture = fixture();
+        let tracked = tracked();
+        let cells_asked = |label: &str, window: (u64, u64)| {
             let memory = StaticProcessHistory::new(Default::default());
-            memory.set_parts(vec![MemoryPart {
-                slot: TRAIN,
-                means: vec![gib(6); 2],
-            }]);
-            let view = attach(&fixture, (&tracked, &memory), history(offset), offset);
-            let asked: Vec<(BTreeSet<EntityId>, (u64, u64), usize)> = memory.asked();
-            assert_eq!(
-                asked,
-                vec![
-                    (
-                        BTreeSet::from([gpu(UNIFIED)]),
-                        (10 * SECOND, 30 * SECOND),
-                        2
-                    ),
-                    (
-                        BTreeSet::from([gpu(DISCRETE)]),
-                        (10 * SECOND, 30 * SECOND),
-                        2
-                    ),
-                    (
-                        BTreeSet::from([gpu(UNIFIED)]),
-                        (10 * SECOND, 30 * SECOND),
-                        2
-                    ),
-                ],
-                "the GPUs of each memory chart"
-            );
-            let parts = |index: usize| -> Vec<(u8, Vec<Option<f64>>)> {
-                view.charts[index]
-                    .parts
-                    .iter()
-                    .map(|part| (part.slot, part.means.clone()))
-                    .collect()
-            };
-            assert_eq!(parts(0), vec![(TRAIN, vec![gib(6); 2])]);
-            assert_eq!(parts(2), parts(0), "RAM the unified GPU holds");
-            assert!(view.charts[3].parts.is_empty());
-        }
+            attach(&fixture, (&tracked, &memory), history(label, window));
+            memory.asked()[0].2
+        };
+        assert_eq!(cells_asked("1h", (0, 24 * 3_600)), 24);
+        assert_eq!(cells_asked("24h", (0, 300 * 86_400)), 300);
+        assert_eq!(cells_asked("auto", (0, 600)), 7);
+        assert_eq!(cells_asked("5m", (10, 30)), 7);
     }
 
     /// Without a tracked process, or without a part in its window, the
@@ -313,15 +320,15 @@ mod tests {
     fn a_view_without_processes_in_its_window_is_shared_unchanged() {
         let fixture = fixture();
         let memory = StaticProcessHistory::new(Default::default());
-        let view = history(0);
+        let view = history("1m", (60, 180));
         assert!(Arc::ptr_eq(
-            &attach(&fixture, (&[], &memory), Arc::clone(&view), 0),
+            &attach(&fixture, (&[], &memory), Arc::clone(&view)),
             &view
         ));
         assert!(memory.asked().is_empty(), "nothing asked without a process");
         let tracked = tracked();
         assert!(Arc::ptr_eq(
-            &attach(&fixture, (&tracked, &memory), Arc::clone(&view), 0),
+            &attach(&fixture, (&tracked, &memory), Arc::clone(&view)),
             &view
         ));
     }

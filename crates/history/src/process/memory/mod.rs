@@ -11,24 +11,32 @@
 //! recorded is kept beside them: it is the time base of a process's part
 //! of a chart, in which a time it was not listed counts as 0.
 //!
-//! Bounded: [`tracking::MAX_TRACKED_PROCESSES`] processes, 24 hours each,
-//! recorded while dgxtop runs (process memory never becomes a store
-//! series, METRICS.md). An exited process keeps its record until it is a
-//! day old or the oldest exited record gives way to a new process; a
-//! process that loses its place takes its record with it, and its memory
-//! then counts among the other processes.
+//! Each series is a tiered series of the shared compression on the wall
+//! clock, aligned to the local clock like every chart (D-97): a part's
+//! cells are the chart's bars, merged from the same bucket sizes, so they
+//! line up with the bars they stack on. A table's read time is placed on
+//! the wall clock by the offset the actor read with it.
+//!
+//! Bounded: [`tracking::MAX_TRACKED_PROCESSES`] processes, each series at
+//! most the compression's buckets of every size, recorded while dgxtop
+//! runs (process memory never becomes a store series, METRICS.md). An
+//! exited process keeps its record until it has not been listed for a day
+//! or the oldest exited record gives way to a new process; a process that
+//! loses its place takes its record with it, and its memory then counts
+//! among the other processes.
 
 mod buckets;
 mod tracking;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use dgxtop_compression::cells_between;
 use dgxtop_core::canonical::{ProcessRow, ProcessTable};
 use dgxtop_core::clock::{NANOS_PER_SECOND, ms_to_ns};
 use dgxtop_core::identity::{EntityId, ProcessKey};
 use dgxtop_core::process_model::MemoryPart;
 
-use self::buckets::TimeBuckets;
+use self::buckets::{Held, HeldSeries, add_held};
 use self::tracking::{Listed as TrackedListed, Tracking};
 
 /// A table's values hold for at most this many sampling periods.
@@ -60,16 +68,18 @@ impl TrackedProcess<'_> {
 struct ProcessRecord {
     pid: i32,
     name: String,
-    current: Vec<(EntityId, u64)>,
-    gpus: BTreeMap<EntityId, TimeBuckets>,
+    gpus: BTreeMap<EntityId, HeldSeries>,
 }
 
-/// The newest table's values, recorded once the next table says how long
-/// they held.
+/// The newest table's values of the tracked processes: what each holds
+/// now ([`TrackedProcess::current`]), recorded once the next table says
+/// how long they held.
 #[derive(Debug, Clone)]
-struct Pending {
-    at_ns: u64,
-    held: Vec<(ProcessKey, EntityId, u64)>,
+struct NewestTable {
+    read_boot_ns: u64,
+    /// The read time on the wall clock.
+    read_utc_ns: i64,
+    held: BTreeMap<ProcessKey, Vec<(EntityId, u64)>>,
 }
 
 /// The process memory record (module docs).
@@ -78,22 +88,27 @@ pub(crate) struct ProcessMemoryBook {
     tracking: Tracking,
     processes: BTreeMap<ProcessKey, ProcessRecord>,
     /// When process lists were recorded.
-    listing: TimeBuckets,
-    pending: Option<Pending>,
+    listing: HeldSeries,
+    newest: Option<NewestTable>,
     hold_ns: u64,
+    /// Local time's offset from UTC: the buckets follow the local clock.
+    shift_ns: i64,
     /// Moves with every table recorded.
     revision: u64,
 }
 
 impl ProcessMemoryBook {
-    /// An empty book for tables read every `interval_ms`.
-    pub(crate) fn new(interval_ms: u64) -> Self {
+    /// An empty book for tables read every `interval_ms`, its buckets on
+    /// the local clock `utc_offset_s` east of UTC.
+    pub(crate) fn new(interval_ms: u64, utc_offset_s: i32) -> Self {
+        let shift_ns = i64::from(utc_offset_s).saturating_mul(1_000_000_000);
         Self {
             tracking: Tracking::default(),
             processes: BTreeMap::new(),
-            listing: TimeBuckets::default(),
-            pending: None,
+            listing: HeldSeries::new(shift_ns),
+            newest: None,
             hold_ns: hold_ns(interval_ms),
+            shift_ns,
             revision: 0,
         }
     }
@@ -108,15 +123,16 @@ impl ProcessMemoryBook {
         self.revision
     }
 
-    /// Records a committed process table (the actor hands each one once);
-    /// one without a read time is none.
-    pub(crate) fn record(&mut self, table: &ProcessTable) {
+    /// Records a committed process table (the actor hands each one once),
+    /// read when the wall clock was `boot_to_utc_ns` ahead of the boot
+    /// clock; one without a read time is none.
+    pub(crate) fn record(&mut self, table: &ProcessTable, boot_to_utc_ns: i128) {
         let now = table.read_finished_boot_ns;
         if now == 0 {
             return;
         }
         self.revision += 1;
-        self.close_pending(now);
+        self.close_newest(now);
         let listed: Vec<Listed<'_>> = table.rows.iter().filter_map(Listed::of).collect();
         let sizes: Vec<TrackedListed<'_>> = listed
             .iter()
@@ -131,58 +147,73 @@ impl ProcessMemoryBook {
         for key in lost {
             self.processes.remove(&key);
         }
-        self.update_records(listed, now);
+        let read_utc_ns = i128::from(now).saturating_add(boot_to_utc_ns);
+        self.update_records(listed, (now, utc_i64(read_utc_ns)));
     }
 
-    /// Records the pending table's values over the time until `now`.
-    fn close_pending(&mut self, now: u64) {
-        let Some(pending) = self.pending.take() else {
+    /// Records the newest table's values over the time until `now` (boot
+    /// clock), placed on the wall clock from that table's read time.
+    fn close_newest(&mut self, now: u64) {
+        let Some(newest) = self.newest.take() else {
             return;
         };
-        let end = now.min(pending.at_ns.saturating_add(self.hold_ns));
-        if end <= pending.at_ns {
+        let end = now.min(newest.read_boot_ns.saturating_add(self.hold_ns));
+        let held_ns = i64::try_from(end.saturating_sub(newest.read_boot_ns)).unwrap_or(i64::MAX);
+        if held_ns == 0 {
             return;
         }
-        self.listing.add(pending.at_ns, end, 1);
-        for (key, gpu, bytes) in pending.held {
-            if let Some(record) = self.processes.get_mut(&key) {
-                record
+        let span = (
+            newest.read_utc_ns,
+            newest.read_utc_ns.saturating_add(held_ns),
+        );
+        add_held(&mut self.listing, span, 1);
+        for (key, gpus) in newest.held {
+            let Some(record) = self.processes.get_mut(&key) else {
+                continue;
+            };
+            for (gpu, bytes) in gpus {
+                let series = record
                     .gpus
                     .entry(gpu)
-                    .or_default()
-                    .add(pending.at_ns, end, bytes);
+                    .or_insert_with(|| HeldSeries::new(self.shift_ns));
+                add_held(series, span, bytes);
             }
         }
     }
 
-    /// The tracked processes' values in `listed`, read at `at_ns`, pending
-    /// until the next table.
-    fn update_records(&mut self, listed: Vec<Listed<'_>>, at_ns: u64) {
-        for record in self.processes.values_mut() {
-            record.current.clear();
-        }
-        let mut held = Vec::new();
+    /// The tracked processes' values in `listed`, read at `read` (boot and
+    /// wall clock), held until the next table.
+    fn update_records(&mut self, listed: Vec<Listed<'_>>, (read_boot_ns, read_utc_ns): (u64, i64)) {
+        let mut held = BTreeMap::new();
         for Listed { row, gpus } in listed {
             if self.tracking.color_of(&row.key).is_none() {
                 continue;
             }
-            held.extend(
-                gpus.iter()
-                    .map(|(gpu, bytes)| (row.key.clone(), gpu.clone(), *bytes)),
-            );
             let record = self
                 .processes
                 .entry(row.key.clone())
                 .or_insert_with(|| ProcessRecord {
                     pid: row.key.pid.get(),
                     name: row.name.clone(),
-                    current: Vec::new(),
                     gpus: BTreeMap::new(),
                 });
             record.name.clone_from(&row.name);
-            record.current = gpus;
+            held.insert(row.key.clone(), gpus);
         }
-        self.pending = Some(Pending { at_ns, held });
+        self.newest = Some(NewestTable {
+            read_boot_ns,
+            read_utc_ns,
+            held,
+        });
+    }
+
+    /// What `key` holds on each GPU in the newest table; empty when it is
+    /// not listed there.
+    fn current_of(&self, key: &ProcessKey) -> &[(EntityId, u64)] {
+        self.newest
+            .as_ref()
+            .and_then(|newest| newest.held.get(key))
+            .map_or(&[], Vec::as_slice)
     }
 
     /// Every tracked process, in color order.
@@ -197,7 +228,7 @@ impl ProcessMemoryBook {
                     key,
                     pid: record.pid,
                     name: &record.name,
-                    current: &record.current,
+                    current: self.current_of(key),
                 })
             })
             .collect();
@@ -210,56 +241,60 @@ impl ProcessMemoryBook {
         tracked
     }
 
-    /// `key`'s part of a chart of the GPUs `include` accepts, in each of
-    /// `cells` even cells of `[start, end)` (boot clock): what it held
-    /// there over the time process lists were recorded there, so the
-    /// parts of all processes add up to what they held together; `None`
-    /// where no list was recorded.
-    pub(crate) fn part_means(
+    /// `key`'s part of a chart of the GPUs `include` accepts, in each cell
+    /// of `window` (wall clock) whose time lists were recorded in is
+    /// `listing`: what it held there over that time, so the parts of all
+    /// processes add up to what they held together; `None` where no list
+    /// was recorded.
+    fn means_over(
         &self,
         key: &ProcessKey,
         include: impl Fn(&EntityId) -> bool,
-        (start, end): (u64, u64),
-        cells: usize,
+        window: (i64, i64),
+        listing: &[Held],
     ) -> Vec<Option<f64>> {
         let Some(record) = self.processes.get(key) else {
-            return vec![None; cells];
+            return vec![None; listing.len()];
         };
-        let series: Vec<&TimeBuckets> = record
+        let mut integrals = vec![0.0; listing.len()];
+        for series in record
             .gpus
             .iter()
             .filter(|(gpu, _)| include(gpu))
             .map(|(_, series)| series)
-            .collect();
-        cell_edges(start, end, cells)
-            .map(|(from, to)| {
-                let listed = self.listing.held(from, to).covered_ns;
+        {
+            let cells = cells_between(series, window, listing.len());
+            for (sum, cell) in integrals.iter_mut().zip(cells) {
+                *sum += cell.integral;
+            }
+        }
+        listing
+            .iter()
+            .zip(integrals)
+            .map(|(listed, integral)| {
                 #[allow(clippy::cast_precision_loss)]
-                let listed_ns = listed as f64;
-                (listed > 0).then(|| {
-                    let integral: f64 = series
-                        .iter()
-                        .map(|series| series.held(from, to).integral)
-                        .sum();
-                    integral / listed_ns
-                })
+                let listed_ns = listed.covered_ns as f64;
+                (listed.covered_ns > 0).then(|| integral / listed_ns)
             })
             .collect()
     }
 
     /// Each tracked process's part of a chart of the GPUs in `gpus` over
-    /// `window` in `cells` cells ([`Self::part_means`]), in color order;
-    /// a process that held nothing there is left out.
+    /// `window` (wall clock) in `cells` cells (`means_over`), in
+    /// color order; a process that held nothing there is left out.
     pub(crate) fn parts(
         &self,
         gpus: &BTreeSet<EntityId>,
         window: (u64, u64),
         cells: usize,
     ) -> Vec<MemoryPart> {
+        let window = utc_window(window);
+        let listing = cells_between(&self.listing, window, cells);
         self.tracked()
             .into_iter()
             .filter_map(|process| {
-                let means = self.part_means(process.key, |gpu| gpus.contains(gpu), window, cells);
+                let means =
+                    self.means_over(process.key, |gpu| gpus.contains(gpu), window, &listing);
                 means
                     .iter()
                     .flatten()
@@ -271,6 +306,17 @@ impl ProcessMemoryBook {
             })
             .collect()
     }
+}
+
+/// A window of the views (unsigned wall clock) on the series' clock.
+fn utc_window((start, end): (u64, u64)) -> (i64, i64) {
+    let signed = |utc: u64| i64::try_from(utc).unwrap_or(i64::MAX);
+    (signed(start), signed(end))
+}
+
+/// `utc_ns` as the series' signed wall-clock time, saturating.
+fn utc_i64(utc_ns: i128) -> i64 {
+    i64::try_from(utc_ns.clamp(i128::from(i64::MIN), i128::from(i64::MAX))).unwrap_or(i64::MAX)
 }
 
 /// How long a table's values hold at `interval_ms`.
@@ -302,17 +348,6 @@ impl<'a> Listed<'a> {
 fn total(gpus: &[(EntityId, u64)]) -> u64 {
     gpus.iter()
         .fold(0, |sum, (_, bytes)| sum.saturating_add(*bytes))
-}
-
-/// The edges of `cells` even cells of `[start, end)`.
-fn cell_edges(start: u64, end: u64, cells: usize) -> impl Iterator<Item = (u64, u64)> {
-    let span = u128::from(end.saturating_sub(start));
-    let count = u128::try_from(cells.max(1)).unwrap_or(u128::MAX);
-    let edge = move |cell: usize| {
-        let offset = span * u128::try_from(cell).unwrap_or(u128::MAX) / count;
-        start.saturating_add(u64::try_from(offset).unwrap_or(u64::MAX))
-    };
-    (0..cells).map(move |cell| (edge(cell), edge(cell + 1)))
 }
 
 #[cfg(test)]

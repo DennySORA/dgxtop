@@ -302,10 +302,6 @@ impl ControlCore {
             trends: self.trends.book(),
             processes: &inputs.processes,
             process_memory: self.process_history.memory(),
-            boot_to_utc_ns: self
-                .clock
-                .now_utc_ns()
-                .saturating_sub(i128::from(self.clock.now_boot_ns())),
             facts: &self.facts,
             enabled_modules: &inputs.enabled_modules,
             archive: self.archive.status(),

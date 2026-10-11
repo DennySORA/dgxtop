@@ -66,6 +66,7 @@ impl ProcessHistory {
         ports: ProcessHistoryPorts,
     ) -> (Self, PublishedProcessHistory) {
         let now_ns = ports.clock.now_boot_ns();
+        let utc_offset_s = settings.utc_offset_s;
         let service = ProcessHistoryService::new(
             ServicePorts {
                 probe: ports.probe,
@@ -77,7 +78,10 @@ impl ProcessHistory {
             now_ns,
         );
         // Every table brings the period it was read at.
-        let memory = Arc::new(RwLock::new(ProcessMemoryBook::new(DEFAULT_PERIOD_MS)));
+        let memory = Arc::new(RwLock::new(ProcessMemoryBook::new(
+            DEFAULT_PERIOD_MS,
+            utc_offset_s,
+        )));
         let published = PublishedProcessHistory::new(Arc::clone(&memory));
         let mut actor = Self {
             service,
@@ -137,7 +141,7 @@ impl ProcessHistory {
         {
             let mut memory = self.memory.write().unwrap_or_else(PoisonError::into_inner);
             memory.set_interval(sample.process_period_ms);
-            memory.record(&sample.table);
+            memory.record(&sample.table, now.utc_ns - i128::from(now.boot_ns));
         }
         self.service.on_table(
             &sample.table,

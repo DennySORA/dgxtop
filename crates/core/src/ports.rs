@@ -596,8 +596,9 @@ pub trait ProcessHistoryReader: Send + Sync {
 /// the history's memory charts.
 pub trait ProcessMemoryReader: Send + Sync {
     /// Each tracked process's part of a chart of the GPUs in `gpus`, in
-    /// each of `cells` even cells of `window` (boot clock), in color order;
-    /// a process that held nothing there is left out.
+    /// each of `cells` even cells of `window` (wall clock; a chart asks
+    /// for its bars, D-97), in color order; a process that held nothing
+    /// there is left out.
     fn parts(&self, gpus: &BTreeSet<EntityId>, window: (u64, u64), cells: usize)
     -> Vec<MemoryPart>;
 }

@@ -171,9 +171,6 @@ pub struct PresentationContext<'a> {
     /// What each GPU process held over time, for the history's memory
     /// charts (D-64).
     pub process_memory: &'a dyn ProcessMemoryReader,
-    /// Wall clock minus boot clock when the projection is built: places the
-    /// process memory record on the history view's time axis.
-    pub boot_to_utc_ns: i128,
     pub facts: &'a HostFacts,
     /// Module ids enabled in the effective configuration.
     pub enabled_modules: &'a [String],
@@ -336,7 +333,6 @@ fn build_modules(
                 tracked: &inputs.processes.tracked,
                 memory: context.process_memory,
                 directory: inputs.directory,
-                boot_to_utc_ns: context.boot_to_utc_ns,
                 cells: layout.history_chart_points(),
             },
         ));
