@@ -10,7 +10,6 @@ use dgxtop_core::action::{
 use dgxtop_core::canonical::GpuUsageKind;
 use dgxtop_core::commands::{SortKey, ViewKind};
 use dgxtop_core::config::{Theme, ValueOrigin};
-use dgxtop_core::history::HistoryMethod;
 use dgxtop_core::identity::{EntityId, ModuleId, ProcessKey, SessionId};
 use dgxtop_core::metric::{CanonicalUnit, Scalar};
 use dgxtop_core::quality::{Freshness, Quality, SampleKind, SelectionState};
@@ -118,10 +117,7 @@ pub(crate) fn stale(unit: CanonicalUnit, last: f64, age_ms: u64) -> MetricCell {
 }
 
 fn trend(points: Vec<Option<f64>>) -> Trend {
-    Trend {
-        points,
-        step_ms: 1000,
-    }
+    Trend { points }
 }
 
 pub(crate) fn cpu_view() -> CpuView {
@@ -557,11 +553,6 @@ pub(crate) fn history_view() -> HistoryView {
                     mean: sample.map(|(mean, _)| mean),
                     min: None,
                     max: sample.map(|(_, max)| max),
-                    method: if sample.is_some() {
-                        HistoryMethod::BucketExact
-                    } else {
-                        HistoryMethod::Gap
-                    },
                 }
             })
             .collect()
@@ -578,7 +569,6 @@ pub(crate) fn history_view() -> HistoryView {
             peak: Some(peak),
             coverage_ratio: Some(1.0),
             covered_ns: Some(60 * MINUTE),
-            truncated: false,
             display_downsampled: true,
             pending: false,
             error: None,
@@ -1003,7 +993,6 @@ pub(crate) const RUNS_UTC: i64 = 1_791_072_000_000_000_000;
 /// running for 2 h in color 0.
 pub(crate) fn process_history_view() -> dgxtop_core::view::ProcessHistoryView {
     use dgxtop_core::action::Signal;
-    use dgxtop_core::history::HistoryMethod;
     use dgxtop_core::process_history::{BarSize, EndCause, RunDetails, RunEnd, RunInfo, RunMetric};
     use dgxtop_core::view::{
         HistoryPointView, ProcessHistoryView, RunChartView, RunDetailView, RunRowView,
@@ -1050,7 +1039,6 @@ pub(crate) fn process_history_view() -> dgxtop_core::view::ProcessHistoryView {
         mean: Some(value),
         min: None,
         max: Some(value),
-        method: HistoryMethod::BucketExact,
     };
     let charts = RunMetric::ALL
         .iter()

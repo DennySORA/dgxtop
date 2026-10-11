@@ -284,7 +284,6 @@ mod tests {
             points: (0..points)
                 .map(|index| Some(f64::from(u32::try_from(index).unwrap())))
                 .collect(),
-            step_ms: 1000,
         }
     }
 

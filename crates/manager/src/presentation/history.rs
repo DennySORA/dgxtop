@@ -5,7 +5,6 @@
 
 use std::sync::Arc;
 
-use dgxtop_core::history::HistoryMethod;
 use dgxtop_core::view::{HistoryPointView, HistoryView};
 
 /// Shares the service result when every chart already fits `width` points.
@@ -63,7 +62,6 @@ struct Bucket {
     weight_ns: f64,
     min: Option<f64>,
     max: Option<f64>,
-    method: HistoryMethod,
     is_gap: bool,
 }
 
@@ -76,7 +74,6 @@ impl Bucket {
             weight_ns: 0.0,
             min: None,
             max: None,
-            method: point.method,
             is_gap: point.mean.is_none(),
         };
         bucket.absorb(point);
@@ -91,9 +88,6 @@ impl Bucket {
     #[allow(clippy::cast_precision_loss)]
     fn absorb(&mut self, point: &HistoryPointView) {
         self.end_utc_ns = point.end_utc_ns.max(self.end_utc_ns);
-        if point.method != self.method {
-            self.method = HistoryMethod::TimeWeightedStep;
-        }
         let Some(mean) = point.mean.filter(|mean| mean.is_finite()) else {
             return;
         };
@@ -114,7 +108,6 @@ impl Bucket {
             mean,
             min: self.min,
             max: self.max,
-            method: self.method,
         }
     }
 }
@@ -126,14 +119,13 @@ mod tests {
 
     const SECOND: u64 = 1_000_000_000;
 
-    fn point(start_s: u64, mean: Option<f64>, method: HistoryMethod) -> HistoryPointView {
+    fn point(start_s: u64, mean: Option<f64>) -> HistoryPointView {
         HistoryPointView {
             start_utc_ns: start_s * SECOND,
             end_utc_ns: (start_s + 1) * SECOND,
             mean,
             min: mean,
             max: mean,
-            method,
         }
     }
 
@@ -146,11 +138,7 @@ mod tests {
 
     #[test]
     fn small_results_are_shared_unchanged() {
-        let history = view(
-            (0..10)
-                .map(|second| point(second, Some(1.0), HistoryMethod::Raw))
-                .collect(),
-        );
+        let history = view((0..10).map(|second| point(second, Some(1.0))).collect());
         let shown = history_for_display(&history, 80);
         assert!(Arc::ptr_eq(&shown, &history));
         assert!(!shown.charts[0].display_downsampled);
@@ -161,7 +149,7 @@ mod tests {
         let points: Vec<HistoryPointView> = (0..300)
             .map(|second| {
                 let value = if second == 150 { 95.0 } else { 10.0 };
-                point(second, Some(value), HistoryMethod::Raw)
+                point(second, Some(value))
             })
             .collect();
         let history = view(points);
@@ -187,11 +175,10 @@ mod tests {
 
     #[test]
     fn gaps_and_discontinuities_are_never_bridged() {
-        let mut points: Vec<HistoryPointView> = (0..10)
-            .map(|second| point(second, Some(1.0), HistoryMethod::Raw))
-            .collect();
-        points[4] = point(4, None, HistoryMethod::Gap);
-        points.push(point(20, Some(2.0), HistoryMethod::Raw));
+        let mut points: Vec<HistoryPointView> =
+            (0..10).map(|second| point(second, Some(1.0))).collect();
+        points[4] = point(4, None);
+        points.push(point(20, Some(2.0)));
         let merged = downsample(&points, 2);
         let shape: Vec<(u64, u64, Option<f64>)> = merged
             .iter()
@@ -212,7 +199,6 @@ mod tests {
                 (20, 21, Some(2.0)),
             ]
         );
-        assert_eq!(merged[1].method, HistoryMethod::Gap);
         assert!(downsample(&[], 10).is_empty());
     }
 }

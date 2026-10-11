@@ -7,7 +7,6 @@
 use std::collections::BTreeMap;
 
 use dgxtop_core::commands::ViewKind;
-use dgxtop_core::history::HistoryMethod;
 use dgxtop_core::metric::CanonicalUnit;
 use dgxtop_core::process_history::{BarSize, RunBucket, RunInfo, RunMetric};
 use dgxtop_core::process_model::{ProcessHistoryModel, RunBars, RunDetail, RunRequest, RunRow};
@@ -179,7 +178,6 @@ fn points_of(bars: &RunBars, metric: RunMetric) -> Vec<HistoryPointView> {
             mean: bar.value(metric).mean(),
             min: None,
             max: bar.value(metric).peak(),
-            method: HistoryMethod::BucketExact,
         })
         .collect()
 }

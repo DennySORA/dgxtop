@@ -12,7 +12,6 @@ use crate::budget::BytePermit;
 use crate::canonical::GpuUsageKind;
 use crate::commands::{SortKey, ViewKind};
 use crate::config::{Theme, ValueOrigin};
-use crate::history::HistoryMethod;
 use crate::identity::{EntityId, MetricKey, ModuleId, ProcessKey, SessionId};
 use crate::metric::{CanonicalUnit, Scalar};
 use crate::process_history::{BarSize, RunEnd, RunInfo, RunMetric};
@@ -135,7 +134,6 @@ impl MetricCell {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Trend {
     pub points: Vec<Option<f64>>,
-    pub step_ms: u64,
 }
 
 /// Colors of GPU processes (D-64, D-65): at most this many processes listed
@@ -456,7 +454,6 @@ pub struct HistoryPointView {
     pub mean: Option<f64>,
     pub min: Option<f64>,
     pub max: Option<f64>,
-    pub method: HistoryMethod,
 }
 
 /// Columns of the history view its panels do not take (the panel border)
@@ -548,7 +545,8 @@ pub struct HistoryChartView {
     /// Time the history holds in the window (see
     /// [`HistoryWindowSummary::covered_ns`]).
     pub covered_ns: Option<u64>,
-    pub truncated: bool,
+    /// Set when points were merged to fit the chart's width: the spec's
+    /// mark of a display-only compression (STORAGE.md §5).
     pub display_downsampled: bool,
     pub pending: bool,
     pub error: Option<String>,

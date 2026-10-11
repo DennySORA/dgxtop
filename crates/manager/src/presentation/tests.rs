@@ -6,7 +6,6 @@ use std::sync::Arc;
 use dgxtop_core::action::Signal;
 use dgxtop_core::commands::{SortKey, ViewKind};
 use dgxtop_core::config::BUILTIN_MODULES;
-use dgxtop_core::history::HistoryMethod;
 use dgxtop_core::naming::attributes;
 use dgxtop_core::observation::EntityKind;
 use dgxtop_core::testing::metric_key;
@@ -423,7 +422,6 @@ fn history_is_shared_when_small_and_downsampled_to_the_chart_width() {
             mean: Some(1.0),
             min: Some(0.5),
             max: Some(2.0),
-            method: HistoryMethod::Raw,
         })
         .collect();
     fixture.history = Arc::new(HistoryView {

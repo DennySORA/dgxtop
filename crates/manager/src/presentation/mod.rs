@@ -69,16 +69,14 @@ use sources::SourcesInputs;
 #[derive(Debug, Clone, Default)]
 pub struct TrendBook {
     capacity: usize,
-    step_ms: u64,
     series: BTreeMap<MetricKey, VecDeque<Option<f64>>>,
 }
 
 impl TrendBook {
-    /// `capacity` points per series at `step_ms` spacing.
-    pub fn new(capacity: usize, step_ms: u64) -> Self {
+    /// `capacity` points per series.
+    pub fn new(capacity: usize) -> Self {
         Self {
             capacity: capacity.max(1),
-            step_ms,
             series: BTreeMap::new(),
         }
     }
@@ -112,10 +110,7 @@ impl TrendBook {
                 points.iter().skip(skip).copied().collect()
             })
             .unwrap_or_default();
-        Trend {
-            points,
-            step_ms: self.step_ms,
-        }
+        Trend { points }
     }
 
     pub fn len(&self) -> usize {

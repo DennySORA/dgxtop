@@ -32,7 +32,7 @@ use std::sync::Arc;
 use dgxtop_core::clock::{NANOS_PER_MILLI, TimeProvider, ms_to_ns};
 use dgxtop_core::commands::ViewKind;
 use dgxtop_core::errors::ErrorDetail;
-use dgxtop_core::history::{HistoryMethod, HistoryResult, MAX_HISTORY_POINTS, SeriesInEveryBoot};
+use dgxtop_core::history::{HistoryResult, MAX_HISTORY_POINTS, SeriesInEveryBoot};
 use dgxtop_core::identity::{MetricKey, SessionId};
 use dgxtop_core::metric::{CanonicalUnit, descriptor};
 use dgxtop_core::overview_history::{
@@ -1130,7 +1130,6 @@ fn chart_view(
                 mean: bar.mean(),
                 min: bar.low(),
                 max: bar.peak(),
-                method: HistoryMethod::TimeWeightedStep,
             }
         })
         .collect();
@@ -1147,7 +1146,6 @@ fn chart_view(
         peak: whole.peak(),
         coverage_ratio: covered_ns.map(|covered| HistoryResult::ratio(covered, grid.span_ns())),
         covered_ns,
-        truncated: false,
         display_downsampled: merges,
         pending: active && !answered && chart.error.is_none(),
         error: chart.error.clone(),

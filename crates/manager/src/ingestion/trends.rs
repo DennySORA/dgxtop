@@ -46,7 +46,7 @@ pub(crate) struct TrendRecorder {
 impl TrendRecorder {
     pub(crate) fn new(step_ms: u64) -> Self {
         Self {
-            book: TrendBook::new(TREND_POINTS, step_ms),
+            book: TrendBook::new(TREND_POINTS),
             step_ms,
             last_read: BTreeMap::new(),
         }
@@ -304,7 +304,6 @@ mod tests {
         assert_eq!(recorder.book().len(), 1);
         recorder.set_step(2000);
         assert!(recorder.book().is_empty());
-        assert_eq!(recorder.book().trend(&memory, 1).step_ms, 2000);
     }
 
     /// The RAM unified GPUs hold gets one point beside each new point of

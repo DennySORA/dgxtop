@@ -587,14 +587,12 @@ mod tests {
                 slot: 0,
                 trend: Trend {
                     points: vec![Some(16.0 * GIB); 2],
-                    step_ms: 1000,
                 },
             },
             ProcessTrend {
                 slot: 1,
                 trend: Trend {
                     points: vec![Some(8.0 * GIB)],
-                    step_ms: 1000,
                 },
             },
         ];
