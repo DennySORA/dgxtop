@@ -276,6 +276,7 @@ impl Application {
             .map_err(|error| StartError::failure(error.to_string()))?,
         );
         startup::remove_unneeded_files(filesystem.as_ref(), &paths, logger.as_ref());
+        startup::log_retired_keys(&loaded.saved, logger.as_ref());
         let sqlite_ok = match ensure_sqlite_version() {
             Ok(_) => true,
             Err(error) => {

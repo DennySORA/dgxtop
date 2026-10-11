@@ -167,6 +167,11 @@ fn saved_value_survives_absent_cli_flags() {
         text.contains("fast 5000 ms"),
         "absent --interval overwrote the saved value: {text}"
     );
+    // D-86: the spec's document still holds a retired key: loaded, noted.
+    assert!(
+        text.contains("note: store.raw_candidate_seconds is retired and ignored"),
+        "{text}"
+    );
     let text = stdout(&home.run(&["--check-config", "-i", "2"]));
     assert!(
         text.contains("sampling.interval_ms: saved 5000 -> effective 2000"),

@@ -68,6 +68,9 @@ fn render_check_config(cli: &Cli) -> Result<String, StartupError> {
     for note in &paths.notes {
         text.push_str(&format!("note: {note}\n"));
     }
+    for notice in startup::retired_key_notices(&loaded.saved) {
+        text.push_str(&format!("note: {notice}\n"));
+    }
     text.push_str("validation: ok\n");
     let differences = startup::effective_differences(&loaded.saved, &loaded.effective);
     if differences.is_empty() {

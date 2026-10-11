@@ -20,7 +20,7 @@ use dgxtop::perf::scenarios::{REF_PROFILE, ScenarioProfile, Scenarios};
 use dgxtop::perf::verdict::VerdictStatus;
 use dgxtop::perf::{Budgets, Environment, ReportKind, SoakResult};
 use dgxtop::version::BuildInfo;
-use dgxtop_core::config::{Config, DEFAULT_CONFIG_JSON};
+use dgxtop_core::config::{Config, DEFAULT_CONFIG_JSON, remove_retired_keys};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -175,9 +175,18 @@ pub fn reference_config() -> BenchResult<Config> {
     Config::reference().map_err(|error| format!("embedded default configuration: {error}"))
 }
 
-/// Whether `config` is exactly the REF default document.
+/// The spec's default document, the REF configuration as the spec wrote it.
+fn reference_document() -> Option<Value> {
+    serde_json::from_str(DEFAULT_CONFIG_JSON).ok()
+}
+
+/// Whether `config` is exactly the REF default document, apart from the
+/// keys dgxtop retired and never writes (D-86).
 pub fn is_reference_config(config: &Config) -> bool {
-    let default: Option<Value> = serde_json::from_str(DEFAULT_CONFIG_JSON).ok();
+    let default = reference_document().map(|mut document| {
+        remove_retired_keys(&mut document);
+        document
+    });
     serde_json::to_value(config).ok() == default
 }
 
@@ -234,7 +243,13 @@ pub fn finish(
 ) -> BenchResult<PathBuf> {
     let (environment, details) = environment;
     let io = |error: std::io::Error| format!("evidence: {error}");
-    evidence.write_json("config.json", config).map_err(io)?;
+    // The spec's evaluator compares the evidence with its default document,
+    // which still carries the keys D-86 retired.
+    match reference_document().filter(|_| is_reference_config(config)) {
+        Some(document) => evidence.write_json("config.json", &document),
+        None => evidence.write_json("config.json", config),
+    }
+    .map_err(io)?;
     let config_sha256 = evidence
         .files()
         .iter()

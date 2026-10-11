@@ -182,6 +182,22 @@ fn flatten(value: &serde_json::Value, prefix: String, leaves: &mut BTreeMap<Stri
     }
 }
 
+/// One notice per retired key the saved configuration still holds (D-86).
+pub fn retired_key_notices(saved: &Config) -> Vec<String> {
+    saved
+        .retired_keys_present()
+        .into_iter()
+        .map(|key| format!("{key} is retired and ignored (D-86); the next save leaves it out"))
+        .collect()
+}
+
+/// Logs [`retired_key_notices`] at startup, one info line each.
+pub fn log_retired_keys(saved: &Config, logger: &dyn Logger) {
+    for notice in retired_key_notices(saved) {
+        logger.log(LogLevel::Info, "config", &notice);
+    }
+}
+
 /// Deletes what the state directory no longer needs (D-85): run under
 /// the instance lock, before any partition opens; one log line a file.
 pub fn remove_unneeded_files(fs: &dyn FileSystemOps, paths: &StatePaths, logger: &dyn Logger) {
@@ -271,6 +287,27 @@ mod tests {
             "not private: untouched"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// An old file's retired key is a notice and an info line; a file
+    /// without one, none.
+    #[test]
+    fn retired_keys_are_noticed_and_logged() {
+        let old = Config::reference().unwrap();
+        let notices = retired_key_notices(&old);
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].starts_with("store.raw_candidate_seconds is retired"));
+        let logger = MemoryLogger::default();
+        log_retired_keys(&old, &logger);
+        assert_eq!(
+            logger.records(),
+            vec![(LogLevel::Info, "config", notices[0].clone())]
+        );
+        let current = Config::from_json(&old.to_pretty_json().unwrap()).unwrap();
+        assert!(retired_key_notices(&current).is_empty());
+        let silent = MemoryLogger::default();
+        log_retired_keys(&current, &silent);
+        assert!(silent.records().is_empty());
     }
 
     #[test]

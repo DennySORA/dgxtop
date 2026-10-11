@@ -331,7 +331,6 @@
                     }
                   },
                   "required": [
-                    "raw_candidate_seconds",
                     "raw_history_seconds",
                     "aggregate_seconds",
                     "aggregate_retention_hours",

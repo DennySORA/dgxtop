@@ -9,7 +9,9 @@ schema plus exactly these extensions (D-80):
   Overview and the Process History (D-77, D-78), optional;
 * `store.process_history_enabled`: whether the Process History is kept on
   disk, optional (unset follows `store.archive_enabled`), wherever the spec
-  has the store settings (the config, and the config a command carries).
+  has the store settings (the config, and the config a command carries);
+* `store.raw_candidate_seconds` is retired (D-86): no longer required, still
+  accepted with the spec's range, and never written by dgxtop.
 
 Every document the spec accepts stays accepted. `--check` fails when the
 committed files differ from what this script builds.
@@ -25,6 +27,8 @@ SPEC = ROOT / 'spec' / 'dgxtop-v2' / 'contracts'
 OUT = ROOT / 'contracts'
 BAR_SIZES = ['auto', '1m', '5m', '10m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '18h', '24h']
 BAR = {'type': 'string', 'enum': BAR_SIZES}
+# Store keys an earlier version wrote and dgxtop ignores (D-86).
+RETIRED_STORE_KEYS = ['raw_candidate_seconds']
 
 
 def objects(node):
@@ -44,6 +48,7 @@ def extend_store(schema):
         properties = node.get('properties')
         if isinstance(properties, dict) and 'archive_enabled' in properties:
             properties['process_history_enabled'] = {'type': 'boolean'}
+            node['required'] = [key for key in node['required'] if key not in RETIRED_STORE_KEYS]
             found += 1
     return found
 
