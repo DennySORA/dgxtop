@@ -171,11 +171,12 @@ impl ControlCore {
                 );
                 self.apply(fx);
             }
-            // Frontends send Shutdown out of band; a queued one still works.
-            CommandBody::Shutdown { reason } => {
-                self.shutdown.request(&reason);
-                self.finish(CommandResult::completed(request_id, "shutdown started"));
-            }
+            // The session refuses it before the queue (D-93); kept total.
+            CommandBody::Shutdown { .. } => self.finish(CommandResult::rejected(
+                request_id,
+                ErrorCode::Unsupported,
+                "Shutdown is not a queued command; quit through request_shutdown",
+            )),
         }
     }
 

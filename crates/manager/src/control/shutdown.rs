@@ -37,7 +37,6 @@ impl ControlCore {
         self.ingestion.stop();
         self.history.cancel_all();
         self.sessions.mark_shutdown_requested_all();
-        self.sessions.answer_shutdown_requests("shutdown started");
         self.logger.log(
             LogLevel::Info,
             "manager.shutdown",
@@ -62,9 +61,6 @@ impl ControlCore {
         };
         let timed_out = self.clock.now_boot_ns() >= draining.deadline_ns
             || Instant::now() >= draining.real_deadline;
-        // Shutdown commands submitted after the start still get their result.
-        self.sessions
-            .answer_shutdown_requests("shutdown in progress");
         let settled = !self.config.has_pending()
             && !self.process.awaiting_control()
             && self.process_history.settled();
@@ -117,7 +113,6 @@ impl ControlCore {
             };
             self.finish(result);
         }
-        self.sessions.answer_shutdown_requests("shutdown complete");
         self.sessions.mark_shutdown_requested_all();
         self.phase = Phase::Finished;
         if !unfinished.is_empty() {
