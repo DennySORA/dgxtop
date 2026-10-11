@@ -46,7 +46,7 @@ pub(super) fn render_gpu_view(
             render_bar(frame, bar, reading, (0, column), context);
         }
     }
-    let blocks = blocks(selected, context);
+    let blocks = blocks(selected, model.header.kernel.as_deref(), context);
     let body = rows
         .rest()
         .unwrap_or(Rect::new(inner.x, inner.bottom(), inner.width, 0));

@@ -624,6 +624,28 @@ fn missing_topics_render_no_data_instead_of_zero() {
     assert!(!rendered.contains("0.0%"), "{}", rendered.text());
 }
 
+/// The GPU view's driver block names the host kernel from the header
+/// (D-91); a narrow terminal still draws it, cut to the column.
+#[test]
+fn gpu_view_shows_the_host_kernel_in_the_driver_block() {
+    let model = model(ViewKind::GpuDetail);
+    assert_eq!(model.header.kernel.as_deref(), Some("6.12.0"));
+    let wide = render(&model, (200, 60));
+    let line = wide
+        .row_with("Linux kernel")
+        .unwrap_or_else(|| panic!("{}", wide.text()));
+    assert!(line.contains("6.12.0"), "{line}");
+    let narrow = render(&model, (80, 80));
+    let line = narrow
+        .row_with("Linux kernel")
+        .unwrap_or_else(|| panic!("{}", narrow.text()));
+    assert!(line.contains("6.12"), "{line}");
+    assert!(narrow.report.module_errors.is_empty());
+    let mut unknown = model;
+    unknown.header.kernel = None;
+    assert!(!render(&unknown, (200, 60)).contains("Linux kernel"));
+}
+
 #[test]
 fn gpu_unavailable_reason_is_shown() {
     let mut model = model(ViewKind::GpuDetail);
