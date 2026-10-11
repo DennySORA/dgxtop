@@ -10,7 +10,7 @@ use dgxtop_core::errors::InfraError;
 use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::overview_history::{
     ArchivePrune, ArchivedMinutes, HistoryTierCompletion, HistoryTierJob, OverviewBucket,
-    StoredTierSeries,
+    StoredTierSeries, TierJournal,
 };
 use dgxtop_core::process_history::{TIER_BUCKETS, Tier};
 use dgxtop_core::testing::{CapturingDispatch, host_id, metric_key};
@@ -484,4 +484,160 @@ fn the_cache_is_bounded() {
             "the one fed longest ago went"
         );
     });
+}
+
+fn gpu_series(gpu: usize) -> SeriesInEveryBoot {
+    SeriesInEveryBoot::from(&metric_key(&format!("gpu:{gpu}"), "gpu.power.draw", "gpu"))
+}
+
+fn gpu_minute(gpu: usize, index: i64) -> TierMinute {
+    let key = metric_key(&format!("gpu:{gpu}"), "gpu.power.draw", "gpu");
+    TierMinute {
+        series: SeriesInEveryBoot::from(&key),
+        key,
+        bucket: minute(index),
+    }
+}
+
+/// The journals the history sent to its store.
+fn appends(jobs: &[HistoryTierJob]) -> Vec<&TierJournal> {
+    jobs.iter()
+        .filter_map(|job| match job {
+            HistoryTierJob::Append(journal) => Some(journal),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A series the cache lets go is gone (owner): the store deletes it with
+/// the next journal (its buckets not sent yet go with it), the archive its
+/// minutes whatever the store's state, and when it comes back it starts
+/// fresh, after what was deleted.
+#[test]
+fn an_evicted_series_is_deleted_everywhere_and_comes_back_fresh() {
+    let mut disk = Disk::default();
+    let run = Run::start(&mut disk, MIDNIGHT);
+    run.port.set_busy(true);
+    run.tiers
+        .feed((0..3).map(|index| gpu_minute(0, index)).collect());
+    for gpu in 1..MAX_TIER_SERIES {
+        run.tiers.feed(vec![gpu_minute(gpu, 10)]);
+    }
+    assert!(run.port.is_empty(), "the store is busy");
+    run.port.set_busy(false);
+    run.tiers.feed(vec![gpu_minute(MAX_TIER_SERIES, 10)]);
+    let jobs = run.port.take();
+    let sent = appends(&jobs);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].forget, vec![gpu_series(0)]);
+    assert!(
+        sent[0].rows.iter().all(|row| row.series != gpu_series(0)),
+        "its buckets not sent yet went with it"
+    );
+    let prunes = run.tiers.take_prunes(0);
+    assert_eq!(
+        prunes,
+        vec![ArchivePrune {
+            series: gpu_series(0),
+            before_utc_ns: MIDNIGHT + 3 * MINUTE,
+        }],
+        "deleted from the archive although a write is in flight"
+    );
+    assert!(run.tiers.take_prunes(0).is_empty(), "asked once");
+    run.tiers.on_store(HistoryTierCompletion::Appended(Ok(())));
+    assert!(
+        appends(&run.port.take()).is_empty(),
+        "nothing left to forget"
+    );
+
+    run.tiers.feed(vec![gpu_minute(0, 20)]);
+    let bars = run.tiers.bars(
+        &gpu_series(0),
+        Tier::OneDay,
+        (MIDNIGHT - 24 * HOUR, MIDNIGHT + 24 * HOUR),
+        &[],
+    );
+    let held: u64 = bars.bars.iter().map(|bar| bar.covered_ns).sum();
+    assert_eq!(held, MINUTE.unsigned_abs(), "only what came after");
+    assert!(minute(20).start_utc_ns >= prunes[0].before_utc_ns);
+    let comeback = run.port.take();
+    assert!(
+        appends(&comeback)
+            .iter()
+            .all(|journal| !journal.forget.contains(&gpu_series(0))),
+        "the comeback is not deleted"
+    );
+}
+
+/// A series let go while the startup runs is not read back: one the load
+/// pushed out is not compressed from the archive, and one let go while its
+/// archived minutes are being read keeps none of them.
+#[test]
+fn a_series_let_go_during_the_startup_is_not_read_back() {
+    let run_start = MIDNIGHT + 4 * HOUR;
+    let run = Run {
+        tiers: OverviewTiers::new(),
+        port: CapturingDispatch::new(),
+    };
+    run.tiers
+        .attach_store(Box::new(run.port.clone()), host_id("test-host"), run_start);
+    assert_eq!(run.port.take(), vec![HistoryTierJob::Load]);
+    let stored = (0..=MAX_TIER_SERIES)
+        .map(|gpu| StoredTierSeries {
+            series: gpu_series(gpu),
+            buckets: vec![(Tier::OneMinute, minute(i64::try_from(gpu).unwrap()))],
+        })
+        .collect();
+    run.tiers
+        .on_store(HistoryTierCompletion::Loaded(Ok(stored)));
+    let jobs = run.port.take();
+    assert!(matches!(jobs[0], HistoryTierJob::ListArchived(_)));
+    assert_eq!(appends(&jobs)[0].forget, vec![gpu_series(0)]);
+    run.tiers.on_store(HistoryTierCompletion::Listed(Ok(vec![
+        gpu_series(0),
+        gpu_series(1),
+        gpu_series(2),
+    ])));
+    let read = match run.port.take().as_slice() {
+        [HistoryTierJob::ReadArchived(read)] => read.clone(),
+        other => panic!("one read expected, got {other:?}"),
+    };
+    assert_eq!(read.series, gpu_series(1), "the one let go is skipped");
+    // A new series takes the place of the one being read.
+    run.tiers.feed(vec![gpu_minute(500, 200)]);
+    run.tiers.on_store(HistoryTierCompletion::ArchivedRead {
+        read,
+        result: Ok(ArchivedMinutes {
+            minutes: vec![minute(-30)],
+            more: false,
+        }),
+    });
+    let next: Vec<SeriesInEveryBoot> = run
+        .port
+        .take()
+        .into_iter()
+        .filter_map(|job| match job {
+            HistoryTierJob::ReadArchived(read) => Some(read.series),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(next, vec![gpu_series(2)]);
+    run.tiers.with_book(|book| {
+        assert!(book.entry_of(&gpu_series(0)).is_none());
+        assert!(
+            book.entry_of(&gpu_series(1)).is_none(),
+            "its page was dropped"
+        );
+    });
+    let before: Vec<(SeriesInEveryBoot, i64)> = run
+        .tiers
+        .take_prunes(0)
+        .into_iter()
+        .map(|prune| (prune.series, prune.before_utc_ns))
+        .collect();
+    assert_eq!(
+        before,
+        vec![(gpu_series(0), run_start), (gpu_series(1), run_start)],
+        "every minute of earlier runs"
+    );
 }

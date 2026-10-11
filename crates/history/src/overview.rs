@@ -16,13 +16,17 @@
 //!
 //! The archive is pruned only while nothing it would lose is unwritten:
 //! the startup is over, every closed bucket was written and no write
-//! failed this run.
+//! failed this run. A series the cache lets go is not shown and not read
+//! back: the store deletes it with the next journal, the archive its
+//! minutes with the next archive journal (whatever the store's state),
+//! and its archived minutes are not compressed if the startup is still
+//! reading them.
 
 mod book;
 mod reader;
 pub(crate) mod rows;
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -38,7 +42,7 @@ use dgxtop_core::overview_history::{
 use dgxtop_core::ports::{Dispatch, DispatchError};
 use dgxtop_core::process_history::{TIER_BUCKETS, Tier};
 
-use self::book::{TierBook, TierMinute};
+use self::book::{Eviction, TierBook, TierMinute};
 
 /// Closed buckets kept for a store that fell behind; past it the oldest
 /// go (and the archive is no longer pruned this run).
@@ -100,12 +104,41 @@ struct StoreLink {
     issue: Option<String>,
     appends_inflight: u32,
     last_prune_boot_ns: Option<u64>,
+    /// Series the cache let go that the store is still to delete.
+    forget: Vec<SeriesInEveryBoot>,
+    /// Their archived minutes, for the archive to delete.
+    eviction_prunes: Vec<ArchivePrune>,
+    /// Series let go during the startup: their archived minutes are not
+    /// compressed.
+    let_go: BTreeSet<SeriesInEveryBoot>,
 }
 
 impl StoreLink {
     fn fail(&mut self, error: &InfraError) {
         self.healthy = false;
         self.issue = Some(format!("history tiers: {error}"));
+    }
+
+    /// What the cache let go: deleted from the store and the archive, and
+    /// left out of what the startup still reads.
+    fn forget(&mut self, evictions: Vec<Eviction>) {
+        for eviction in evictions {
+            // This run's minutes of it all end by `through_utc_ns`, earlier
+            // runs' before this run started; a comeback starts after both.
+            let before_utc_ns = eviction.through_utc_ns.max(self.run_start_utc_ns);
+            self.eviction_prunes.push(ArchivePrune {
+                series: eviction.series.clone(),
+                before_utc_ns,
+            });
+            self.forget.push(eviction.series.clone());
+            if matches!(self.phase, Phase::Done) {
+                continue;
+            }
+            if let Phase::Backfilling { queue, .. } = &mut self.phase {
+                queue.retain(|series| *series != eviction.series);
+            }
+            self.let_go.insert(eviction.series);
+        }
     }
 
     /// Sends a startup job, holding it while the queue is full.
@@ -171,6 +204,9 @@ impl OverviewTiers {
             issue: None,
             appends_inflight: 0,
             last_prune_boot_ns: None,
+            forget: Vec::new(),
+            eviction_prunes: Vec::new(),
+            let_go: BTreeSet::new(),
         };
         link.send(HistoryTierJob::Load);
         inner.link = Some(link);
@@ -196,6 +232,7 @@ impl OverviewTiers {
                 }
             }
         }
+        link.forget(book.take_evictions());
         flush(book, link);
     }
 
@@ -208,19 +245,24 @@ impl OverviewTiers {
             book.feed(minute);
         }
         match link.as_mut() {
-            Some(link) => flush(book, link),
+            Some(link) => {
+                link.forget(book.take_evictions());
+                flush(book, link);
+            }
             None => drop(book.take_unsent()),
         }
     }
 
-    /// The deletions the archive may make now (at most every ten minutes,
-    /// only while everything they would lose is written).
+    /// The deletions the archive may make now: every series the cache let
+    /// go, and the minutes the sizes hold (at most every ten minutes, only
+    /// while everything they would lose is written).
     pub(crate) fn take_prunes(&self, now_boot_ns: u64) -> Vec<ArchivePrune> {
         let mut inner = self.lock();
         let Inner { book, link } = &mut *inner;
         let Some(link) = link.as_mut() else {
             return Vec::new();
         };
+        let mut prunes = std::mem::take(&mut link.eviction_prunes);
         let settled = link.healthy
             && matches!(link.phase, Phase::Done)
             && link.held.is_none()
@@ -229,11 +271,11 @@ impl OverviewTiers {
         let due = link
             .last_prune_boot_ns
             .is_none_or(|last| now_boot_ns.saturating_sub(last) >= PRUNE_EVERY_NS);
-        if !(settled && due) {
-            return Vec::new();
+        if settled && due {
+            link.last_prune_boot_ns = Some(now_boot_ns);
+            prunes.extend(book.prunes());
         }
-        link.last_prune_boot_ns = Some(now_boot_ns);
-        book.prunes()
+        prunes
     }
 
     /// The bars of `tier` starting in `window`, with `extra` minutes (not
@@ -307,6 +349,7 @@ fn listed(
                 .into_iter()
                 .filter(|series| {
                     is_overview_series(series.metric_id.as_str(), series.entity_id.as_str())
+                        && !link.let_go.contains(series)
                 })
                 .collect()
         }
@@ -335,6 +378,10 @@ fn archived_read(
     else {
         return;
     };
+    if link.let_go.contains(&series) {
+        next_backfill(book, link);
+        return;
+    }
     match result {
         Ok(page) => {
             book.add_archived(&series, &page.minutes, first_page);
@@ -369,6 +416,7 @@ fn next_backfill(book: &mut TierBook, link: &mut StoreLink) {
     };
     let Some(series) = queue.pop_front() else {
         link.phase = Phase::Done;
+        link.let_go.clear();
         book.release(link.listed);
         return;
     };
@@ -391,15 +439,19 @@ fn flush(book: &mut TierBook, link: &mut StoreLink) {
         }
     }
     let rows: Vec<TierRow> = book.take_unsent();
-    if rows.is_empty() {
+    if rows.is_empty() && link.forget.is_empty() {
         return;
     }
     let journal = TierJournal {
+        forget: link.forget.clone(),
         rows: rows.clone(),
         keep_latest: u32::try_from(TIER_BUCKETS).unwrap_or(u32::MAX),
     };
     match link.port.try_dispatch(HistoryTierJob::Append(journal)) {
-        Ok(()) => link.appends_inflight = link.appends_inflight.saturating_add(1),
+        Ok(()) => {
+            link.forget.clear();
+            link.appends_inflight = link.appends_inflight.saturating_add(1);
+        }
         Err(DispatchError::Busy) => {
             book.return_unsent(rows);
             if book.shed_unsent(MAX_UNSENT_ROWS) {

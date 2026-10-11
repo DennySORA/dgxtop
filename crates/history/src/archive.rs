@@ -1,23 +1,27 @@
 //! Bounded queue of finished history rows for the optional archive.
 //!
 //! Rows (finalized minute buckets, bridges and settled gaps) are queued only
-//! when the archive is enabled, accounted in the `reserve` partition (the
+//! when the archive is enabled, and only those read back: rows of the
+//! series the Overview keeps in its sizes, and gaps no series is named in
+//! (D-82; a row of any other series would only wait for its age limit).
+//! They are accounted in the `reserve` partition (the
 //! archive journal's budget) and handed out as bounded `ArchiveJournal`s.
 //! Every journal carries the segment row of every segment its buckets and
 //! bridges reference (the sink upserts them), so a journal never depends on
 //! an earlier one. When the queue is full the oldest rows are dropped and the
 //! dropped time is reported to the archive as an `archive_overflow` gap: the
 //! live state is never blocked by the archive. A journal also carries the
-//! deletions the Overview's sizes allow (D-82), alone when no row waits.
+//! deletions the Overview's sizes allow (D-82), alone when no row waits;
+//! a queued row such a deletion covers is dropped before it is written.
 
 use std::collections::{BTreeSet, VecDeque};
 
 use dgxtop_core::budget::{ByteLedger, Partition};
 use dgxtop_core::canonical::GapRecord;
-use dgxtop_core::history::HistoryMethod;
+use dgxtop_core::history::{HistoryMethod, SeriesInEveryBoot};
 use dgxtop_core::identity::{BootId, HostId};
 use dgxtop_core::metric::ScalarView;
-use dgxtop_core::overview_history::ArchivePrune;
+use dgxtop_core::overview_history::{ArchivePrune, is_overview_series};
 use dgxtop_core::ports::{ArchiveJournal, ArchivedBridge, ArchivedBucket, ArchivedSegment};
 
 use dgxtop_core::clock::format_utc_ns;
@@ -58,6 +62,41 @@ fn row_identity(row: &ArchiveRow) -> Option<(&HostId, &BootId)> {
         | ArchiveRow::Bridge { segment, .. } => Some((&segment.key.host_id, &segment.key.boot_id)),
         ArchiveRow::Gap(gap) => gap.key.as_ref().map(|key| (&key.host_id, &key.boot_id)),
     }
+}
+
+/// Whether the archive keeps a row: one of an Overview series (the history
+/// compresses those minutes at startup) or a gap no series is named in.
+fn is_read_back(row: &ArchiveRow) -> bool {
+    let key = match row {
+        ArchiveRow::GaugeBucket { segment, .. }
+        | ArchiveRow::CounterBucket { segment, .. }
+        | ArchiveRow::Bridge { segment, .. } => &segment.key,
+        ArchiveRow::Gap(gap) => match &gap.key {
+            Some(key) => key,
+            None => return true,
+        },
+    };
+    is_overview_series(key.metric_id.as_str(), key.entity_id.as_str())
+}
+
+/// Whether `prune` covers a queued row: one of its series that starts
+/// before the prune (an unmapped boot time is not covered).
+fn is_pruned(row: &ArchiveRow, prune: &ArchivePrune, clock: &WallClock) -> bool {
+    let key = match row {
+        ArchiveRow::GaugeBucket { segment, .. }
+        | ArchiveRow::CounterBucket { segment, .. }
+        | ArchiveRow::Bridge { segment, .. } => &segment.key,
+        ArchiveRow::Gap(gap) => match &gap.key {
+            Some(key) => key,
+            None => return false,
+        },
+    };
+    if SeriesInEveryBoot::from(key) != prune.series {
+        return false;
+    }
+    clock
+        .utc_of(row_span(row).0)
+        .is_some_and(|start| start < i128::from(prune.before_utc_ns))
 }
 
 /// Pending archive rows.
@@ -126,12 +165,16 @@ impl ArchiveQueue {
         true
     }
 
-    /// Queues rows; returns how many rows were dropped to stay bounded.
+    /// Queues the rows the archive keeps; returns how many rows were
+    /// dropped to stay bounded.
     pub(crate) fn enqueue(&mut self, rows: Vec<ArchiveRow>) -> u64 {
         let mut dropped = 0u64;
         for row in rows {
             if let Some((host, boot)) = row_identity(&row) {
                 self.identity = Some((host.to_string(), boot.to_string()));
+            }
+            if !is_read_back(&row) {
+                continue;
             }
             let bytes = row_bytes(&row);
             loop {
@@ -149,6 +192,26 @@ impl ArchiveQueue {
             }
         }
         dropped
+    }
+
+    /// Drops the queued rows `prunes` would delete once written: a pruned
+    /// series' rows that start before its prune, on the wall clock.
+    pub(crate) fn drop_pruned(&mut self, prunes: &[ArchivePrune], clock: &WallClock) {
+        if prunes.is_empty() {
+            return;
+        }
+        let before = self.account.bytes();
+        let mut released = 0u64;
+        self.rows.retain(|queued| {
+            let pruned = prunes
+                .iter()
+                .any(|prune| is_pruned(&queued.row, prune, clock));
+            if pruned {
+                released = released.saturating_add(queued.bytes);
+            }
+            !pruned
+        });
+        self.account.shrink_to(before.saturating_sub(released));
     }
 
     /// Takes up to `max_bytes` of rows (at least one) of a single host/boot,
@@ -326,7 +389,8 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use dgxtop_core::metric::{CanonicalUnit, Scalar};
+    use dgxtop_core::metric::{CanonicalUnit, Scalar, ids};
+    use dgxtop_core::naming::entity;
     use dgxtop_core::quality::SampleKind;
     use dgxtop_core::testing::{metric_key, source_id};
     use uuid::Uuid;
@@ -335,9 +399,13 @@ mod tests {
     use crate::segment::SegmentIdentity;
 
     fn segment() -> Arc<SegmentMeta> {
+        segment_of("gpu:0", "gpu.temperature")
+    }
+
+    fn segment_of(entity: &str, metric: &str) -> Arc<SegmentMeta> {
         Arc::new(SegmentMeta {
             uuid: Uuid::new_v4(),
-            key: metric_key("gpu:0", "gpu.temperature", "gpu"),
+            key: metric_key(entity, metric, "gpu"),
             identity: SegmentIdentity {
                 source_id: source_id("nvml:0:temp"),
                 source_generation: 1,
@@ -407,6 +475,126 @@ mod tests {
             "a later journal repeats the segment row"
         );
         assert_eq!(later.segments[0].segment_id, later.buckets[0].segment_id);
+    }
+
+    fn gap(key: Option<dgxtop_core::identity::MetricKey>) -> ArchiveRow {
+        ArchiveRow::Gap(GapRecord {
+            key,
+            adapter_id: None,
+            start_boot_ns: 0,
+            end_boot_ns: BUCKET_NS,
+            reason: "collector_down".to_owned(),
+            affected_count: 1,
+        })
+    }
+
+    /// Only what is read back is archived (D-82): an Overview series'
+    /// minutes and bridges, gaps keyed to one and gaps keyed to none; a
+    /// CPU core or a metric the Overview does not chart is left out.
+    #[test]
+    fn only_the_overview_series_are_queued() {
+        let ledger = ByteLedger::for_memory_limit_mib(64);
+        let mut queue = ArchiveQueue::new(&ledger);
+        let kept = segment();
+        let core = segment_of("cpu:3", ids::CPU_UTILIZATION_TOTAL);
+        let whole_cpu = segment_of(entity::CPU_AGGREGATE, ids::CPU_UTILIZATION_TOTAL);
+        let uncharted = segment_of(entity::CPU_AGGREGATE, ids::CPU_UTILIZATION_IOWAIT);
+        let bridge = |segment: &Arc<SegmentMeta>| ArchiveRow::Bridge {
+            segment: Arc::clone(segment),
+            bridge: CounterSample {
+                start_ns: 59_500_000_000,
+                end_ns: 60_500_000_000,
+                delta: Scalar::from_u64(300),
+                segment: 0,
+            },
+        };
+        let dropped = queue.enqueue(vec![
+            bucket_row(&kept, 0),
+            bucket_row(&core, 0),
+            bucket_row(&whole_cpu, 0),
+            bucket_row(&uncharted, 0),
+            bridge(&kept),
+            bridge(&core),
+            gap(Some(kept.key.clone())),
+            gap(Some(core.key.clone())),
+            gap(None),
+        ]);
+        assert_eq!(dropped, 0, "left out is not dropped");
+        assert_eq!(
+            ledger.used(Partition::Reserve),
+            2 * ROW_BYTES + ROW_BYTES + 2 * (ROW_BYTES + 14),
+            "only the rows kept are accounted"
+        );
+        let journal = queue.take(1 << 20, &clock(), 1, Vec::new()).unwrap();
+        let mut segments: Vec<&str> = journal
+            .segments
+            .iter()
+            .map(|segment| segment.key.entity_id.as_str())
+            .collect();
+        segments.sort_unstable();
+        assert_eq!(segments, vec![entity::CPU_AGGREGATE, "gpu:0"]);
+        assert_eq!(journal.buckets.len(), 2);
+        assert_eq!(journal.bridges.len(), 1);
+        assert_eq!(journal.gaps.len(), 2);
+        assert!(
+            journal
+                .gaps
+                .iter()
+                .all(|gap| gap.key.as_ref().is_none_or(|key| key == &kept.key))
+        );
+    }
+
+    /// A queued row a prune covers is dropped before it is written (it
+    /// would be deleted in the same step): the pruned series' rows before
+    /// the prune go, its later rows and other series' rows stay.
+    #[test]
+    fn queued_rows_a_prune_covers_are_dropped() {
+        let ledger = ByteLedger::for_memory_limit_mib(64);
+        let mut queue = ArchiveQueue::new(&ledger);
+        let pruned = segment();
+        let other = segment_of("gpu:1", "gpu.temperature");
+        queue.enqueue(vec![
+            bucket_row(&pruned, 0),
+            bucket_row(&pruned, 1),
+            gap(Some(pruned.key.clone())),
+            bucket_row(&pruned, 2),
+            bucket_row(&other, 0),
+            gap(None),
+        ]);
+        let start_of_minute_2 = 1_790_000_000_000_000_000 + 2 * i64::try_from(BUCKET_NS).unwrap();
+        let prune = ArchivePrune {
+            series: dgxtop_core::history::SeriesInEveryBoot::from(&pruned.key),
+            before_utc_ns: start_of_minute_2,
+        };
+        queue.drop_pruned(&[], &clock());
+        assert_eq!(queue.rows.len(), 6, "no prune, nothing dropped");
+        queue.drop_pruned(std::slice::from_ref(&prune), &WallClock::default());
+        assert_eq!(queue.rows.len(), 6, "an unmapped boot time is kept");
+        queue.drop_pruned(&[prune], &clock());
+        assert_eq!(
+            ledger.used(Partition::Reserve),
+            2 * ROW_BYTES + (ROW_BYTES + 14),
+            "what was dropped is released"
+        );
+        let journal = queue.take(1 << 20, &clock(), 1, Vec::new()).unwrap();
+        let kept: Vec<(&str, u64)> = journal
+            .buckets
+            .iter()
+            .map(|bucket| {
+                let segment = journal
+                    .segments
+                    .iter()
+                    .find(|segment| segment.segment_id == bucket.segment_id)
+                    .unwrap();
+                (
+                    segment.key.entity_id.as_str(),
+                    bucket.start_boot_ns / BUCKET_NS,
+                )
+            })
+            .collect();
+        assert_eq!(kept, vec![("gpu:0", 2), ("gpu:1", 0)]);
+        assert_eq!(journal.gaps.len(), 1);
+        assert!(journal.gaps[0].key.is_none());
     }
 
     /// Deletions the Overview's sizes allow travel in a journal of their
