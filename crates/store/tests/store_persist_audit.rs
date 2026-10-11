@@ -22,9 +22,9 @@ use dgxtop_core::ports::AuditRepository;
 use dgxtop_core::testing::FakeClock;
 use dgxtop_core::wire::parse_fixed_width;
 use dgxtop_store::audit::{AuditLimits, SqliteAuditRepository};
-use dgxtop_store::fs::{Failpoint, FailpointFileSystem, Trigger};
 use dgxtop_store::sqlite::{
-    AUDIT_DDL, FreeSpaceProbe, StorageFootprint, format_utc_rfc3339, shm_path, wal_path,
+    FreeSpaceProbe, SchemaKind, StorageFootprint, format_stamp, format_utc_rfc3339, shm_path,
+    wal_path,
 };
 use rusqlite::Connection;
 use uuid::Uuid;
@@ -43,6 +43,10 @@ impl TempDir {
             Uuid::new_v4().simple()
         ));
         std::fs::create_dir_all(&path).unwrap();
+        // Like the real state directory: a file is recreated only in a
+        // private one (D-85).
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         Self(path)
     }
@@ -633,63 +637,140 @@ fn database_files_are_private() {
     assert_eq!(status.bytes_limit, 128 * MIB);
 }
 
-#[test]
-fn future_user_version_is_a_read_only_diagnostic() {
-    let fixture = Fixture::new("future");
-    {
-        let connection = Connection::open(fixture.dir.database()).unwrap();
-        connection
-            .execute_batch("CREATE TABLE action_intents(x TEXT); PRAGMA user_version = 3;")
-            .unwrap();
-    }
-    std::fs::set_permissions(
-        fixture.dir.database(),
-        std::fs::Permissions::from_mode(0o600),
-    )
-    .unwrap();
-    let before = std::fs::read(fixture.dir.database()).unwrap();
-    let mut audit = fixture.open(AuditLimits::default());
-    let status = audit.status();
-    assert_eq!(status.state, PersistenceState::ReadOnlyDiagnostic);
-    assert!(status.detail.unwrap().contains("user_version 3"));
-    let error = audit.append_intent(&fixture.intent(100)).unwrap_err();
-    assert_eq!(error.code, ErrorCode::Unavailable);
-    assert!(audit.recover_unknown(1, &fixture.now_utc()).is_err());
-    drop(audit);
-    assert_eq!(
-        std::fs::read(fixture.dir.database()).unwrap(),
-        before,
-        "never rewritten"
-    );
+fn write_private(path: &Path, bytes: &[u8]) {
+    std::fs::write(path, bytes).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
 }
 
+/// Opens the audit over a file the test prepared and checks it was
+/// deleted and created afresh (D-85): the reason is reported, the audit
+/// starts empty, healthy and writable, and the new file is stamped.
+fn assert_recreated(fixture: &Fixture, reason_part: &str) {
+    let mut audit = fixture.open(AuditLimits::default());
+    let reason = audit.recreated().map(str::to_owned);
+    assert!(
+        reason
+            .as_deref()
+            .is_some_and(|text| text.contains(reason_part)),
+        "{reason:?} should mention {reason_part:?}"
+    );
+    assert_eq!(audit.status().state, PersistenceState::Healthy);
+    audit.append_intent(&fixture.intent(100)).unwrap();
+    drop(audit);
+    let stamp: i32 = fixture
+        .reader()
+        .query_row("PRAGMA application_id", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(stamp, SchemaKind::Audit.format_stamp());
+    let mode = std::fs::metadata(fixture.dir.database())
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600);
+}
+
+/// A database of this format is kept with its rows; every other format
+/// version, newer, older or none (written before D-85), is recreated.
 #[test]
-fn garbage_file_is_failed_and_preserved() {
+fn a_database_of_another_format_version_is_recreated() {
+    let current = SchemaKind::Audit.format_version();
+    for (label, stamp) in [
+        ("newer", format_stamp(current + 1)),
+        ("older", format_stamp(current - 1)),
+        ("missing", 0),
+    ] {
+        let fixture = Fixture::new(label);
+        {
+            let mut audit = fixture.open(AuditLimits::default());
+            audit.append_intent(&fixture.intent(90)).unwrap();
+        }
+        Connection::open(fixture.dir.database())
+            .unwrap()
+            .pragma_update(None, "application_id", stamp)
+            .unwrap();
+        assert_recreated(&fixture, "format");
+        let intents = count(&fixture.reader(), "action_intents");
+        assert_eq!(intents, 1, "{label}: only the intent written afterwards");
+    }
+    let same = Fixture::new("same");
+    {
+        let mut audit = same.open(AuditLimits::default());
+        audit.append_intent(&same.intent(90)).unwrap();
+    }
+    let mut audit = same.open(AuditLimits::default());
+    assert_eq!(audit.recreated(), None);
+    assert_eq!(audit.status().state, PersistenceState::Healthy);
+    drop(audit);
+    assert_eq!(count(&same.reader(), "action_intents"), 1);
+}
+
+/// Another `user_version`, missing tables or foreign objects: a structure
+/// this build does not write is recreated, never migrated or kept.
+#[test]
+fn a_database_of_another_structure_is_recreated() {
+    let stamp = SchemaKind::Audit.format_stamp();
+    for (setup, reason) in [
+        (
+            format!(
+                "CREATE TABLE action_intents(x TEXT); PRAGMA user_version = 3; PRAGMA application_id = {stamp};"
+            ),
+            "user_version 3",
+        ),
+        (
+            format!(
+                "CREATE TABLE action_intents(x TEXT); PRAGMA user_version = 2; PRAGMA application_id = {stamp};"
+            ),
+            "objects missing",
+        ),
+        (
+            "CREATE TABLE somebody_elses(x TEXT);".to_owned(),
+            "no dgxtop format version",
+        ),
+    ] {
+        let fixture = Fixture::new("structure");
+        {
+            let connection = Connection::open(fixture.dir.database()).unwrap();
+            connection.execute_batch(&setup).unwrap();
+        }
+        std::fs::set_permissions(
+            fixture.dir.database(),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        assert_recreated(&fixture, reason);
+    }
+    let foreign = Fixture::new("foreign");
+    {
+        let audit = foreign.open(AuditLimits::default());
+        drop(audit);
+    }
+    Connection::open(foreign.dir.database())
+        .unwrap()
+        .execute_batch("CREATE TABLE somebody_elses(x TEXT);")
+        .unwrap();
+    assert_recreated(&foreign, "somebody_elses");
+}
+
+/// A file that is no database, with leftover journals, is deleted with
+/// them and created afresh.
+#[test]
+fn a_garbage_file_is_recreated_with_its_journals() {
     let fixture = Fixture::new("garbage");
     let garbage: Vec<u8> = (0..16_384u32)
         .map(|index| u8::try_from(index % 251).unwrap())
         .collect();
-    std::fs::write(fixture.dir.database(), &garbage).unwrap();
-    std::fs::set_permissions(
-        fixture.dir.database(),
-        std::fs::Permissions::from_mode(0o600),
-    )
-    .unwrap();
-    let mut audit = fixture.open(AuditLimits::default());
-    let status = audit.status();
-    assert_eq!(status.state, PersistenceState::Failed);
-    assert!(status.detail.unwrap().contains("file kept"));
-    assert_eq!(
-        audit.append_intent(&fixture.intent(110)).unwrap_err().code,
-        ErrorCode::PersistFailed
-    );
-    drop(audit);
-    assert_eq!(std::fs::read(fixture.dir.database()).unwrap(), garbage);
-    assert!(!wal_path(&fixture.dir.database()).exists());
+    write_private(&fixture.dir.database(), &garbage);
+    write_private(&wal_path(&fixture.dir.database()), b"stale wal");
+    write_private(&shm_path(&fixture.dir.database()), b"stale shm");
+    assert_recreated(&fixture, "schema inspection");
+    assert_ne!(std::fs::read(fixture.dir.database()).unwrap(), garbage);
 }
 
+/// Damaged pages behind a valid header fail the integrity check: the
+/// file is recreated and the damaged rows are gone.
 #[test]
-fn damaged_pages_behind_a_valid_header_are_detected_and_kept() {
+fn damaged_pages_behind_a_valid_header_are_recreated() {
     let fixture = Fixture::new("damaged");
     {
         let mut audit = fixture.open(AuditLimits::default());
@@ -707,139 +788,89 @@ fn damaged_pages_behind_a_valid_header_are_detected_and_kept() {
     }
     std::fs::write(fixture.dir.database(), &bytes).unwrap();
     let mut audit = fixture.open(AuditLimits::default());
-    assert_eq!(audit.status().state, PersistenceState::Failed);
-    assert!(audit.append_intent(&fixture.intent(3000)).is_err());
-    drop(audit);
-    assert_eq!(std::fs::read(fixture.dir.database()).unwrap(), bytes);
+    assert!(audit.recreated().is_some());
+    assert_eq!(audit.status().state, PersistenceState::Healthy);
+    assert_eq!(count(&fixture.reader(), "action_intents"), 0);
+    audit.append_intent(&fixture.intent(3000)).unwrap();
 }
 
+/// A symbolic link is removed as a link (its target stays as it was); a
+/// file writable by others is recreated private.
 #[test]
-fn symlinked_or_shared_database_files_are_refused() {
+fn unsafe_database_files_are_recreated_without_following_links() {
     let fixture = Fixture::new("unsafe");
-    let real = fixture.dir.0.join("real.sqlite3");
-    std::fs::write(&real, b"").unwrap();
-    std::os::unix::fs::symlink(&real, fixture.dir.database()).unwrap();
-    let mut audit = fixture.open(AuditLimits::default());
-    assert_eq!(audit.status().state, PersistenceState::Failed);
-    drop(audit);
-    std::fs::remove_file(fixture.dir.database()).unwrap();
-    std::fs::write(fixture.dir.database(), b"").unwrap();
+    let target = fixture.dir.0.join("target.bin");
+    write_private(&target, b"not ours to touch");
+    std::os::unix::fs::symlink(&target, fixture.dir.database()).unwrap();
+    assert_recreated(&fixture, "symbolic link");
+    assert_eq!(std::fs::read(&target).unwrap(), b"not ours to touch");
+    assert!(
+        !std::fs::symlink_metadata(fixture.dir.database())
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+
+    let shared = Fixture::new("shared");
+    {
+        let audit = shared.open(AuditLimits::default());
+        drop(audit);
+    }
     std::fs::set_permissions(
-        fixture.dir.database(),
+        shared.dir.database(),
         std::fs::Permissions::from_mode(0o666),
     )
     .unwrap();
-    let mut audit = fixture.open(AuditLimits::default());
-    let status = audit.status();
-    assert_eq!(status.state, PersistenceState::Failed);
-    assert!(status.detail.unwrap().contains("writable"));
+    assert_recreated(&shared, "writable");
 }
 
+/// What is not the file's fault leaves it alone: another writer holding
+/// the lock, a state directory others may write, a directory in its place.
 #[test]
-fn migration_of_pre_v2_content_backs_up_first() {
-    let fixture = Fixture::new("migrate");
-    let partial_ddl = AUDIT_DDL
-        .split("CREATE TABLE IF NOT EXISTS action_events")
-        .next()
-        .unwrap()
-        .replace("BEGIN IMMEDIATE;", "")
-        .replace("PRAGMA foreign_keys = ON;", "");
-    {
-        let connection = Connection::open(fixture.dir.database()).unwrap();
-        connection.execute_batch(&partial_ddl).unwrap();
-        let version: i64 = connection
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(version, 0);
-    }
-    std::fs::set_permissions(
-        fixture.dir.database(),
-        std::fs::Permissions::from_mode(0o600),
-    )
-    .unwrap();
-    let mut audit = fixture.open(AuditLimits::default());
-    assert_eq!(audit.status().state, PersistenceState::Healthy);
-    let backup = audit.migration_backup().unwrap().to_path_buf();
-    assert!(backup.exists());
-    assert_eq!(
-        std::fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
-    let copy = Connection::open(&backup).unwrap();
-    let tables: i64 = copy
-        .query_row(
-            "SELECT count(*) FROM sqlite_schema WHERE name = 'action_intents'",
-            [],
-            |row| row.get(0),
-        )
+fn a_file_is_never_deleted_for_what_is_not_its_fault() {
+    let busy = Fixture::new("busy");
+    write_private(&busy.dir.database(), b"");
+    let holder = Connection::open(busy.dir.database()).unwrap();
+    holder
+        .execute_batch("CREATE TABLE held(x); BEGIN EXCLUSIVE; INSERT INTO held VALUES (1);")
         .unwrap();
-    assert_eq!(tables, 1);
-    audit.append_intent(&fixture.intent(120)).unwrap();
-    let version: i64 = fixture
-        .reader()
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(version, 2);
-}
-
-#[test]
-fn failed_backup_aborts_the_migration_and_keeps_the_file() {
-    let fixture = Fixture::new("backup-fails");
-    {
-        let connection = Connection::open(fixture.dir.database()).unwrap();
-        connection
-            .execute_batch("CREATE TABLE action_intents(request_id TEXT PRIMARY KEY);")
-            .unwrap();
-    }
-    std::fs::set_permissions(
-        fixture.dir.database(),
-        std::fs::Permissions::from_mode(0o600),
-    )
-    .unwrap();
-    let before = std::fs::read(fixture.dir.database()).unwrap();
-    let fs = FailpointFileSystem::over_real();
-    fs.arm(Failpoint::CreateFile, Trigger::Always);
-    let mut audit = SqliteAuditRepository::open_with_filesystem(
-        &fixture.dir.database(),
-        AuditLimits::default(),
-        fixture.clock.clone(),
-        fixture.free.clone(),
-        &fs,
-    )
-    .unwrap();
+    let mut audit = busy.open(AuditLimits::default());
     let status = audit.status();
     assert_eq!(status.state, PersistenceState::Failed);
-    assert!(status.detail.unwrap().contains("backup"));
+    assert!(status.detail.unwrap().contains("locked"));
+    assert!(audit.append_intent(&busy.intent(110)).is_err());
     drop(audit);
-    assert_eq!(std::fs::read(fixture.dir.database()).unwrap(), before);
-}
-
-#[test]
-fn unknown_schema_versions_and_foreign_objects_are_kept_untouched() {
-    for setup in [
-        "CREATE TABLE action_intents(x TEXT); PRAGMA user_version = 1;",
-        "CREATE TABLE somebody_elses(x TEXT);",
-    ] {
-        let fixture = Fixture::new("unknown");
-        {
-            let connection = Connection::open(fixture.dir.database()).unwrap();
-            connection.execute_batch(setup).unwrap();
-        }
-        std::fs::set_permissions(
-            fixture.dir.database(),
-            std::fs::Permissions::from_mode(0o600),
-        )
+    holder.execute_batch("COMMIT").unwrap();
+    let held: i64 = holder
+        .query_row("SELECT count(*) FROM held", [], |row| row.get(0))
         .unwrap();
-        let before = std::fs::read(fixture.dir.database()).unwrap();
-        let mut audit = fixture.open(AuditLimits::default());
-        assert_eq!(audit.status().state, PersistenceState::Failed, "{setup}");
-        drop(audit);
-        assert_eq!(
-            std::fs::read(fixture.dir.database()).unwrap(),
-            before,
-            "{setup}"
-        );
-    }
+    assert_eq!(held, 1, "the held file was not deleted");
+    drop(holder);
+
+    let open_dir = Fixture::new("open-dir");
+    write_private(&open_dir.dir.database(), &[0x42u8; 8192]);
+    std::fs::set_permissions(&open_dir.dir.0, std::fs::Permissions::from_mode(0o777)).unwrap();
+    let mut audit = open_dir.open(AuditLimits::default());
+    let status = audit.status();
+    assert_eq!(status.state, PersistenceState::Failed);
+    assert!(status.detail.unwrap().contains("not deleted"));
+    assert_eq!(
+        audit.append_intent(&open_dir.intent(111)).unwrap_err().code,
+        ErrorCode::PersistFailed
+    );
+    drop(audit);
+    assert_eq!(
+        std::fs::read(open_dir.dir.database()).unwrap(),
+        vec![0x42u8; 8192]
+    );
+    std::fs::set_permissions(&open_dir.dir.0, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let directory = Fixture::new("directory");
+    std::fs::create_dir(directory.dir.database()).unwrap();
+    let mut audit = directory.open(AuditLimits::default());
+    assert_eq!(audit.status().state, PersistenceState::Failed);
+    drop(audit);
+    assert!(directory.dir.database().is_dir());
 }
 
 #[test]

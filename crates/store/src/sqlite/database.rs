@@ -1,35 +1,38 @@
 //! The shared open sequence of a SQLite partition.
 //!
-//! Order matters: nothing is written to an existing file before its version,
-//! schema and integrity are known, so a future-schema or corrupt database is
-//! left byte-for-byte as found.
+//! Nothing is written to an existing file before its format, schema and
+//! integrity are known. One rule for every partition (D-85): a file that
+//! cannot be used as it is (not this build's format version, `user_version`
+//! or objects, unreadable, corrupt, failing its integrity check, a symbolic
+//! link, another user's or writable by others) is not migrated or kept but
+//! deleted with its `-wal`/`-shm` and created afresh, once; the reason is
+//! handed to the partition to log. What is not the file's fault (the
+//! SQLite version gate, another writer holding the lock, a directory or
+//! FIFO in its place, a state directory that is not private) leaves it
+//! alone and makes the partition unusable instead.
 //!
 //! 1. runtime version gate;
 //! 2. path safety (regular file, ours, not group/world-writable) or 0600
 //!    pre-creation of a missing file;
-//! 3. read-only inspection of `user_version` and schema objects;
-//! 4. `quick_check` (current schema) or `integrity_check` plus backup
-//!    (migration);
+//! 3. read-only inspection of the format version, `user_version` and
+//!    schema objects;
+//! 4. `quick_check` of an existing file;
 //! 5. PRAGMA profile and `max_page_count`;
-//! 6. idempotent spec DDL when initializing or migrating.
+//! 6. the DDL and the format stamp when the file is empty.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use dgxtop_core::action::PersistenceState;
-use dgxtop_core::clock::TimeProvider;
 use rusqlite::Connection;
 
-use super::capacity::{CapacityPolicy, PageUsage};
+use super::capacity::{CapacityPolicy, PageUsage, shm_path, wal_path};
 use super::connection::{ConnectionProfile, apply_profile, open_connection};
 use super::errors::{FaultKind, describe, fault_kind};
-use super::schema::{
-    SchemaKind, SchemaPlan, SchemaRefusal, apply_ddl, apply_upgrade, backup_before_migration,
-    integrity_problem, plan,
-};
-use super::time::format_utc_rfc3339;
+use super::schema::{SchemaKind, SchemaPlan, apply_ddl, integrity_problem, plan};
 use super::version::{SqliteGateError, SqliteVersion};
 use crate::fs::{FileKind, FileSystemOps};
+use crate::paths::verify_private_directory;
 
 /// Version check used by the open sequence (the real gate in production; a
 /// failing stub in tests).
@@ -58,68 +61,142 @@ impl Unusable {
             reason: dgxtop_core::text::sanitize_message(reason.as_ref()),
         }
     }
-
-    fn read_only(reason: impl AsRef<str>) -> Self {
-        Self {
-            state: PersistenceState::ReadOnlyDiagnostic,
-            reason: dgxtop_core::text::sanitize_message(reason.as_ref()),
-        }
-    }
 }
 
 /// A ready writer connection.
 #[derive(Debug)]
 pub(crate) struct OpenedDatabase {
     pub connection: Connection,
-    /// Backup written before a migration, if one ran.
-    pub backup: Option<PathBuf>,
+    /// Why the file found was deleted and created afresh, if it was.
+    pub recreated: Option<String>,
+}
+
+/// Why one open attempt failed.
+#[derive(Debug)]
+enum OpenFailure {
+    /// The file itself cannot be used: it is recreated.
+    File(String),
+    /// Something around the file: it is left alone.
+    Surroundings(Unusable),
+}
+
+impl OpenFailure {
+    fn sqlite(context: &str, error: &rusqlite::Error) -> Self {
+        match fault_kind(error) {
+            FaultKind::Busy => Self::Surroundings(Unusable::failed(format!(
+                "{context}: database is locked by another writer"
+            ))),
+            _ => Self::File(format!("{context}: {}", describe(error))),
+        }
+    }
 }
 
 pub(crate) fn open_database(
     spec: &DatabaseSpec<'_>,
     fs: &dyn FileSystemOps,
-    clock: &dyn TimeProvider,
     gate: VersionGate,
 ) -> Result<OpenedDatabase, Unusable> {
     gate().map_err(|error| Unusable::failed(format!("SQLite version gate: {error}")))?;
+    match open_as_found(spec, fs) {
+        Ok(connection) => Ok(OpenedDatabase {
+            connection,
+            recreated: None,
+        }),
+        Err(OpenFailure::Surroundings(unusable)) => Err(unusable),
+        Err(OpenFailure::File(reason)) => recreate(spec, fs, reason),
+    }
+}
+
+/// Deletes the file and its journals and opens a fresh one; a second
+/// failure is final (no loop).
+fn recreate(
+    spec: &DatabaseSpec<'_>,
+    fs: &dyn FileSystemOps,
+    reason: String,
+) -> Result<OpenedDatabase, Unusable> {
+    remove_database_files(spec.path, fs)
+        .map_err(|error| Unusable::failed(format!("{reason}; not deleted: {error}")))?;
+    match open_as_found(spec, fs) {
+        Ok(connection) => Ok(OpenedDatabase {
+            connection,
+            recreated: Some(dgxtop_core::text::sanitize_message(&reason)),
+        }),
+        Err(OpenFailure::Surroundings(unusable)) => Err(unusable),
+        Err(OpenFailure::File(again)) => Err(Unusable::failed(format!(
+            "{again} (after deleting a file with {reason})"
+        ))),
+    }
+}
+
+/// Removes the database, `-wal` and `-shm`, only inside a private
+/// directory of ours; a symbolic link is removed as a link, never its
+/// target.
+fn remove_database_files(path: &Path, fs: &dyn FileSystemOps) -> Result<(), String> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| "the database has no directory".to_owned())?;
+    verify_private_directory(fs, directory).map_err(|error| error.to_string())?;
+    for file in [path.to_path_buf(), wal_path(path), shm_path(path)] {
+        if let Ok(facts) = fs.symlink_metadata(&file)
+            && !matches!(facts.kind, FileKind::Regular | FileKind::Symlink)
+        {
+            return Err(format!("{} is not a regular file", file.display()));
+        }
+        match fs.remove_file(&file) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("cannot remove {}: {error}", file.display())),
+        }
+    }
+    fs.sync_directory(directory)
+        .map_err(|error| format!("directory fsync after removal failed: {error}"))
+}
+
+fn open_as_found(
+    spec: &DatabaseSpec<'_>,
+    fs: &dyn FileSystemOps,
+) -> Result<Connection, OpenFailure> {
     let was_empty = prepare_file(spec.path, fs)?;
     let connection = open_connection(spec.path, spec.profile.busy_timeout)
-        .map_err(|error| Unusable::failed(format!("cannot open database: {}", describe(&error))))?;
+        .map_err(|error| OpenFailure::sqlite("cannot open database", &error))?;
     let plan = inspect(&connection, spec.kind)?;
-    let backup = verify_before_writing(&connection, spec, &plan, was_empty, fs, clock)?;
-    configure(&connection, spec)?;
-    if let SchemaPlan::Upgrade { from } = plan {
-        apply_upgrade(&connection, spec.kind, from)
-            .map_err(|error| sqlite_unusable("schema upgrade", &error))?;
+    if !was_empty && plan == SchemaPlan::Current {
+        verify_integrity(&connection)?;
     }
-    if plan != SchemaPlan::Current {
+    configure(&connection, spec)?;
+    if plan == SchemaPlan::Initialize {
         initialize_schema(&connection, spec.kind)?;
     }
-    Ok(OpenedDatabase { connection, backup })
+    Ok(connection)
 }
 
 /// Validates an existing file or pre-creates a missing one with mode 0600
 /// (SQLite gives `-wal`/`-shm` the main file's mode). Returns whether the
 /// file is empty.
-fn prepare_file(path: &Path, fs: &dyn FileSystemOps) -> Result<bool, Unusable> {
+fn prepare_file(path: &Path, fs: &dyn FileSystemOps) -> Result<bool, OpenFailure> {
+    let label = path.display();
     match fs.symlink_metadata(path) {
         Ok(facts) => {
-            let label = path.display();
-            if facts.kind == FileKind::Symlink {
-                return Err(Unusable::failed(format!("{label} is a symbolic link")));
-            }
-            if facts.kind != FileKind::Regular {
-                return Err(Unusable::failed(format!("{label} is not a regular file")));
+            match facts.kind {
+                FileKind::Regular => {}
+                FileKind::Symlink => {
+                    return Err(OpenFailure::File(format!("{label} is a symbolic link")));
+                }
+                FileKind::Directory | FileKind::Other => {
+                    return Err(OpenFailure::Surroundings(Unusable::failed(format!(
+                        "{label} is not a regular file"
+                    ))));
+                }
             }
             let euid = fs.effective_uid();
             if facts.owner_uid != euid {
-                return Err(Unusable::failed(format!(
+                return Err(OpenFailure::File(format!(
                     "{label} is owned by uid {}, expected {euid}",
                     facts.owner_uid
                 )));
             }
             if facts.is_group_or_world_writable() {
-                return Err(Unusable::failed(format!(
+                return Err(OpenFailure::File(format!(
                     "{label} is group/world-writable (mode {:o})",
                     facts.permissions
                 )));
@@ -129,106 +206,62 @@ fn prepare_file(path: &Path, fs: &dyn FileSystemOps) -> Result<bool, Unusable> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => match fs.create_private_file(path)
         {
             Ok(_created) => Ok(true),
-            Err(error) => Err(Unusable::failed(format!(
-                "cannot create {}: {error}",
-                path.display()
-            ))),
+            Err(error) => Err(OpenFailure::Surroundings(Unusable::failed(format!(
+                "cannot create {label}: {error}"
+            )))),
         },
-        Err(error) => Err(Unusable::failed(format!(
-            "cannot inspect {}: {error}",
-            path.display()
-        ))),
+        Err(error) => Err(OpenFailure::Surroundings(Unusable::failed(format!(
+            "cannot inspect {label}: {error}"
+        )))),
     }
 }
 
-fn sqlite_unusable(context: &str, error: &rusqlite::Error) -> Unusable {
-    match fault_kind(error) {
-        FaultKind::Corrupt => Unusable::failed(format!(
-            "{context}: database is corrupt or not a database (file kept): {}",
-            describe(error)
-        )),
-        FaultKind::Busy => {
-            Unusable::failed(format!("{context}: database is locked by another writer"))
-        }
-        _ => Unusable::failed(format!("{context}: {}", describe(error))),
-    }
-}
-
-/// Read-only look at `user_version` and the schema objects.
-fn inspect(connection: &Connection, kind: SchemaKind) -> Result<SchemaPlan, Unusable> {
+/// Read-only look at the format version, `user_version` and objects.
+fn inspect(connection: &Connection, kind: SchemaKind) -> Result<SchemaPlan, OpenFailure> {
     match plan(connection, kind) {
-        Err(error) => Err(sqlite_unusable("schema inspection", &error)),
+        Err(error) => Err(OpenFailure::sqlite("schema inspection", &error)),
         Ok(Ok(plan)) => Ok(plan),
-        Ok(Err(SchemaRefusal::Future { found })) => Err(Unusable::read_only(format!(
-            "{} schema user_version {found} is newer than the supported {}; \
-             kept for read-only diagnostics and never rewritten",
+        Ok(Err(refusal)) => Err(OpenFailure::File(format!(
+            "{} database of another format ({refusal}; this build writes format {}, \
+             user_version {})",
             kind.label(),
+            kind.format_version(),
             kind.user_version()
         ))),
-        Ok(Err(SchemaRefusal::Unknown(detail))) => Err(Unusable::failed(format!(
-            "unknown {} schema ({detail}); file kept",
-            kind.label()
-        ))),
-        Ok(Err(SchemaRefusal::Incomplete(missing))) => Err(Unusable::failed(format!(
-            "{} schema is incomplete (missing {}); file kept",
-            kind.label(),
-            missing.join(", ")
-        ))),
     }
 }
 
-/// Integrity verification before the first write; backup before migration.
-fn verify_before_writing(
-    connection: &Connection,
-    spec: &DatabaseSpec<'_>,
-    plan: &SchemaPlan,
-    was_empty: bool,
-    fs: &dyn FileSystemOps,
-    clock: &dyn TimeProvider,
-) -> Result<Option<PathBuf>, Unusable> {
-    if was_empty || *plan == SchemaPlan::Initialize {
-        return Ok(None);
+fn verify_integrity(connection: &Connection) -> Result<(), OpenFailure> {
+    match integrity_problem(connection, true) {
+        Err(error) => Err(OpenFailure::sqlite("integrity check", &error)),
+        Ok(Some(problem)) => Err(OpenFailure::File(format!(
+            "integrity check failed: {problem}"
+        ))),
+        Ok(None) => Ok(()),
     }
-    let quick = *plan == SchemaPlan::Current;
-    match integrity_problem(connection, quick) {
-        Err(error) => return Err(sqlite_unusable("integrity check", &error)),
-        Ok(Some(problem)) => {
-            return Err(Unusable::failed(format!(
-                "integrity check failed (file kept, partition stopped): {problem}"
-            )));
-        }
-        Ok(None) => {}
-    }
-    if !plan.rewrites() {
-        return Ok(None);
-    }
-    let label = format_utc_rfc3339(clock.now_utc_ns());
-    backup_before_migration(connection, (spec.path, spec.kind), fs, &label)
-        .map(Some)
-        .map_err(|message| {
-            Unusable::failed(format!(
-                "backup before migration failed, not migrated: {message}"
-            ))
-        })
 }
 
-fn configure(connection: &Connection, spec: &DatabaseSpec<'_>) -> Result<(), Unusable> {
+fn configure(connection: &Connection, spec: &DatabaseSpec<'_>) -> Result<(), OpenFailure> {
     let page_size = PageUsage::read(connection)
-        .map_err(|error| sqlite_unusable("page accounting", &error))?
+        .map_err(|error| OpenFailure::sqlite("page accounting", &error))?
         .page_size;
     let page_cap = spec.policy.database_page_cap(page_size);
     apply_profile(connection, &spec.profile, page_cap)
         .map(|_effective| ())
-        .map_err(|error| Unusable::failed(format!("cannot configure database: {error}")))
+        .map_err(|error| {
+            OpenFailure::Surroundings(Unusable::failed(format!(
+                "cannot configure database: {error}"
+            )))
+        })
 }
 
-fn initialize_schema(connection: &Connection, kind: SchemaKind) -> Result<(), Unusable> {
+fn initialize_schema(connection: &Connection, kind: SchemaKind) -> Result<(), OpenFailure> {
     apply_ddl(connection, kind)
-        .map_err(|error| sqlite_unusable("schema initialization", &error))?;
+        .map_err(|error| OpenFailure::sqlite("schema initialization", &error))?;
     match inspect(connection, kind)? {
         SchemaPlan::Current => Ok(()),
-        other => Err(Unusable::failed(format!(
-            "schema verification after initialization found {other:?}"
+        SchemaPlan::Initialize => Err(OpenFailure::Surroundings(Unusable::failed(
+            "schema verification after initialization found an empty database",
         ))),
     }
 }

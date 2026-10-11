@@ -144,6 +144,8 @@ fn the_store_keeps_only_sqlite_and_file_modules() {
             "config",
             "fs",
             "history_tiers",
+            // D-85: files of the state directory no build needs any more.
+            "leftovers",
             "lock",
             "paths",
             "process_history",

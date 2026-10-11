@@ -442,10 +442,10 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 | S1 a legacy dry-run maps everything | `dgxtop-store/store_persist_config::legacy_dry_run_maps_everything_and_writes_nothing`, `cli::legacy_import_dry_run_writes_nothing_and_apply_writes_private_v2_once` |  |
 | S2 apply writes only v2 | `dgxtop-store/store_persist_config::legacy_apply_writes_v2_once_and_refuses_an_existing_v2` |  |
 | S3 rollback starts the old version; v2 data kept | `cli::installer::installs_a_verified_release_keeps_the_previous_binary_and_rolls_back` | Stub old binary |
-| F1 checksum corruption keeps a recoverable file | `cli::installer::a_checksum_mismatch_is_refused_and_the_installed_binary_is_kept`, `dgxtop-store/store_persist_audit::garbage_file_is_failed_and_preserved`, `dgxtop-store/store_persist_archive::corrupt_and_future_archives_are_kept_and_reported` |  |
+| F1 checksum corruption keeps a recoverable file | `cli::installer::a_checksum_mismatch_is_refused_and_the_installed_binary_is_kept`, `dgxtop-store/store_persist_audit::a_garbage_file_is_recreated_with_its_journals`, `dgxtop-store/store_persist_audit::damaged_pages_behind_a_valid_header_are_recreated`, `dgxtop-store/store_persist_archive::corrupt_and_other_format_archives_are_recreated` | D-85: a corrupt or other-format database is deleted and created afresh (the spec keeps it); the binary and `config.json` stay recoverable |
 | F2 unknown schema | `dgxtop-store/store_persist_config::future_schema_is_reported_and_never_rewritten`, `cli::future_schema_is_refused_and_never_rewritten` |  |
 | F3 disk full | `dgxtop-store/store_persist_config::enospc_during_write_keeps_the_old_file` | PARTIAL: configuration write only |
-| F4 an interrupted switch | `dgxtop-store/store_persist_config::rename_failure_keeps_the_old_file`, `dgxtop-store/store_persist_audit::failed_backup_aborts_the_migration_and_keeps_the_file` | PARTIAL: no binary-switch test |
+| F4 an interrupted switch | `dgxtop-store/store_persist_config::rename_failure_keeps_the_old_file`, `dgxtop-store/store_persist_audit::a_file_is_never_deleted_for_what_is_not_its_fault` | PARTIAL: no binary-switch test; D-85: no database migration remains to interrupt |
 | F5 rollback never claims to undo signals | `cli::installer::installs_a_verified_release_keeps_the_previous_binary_and_rolls_back` |  |
 
 <a id="at19"></a>

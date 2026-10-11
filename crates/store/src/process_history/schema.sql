@@ -1,6 +1,6 @@
 -- dgxtop process history (D-76, D-77): GPU process runs and their buckets.
--- Not part of the sealed spec; version 3 (upgrade_from_2.sql reaches it
--- from version 2 and leaves these same tables).
+-- Not part of the sealed spec; user_version 3. A file of another format
+-- is recreated, never upgraded (D-85).
 PRAGMA foreign_keys = ON;
 BEGIN IMMEDIATE;
 

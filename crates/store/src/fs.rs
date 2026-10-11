@@ -89,7 +89,7 @@ impl PrivateFile {
     }
 
     /// Borrow of the underlying descriptor for operations outside the trait
-    /// (for example letting SQLite write into a pre-created backup file).
+    /// (for example letting SQLite write into a pre-created file).
     pub fn as_file(&self) -> &File {
         &self.file
     }
@@ -134,7 +134,7 @@ pub struct DirectoryLock {
 }
 
 /// Filesystem operations required by the configuration repository, the path
-/// checks and the SQLite pre-creation/backup steps.
+/// checks and the SQLite pre-creation and recreation steps.
 pub trait FileSystemOps: Send + Sync + fmt::Debug {
     /// Creates `path` with `O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC`, mode 0600.
     fn create_private_file(&self, path: &Path) -> io::Result<PrivateFile>;

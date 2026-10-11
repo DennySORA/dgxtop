@@ -53,7 +53,8 @@ impl Default for ArchiveLimits {
 }
 
 /// Invalid arguments to [`crate::archive::SqliteArchive::open`]. Database
-/// problems open an archive whose status is `Failed`/`ReadOnlyDiagnostic`.
+/// problems open an archive whose status is `Failed` (a file that is merely
+/// not this build's is recreated instead, D-85).
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ArchiveOpenError {
     #[error("invalid archive limits: {0}")]

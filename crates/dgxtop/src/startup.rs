@@ -6,10 +6,11 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use dgxtop_core::config::{Config, ValueOrigin};
-use dgxtop_core::ports::{ConfigLoadError, ConfigRepository, LoadOrigin};
+use dgxtop_core::ports::{ConfigLoadError, ConfigRepository, LoadOrigin, LogLevel, Logger};
 use dgxtop_core::quality::Namespace;
 use dgxtop_store::config::FileConfigRepository;
 use dgxtop_store::fs::{FileSystemOps, RealFileSystem};
+use dgxtop_store::leftovers::{find_leftovers, remove_leftover};
 use dgxtop_store::paths::{PathError, ProcessEnv, StatePaths};
 use thiserror::Error;
 
@@ -181,9 +182,96 @@ fn flatten(value: &serde_json::Value, prefix: String, leaves: &mut BTreeMap<Stri
     }
 }
 
+/// Deletes what the state directory no longer needs (D-85): run under
+/// the instance lock, before any partition opens; one log line a file.
+pub fn remove_unneeded_files(fs: &dyn FileSystemOps, paths: &StatePaths, logger: &dyn Logger) {
+    let leftovers = match find_leftovers(fs, paths) {
+        Ok(found) => found,
+        Err(error) => {
+            logger.log(
+                LogLevel::Warn,
+                "store",
+                &format!("state directory not cleaned: {error}"),
+            );
+            return;
+        }
+    };
+    for leftover in leftovers {
+        let path = leftover.path.display();
+        let reason = leftover.kind.reason();
+        match remove_leftover(fs, &leftover) {
+            Ok(()) => logger.log(
+                LogLevel::Info,
+                "store",
+                &format!("{path} deleted, {reason} (D-85)"),
+            ),
+            Err(error) => logger.log(
+                LogLevel::Warn,
+                "store",
+                &format!("{path} not deleted ({reason}): {error}"),
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use dgxtop_core::testing::MemoryLogger;
+    use dgxtop_store::paths::MapEnv;
+
     use super::*;
+
+    fn private_state_dir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "dgxtop-startup-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        dir
+    }
+
+    fn paths_in(dir: &std::path::Path) -> StatePaths {
+        let env = MapEnv::new().with("HOME", "/home/acme");
+        StatePaths::resolve(&env, None, Some(dir), Namespace::Live).unwrap()
+    }
+
+    /// Startup deletes the leftovers and logs one line for each; the
+    /// databases in use stay.
+    #[test]
+    fn unneeded_files_are_deleted_with_one_line_each() {
+        let dir = private_state_dir("leftovers");
+        for name in [
+            "history.sqlite3",
+            "history.sqlite3.pre-v2-20260101T000000Z-1a2b3c4d.bak",
+            "process_history.sqlite3-wal",
+        ] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let logger = MemoryLogger::default();
+        remove_unneeded_files(&RealFileSystem, &paths_in(&dir), &logger);
+        let records = logger.records();
+        assert_eq!(records.len(), 2, "{records:?}");
+        assert!(records.iter().all(|(level, _, message)| {
+            *level == LogLevel::Info && message.contains("deleted") && message.contains("D-85")
+        }));
+        assert!(dir.join("history.sqlite3").exists());
+        assert!(!dir.join("process_history.sqlite3-wal").exists());
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+        std::fs::write(dir.join("audit.sqlite3-wal"), b"x").unwrap();
+        let refused = MemoryLogger::default();
+        remove_unneeded_files(&RealFileSystem, &paths_in(&dir), &refused);
+        assert_eq!(refused.records().len(), 1);
+        assert_eq!(refused.records()[0].0, LogLevel::Warn);
+        assert!(
+            dir.join("audit.sqlite3-wal").exists(),
+            "not private: untouched"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn origins_mark_defaults_saved_and_overrides() {

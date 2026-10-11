@@ -5,9 +5,9 @@
 //! ([`recent`]).
 //!
 //! The database is opened like the other partitions (0600, no symlinks,
-//! schema and integrity checked before any write, `max_page_count`); an
-//! unusable one makes every call fail with its reason, and the history
-//! stays in memory. A bucket packs 12 bytes a metric; a run keeps at most
+//! format, schema and integrity checked before any write, a file of
+//! another format recreated (D-85), `max_page_count`); one still unusable
+//! makes every call fail with its reason, and the history stays in memory. A bucket packs 12 bytes a metric; a run keeps at most
 //! 300 buckets a size, so at most about a megabyte however long it runs.
 //! No run expires by age: past [`MAX_USED_BYTES`] the ended runs last seen
 //! longest ago give way.
@@ -48,6 +48,7 @@ const RETENTION_EVERY_NS: u64 = 3_600 * 1_000_000_000;
 /// The process history's stores in dgxtop's state directory.
 pub struct ProcessHistoryFiles {
     database: Result<Connection, String>,
+    recreated: Option<String>,
     recent_path: PathBuf,
     fs: Box<dyn FileSystemOps>,
     clock: Arc<dyn TimeProvider>,
@@ -98,17 +99,25 @@ impl ProcessHistoryFiles {
                 min_free_disk_bytes: MIN_FREE_DISK_BYTES,
             },
         };
-        let database = open_database(&spec, fs.as_ref(), clock.as_ref(), gate)
-            .map(|opened| opened.connection)
-            .map_err(|unusable| unusable.reason);
+        let (database, recreated) = match open_database(&spec, fs.as_ref(), gate) {
+            Ok(opened) => (Ok(opened.connection), opened.recreated),
+            Err(unusable) => (Err(unusable.reason), None),
+        };
         Self {
             database,
+            recreated,
             recent_path: recent_path.to_path_buf(),
             fs,
             clock,
             last_retention_boot_ns: None,
             max_used_bytes: MAX_USED_BYTES,
         }
+    }
+
+    /// Why the database found at open was deleted and created afresh
+    /// (D-85), if it was.
+    pub fn recreated(&self) -> Option<&str> {
+        self.recreated.as_deref()
     }
 
     fn connection(&mut self) -> Result<&mut Connection, InfraError> {

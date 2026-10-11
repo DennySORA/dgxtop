@@ -275,6 +275,7 @@ impl Application {
             )
             .map_err(|error| StartError::failure(error.to_string()))?,
         );
+        startup::remove_unneeded_files(filesystem.as_ref(), &paths, logger.as_ref());
         let sqlite_ok = match ensure_sqlite_version() {
             Ok(_) => true,
             Err(error) => {
@@ -520,18 +521,20 @@ impl Wiring {
         history_index
             .overview()
             .set_utc_offset(local_utc_offset_s());
-        self.spawn_history_tiers(
-            effective,
-            paths,
-            sqlite_ok,
-            (history_index.overview().clone(), host_id.clone()),
-            &mut workers,
-        )?;
+        // The archive opens first: a file it recreates (D-85) is gone before
+        // the tiers' reader of it opens.
         let archive = self.spawn_archive(
             effective,
             paths,
             sqlite_ok,
             completions.clone(),
+            &mut workers,
+        )?;
+        self.spawn_history_tiers(
+            effective,
+            paths,
+            sqlite_ok,
+            (history_index.overview().clone(), host_id.clone()),
             &mut workers,
         )?;
         let store = self.spawn_store(
@@ -669,6 +672,11 @@ impl Wiring {
             Arc::new(StatvfsFreeSpace),
         )
         .map_err(|error| StartError::failure(error.to_string()))?;
+        log_recreated(
+            self.logger.as_ref(),
+            &paths.history_database,
+            archive.recreated(),
+        );
         let logger = Arc::clone(&self.logger);
         let handle = spawn_actor(
             "archive",
@@ -778,8 +786,14 @@ impl Wiring {
         if !(effective.store.archive_enabled && sqlite_ok) {
             return Ok(());
         }
+        let tiers = SqliteHistoryTiers::open(&paths.history_tiers_database);
+        log_recreated(
+            self.logger.as_ref(),
+            &paths.history_tiers_database,
+            tiers.recreated(),
+        );
         let files = HistoryTierFiles {
-            tiers: SqliteHistoryTiers::open(&paths.history_tiers_database, Arc::clone(&self.clock)),
+            tiers,
             archive: SqliteArchiveReader::new(&paths.history_database),
         };
         let answer = overview.clone();
@@ -835,15 +849,19 @@ impl Wiring {
         completions: Completions,
     ) -> Result<PoolHandle<AuditOp>, StartError> {
         let repository: Box<dyn AuditRepository> = if sqlite_ok {
-            Box::new(
-                SqliteAuditRepository::open(
-                    &paths.audit_database,
-                    AuditLimits::from_config(effective),
-                    Arc::clone(&self.clock),
-                    Arc::new(StatvfsFreeSpace),
-                )
-                .map_err(|error| StartError::failure(error.to_string()))?,
+            let audit = SqliteAuditRepository::open(
+                &paths.audit_database,
+                AuditLimits::from_config(effective),
+                Arc::clone(&self.clock),
+                Arc::new(StatvfsFreeSpace),
             )
+            .map_err(|error| StartError::failure(error.to_string()))?;
+            log_recreated(
+                self.logger.as_ref(),
+                &paths.audit_database,
+                audit.recreated(),
+            );
+            Box::new(audit)
         } else {
             Box::new(crate::audit_unavailable::UnavailableAudit::new(
                 "SQLite runtime gate failed",
@@ -953,6 +971,11 @@ impl Wiring {
             &paths.process_history_database,
             &paths.process_recent_file,
             Arc::clone(&self.clock),
+        );
+        log_recreated(
+            self.logger.as_ref(),
+            &paths.process_history_database,
+            store.recreated(),
         );
         let inbox = Arc::clone(inbox);
         let logger = Arc::clone(&self.logger);
@@ -1260,6 +1283,20 @@ impl HistoryTierFiles {
     }
 }
 
+/// One line for a database found unusable and recreated at open (D-85).
+fn log_recreated(logger: &dyn Logger, database: &Path, reason: Option<&str>) {
+    if let Some(reason) = reason {
+        logger.log(
+            LogLevel::Info,
+            "store",
+            &format!(
+                "{} deleted and created afresh (D-85): {reason}",
+                database.display()
+            ),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// hwmon reads the thermal zones' mirrors only when the thermal
@@ -1282,6 +1319,26 @@ mod tests {
     }
 
     use super::*;
+
+    /// A recreated database is one info line naming the file and the
+    /// reason; a database opened as it was says nothing.
+    #[test]
+    fn a_recreated_database_is_logged_once() {
+        let logger = dgxtop_core::testing::MemoryLogger::default();
+        let path = Path::new("/state/acme/history.sqlite3");
+        log_recreated(&logger, path, None);
+        assert!(logger.records().is_empty());
+        log_recreated(&logger, path, Some("no dgxtop format version"));
+        let records = logger.records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].0, LogLevel::Info);
+        assert!(
+            records[0]
+                .2
+                .contains("/state/acme/history.sqlite3 deleted and created afresh")
+        );
+        assert!(records[0].2.contains("no dgxtop format version"));
+    }
 
     #[test]
     fn shutdown_waits_share_one_deadline() {

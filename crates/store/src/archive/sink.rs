@@ -80,9 +80,10 @@ struct CleanupCounts {
 
 /// The optional history archive on `history.sqlite3`.
 ///
-/// Like the audit, an unusable database (version gate, corruption, unknown
-/// or future schema, unsafe file) still yields an archive whose status says
-/// why and whose appends fail with `InfraError::Unavailable`.
+/// Like the audit, a file that is not this build's format, or unreadable,
+/// is deleted and created afresh at open (D-85); what cannot be fixed that
+/// way still yields an archive whose status says why and whose appends fail
+/// with `InfraError::Unavailable`.
 pub struct SqliteArchive {
     path: PathBuf,
     limits: ArchiveLimits,
@@ -93,7 +94,7 @@ pub struct SqliteArchive {
     unusable: Option<Unusable>,
     last_issue: Option<String>,
     last_retention_boot_ns: Option<u64>,
-    migration_backup: Option<PathBuf>,
+    recreated: Option<String>,
     stats: ArchiveStats,
 }
 
@@ -210,7 +211,7 @@ impl SqliteArchive {
     }
 
     /// Like [`Self::open`] with an explicit filesystem for the pre-creation
-    /// and migration backup steps (fault injection).
+    /// and recreation steps (fault injection).
     pub fn open_with_filesystem(
         path: &Path,
         limits: ArchiveLimits,
@@ -238,7 +239,7 @@ impl SqliteArchive {
             profile: ConnectionProfile::archive(limits.wal_checkpoint_bytes),
             policy,
         };
-        let opened = open_database(&spec, fs, clock.as_ref(), gate);
+        let opened = open_database(&spec, fs, gate);
         let mut archive = Self {
             path: path.to_path_buf(),
             limits,
@@ -249,13 +250,13 @@ impl SqliteArchive {
             unusable: None,
             last_issue: None,
             last_retention_boot_ns: None,
-            migration_backup: None,
+            recreated: None,
             stats: ArchiveStats::default(),
         };
         match opened {
             Ok(opened) => {
                 archive.connection = Some(opened.connection);
-                archive.migration_backup = opened.backup;
+                archive.recreated = opened.recreated;
                 archive.maybe_run_retention();
             }
             Err(unusable) => archive.unusable = Some(unusable),
@@ -275,9 +276,10 @@ impl SqliteArchive {
         self.stats
     }
 
-    /// Backup written before a schema migration during open, if any.
-    pub fn migration_backup(&self) -> Option<&Path> {
-        self.migration_backup.as_deref()
+    /// Why the file found at open was deleted and created afresh (D-85),
+    /// if it was.
+    pub fn recreated(&self) -> Option<&str> {
+        self.recreated.as_deref()
     }
 
     /// Age-based retention: buckets whose interval ended before
@@ -347,7 +349,7 @@ impl SqliteArchive {
                 connection.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true);
         }
         self.unusable = Some(Unusable::failed(format!(
-            "{message} (file kept, archive stopped)"
+            "{message} (archive stopped; the file is recreated at the next start, D-85)"
         )));
     }
 

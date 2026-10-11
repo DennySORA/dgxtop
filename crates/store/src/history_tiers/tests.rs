@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::overview_history::{OverviewBucket, TierRow};
 use dgxtop_core::process_history::{TIER_BUCKETS, Tier};
-use dgxtop_core::testing::{FakeClock, metric_key};
+use dgxtop_core::testing::metric_key;
 
 use super::*;
-use crate::sqlite::{SqliteGateError, SqliteVersion};
+use crate::sqlite::{SchemaKind, SqliteGateError, SqliteVersion};
 
 const MINUTE: i64 = 60 * 1_000_000_000;
 
@@ -20,6 +20,10 @@ impl Scratch {
             uuid::Uuid::new_v4().simple()
         ));
         std::fs::create_dir_all(&dir).unwrap();
+        // Like the real state directory: a file is recreated only in a
+        // private one (D-85).
+        std::fs::set_permissions(&dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .unwrap();
         Self(dir)
     }
 
@@ -28,7 +32,7 @@ impl Scratch {
     }
 
     fn open(&self) -> SqliteHistoryTiers {
-        SqliteHistoryTiers::open(&self.path(), FakeClock::new(1_000_000_000))
+        SqliteHistoryTiers::open(&self.path())
     }
 }
 
@@ -192,14 +196,38 @@ fn failing_gate() -> Result<SqliteVersion, SqliteGateError> {
 #[test]
 fn an_unusable_database_reports_why() {
     let scratch = Scratch::new("unusable");
-    let clock = FakeClock::new(0);
-    let mut store = SqliteHistoryTiers::open_with(
-        &scratch.path(),
-        clock.as_ref(),
-        &RealFileSystem,
-        failing_gate,
-    );
+    let mut store = SqliteHistoryTiers::open_with(&scratch.path(), &RealFileSystem, failing_gate);
     let error = store.load().unwrap_err().to_string();
     assert!(error.contains("history tiers database"), "{error}");
     assert!(store.append(&journal(Vec::new())).is_err());
+}
+
+/// A tiers database of another format version, or none (written before
+/// D-85), starts empty; one of this format keeps its buckets.
+#[test]
+fn a_database_of_another_format_starts_empty() {
+    let current = SchemaKind::HistoryTiers.format_stamp();
+    for (label, stamp, kept) in [
+        ("same", current, true),
+        ("unstamped", 0, false),
+        ("newer", crate::sqlite::format_stamp(2), false),
+    ] {
+        let scratch = Scratch::new(label);
+        let mut store = scratch.open();
+        store
+            .append(&journal(vec![row(
+                "gpu0",
+                Tier::OneMinute,
+                gauge(10 * MINUTE, 40.0),
+            )]))
+            .unwrap();
+        drop(store);
+        rusqlite::Connection::open(scratch.path())
+            .unwrap()
+            .pragma_update(None, "application_id", stamp)
+            .unwrap();
+        let mut store = scratch.open();
+        assert_eq!(store.recreated().is_none(), kept, "{label}");
+        assert_eq!(store.load().unwrap().len(), usize::from(kept), "{label}");
+    }
 }
