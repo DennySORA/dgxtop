@@ -76,24 +76,27 @@ impl Evidence<'_> {
             .unwrap_or_default()
     }
 
-    /// The archive's points that reach into `window`, ended at the seam,
-    /// each with the time it holds there (a point the window's start or the
-    /// seam cuts holds at most what is left of it).
+    /// The archive's points that reach into `window` and end by the seam,
+    /// each with the time it holds there (a point the window's start cuts
+    /// holds at most what is left of it). A point that ends after the seam
+    /// is left out: this run writes the archive too, so the minute it
+    /// started in sums samples memory answers after the seam, and cutting
+    /// it at the seam would draw them before dgxtop started and count them
+    /// twice. At most the minute before this run's start is lost.
     fn archived_in(&self, window: UtcWindow) -> impl Iterator<Item = (ArchivePoint, u64)> + '_ {
         let seam = self.seam.unwrap_or(u64::MAX);
         self.archived
             .map(|result| result.points.as_slice())
             .unwrap_or_default()
             .iter()
+            .filter(move |point| point.end_utc_ns <= seam)
             .filter_map(move |point| {
-                let end = point.end_utc_ns.min(seam);
                 let start = point.start_utc_ns.max(window.start);
-                (end > start).then(|| {
-                    let clipped = ArchivePoint {
-                        end_utc_ns: end,
-                        ..point.clone()
-                    };
-                    (clipped, point.covered_ns.min(end - start))
+                (point.end_utc_ns > start).then(|| {
+                    (
+                        point.clone(),
+                        point.covered_ns.min(point.end_utc_ns - start),
+                    )
                 })
             })
     }
@@ -364,7 +367,8 @@ mod tests {
     fn points_are_in_time_order_and_never_overlap_at_this_runs_start() {
         // This run's boot clock reads 0 at wall minute 100 and it started at
         // boot minute 40 (wall 140). Memory answers the whole window, empty
-        // before that start; the archive's last point runs past it.
+        // before that start; the archive's last point ends at it, and one
+        // running past it is left out.
         let wall = Wall {
             offset_ns: i128::from(100 * MINUTE),
         };
@@ -383,7 +387,10 @@ mod tests {
         };
         let mut mean = memory(&[(40 * MINUTE, 80.0)]);
         mean.points.insert(0, empty_before);
-        let archive = archived(&[(138 * MINUTE, 141 * MINUTE, 40.0, 41.0, 2 * MINUTE)]);
+        let archive = archived(&[
+            (138 * MINUTE, 140 * MINUTE, 40.0, 41.0, 2 * MINUTE),
+            (140 * MINUTE, 142 * MINUTE, 80.0, 80.0, MINUTE),
+        ]);
         let evidence = Evidence {
             mean: Some(&mean),
             maximum: None,
@@ -397,6 +404,51 @@ mod tests {
             .collect();
         assert_eq!(spans, vec![(138, 140), (140, 141)]);
         assert_eq!(evidence.covered_ns(window), Some(3 * MINUTE));
+    }
+
+    /// The archive also holds this run's own minutes once they are final.
+    /// The minute this run started in summarizes samples memory answers
+    /// after the seam: it must not be drawn before the seam (on a fresh
+    /// install, as history from before dgxtop started) or counted twice.
+    #[test]
+    fn the_minute_this_run_started_in_is_not_taken_from_the_archive() {
+        // Wall minute 100 is boot minute 0; this run started at wall
+        // 140.5 min, its first sample at 140.5. The archive's minute 140
+        // holds this run's first half minute.
+        let wall = Wall {
+            offset_ns: i128::from(100 * MINUTE),
+        };
+        let window = UtcWindow {
+            start: 100 * MINUTE,
+            end: 160 * MINUTE,
+        };
+        let seam = 140 * MINUTE + MINUTE / 2;
+        let mut mean = memory(&[(40 * MINUTE + MINUTE / 2, 80.0)]);
+        mean.covered_ns = MINUTE;
+        let archive = archived(&[
+            (139 * MINUTE, 140 * MINUTE, 60.0, 61.0, MINUTE),
+            (140 * MINUTE, 141 * MINUTE, 80.0, 80.0, MINUTE / 2),
+        ]);
+        let evidence = Evidence {
+            mean: Some(&mean),
+            maximum: None,
+            archived: Some(&archive),
+            seam: Some(seam),
+        };
+        let spans: Vec<(u64, u64)> = evidence
+            .points(wall, window)
+            .iter()
+            .map(|point| (point.start_utc_ns, point.end_utc_ns))
+            .collect();
+        assert_eq!(
+            spans,
+            vec![
+                (139 * MINUTE, 140 * MINUTE),
+                (seam, 141 * MINUTE + MINUTE / 2)
+            ]
+        );
+        assert_eq!(evidence.covered_ns(window), Some(2 * MINUTE));
+        assert!((evidence.mean(window).unwrap() - 70.0).abs() < 1e-9);
     }
 
     #[test]
