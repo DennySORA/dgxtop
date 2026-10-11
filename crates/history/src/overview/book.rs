@@ -6,7 +6,10 @@
 //!
 //! Bounded: at most [`MAX_TIER_SERIES`] series, each at most a full set of
 //! sizes (about 200 KiB, so about 32 MiB in all); a new series beyond it
-//! takes the place of the one fed longest ago. While the store's startup load runs, a series'
+//! takes the place of the one fed longest ago. A series that gives way is
+//! gone: its closed buckets not sent yet go with it and, while a store is
+//! kept, the eviction is noted so that the store and the archive delete it
+//! too ([`Eviction`]); if it comes back it starts fresh. While the store's startup load runs, a series'
 //! live minutes wait ([`MAX_PENDING_MINUTES`] at most) so that its earlier
 //! history goes in first.
 
@@ -36,6 +39,15 @@ pub(crate) struct TierMinute {
     /// This boot's key of the series (its raw history is read by it).
     pub(crate) key: MetricKey,
     pub(crate) bucket: OverviewBucket,
+}
+
+/// A series the cache let go, for the store and the archive to delete.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Eviction {
+    pub(crate) series: SeriesInEveryBoot,
+    /// End of the latest minute the cache was given of it (fed, waiting
+    /// or restored); `i64::MIN` when none.
+    pub(crate) through_utc_ns: i64,
 }
 
 /// One series in every size.
@@ -71,6 +83,18 @@ impl TierEntry {
         }
     }
 
+    /// The end of the latest minute it was given, fed, waiting or
+    /// restored (`i64::MIN` when none).
+    fn given_through_utc_ns(&self, shift_ns: i64) -> i64 {
+        let waiting = self.pending.back().map_or(i64::MIN, |minute| {
+            Tier::OneMinute
+                .align(minute.start_utc_ns, shift_ns)
+                .saturating_add(minute_ns())
+        });
+        let held = self.minutes_through_utc_ns().unwrap_or(i64::MIN);
+        self.fed_through_utc_ns.max(waiting).max(held)
+    }
+
     /// The end of the latest minute the minutes size holds, if any.
     pub(crate) fn minutes_through_utc_ns(&self) -> Option<i64> {
         self.tiers
@@ -97,6 +121,9 @@ pub(crate) struct TierBook {
     /// Closed buckets collected for the store (only while one is kept).
     unsent: Vec<TierRow>,
     keeps_rows: bool,
+    /// Series let go since the last [`TierBook::take_evictions`] (only
+    /// while a store is kept).
+    evicted: Vec<Eviction>,
 }
 
 impl TierBook {
@@ -108,6 +135,7 @@ impl TierBook {
             new_backfilled: false,
             unsent: Vec::new(),
             keeps_rows: false,
+            evicted: Vec::new(),
         }
     }
 
@@ -183,13 +211,34 @@ impl TierBook {
                 .min_by_key(|(_, entry)| entry.fed_through_utc_ns)
                 .map(|(series, _)| series.clone());
             if let Some(oldest) = oldest {
-                self.entries.remove(&oldest);
+                self.evict(&oldest);
             }
         }
         let (shift, ready, backfilled) = (self.shift_ns, !self.waiting, self.new_backfilled);
         self.entries
             .entry(series.clone())
             .or_insert_with(|| TierEntry::new(shift, ready, backfilled && ready))
+    }
+
+    /// Lets a series go: its entry, its rows not sent yet and, while a
+    /// store is kept, a note for the store and the archive.
+    fn evict(&mut self, series: &SeriesInEveryBoot) {
+        let Some(entry) = self.entries.remove(series) else {
+            return;
+        };
+        if !self.keeps_rows {
+            return;
+        }
+        self.unsent.retain(|row| row.series != *series);
+        self.evicted.push(Eviction {
+            series: series.clone(),
+            through_utc_ns: entry.given_through_utc_ns(self.shift_ns),
+        });
+    }
+
+    /// Takes the series let go since the last call.
+    pub(crate) fn take_evictions(&mut self) -> Vec<Eviction> {
+        std::mem::take(&mut self.evicted)
     }
 
     /// Adds one minute to the sizes and collects what it closed.

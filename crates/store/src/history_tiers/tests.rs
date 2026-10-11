@@ -62,6 +62,7 @@ fn row(entity: &str, tier: Tier, bucket: OverviewBucket) -> TierRow {
 
 fn journal(rows: Vec<TierRow>) -> TierJournal {
     TierJournal {
+        forget: Vec::new(),
         rows,
         keep_latest: u32::try_from(TIER_BUCKETS).unwrap(),
     }
@@ -126,6 +127,7 @@ fn each_size_keeps_its_latest_buckets() {
         .collect();
     store
         .append(&TierJournal {
+            forget: Vec::new(),
             rows,
             keep_latest: 4,
         })
@@ -149,6 +151,56 @@ fn each_size_keeps_its_latest_buckets() {
 }
 
 /// Past the size limit the series written longest ago give way.
+/// A series the history let go is deleted in every size before the
+/// journal's rows are written, so one coming back in the same journal
+/// starts fresh; a forgotten series never stored is no error, and a
+/// journal of deletions alone is carried out.
+#[test]
+fn a_forgotten_series_is_deleted_before_the_rows() {
+    let scratch = Scratch::new("forget");
+    let mut store = scratch.open();
+    store
+        .append(&journal(vec![
+            row("gpu:0", Tier::OneMinute, gauge(0, 1.0)),
+            row("gpu:0", Tier::OneHour, gauge(0, 1.0)),
+            row("gpu:1", Tier::OneMinute, gauge(0, 2.0)),
+            row("gpu:2", Tier::OneMinute, gauge(0, 3.0)),
+        ]))
+        .unwrap();
+    store
+        .append(&TierJournal {
+            forget: vec![series("gpu:0"), series("gpu:1"), series("gpu:9")],
+            ..journal(vec![row("gpu:1", Tier::OneMinute, gauge(MINUTE, 5.0))])
+        })
+        .unwrap();
+    let loaded = store.load().unwrap();
+    let kept: Vec<(&str, Vec<i64>)> = loaded
+        .iter()
+        .map(|stored| {
+            let starts = stored
+                .buckets
+                .iter()
+                .map(|(_, bucket)| bucket.start_utc_ns / MINUTE)
+                .collect();
+            (stored.series.entity_id.as_str(), starts)
+        })
+        .collect();
+    assert_eq!(kept, vec![("gpu:1", vec![1]), ("gpu:2", vec![0])]);
+    store
+        .append(&TierJournal {
+            forget: vec![series("gpu:2")],
+            ..journal(Vec::new())
+        })
+        .unwrap();
+    let left: Vec<String> = store
+        .load()
+        .unwrap()
+        .iter()
+        .map(|stored| stored.series.entity_id.to_string())
+        .collect();
+    assert_eq!(left, vec!["gpu:1".to_owned()]);
+}
+
 #[test]
 fn the_series_written_longest_ago_give_way() {
     let scratch = Scratch::new("retain");

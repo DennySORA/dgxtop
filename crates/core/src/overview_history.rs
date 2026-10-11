@@ -187,10 +187,13 @@ pub struct StoredTierSeries {
     pub buckets: Vec<(Tier, OverviewBucket)>,
 }
 
-/// What the history asks its store to write: closed buckets, then of every
-/// (series, size) written only the latest `keep_latest` kept.
+/// What the history asks its store to write: first every bucket of the
+/// `forget` series deleted (the history's cache let them go, so they are
+/// not read back), then the closed buckets, then of every (series, size)
+/// written only the latest `keep_latest` kept.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TierJournal {
+    pub forget: Vec<SeriesInEveryBoot>,
     pub rows: Vec<TierRow>,
     pub keep_latest: u32,
 }

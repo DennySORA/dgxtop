@@ -1,5 +1,5 @@
-//! Rows of the tiers database (D-82): series upserted by their identity,
-//! closed buckets written as the history hands them, each (series, size)
+//! Rows of the tiers database (D-82): series the history let go deleted,
+//! series upserted by their identity, closed buckets written as the history hands them, each (series, size)
 //! cut to the latest the journal asks for, the series written longest ago
 //! giving way past the size limit, and the read at startup. Only prepared
 //! statements with bound parameters.
@@ -21,13 +21,17 @@ const BUSY_DEADLINE: Duration = Duration::from_millis(500);
 /// Series a pass over a database past its size gives way at once.
 const SERIES_GIVING_WAY: i64 = 1;
 
-/// Writes the journal's buckets (one written again replaces the earlier),
-/// then keeps the latest `keep_latest` of every (series, size) it touched.
+/// Deletes the series the journal forgets, writes its buckets (one written
+/// again replaces the earlier), then keeps the latest `keep_latest` of
+/// every (series, size) it touched.
 pub(super) fn append(connection: &mut Connection, journal: &TierJournal) -> Result<(), InfraError> {
-    if journal.rows.is_empty() {
+    if journal.rows.is_empty() && journal.forget.is_empty() {
         return Ok(());
     }
     immediate_transaction(connection, BUSY_DEADLINE, |transaction| {
+        for series in &journal.forget {
+            delete_series(transaction, series)?;
+        }
         let mut touched = BTreeSet::new();
         for row in &journal.rows {
             let Some(tier) = stored_tier(row.tier) else {
@@ -47,6 +51,32 @@ pub(super) fn append(connection: &mut Connection, journal: &TierJournal) -> Resu
     connection
         .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()))
         .map_err(|error| sqlite_error("history_tiers.checkpoint", &error))
+}
+
+/// Deletes one series and every bucket of it.
+fn delete_series(
+    transaction: &Transaction<'_>,
+    series: &SeriesInEveryBoot,
+) -> rusqlite::Result<()> {
+    let identity = params![
+        series.host_id.as_str(),
+        series.entity_id.as_str(),
+        series.metric_id.as_str(),
+        series.scope.as_str(),
+    ];
+    transaction
+        .prepare_cached(
+            "DELETE FROM tier_buckets WHERE series_id IN (SELECT series_id FROM tier_series \
+             WHERE host_id = ?1 AND entity_id = ?2 AND metric_id = ?3 AND scope = ?4)",
+        )?
+        .execute(identity)?;
+    transaction
+        .prepare_cached(
+            "DELETE FROM tier_series \
+             WHERE host_id = ?1 AND entity_id = ?2 AND metric_id = ?3 AND scope = ?4",
+        )?
+        .execute(identity)?;
+    Ok(())
 }
 
 /// The code of a size the database keeps (not the 5 s one).

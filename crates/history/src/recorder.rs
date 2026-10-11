@@ -167,6 +167,7 @@ impl HistoryIngest for HistoryRecorder {
         } else {
             Vec::new()
         };
+        self.archive.drop_pruned(&prunes, &self.clock);
         self.archive
             .take(max_bytes, &self.clock, self.revision, prunes)
     }
