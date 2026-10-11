@@ -26,7 +26,9 @@
 //! inside each commit, so history never lags the snapshot; the Manager reads
 //! it through `OverviewReader` ([`HistoryIndex`]): the bars and window
 //! statistics of the Overview's sizes, with the minutes not finalized yet
-//! cut from the raw steps; the archive receives the finished rows as
+//! cut from the raw steps, each chart's window totals and, for a memory
+//! chart, the tracked processes' parts from the process actor's record
+//! (D-99); the archive receives the finished rows as
 //! `ArchiveJournal`s drained from the recorder. The bounded query engine
 //! over the raw steps and minutes (`HistoryReader`) is removed (D-90).
 //!
@@ -37,8 +39,10 @@
 //!
 //! The GPU processes' runs and memory are its process actor's
 //! ([`ProcessHistory`]): the Manager hands it the committed process tables
-//! and reads the model it publishes ([`PublishedProcessHistory`]) through
-//! `ProcessHistoryReader` and `ProcessMemoryReader`.
+//! with the snapshot and catalog they came with, and reads the model it
+//! publishes ([`PublishedProcessHistory`]) through `ProcessHistoryReader`;
+//! the history's readers join its `ProcessMemoryReader` record with the
+//! memory charts' bars (D-99).
 
 #![forbid(unsafe_code)]
 

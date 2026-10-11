@@ -446,7 +446,6 @@ impl StaticInputs {
             history: Arc::clone(&self.history),
             trends: &world.trends,
             processes: &world.model,
-            process_memory: &world.published,
             facts: &self.facts,
             enabled_modules: &self.config.viewer.enabled_modules,
             archive: None,

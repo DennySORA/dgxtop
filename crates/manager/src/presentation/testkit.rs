@@ -19,9 +19,7 @@ use dgxtop_core::naming::collector_id;
 use dgxtop_core::observation::EntityRecord;
 use dgxtop_core::process_model::ProcessHistoryModel;
 use dgxtop_core::quality::{Freshness, Quality, ReadStatus, SampleKind, SelectionState};
-use dgxtop_core::testing::{
-    StaticProcessHistory, adapter_id, boot_id, host_id, metric_key, source_id,
-};
+use dgxtop_core::testing::{adapter_id, boot_id, host_id, metric_key, source_id};
 use dgxtop_core::view::{
     ActionsView, DiskHistory, HistoryChartKind, HistoryChartView, HistoryPointView, HistoryView,
     HostState, HostStatus, IntervalView, OverloadState, SessionState,
@@ -356,7 +354,6 @@ pub(crate) struct Fixture {
     pub(crate) trends: TrendBook,
     /// What the history's process actor published.
     pub(crate) processes: ProcessHistoryModel,
-    pub(crate) process_memory: Arc<StaticProcessHistory>,
     pub(crate) facts: HostFacts,
     pub(crate) enabled_modules: Vec<String>,
     pub(crate) now_boot_ns: u64,
@@ -405,7 +402,6 @@ impl Fixture {
             history: Arc::new(empty_history()),
             trends: TrendBook::new(120),
             processes: ProcessHistoryModel::default(),
-            process_memory: StaticProcessHistory::new(ProcessHistoryModel::default()),
             facts: HostFacts {
                 host_name: "dgx-test".to_owned(),
                 version: "0.2.0".to_owned(),
@@ -440,7 +436,6 @@ impl Fixture {
             history: Arc::clone(&self.history),
             trends: &self.trends,
             processes: &self.processes,
-            process_memory: self.process_memory.as_ref(),
             facts: &self.facts,
             enabled_modules: &self.enabled_modules,
             archive: self.archive_status.as_ref(),

@@ -21,7 +21,7 @@ use dgxtop_core::observation::{
 };
 use dgxtop_core::ports::{
     AdapterJob, ConfigJob, ControlCompletion, HistoryJob, IngestionCompletion, ProcessHistoryInput,
-    ProcessHistoryReader, ProcessMemoryReader, SessionPort, StoreJob,
+    ProcessHistoryReader, SessionPort, StoreJob,
 };
 use dgxtop_core::ports::{Collector, IngressBatch, SnapshotReader};
 use dgxtop_core::quality::Availability;
@@ -364,7 +364,6 @@ pub(crate) fn harness_ports(options: &HarnessOptions) -> (ManagerPorts, Ports) {
         process_history: options.process_history.then(|| ProcessHistoryHandles {
             inputs: Box::new(ports.process_inputs.clone()),
             runs: Arc::clone(&ports.process_history) as Arc<dyn ProcessHistoryReader>,
-            memory: Arc::clone(&ports.process_history) as Arc<dyn ProcessMemoryReader>,
         }),
         logger: ports.logger.clone(),
         ledger: ports.ledger.clone(),

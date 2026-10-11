@@ -9,7 +9,7 @@ use dgxtop_core::quality::SampleKind;
 use dgxtop_core::view::{CellState, MemoryView, MetricCell, ProcessShare, ProcessTrend, Trend};
 
 use super::gpu_directory::GpuDirectory;
-use super::process_parts::process_shares;
+use super::process_shares::process_shares;
 use super::reader::MetricReader;
 
 /// Source label of the summed GPU allocations: only processes the driver

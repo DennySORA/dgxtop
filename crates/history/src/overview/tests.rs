@@ -269,16 +269,14 @@ fn bars_are_local_clock_buckets_holding_only_what_was_recorded() {
         .collect();
     assert_eq!(shape, vec![(0, 45), (60, 50)], "45 and 60 - 10 gap minutes");
     assert_same(&bars.bars[0], &brute_force(first, first + 45));
-    assert_eq!(
-        bars.settled_through_utc_ns,
-        MIDNIGHT + (first + 105) * MINUTE,
-        "every bar ending by the latest minute is final"
-    );
+    // The window's totals are its bars merged (D-99): the mean of the 95
+    // minutes it holds, the peak of all of them.
+    let mut recorded = brute_force(first, first + 60);
+    recorded.merge(&brute_force(first + 70, first + 105));
+    assert_same(&bars.whole, &recorded);
+    assert_eq!(bars.whole.start_utc_ns, window.0);
     let gaps = tiers.bars(&power(), Tier::OneMinute, window, &[]);
     assert_eq!(gaps.bars.len(), 95, "the missing ten minutes are gaps");
-    tiers.feed(vec![live(first + 105)]);
-    let later = tiers.bars(&power(), Tier::OneHour, window, &[]);
-    assert_eq!(later.epoch, bars.epoch, "a live minute keeps the past");
     let unknown = SeriesInEveryBoot::from(&metric_key("gpu:9", "gpu.power.draw", "gpu"));
     assert!(
         tiers
@@ -382,11 +380,6 @@ fn the_archive_is_compressed_at_startup_and_live_minutes_wait() {
         (MIDNIGHT, MIDNIGHT + 100 * HOUR),
         &[],
     );
-    assert_eq!(
-        waiting.settled_through_utc_ns,
-        i64::MIN,
-        "nothing settled yet"
-    );
     assert_eq!(waiting.bars.len(), 1, "waiting minutes are read too");
     run.settle(&mut disk);
     let days = run.tiers.bars(
@@ -401,10 +394,6 @@ fn the_archive_is_compressed_at_startup_and_live_minutes_wait() {
         .map(|bar| bar.covered_ns / MINUTE.unsigned_abs())
         .collect();
     assert_eq!(counted, vec![1440, 1440, 1440, 3]);
-    assert_ne!(
-        days.epoch, waiting.epoch,
-        "the past changed under any cached bar"
-    );
     assert!(disk.tiers.keys().any(|(tier, _)| *tier == Tier::OneDay));
     assert!(
         disk.tiers
@@ -704,29 +693,6 @@ fn a_series_let_go_during_the_startup_is_not_read_back() {
     );
 }
 
-/// A series let go and come back is a new past: every answer about it
-/// carries an epoch it never had before, so a reader's cached bars of the
-/// old one are read again (without a store, and after the startup).
-#[test]
-fn a_series_that_comes_back_has_a_new_epoch() {
-    let tiers = OverviewTiers::with_cache_budget(budget_of(|scratch| {
-        scratch.feed(vec![gpu_minute(0, 0)]);
-    }));
-    let window = (MIDNIGHT - 24 * HOUR, MIDNIGHT + 24 * HOUR);
-    let epoch =
-        |tiers: &OverviewTiers| tiers.bars(&gpu_series(0), Tier::OneHour, window, &[]).epoch;
-    tiers.feed(vec![gpu_minute(0, 0)]);
-    let before = epoch(&tiers);
-    tiers.feed(vec![gpu_minute(1, 10)]);
-    tiers.with_book(|book| assert!(book.entry_of(&gpu_series(0)).is_none()));
-    let gone = epoch(&tiers);
-    assert_ne!(gone, before, "the series let go is not the one cached");
-    tiers.feed(vec![gpu_minute(0, 20)]);
-    let back = epoch(&tiers);
-    assert_ne!(back, before, "the comeback is a new past");
-    assert_ne!(back, gone);
-}
-
 /// A store port that stops taking jobs once it is stopped.
 #[derive(Clone, Default)]
 struct StoppingPort {
@@ -783,7 +749,6 @@ fn the_startup_ends_when_the_store_stops() {
             assert!(held > 0, "{step}: the series is fed live");
         });
         let bars = tiers.bars(&power(), Tier::OneHour, window, &[]);
-        assert_ne!(bars.settled_through_utc_ns, i64::MIN, "{step}: settled");
         assert!(bars.store_issue.is_some(), "{step}: the stop is shown");
         assert!(tiers.take_prunes(0).is_empty(), "{step}: nothing pruned");
     }

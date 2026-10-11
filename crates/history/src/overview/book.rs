@@ -57,9 +57,6 @@ pub(crate) struct TierEntry {
     /// Its archived minutes are in the sizes: the archive may let the ones
     /// the minutes size no longer holds go.
     backfilled: bool,
-    /// Changes when its past changed under a reader's cached bars; drawn
-    /// from the book's [`TierBook::epoch`], so no two pasts share one.
-    epoch: u64,
     /// End of the latest minute it was given.
     fed_through_utc_ns: i64,
     /// The archive was asked to delete its minutes before this.
@@ -68,13 +65,12 @@ pub(crate) struct TierEntry {
 }
 
 impl TierEntry {
-    fn new(shift_ns: i64, ready: bool, backfilled: bool, epoch: u64) -> Self {
+    fn new(shift_ns: i64, ready: bool, backfilled: bool) -> Self {
         Self {
             tiers: TieredSeries::new(shift_ns),
             pending: VecDeque::new(),
             ready,
             backfilled,
-            epoch,
             fed_through_utc_ns: i64::MIN,
             pruned_before_utc_ns: i64::MIN,
             key: None,
@@ -131,11 +127,6 @@ pub(crate) struct TierBook {
     /// Series let go since the last [`TierBook::take_evictions`] (only
     /// while a store is kept).
     evicted: Vec<Eviction>,
-    /// The latest epoch handed out: bumped for every new entry, every
-    /// change of an entry's past and every eviction, so a series that
-    /// comes back (or is gone) never answers with an epoch a reader cached
-    /// for its earlier past.
-    epoch: u64,
     /// Bytes the entries may take ([`CACHE_BUDGET_BYTES`]).
     budget_bytes: usize,
 }
@@ -155,14 +146,8 @@ impl TierBook {
             unsent_bytes: 0,
             keeps_rows: false,
             evicted: Vec::new(),
-            epoch: 0,
             budget_bytes,
         }
-    }
-
-    fn next_epoch(&mut self) -> u64 {
-        self.epoch = self.epoch.saturating_add(1);
-        self.epoch
     }
 
     /// Buckets follow the local clock `shift_ns` east of UTC. Set before
@@ -242,15 +227,10 @@ impl TierBook {
 
     /// The series' entry, made (waiting while the store loads) when new.
     fn entry(&mut self, series: &SeriesInEveryBoot) -> &mut TierEntry {
-        let epoch = if self.entries.contains_key(series) {
-            self.epoch
-        } else {
-            self.next_epoch()
-        };
         let (shift, ready, backfilled) = (self.shift_ns, !self.waiting, self.new_backfilled);
         self.entries
             .entry(series.clone())
-            .or_insert_with(|| TierEntry::new(shift, ready, backfilled && ready, epoch))
+            .or_insert_with(|| TierEntry::new(shift, ready, backfilled && ready))
     }
 
     /// What every entry costs in memory.
@@ -300,7 +280,6 @@ impl TierBook {
         let Some(entry) = self.entries.remove(series) else {
             return;
         };
-        self.next_epoch();
         if !self.keeps_rows {
             return;
         }
@@ -397,12 +376,10 @@ impl TierBook {
         if !resumed {
             self.resume(series);
         }
-        let epoch = self.next_epoch();
         let entry = self.entry(series);
         let pending: Vec<OverviewBucket> = entry.pending.drain(..).collect();
         entry.ready = true;
         entry.backfilled = backfilled;
-        entry.epoch = epoch;
         for minute in &pending {
             self.add(series, minute);
         }
@@ -457,26 +434,17 @@ impl TierBook {
         window: (i64, i64),
         extra: &[OverviewBucket],
     ) -> OverviewBars {
-        let Some(entry) = self.entries.get(series) else {
-            // The latest epoch: one the series' past, if it had one, never
-            // carried.
-            return OverviewBars {
-                epoch: self.epoch,
-                settled_through_utc_ns: i64::MIN,
-                bars: bars_in(&TieredSeries::new(self.shift_ns), tier, window, extra),
-                kept_on_disk: false,
-                store_issue: None,
-            };
+        let bars = match self.entries.get(series) {
+            Some(entry) => {
+                let waiting = entry.pending.iter().chain(self.after_fed(entry, extra));
+                bars_in(&entry.tiers, tier, window, waiting)
+            }
+            None => bars_in(&TieredSeries::new(self.shift_ns), tier, window, extra),
         };
-        let waiting = entry.pending.iter().chain(self.after_fed(entry, extra));
         OverviewBars {
-            epoch: entry.epoch,
-            settled_through_utc_ns: if entry.ready {
-                entry.fed_through_utc_ns
-            } else {
-                i64::MIN
-            },
-            bars: bars_in(&entry.tiers, tier, window, waiting),
+            whole: whole_of(&bars, window),
+            bars,
+            parts: Vec::new(),
             kept_on_disk: false,
             store_issue: None,
         }
@@ -537,4 +505,14 @@ impl TierBook {
     ) -> Option<&TieredSeries<OverviewBucket>> {
         self.entries.get(series).map(|entry| &entry.tiers)
     }
+}
+
+/// `bars` merged into one bucket starting at the window's start: the
+/// window's mean over the time it holds, its peak and that time (D-99).
+fn whole_of(bars: &[OverviewBucket], (start, _): (i64, i64)) -> OverviewBucket {
+    let mut whole = OverviewBucket::new(start);
+    for bar in bars {
+        whole.merge(bar);
+    }
+    whole
 }

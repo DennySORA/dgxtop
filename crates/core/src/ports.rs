@@ -5,8 +5,9 @@
 //!   ProcessService ever receives one.
 //! * Process history (D-76): `ProcessProbe` (read-only, beside the
 //!   adapters) and `ProcessHistoryStore`; the history's process actor takes
-//!   `ProcessHistoryInput`s and publishes through `ProcessHistoryReader` and
-//!   `ProcessMemoryReader` (D-79).
+//!   `ProcessHistoryInput`s and publishes through `ProcessHistoryReader`
+//!   (to the Manager) and `ProcessMemoryReader` (to the history's readers,
+//!   which join it with the memory charts' bars, D-99) (D-79).
 //! * Collectors are pure (`Collector::collect`).
 //! * State (D-79): `StoreWriter` (HotStore actor only), `SnapshotReader`
 //!   and `TrendReader` (the short trends it fills at commit, D-99).

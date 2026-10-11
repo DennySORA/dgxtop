@@ -22,7 +22,6 @@ fn rig() -> Rig {
     let link = ProcessHistoryLink::new(Some(ProcessHistoryHandles {
         inputs: Box::new(inputs.clone()),
         runs: Arc::clone(&history) as Arc<dyn ProcessHistoryReader>,
-        memory: Arc::clone(&history) as Arc<dyn ProcessMemoryReader>,
     }));
     Rig {
         link,

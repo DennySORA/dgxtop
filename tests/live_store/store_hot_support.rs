@@ -246,6 +246,7 @@ impl Harness {
             from_utc_ns: utc_of(from),
             end_utc_ns: utc_of(end),
             at_utc_ns: utc_of(self.clock.now_boot_ns()),
+            parts_of: std::collections::BTreeSet::new(),
         };
         match self.read(&request) {
             Ok(OverviewAnswer::Bars(bars)) => bars.bars,

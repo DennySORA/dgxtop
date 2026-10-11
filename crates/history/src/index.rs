@@ -6,6 +6,7 @@ use std::fmt;
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use dgxtop_core::canonical::GapRecord;
+use dgxtop_core::ports::ProcessMemoryReader;
 
 use super::grid::MinuteGrid;
 use super::output::HistoryReport;
@@ -20,6 +21,9 @@ use crate::overview::OverviewTiers;
 pub struct HistoryIndex {
     shared: Arc<RwLock<HistoryState>>,
     overview: OverviewTiers,
+    /// The process actor's memory record, which a memory chart's bars are
+    /// joined with (D-99); none without a process actor.
+    process_memory: Option<Arc<dyn ProcessMemoryReader>>,
 }
 
 impl fmt::Debug for HistoryIndex {
@@ -33,7 +37,25 @@ impl fmt::Debug for HistoryIndex {
 
 impl HistoryIndex {
     pub(crate) fn new(shared: Arc<RwLock<HistoryState>>, overview: OverviewTiers) -> Self {
-        Self { shared, overview }
+        Self {
+            shared,
+            overview,
+            process_memory: None,
+        }
+    }
+
+    /// Joins the bars of the memory charts with what each tracked process
+    /// held (`memory`, the process actor's record, D-64, D-99).
+    #[must_use]
+    pub fn with_process_memory(self, memory: Arc<dyn ProcessMemoryReader>) -> Self {
+        Self {
+            process_memory: Some(memory),
+            ..self
+        }
+    }
+
+    pub(crate) fn process_memory(&self) -> Option<&dyn ProcessMemoryReader> {
+        self.process_memory.as_deref()
     }
 
     /// The Overview series in every size (D-82): composition sets its local

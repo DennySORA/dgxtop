@@ -998,9 +998,9 @@ fn history_view_queries_and_drops_stale_generations() {
     assert_eq!(job.session_id, *harness.session.session_id());
     let answer = dgxtop_core::overview_history::OverviewAnswer::Bars(
         dgxtop_core::overview_history::OverviewBars {
-            epoch: 0,
-            settled_through_utc_ns: 0,
             bars: Vec::new(),
+            whole: dgxtop_core::overview_history::OverviewBucket::new(0),
+            parts: Vec::new(),
             kept_on_disk: false,
             store_issue: None,
         },

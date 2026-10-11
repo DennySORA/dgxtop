@@ -21,7 +21,7 @@ mod memory;
 mod network;
 mod ordering;
 mod plan;
-mod process_parts;
+mod process_shares;
 mod processes;
 mod reader;
 mod run_history;
@@ -46,7 +46,7 @@ use dgxtop_core::commands::ViewKind;
 use dgxtop_core::config::{BUILTIN_MODULES, Config, ValueOrigin};
 use dgxtop_core::identity::ModuleId;
 use dgxtop_core::naming::adapters;
-use dgxtop_core::ports::{ProcessMemoryReader, TrendReader};
+use dgxtop_core::ports::TrendReader;
 use dgxtop_core::process_model::ProcessHistoryModel;
 use dgxtop_core::view::{
     ActionsView, GpuView, HeaderView, HistoryView, HostStatus, IntervalView, ModuleViews,
@@ -109,9 +109,6 @@ pub struct PresentationContext<'a> {
     /// The GPU process runs and colors the history's process actor
     /// published (D-64, D-76, D-79).
     pub processes: &'a ProcessHistoryModel,
-    /// What each GPU process held over time, for the history's memory
-    /// charts (D-64).
-    pub process_memory: &'a dyn ProcessMemoryReader,
     pub facts: &'a HostFacts,
     /// Module ids enabled in the effective configuration.
     pub enabled_modules: &'a [String],
@@ -263,15 +260,9 @@ fn build_modules(
         )));
     }
     if plan.shows(plan::HISTORY) {
-        modules.history = Some(process_parts::with_process_parts(
-            Arc::clone(&context.history),
-            &process_parts::ProcessHistoryInputs {
-                tracked: &inputs.processes.tracked,
-                memory: context.process_memory,
-                directory: inputs.directory,
-                cells: layout.history_chart_points(),
-            },
-        ));
+        // The service's view, with the processes' parts the history joined
+        // with its memory charts (D-99).
+        modules.history = Some(Arc::clone(&context.history));
         let opened = run_history::run_request(context.session, context.viewport);
         modules.process_history = Some(Arc::new(run_history::build_process_history_view(
             &run_history::RunHistoryInputs {

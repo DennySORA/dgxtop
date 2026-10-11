@@ -300,7 +300,6 @@ impl ControlCore {
             history: self.history.view(session_id),
             trends: self.trends.as_ref(),
             processes: &inputs.processes,
-            process_memory: self.process_history.memory(),
             facts: &self.facts,
             enabled_modules: &inputs.enabled_modules,
             archive: self.archive.status(),

@@ -46,6 +46,7 @@ fn day_of_bars(key: &dgxtop_core::identity::MetricKey, at: u64) -> OverviewReque
         from_utc_ns: utc_of(at.saturating_sub(EVERYTHING_NS)),
         end_utc_ns: utc_of(at + MINUTE),
         at_utc_ns: utc_of(at),
+        parts_of: std::collections::BTreeSet::new(),
     }
 }
 
