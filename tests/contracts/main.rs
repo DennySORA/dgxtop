@@ -148,7 +148,8 @@ fn example_config_reference() {
         vec![
             "store.raw_candidate_seconds",
             "store.max_query_scan_records",
-            "runtime.max_history_result_bytes"
+            "runtime.max_history_result_bytes",
+            "viewer.redline_threshold_percent"
         ]
     );
     let reencoded = to_value(&parsed);

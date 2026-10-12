@@ -740,6 +740,13 @@ pub mod ids {
     pub const CPU_ENERGY_PACKAGE: &str = "cpu.energy.package";
     pub const CPU_ENERGY_PLATFORM: &str = "cpu.energy.platform";
 
+    // Host (derived across domains)
+    /// What the CPU packages and every GPU draw together (D-106): derived by
+    /// the CPU collector, only while each of them reports. Not the power
+    /// at the wall socket: fans, drives, memory and the supply's loss are
+    /// not in it.
+    pub const HOST_POWER_TOTAL: &str = "host.power.total";
+
     // Memory
     pub const MEMORY_TOTAL: &str = "memory.total";
     pub const MEMORY_AVAILABLE: &str = "memory.available";
@@ -993,6 +1000,15 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         Cpu,
         true,
         "Platform power"
+    ),
+    descriptor!(
+        ids::HOST_POWER_TOTAL,
+        Watts,
+        Canonical,
+        Gauge,
+        Cpu,
+        true,
+        "CPU + GPU power"
     ),
     descriptor!(
         ids::CPU_LOAD_1M,

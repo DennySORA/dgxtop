@@ -14,8 +14,9 @@ describes.
 | `command.schema.json`, `config.schema.json` | `store.process_history_enabled`: whether the Process History is kept on disk, optional, unset following `store.archive_enabled` | D-80 |
 | `command.schema.json`, `config.schema.json` | Retired: `store.raw_candidate_seconds` is no longer required. A document that still has it stays valid and dgxtop ignores it; dgxtop never writes it | D-88 |
 | `command.schema.json`, `config.schema.json` | Retired: `store.max_query_scan_records` and `runtime.max_history_result_bytes` are no longer required. A document that still has them stays valid and dgxtop ignores them; dgxtop never writes them | D-90 |
+| `command.schema.json`, `config.schema.json` | Retired: `viewer.redline_threshold_percent` is no longer required. Level colors run from green at 0 % to red at 100 % (D-104), so no fill turns them red early. A document that still has it stays valid and dgxtop ignores it; dgxtop never writes it | D-105 |
 
 `examples/config.reference.json` is the configuration of the REF workload, the reference
 benchmark. dgxtop's built-in defaults differ from it: the history archive is on (D-51) and
-SIGKILL is allowed (D-71). It still carries the keys D-88 and D-90 retired, as an earlier
-version wrote them.
+SIGKILL is allowed (D-71). It still carries the keys D-88, D-90 and D-105 retired, as an
+earlier version wrote them.

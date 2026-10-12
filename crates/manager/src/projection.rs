@@ -145,7 +145,10 @@ mod tests {
                 hosts_total: 0,
                 read_only: false,
                 theme: Theme::Dark,
-                redline_threshold_percent: 80.0,
+                total_power: dgxtop_core::view::MetricCell::missing(
+                    dgxtop_core::metric::CanonicalUnit::Watts,
+                    dgxtop_core::view::CellState::Unavailable,
+                ),
             },
             session: SessionState {
                 session_id: SessionId::new("s1").unwrap(),

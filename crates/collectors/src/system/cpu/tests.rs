@@ -959,3 +959,303 @@ fn value_returning_after_a_conflict_is_published_again() {
     );
     assert!(value_of(&quiet, &package_temperature()).is_none());
 }
+
+// ----- total power (D-106) --------------------------------------------------
+
+const GPU_A: &str = "gpu:GPU-aaaa1111";
+const GPU_B: &str = "gpu:GPU-bbbb2222";
+
+fn total_power() -> MetricKey {
+    metric_key("host", ids::HOST_POWER_TOTAL, "host")
+}
+
+fn gpu_record(id: &str, removed: bool) -> dgxtop_core::observation::EntityRecord {
+    dgxtop_core::observation::EntityRecord {
+        entity_id: crate::testkit::entity(id),
+        kind: dgxtop_core::observation::EntityKind::Gpu,
+        parent_id: None,
+        generation: 1,
+        discovered_boot_ns: 0,
+        removed_boot_ns: removed.then_some(SECOND / 2),
+        display_name: "NVIDIA H100".to_owned(),
+        attributes: Vec::new(),
+    }
+}
+
+fn gpu_catalog(gpus: &[(&str, bool)]) -> dgxtop_core::canonical::CatalogSnapshot {
+    catalog(
+        &[],
+        gpus.iter()
+            .map(|(id, removed)| gpu_record(id, *removed))
+            .collect(),
+    )
+}
+
+/// A committed power of `metric` on `entity`: `watts` (none: a read
+/// without a value) read at `at`, current until `stale_after`.
+fn committed_power(
+    (entity, metric, scope): (&str, &str, &str),
+    watts: Option<f64>,
+    at: u64,
+    stale_after: u64,
+) -> std::sync::Arc<dgxtop_core::canonical::SnapshotEntry> {
+    let value = dgxtop_core::canonical::CanonicalValue {
+        key: metric_key(entity, metric, scope),
+        cycle_id: 1,
+        source_id: Some(dgxtop_core::testing::source_id(&format!("{entity}:power"))),
+        source_generation: Some(1),
+        unit: CanonicalUnit::Watts,
+        value: watts.map(|watts| dgxtop_core::metric::Scalar::from_f64(watts).unwrap()),
+        sample_kind: SampleKind::Measured,
+        selection_state: if watts.is_some() {
+            SelectionState::Selected
+        } else {
+            SelectionState::Unavailable
+        },
+        quality: Quality::Verified,
+        freshness: dgxtop_core::quality::Freshness::Fresh,
+        measurement_freshness: dgxtop_core::quality::Freshness::Unknown,
+        observed_boot_ns: None,
+        read_finished_boot_ns: at,
+        policy_revision: 1,
+        candidate_source_ids: Vec::new(),
+        reason_codes: Vec::new(),
+        eligible_for_history: watts.is_some(),
+    };
+    std::sync::Arc::new(dgxtop_core::canonical::SnapshotEntry {
+        sample: dgxtop_core::canonical::CanonicalSample::commit(value, 1, at),
+        last_good: None,
+        stale_after_boot_ns: watts.map(|_| stale_after),
+    })
+}
+
+fn gpu_power(
+    id: &str,
+    watts: Option<f64>,
+    stale_after: u64,
+) -> std::sync::Arc<dgxtop_core::canonical::SnapshotEntry> {
+    committed_power(
+        (id, ids::GPU_POWER_DRAW, "gpu"),
+        watts,
+        SECOND - 200 * MILLISECOND,
+        stale_after,
+    )
+}
+
+/// What a snapshot of `entries` gives the CPU collector to read.
+fn committed(
+    entries: Vec<std::sync::Arc<dgxtop_core::canonical::SnapshotEntry>>,
+) -> dgxtop_core::canonical::CommittedSamples {
+    let samples = entries
+        .into_iter()
+        .map(|entry| (entry.sample.key.clone(), entry))
+        .collect();
+    let domain = dgxtop_core::canonical::DomainSnapshot {
+        samples,
+        ..dgxtop_core::canonical::DomainSnapshot::default()
+    };
+    let snapshot = dgxtop_core::canonical::ImmutableSnapshot {
+        domains: std::collections::BTreeMap::from([(
+            crate::testkit::collector_id("gpu"),
+            std::sync::Arc::new(domain),
+        )]),
+        ..dgxtop_core::canonical::ImmutableSnapshot::default()
+    };
+    dgxtop_core::canonical::CommittedSamples::of(
+        &snapshot,
+        CpuCollector::new().unwrap().committed_metrics(),
+    )
+}
+
+/// One job of GB10 cluster readings (8.5 W + 1.2 W) on a host with
+/// `gpus` that reads `entries` of the latest snapshot.
+fn total_job(
+    gpus: &[(&str, bool)],
+    entries: Vec<std::sync::Arc<dgxtop_core::canonical::SnapshotEntry>>,
+) -> CollectionBatch {
+    let plan = PlanBuilder::new("cpu")
+        .catalog(gpu_catalog(gpus))
+        .committed(committed(entries))
+        .at(SECOND + 1)
+        .batch(
+            "hwmon",
+            "fast",
+            vec![
+                cluster("cluster:p", Some(8.5), SECOND),
+                cluster("cluster:e", Some(1.2), SECOND),
+            ],
+        )
+        .build();
+    collect(&CpuCollector::new().unwrap(), &plan)
+}
+
+/// The CPU package's power plus every GPU's draw, a live derived value
+/// named by the CPU's source and listing every input.
+#[test]
+fn the_total_adds_every_gpus_draw_to_the_cpu_package() {
+    let batch = total_job(
+        &[(GPU_A, false), (GPU_B, false)],
+        vec![
+            gpu_power(GPU_A, Some(60.0), 3 * SECOND),
+            gpu_power(GPU_B, Some(40.3), 3 * SECOND),
+        ],
+    );
+    let total = value_of(&batch, &total_power()).unwrap();
+    assert_close(total.value.unwrap().to_f64_lossy(), 110.0);
+    assert_eq!(total.unit, CanonicalUnit::Watts);
+    assert_eq!(total.sample_kind, SampleKind::Derived);
+    assert_eq!(total.selection_state, SelectionState::Selected);
+    assert!(total.eligible_for_history, "the History charts the total");
+    assert_eq!(
+        total.reason_codes,
+        vec![reasons::FORMULA_HOST_POWER_TOTAL.to_owned()]
+    );
+    let package = value_of(&batch, &package_power()).unwrap();
+    assert_eq!(
+        total.source_id, package.source_id,
+        "the CPU names the total"
+    );
+    let inputs: Vec<&str> = total
+        .candidate_source_ids
+        .iter()
+        .map(|id| id.as_str())
+        .collect();
+    for input in [
+        format!("{GPU_A}:power"),
+        format!("{GPU_B}:power"),
+        package.source_id.as_ref().unwrap().as_str().to_owned(),
+    ] {
+        assert!(inputs.contains(&input.as_str()), "{input} in {inputs:?}");
+    }
+}
+
+/// A GPU without a current draw (none committed, stale, or a read without
+/// a value) leaves the total unavailable, never a partial sum.
+#[test]
+fn a_gpu_without_a_current_draw_leaves_no_partial_total() {
+    for (entries, code) in [
+        (
+            vec![gpu_power(GPU_A, Some(60.0), 3 * SECOND)],
+            reasons::MISSING_INPUT,
+        ),
+        (
+            vec![
+                gpu_power(GPU_A, Some(60.0), 3 * SECOND),
+                gpu_power(GPU_B, Some(40.0), SECOND),
+            ],
+            reasons::STALE,
+        ),
+        (
+            vec![
+                gpu_power(GPU_A, Some(60.0), 3 * SECOND),
+                gpu_power(GPU_B, None, 3 * SECOND),
+            ],
+            reasons::MISSING_INPUT,
+        ),
+    ] {
+        let batch = total_job(&[(GPU_A, false), (GPU_B, false)], entries);
+        let total = value_of(&batch, &total_power()).unwrap();
+        assert_eq!(total.value, None);
+        assert_eq!(total.selection_state, SelectionState::Unavailable);
+        assert!(!total.eligible_for_history);
+        assert_eq!(
+            total.reason_codes,
+            vec![
+                reasons::FORMULA_HOST_POWER_TOTAL.to_owned(),
+                code.to_owned()
+            ]
+        );
+    }
+}
+
+/// No GPU, or no CPU power read in the job: no total at all. A GPU the
+/// catalog saw removed is no part of it.
+#[test]
+fn the_total_needs_a_gpu_and_a_new_cpu_reading() {
+    let alone = total_job(&[], vec![gpu_power(GPU_A, Some(60.0), 3 * SECOND)]);
+    assert!(value_of(&alone, &package_power()).is_some());
+    assert!(value_of(&alone, &total_power()).is_none(), "nothing to add");
+    let temperatures_only = collect(
+        &CpuCollector::new().unwrap(),
+        &PlanBuilder::new("cpu")
+            .catalog(gpu_catalog(&[(GPU_A, false)]))
+            .committed(committed(vec![gpu_power(GPU_A, Some(60.0), 3 * SECOND)]))
+            .at(SECOND + 1)
+            .batch("hwmon", "fast", gb10_clusters([Some(70.0); 4]))
+            .build(),
+    );
+    assert!(value_of(&temperatures_only, &total_power()).is_none());
+    let unplugged = total_job(
+        &[(GPU_A, false), (GPU_B, true)],
+        vec![gpu_power(GPU_A, Some(60.0), 3 * SECOND)],
+    );
+    assert_close(
+        number(&unplugged, &total_power()).unwrap(),
+        8.5 + 1.2 + 60.0,
+    );
+}
+
+/// A CPU package this job did not read counts with its committed power
+/// while it is current; once stale, the total has no value.
+#[test]
+fn a_package_the_job_did_not_read_counts_as_committed() {
+    let second_package = |stale_after| {
+        committed_power(
+            ("cpu.package.1", ids::CPU_POWER_PACKAGE, "package:1"),
+            Some(20.0),
+            SECOND - 300 * MILLISECOND,
+            stale_after,
+        )
+    };
+    let current = total_job(
+        &[(GPU_A, false)],
+        vec![
+            gpu_power(GPU_A, Some(60.0), 3 * SECOND),
+            second_package(3 * SECOND),
+        ],
+    );
+    assert_close(
+        number(&current, &total_power()).unwrap(),
+        8.5 + 1.2 + 20.0 + 60.0,
+    );
+    let stale = total_job(
+        &[(GPU_A, false)],
+        vec![
+            gpu_power(GPU_A, Some(60.0), 3 * SECOND),
+            second_package(SECOND),
+        ],
+    );
+    assert_eq!(value_of(&stale, &total_power()).unwrap().value, None);
+}
+
+/// From replayed readings the total stays in the replay namespace and out
+/// of the history.
+#[test]
+fn a_replayed_total_never_enters_the_history() {
+    let replayed = |mut record: Observation| {
+        record.sample_kind = SampleKind::Replay;
+        record.provenance.adapter_id = dgxtop_core::identity::AdapterId::new("replay").unwrap();
+        record
+    };
+    let mut gpu = (*gpu_power(GPU_A, Some(60.0), 3 * SECOND)).clone();
+    gpu.sample.sample_kind = SampleKind::Replay;
+    let plan = PlanBuilder::new("cpu")
+        .policy(crate::testkit::replay_policy())
+        .catalog(gpu_catalog(&[(GPU_A, false)]))
+        .committed(committed(vec![std::sync::Arc::new(gpu)]))
+        .at(SECOND + 1)
+        .batch(
+            "replay",
+            "hwmon.fast",
+            vec![
+                replayed(cluster("cluster:p", Some(8.5), SECOND)),
+                replayed(cluster("cluster:e", Some(1.2), SECOND)),
+            ],
+        )
+        .build();
+    let batch = collect(&CpuCollector::new().unwrap(), &plan);
+    let total = value_of(&batch, &total_power()).unwrap();
+    assert_close(total.value.unwrap().to_f64_lossy(), 69.7);
+    assert_eq!(total.sample_kind, SampleKind::Replay);
+    assert!(!total.eligible_for_history);
+}

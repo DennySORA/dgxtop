@@ -1,11 +1,13 @@
-//! CPU module: the first temperature and power sensor and the current and
-//! maximum frequency of each kind of core, with load and tasks on the same
-//! line when they fit; the
+//! CPU module: the first temperature (in the level color of its 0–100 °C
+//! scale, D-104), the first CPU package's power after `⚡` (D-106) and the
+//! current and maximum frequency of each kind of core, with load and tasks
+//! on the same line when they fit; the
 //! utilization bar with its chart under it (D-43); the usr/sys/iowait/steal
 //! breakdown. In the overview it starts collapsed (D-36); a click on the
 //! panel or `c` adds every sensor with its source and the htop-style
 //! per-core bars.
 
+use dgxtop_core::metric::CanonicalUnit;
 use dgxtop_core::view::{CoreView, CpuView, FrequencyGroup, LabeledCell, MetricCell, ViewModel};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -15,8 +17,9 @@ use ratatui::text::{Line, Span};
 use super::ModuleBuildError;
 use super::common::{
     BarRow, ManifestSpec, Output, RowCursor, build_manifest, cell_label, cell_spans, draw_line,
-    gap, join_if_fits, labeled_cell, measuring_context, message, no_data, panel, panel_with_keys,
-    percent_ratio, render_bar_row, render_chart, separator, under_bar,
+    gap, has_value, join_if_fits, labeled_cell, labeled_temperature, measuring_context, message,
+    no_data, panel, panel_with_keys, percent_ratio, power_icon, render_bar_row, render_chart,
+    separator, temperature_spans, under_bar,
 };
 use crate::format::{CellDetail, cell_tone, clean, display_width, truncate_to_width, value_text};
 use crate::num::saturate_u16;
@@ -197,7 +200,7 @@ fn render_sensors_and_cores(
             draw_line(
                 frame.buffer_mut(),
                 row,
-                &Line::from(labeled_cell(label, cell, detail, context)),
+                &Line::from(sensor_spans(label, cell, detail, context)),
             );
         }
     } else if let Some(row) = rows.next_row() {
@@ -259,20 +262,30 @@ fn render_utilization(frame: &mut Frame<'_>, area: Rect, cpu: &CpuView, context:
     }
 }
 
-/// `71°C │ 12 W │ 2.1/2.8 GHz · 3.4/3.9 GHz` (D-66): the first temperature
-/// and power sensor and, per kind of core, the mean frequency its cores run
-/// at now (D-67) over their maximum; the expanded panel lists every sensor.
+/// `71°C │ ⚡12 W │ 2.1/2.8 GHz · 3.4/3.9 GHz` (D-66): the first temperature
+/// in its level color (D-104), the first CPU package's power while it has a
+/// value (D-106) and, per kind of core, the mean frequency its cores run at
+/// now (D-67) over their maximum; the expanded panel lists every sensor.
 fn summary_line(cpu: &CpuView, context: &DisplayContext) -> Line<'static> {
-    let glance = |cell: &MetricCell| cell_spans(cell, CellDetail::GLANCE, context);
     let temperature = cpu
         .package_temperatures
         .first()
         .or_else(|| cpu.soc_temperatures.first());
-    let mut parts: Vec<Vec<Span<'static>>> = [temperature, cpu.power.first()]
-        .into_iter()
-        .flatten()
-        .map(|sensor| glance(&sensor.cell))
-        .collect();
+    let mut parts: Vec<Vec<Span<'static>>> = Vec::new();
+    if let Some(sensor) = temperature {
+        parts.push(temperature_spans(&sensor.cell, CellDetail::GLANCE, context));
+    }
+    // Shown only while it is read: a host whose CPU power cannot be read
+    // has none (D-106).
+    if let Some(power) = cpu
+        .package_power
+        .first()
+        .filter(|power| has_value(&power.cell))
+    {
+        let mut spans = vec![power_icon(context)];
+        spans.extend(cell_spans(&power.cell, CellDetail::GLANCE, context));
+        parts.push(spans);
+    }
     if !cpu.frequencies.is_empty() {
         parts.push(frequency_spans(&cpu.frequencies, context));
     }
@@ -339,6 +352,7 @@ fn sensor_cells(cpu: &CpuView) -> Vec<(String, &MetricCell)> {
     for (prefix, group) in [
         ("temp", &cpu.package_temperatures),
         ("soc", &cpu.soc_temperatures),
+        ("power", &cpu.package_power),
         ("power", &cpu.power),
     ] {
         for labeled in group.iter() {
@@ -359,6 +373,20 @@ fn sensor_label(prefix: &str, labeled: &LabeledCell) -> String {
     }
 }
 
+/// A sensor's `label value`, a temperature in its level color (D-104).
+fn sensor_spans(
+    label: &str,
+    cell: &MetricCell,
+    detail: CellDetail,
+    context: &DisplayContext,
+) -> Vec<Span<'static>> {
+    if cell.unit == CanonicalUnit::DegC {
+        labeled_temperature(label, cell, detail, context)
+    } else {
+        labeled_cell(label, cell, detail, context)
+    }
+}
+
 /// All sensors on one line (compact panels).
 fn sensors_line(sensors: &[(String, &MetricCell)], context: &DisplayContext) -> Line<'static> {
     if sensors.is_empty() {
@@ -372,7 +400,7 @@ fn sensors_line(sensors: &[(String, &MetricCell)], context: &DisplayContext) -> 
         if !spans.is_empty() {
             spans.push(gap(context));
         }
-        spans.extend(labeled_cell(label, cell, CellDetail::COMPACT, context));
+        spans.extend(sensor_spans(label, cell, CellDetail::COMPACT, context));
     }
     Line::from(spans)
 }
@@ -464,20 +492,27 @@ fn render_core(frame: &mut Frame<'_>, cell: Rect, core: &CoreView, context: &Dis
         .buffer_mut()
         .set_string(cell.x, cell.y, &id_text, context.theme.muted_style());
     let mut label = value_text(&core.utilization);
-    if cell.width >= RICH_CORE_CELL {
-        label = format!(
-            "{label} {} {}",
-            value_text(&core.frequency),
-            value_text(&core.temperature)
-        );
-    }
     let id_width = saturate_u16(display_width(&id_text));
-    let gauge = Rect::new(
+    let mut gauge = Rect::new(
         cell.x + id_width,
         cell.y,
         cell.width.saturating_sub(id_width),
         1,
     );
+    if cell.width >= RICH_CORE_CELL {
+        label = format!("{label} {}", value_text(&core.frequency));
+        // The temperature ends the cell in its own level color (D-104).
+        let temperature = value_text(&core.temperature);
+        let room = saturate_u16(display_width(&temperature)).saturating_add(1);
+        gauge.width = gauge.width.saturating_sub(room);
+        frame.buffer_mut().set_stringn(
+            gauge.right().saturating_add(1),
+            cell.y,
+            &temperature,
+            usize::from(cell.right().saturating_sub(gauge.right())),
+            context.theme.temperature_style(&core.temperature),
+        );
+    }
     frame.render_widget(
         Gauge::new(percent_ratio(&core.utilization), &label, &context.theme),
         gauge,
@@ -500,7 +535,7 @@ fn add_labels(output: &mut Output, cpu: &CpuView, context: &DisplayContext) {
             context,
         ));
     }
-    for labeled in &cpu.power {
+    for labeled in cpu.package_power.iter().chain(&cpu.power) {
         output.label(cell_label(
             &format!("cpu power {}", clean(&labeled.label)),
             &labeled.cell,
@@ -562,6 +597,52 @@ mod tests {
         );
         assert_eq!(frequency_text(&[group(None, Some(3900.0))]), "–/3.9 GHz");
         assert_eq!(frequency_text(&[group(Some(1800.0), None)]), "1.8 GHz");
+    }
+
+    /// The CPU line writes its temperature in its level color (D-104) and
+    /// its package power after `⚡` only while it has a value (D-106); the
+    /// platform's power is never taken for the CPU's.
+    #[test]
+    fn the_summary_colors_the_temperature_and_shows_power_only_when_read() {
+        let context = test_fixtures::display_context();
+        let mut cpu = test_fixtures::cpu_view();
+        let line = summary_line(&cpu, &context);
+        let text: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(text.starts_with("68°C │ ⚡45.2 W"), "{text}");
+        assert_eq!(
+            line.spans[0].style.fg,
+            Some(context.theme.temperature_color(68.0))
+        );
+        for state in [
+            CellState::Unavailable,
+            CellState::ReadFailed,
+            CellState::Stale,
+        ] {
+            cpu.package_power[0].cell = MetricCell::missing(CanonicalUnit::Watts, state);
+            let text: String = summary_line(&cpu, &context)
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect();
+            assert!(
+                !text.contains('⚡') && !text.contains(" W"),
+                "{state:?}: {text}"
+            );
+        }
+        cpu.package_power.clear();
+        let text: String = summary_line(&cpu, &context)
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(
+            !text.contains("61.5"),
+            "the platform is not the CPU: {text}"
+        );
     }
 
     /// Without cpufreq the summary has no frequency part and no dangling

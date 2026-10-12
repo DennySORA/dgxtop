@@ -86,6 +86,12 @@ pub trait Collector: Send + Sync {
     /// Whether batches of `(adapter_id, read_group)` feed this collector.
     /// `read_group` is the base group name (page suffix removed).
     fn consumes(&self, adapter_id: &AdapterId, read_group: &str) -> bool;
+    /// Metrics of other domains whose committed samples a job reads
+    /// (`CollectionPlan::committed`): none unless a derivation spans
+    /// domains, like the host's total power (D-106).
+    fn committed_metrics(&self) -> &'static [&'static str] {
+        &[]
+    }
     fn collect(&self, plan: &CollectionPlan) -> CollectionBatch;
 }
 

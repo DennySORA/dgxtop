@@ -2,7 +2,7 @@
 //! (rates, differences, ratios, formula outputs): sample kind, quality,
 //! timing, candidate lists and history eligibility.
 
-use dgxtop_core::canonical::{CanonicalValue, MAX_CANDIDATE_IDS};
+use dgxtop_core::canonical::{CanonicalSample, CanonicalValue, MAX_CANDIDATE_IDS};
 use dgxtop_core::identity::{EntityId, IdentityError, MetricId, MetricKey, Scope, SourceId};
 use dgxtop_core::metric::{MetricDescriptor, Scalar, ScalarView, descriptor};
 use dgxtop_core::observation::Observation;
@@ -39,6 +39,32 @@ impl Evidence {
             read_finished_boot_ns: observation.read_finished_boot_ns,
             observed_boot_ns: observation.device_sample_boot_ns,
         }
+    }
+
+    /// A value this job published, as an input; `None` without the
+    /// source that read it.
+    pub fn of_value(value: &CanonicalValue) -> Option<Self> {
+        Some(Self {
+            source_id: value.source_id.clone()?,
+            generation: value.source_generation?,
+            quality: value.quality,
+            sample_kind: value.sample_kind,
+            read_finished_boot_ns: value.read_finished_boot_ns,
+            observed_boot_ns: value.observed_boot_ns,
+        })
+    }
+
+    /// A committed sample of another job, as an input; `None` without the
+    /// source that read it.
+    pub fn of_sample(sample: &CanonicalSample) -> Option<Self> {
+        Some(Self {
+            source_id: sample.source_id.clone()?,
+            generation: sample.source_generation?,
+            quality: sample.quality,
+            sample_kind: sample.sample_kind,
+            read_finished_boot_ns: sample.read_finished_boot_ns,
+            observed_boot_ns: sample.observed_boot_ns,
+        })
     }
 
     pub fn of_selection(selection: &crate::shared::arbitration::Selection) -> Self {

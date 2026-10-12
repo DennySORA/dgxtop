@@ -598,6 +598,42 @@ pub struct CollectionPlan {
     pub inputs: Vec<Arc<IngressBatch>>,
     pub now_boot_ns: u64,
     pub limits: CollectionLimits,
+    /// What the latest snapshot holds of the metrics the collector reads
+    /// from other domains (`Collector::committed_metrics`, D-106); empty
+    /// for a collector that reads none.
+    pub committed: Arc<CommittedSamples>,
+}
+
+/// Committed samples a collector reads beside its own inputs (D-106): the
+/// latest snapshot's entries of a few metrics, shared, never copied.
+#[derive(Debug, Clone, Default)]
+pub struct CommittedSamples {
+    entries: Vec<Arc<SnapshotEntry>>,
+}
+
+impl CommittedSamples {
+    /// Every entry of `metrics` that `snapshot` holds, in any domain.
+    pub fn of(snapshot: &ImmutableSnapshot, metrics: &[&str]) -> Self {
+        if metrics.is_empty() {
+            return Self::default();
+        }
+        let entries = snapshot
+            .domains
+            .values()
+            .flat_map(|domain| domain.samples.values())
+            .filter(|entry| metrics.contains(&entry.sample.key.metric_id.as_str()))
+            .cloned()
+            .collect();
+        Self { entries }
+    }
+
+    /// The committed entries of `metric`.
+    pub fn of_metric<'a>(&'a self, metric: &'a str) -> impl Iterator<Item = &'a SnapshotEntry> {
+        self.entries
+            .iter()
+            .filter(move |entry| entry.sample.key.metric_id.as_str() == metric)
+            .map(Arc::as_ref)
+    }
 }
 
 /// Non-fatal collection failure (one source or one metric).

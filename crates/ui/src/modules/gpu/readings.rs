@@ -252,8 +252,9 @@ mod tests {
         );
     }
 
-    /// A GPU's memory bar is green and turns amber and red as it fills,
-    /// like its other bars (D-73).
+    /// A GPU's memory bar turns from green through amber to red as it
+    /// fills, like its other bars (D-73), one step for each whole percent
+    /// (D-104).
     #[test]
     fn the_memory_bar_turns_with_its_level() {
         let context = crate::test_fixtures::display_context();
@@ -277,11 +278,19 @@ mod tests {
                 .unwrap();
             terminal.backend().buffer()[(5, 0)].fg
         };
-        assert_eq!(color_at(&card), theme.level_color(10.0 / 64.0));
-        assert_eq!(theme.level_color(10.0 / 64.0), theme.gauge_low);
+        let quiet = color_at(&card);
+        assert_eq!(quiet, theme.level_color(10.0 / 64.0));
+        card.process_allocated =
+            crate::test_fixtures::ok(32.0 * crate::test_fixtures::GIB, CanonicalUnit::Bytes);
+        assert_eq!(color_at(&card), theme.gauge_mid, "half full is amber");
+        card.process_allocated =
+            crate::test_fixtures::ok(64.0 * crate::test_fixtures::GIB, CanonicalUnit::Bytes);
+        assert_eq!(color_at(&card), theme.gauge_high, "only a full bar is red");
         card.process_allocated =
             crate::test_fixtures::ok(60.0 * crate::test_fixtures::GIB, CanonicalUnit::Bytes);
-        assert_eq!(color_at(&card), theme.gauge_high);
+        let busy = color_at(&card);
+        assert_eq!(busy, theme.level_color(60.0 / 64.0));
+        assert!(![quiet, theme.gauge_mid, theme.gauge_high].contains(&busy));
     }
 
     #[test]

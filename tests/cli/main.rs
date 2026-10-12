@@ -251,12 +251,17 @@ fn legacy_import_dry_run_writes_nothing_and_apply_writes_private_v2_once() {
         "sampling.gpu_enabled = false",
         "store.raw_history_seconds = 150",
         "viewer.network_max_visible = 4",
-        "viewer.redline_threshold_percent = 85",
+        // The redline is retired (D-105): reported, never imported.
+        "retired (D-105)",
         "unsupported",
         "dry run: nothing was written",
     ] {
         assert!(report.contains(line), "missing {line:?} in {report}");
     }
+    assert!(
+        !report.contains("viewer.redline_threshold_percent"),
+        "{report}"
+    );
     assert!(!home.config_path().exists(), "dry run wrote a config");
 
     let output = home.run(&["--import-legacy", &legacy_arg, "--apply"]);
@@ -277,6 +282,7 @@ fn legacy_import_dry_run_writes_nothing_and_apply_writes_private_v2_once() {
         serde_json::from_slice(&std::fs::read(home.config_path()).unwrap()).unwrap();
     assert_eq!(written["sampling"]["interval_ms"], 500);
     assert_eq!(written["viewer"]["theme"], "green");
+    assert!(written["viewer"].get("redline_threshold_percent").is_none());
 
     let again = home.run(&["--import-legacy", &legacy_arg, "--apply"]);
     assert!(

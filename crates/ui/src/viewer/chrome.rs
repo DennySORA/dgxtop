@@ -3,7 +3,7 @@
 
 use dgxtop_core::commands::ViewKind;
 use dgxtop_core::identity::ModuleId;
-use dgxtop_core::view::{OverloadState, ViewModel};
+use dgxtop_core::view::{MetricCell, OverloadState, ViewModel};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -16,7 +16,8 @@ use super::layout::{MIN_COLUMNS, MIN_ROWS};
 use super::ui_state::{ModeView, UiState};
 use crate::controller::keymap::{self, ModeKind};
 use crate::format::{
-    clean, display_width, format_age, format_interval_ms, format_span_seconds, truncate_to_width,
+    cell_tone, clean, display_width, format_age, format_interval_ms, format_span_seconds,
+    truncate_to_width, value_text,
 };
 use crate::num::saturate_u16;
 use crate::registry::HitTarget;
@@ -30,9 +31,24 @@ const INTERVAL_HINT: &str = "interval";
 
 /// One header item; narrow terminals keep the highest priorities.
 struct Segment {
-    text: String,
-    style: Style,
+    spans: Vec<Span<'static>>,
     priority: u8,
+}
+
+impl Segment {
+    fn new(text: impl Into<String>, style: Style, priority: u8) -> Self {
+        Self {
+            spans: vec![Span::styled(text.into(), style)],
+            priority,
+        }
+    }
+
+    fn width(&self) -> usize {
+        self.spans
+            .iter()
+            .map(|span| display_width(&span.content))
+            .sum()
+    }
 }
 
 fn fit_segments(segments: Vec<Segment>, width: usize, separator: &str) -> Vec<Segment> {
@@ -51,7 +67,7 @@ fn fit_segments(segments: Vec<Segment>, width: usize, separator: &str) -> Vec<Se
         } else {
             display_width(separator)
         };
-        let needed = display_width(&segments[index].text) + separator_width;
+        let needed = segments[index].width() + separator_width;
         if used + needed <= width {
             used += needed;
             keep[index] = true;
@@ -70,7 +86,7 @@ fn segments_line(segments: Vec<Segment>, separator: &'static str, style: Style) 
         if !spans.is_empty() {
             spans.push(Span::styled(separator, style));
         }
-        spans.push(Span::styled(segment.text, segment.style));
+        spans.extend(segment.spans);
     }
     Line::from(spans)
 }
@@ -129,7 +145,7 @@ pub fn render_header(
         let reserved = facts
             .iter()
             .filter(|fact| fact.priority >= HOST_PRIORITY)
-            .map(|fact| display_width(&fact.text) + display_width(HEADER_GAP))
+            .map(|fact| fact.width() + display_width(HEADER_GAP))
             .sum::<usize>();
         let tab_width = area
             .right()
@@ -153,6 +169,8 @@ pub fn render_header(
 
 /// Priority of the host name; facts at or above it keep room beside the tabs.
 const HOST_PRIORITY: u8 = 95;
+/// The host's total power goes right after its name.
+const TOTAL_POWER_PRIORITY: u8 = 90;
 
 fn header_facts(input: &HeaderInput<'_>, palette: &ThemePalette) -> Vec<Segment> {
     let header = &input.model.header;
@@ -161,48 +179,47 @@ fn header_facts(input: &HeaderInput<'_>, palette: &ThemePalette) -> Vec<Segment>
         .add_modifier(Modifier::BOLD);
     let mut facts = Vec::new();
     if let Some(namespace) = header.namespace_label.as_deref() {
-        facts.push(Segment {
-            text: format!("[{} · simulated data]", clean(namespace).to_uppercase()),
-            style: Style::new().fg(palette.accent).add_modifier(Modifier::BOLD),
-            priority: 99,
-        });
+        facts.push(Segment::new(
+            format!("[{} · simulated data]", clean(namespace).to_uppercase()),
+            Style::new().fg(palette.accent).add_modifier(Modifier::BOLD),
+            99,
+        ));
     }
     if header.read_only {
-        facts.push(Segment {
-            text: "READ-ONLY".to_owned(),
-            style: warning,
-            priority: 98,
-        });
+        facts.push(Segment::new("READ-ONLY".to_owned(), warning, 98));
     }
     if header.overload != OverloadState::Normal {
-        facts.push(Segment {
-            text: format!("overload {}", header.overload.label()),
-            style: warning,
-            priority: 97,
-        });
+        facts.push(Segment::new(
+            format!("overload {}", header.overload.label()),
+            warning,
+            97,
+        ));
     }
     if header.hosts_healthy < header.hosts_total {
-        facts.push(Segment {
-            text: format!(
+        facts.push(Segment::new(
+            format!(
                 "hosts {}/{} healthy",
                 header.hosts_healthy, header.hosts_total
             ),
-            style: warning,
-            priority: 96,
-        });
+            warning,
+            96,
+        ));
     }
     if projection_is_old(input.projection_age_ms, header.effective_interval_ms) {
-        facts.push(Segment {
-            text: format!("updated {}", format_age(input.projection_age_ms)),
-            style: warning,
-            priority: 96,
-        });
+        facts.push(Segment::new(
+            format!("updated {}", format_age(input.projection_age_ms)),
+            warning,
+            96,
+        ));
     }
-    facts.push(Segment {
-        text: clean(&header.host_name),
-        style: palette.title_style(),
-        priority: HOST_PRIORITY,
-    });
+    facts.push(Segment::new(
+        clean(&header.host_name),
+        palette.title_style(),
+        HOST_PRIORITY,
+    ));
+    if let Some(total) = total_power_segment(&header.total_power, palette) {
+        facts.push(total);
+    }
     let cards = input
         .model
         .modules
@@ -210,11 +227,11 @@ fn header_facts(input: &HeaderInput<'_>, palette: &ThemePalette) -> Vec<Segment>
         .as_deref()
         .map_or(&[][..], |gpu| gpu.cards.as_slice());
     if !cards.is_empty() {
-        facts.push(Segment {
-            text: format!("{}x GPU", cards.len()),
-            style: palette.label_style(),
-            priority: 60,
-        });
+        facts.push(Segment::new(
+            format!("{}x GPU", cards.len()),
+            palette.label_style(),
+            60,
+        ));
     }
     if let Some(driver) = cards.iter().find_map(|card| {
         card.metadata
@@ -222,25 +239,42 @@ fn header_facts(input: &HeaderInput<'_>, palette: &ThemePalette) -> Vec<Segment>
             .find(|(key, _)| key == DRIVER_VERSION_KEY)
             .map(|(_, value)| clean(value))
     }) {
-        facts.push(Segment {
-            text: format!("drv:{driver}"),
-            style: palette.muted_style(),
-            priority: 40,
-        });
+        facts.push(Segment::new(
+            format!("drv:{driver}"),
+            palette.muted_style(),
+            40,
+        ));
     }
     if let Some(uptime) = header.uptime_s {
-        facts.push(Segment {
-            text: format!("up {}", format_span_seconds(uptime)),
-            style: palette.muted_style(),
-            priority: 50,
-        });
+        facts.push(Segment::new(
+            format!("up {}", format_span_seconds(uptime)),
+            palette.muted_style(),
+            50,
+        ));
     }
-    facts.push(Segment {
-        text: format!("v{}", clean(&header.version)),
-        style: palette.muted_style(),
-        priority: 20,
-    });
+    facts.push(Segment::new(
+        format!("v{}", clean(&header.version)),
+        palette.muted_style(),
+        20,
+    ));
     facts
+}
+
+/// `⚡152 W total`: what the CPU and the GPUs draw together (D-106), shown
+/// only while it has a value; a host whose CPU power cannot be read has
+/// none. Kept right after the host name.
+fn total_power_segment(cell: &MetricCell, palette: &ThemePalette) -> Option<Segment> {
+    if !(cell.state.has_value() && cell.value.is_some()) {
+        return None;
+    }
+    Some(Segment {
+        spans: vec![
+            Span::styled("⚡", Style::new().fg(palette.warning)),
+            Span::styled(value_text(cell), palette.tone_style(cell_tone(cell))),
+            Span::styled(" total", palette.label_style()),
+        ],
+        priority: TOTAL_POWER_PRIORITY,
+    })
 }
 
 /// Whether the projection is older than a few sampling intervals.

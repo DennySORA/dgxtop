@@ -166,6 +166,7 @@ impl Pipeline {
                     max_processes: 256,
                     max_process_gpu_links: 1024,
                 },
+                committed: Arc::default(),
             };
             let output = collector.collect(&plan);
             output.validate().unwrap();

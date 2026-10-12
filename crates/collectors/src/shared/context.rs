@@ -641,6 +641,17 @@ impl<'a> Session<'a> {
         selection
     }
 
+    /// The canonical values of `metric` this job has published so far.
+    pub fn published<'s>(
+        &'s self,
+        metric: &'s str,
+    ) -> impl Iterator<Item = &'s dgxtop_core::canonical::CanonicalValue> {
+        self.output
+            .canonical
+            .iter()
+            .filter(move |value| value.key.metric_id.as_str() == metric)
+    }
+
     /// Arbitrates and publishes in one step.
     pub fn arbitrate_and_publish(
         &mut self,

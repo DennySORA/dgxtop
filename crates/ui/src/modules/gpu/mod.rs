@@ -14,7 +14,6 @@ use dgxtop_core::view::{
 };
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use self::facts::reported;
@@ -22,8 +21,8 @@ use self::readings::{OVERVIEW_READINGS, overview_readings, render_bar};
 use super::ModuleBuildError;
 use super::common::{
     ManifestSpec, Output, RowCursor, build_manifest, cell_label, cell_spans, draw_line,
-    fraction_ratio, gauge_row, labeled_cell, message, no_data, panel, percent_ratio, render_chart,
-    separator, split_columns,
+    fraction_ratio, gauge_row, labeled_cell, message, no_data, panel, percent_ratio, power_icon,
+    render_chart, separator, split_columns, temperature_spans,
 };
 use crate::format::{CellDetail, clean, display_width, value_text};
 use crate::num::saturate_u16;
@@ -326,9 +325,13 @@ fn overview_headline(card: &GpuCard, context: &DisplayContext) -> Line<'static> 
         Span::styled(clean(&card.name), context.theme.text_style()),
         separator(context),
     ];
-    spans.extend(cell_spans(&card.temperature, CellDetail::GLANCE, context));
+    spans.extend(temperature_spans(
+        &card.temperature,
+        CellDetail::GLANCE,
+        context,
+    ));
     spans.push(separator(context));
-    spans.push(Span::styled("⚡", Style::new().fg(context.theme.warning)));
+    spans.push(power_icon(context));
     spans.extend(power_spans(card, context));
     if let Some(clock) = card.clocks.first() {
         spans.push(separator(context));
@@ -430,7 +433,11 @@ fn card_headline(card: &GpuCard, context: &DisplayContext) -> Line<'static> {
         Span::styled(clean(&card.name), context.theme.text_style()),
         separator(context),
     ];
-    spans.extend(cell_spans(&card.temperature, CellDetail::GLANCE, context));
+    spans.extend(temperature_spans(
+        &card.temperature,
+        CellDetail::GLANCE,
+        context,
+    ));
     spans.push(separator(context));
     spans.extend(power_spans(card, context));
     spans.extend(fan_spans(card, context));
@@ -473,6 +480,28 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect()
+    }
+
+    /// Both headlines write the temperature in the level color of its
+    /// share of 100 °C (D-104).
+    #[test]
+    fn headlines_color_the_temperature_by_its_level() {
+        let context = display_context();
+        let card = gpu_view().cards.remove(0);
+        for headline in [
+            overview_headline(&card, &context),
+            card_headline(&card, &context),
+        ] {
+            let temperature = headline
+                .spans
+                .iter()
+                .find(|span| span.content == "71°C")
+                .unwrap();
+            assert_eq!(
+                temperature.style.fg,
+                Some(context.theme.temperature_color(71.0))
+            );
+        }
     }
 
     /// A GB10 reports neither a power limit nor a fan: the headlines leave

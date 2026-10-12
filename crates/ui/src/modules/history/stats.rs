@@ -1,9 +1,11 @@
 //! The GPUs' long-term table of the history view (D-48, D-50): for each GPU
 //! one row per window (the last 1 h, 6 h, 12 h and 24 h) with the mean and
 //! peak of its utilization, memory in use, temperature and power and the
-//! energy it drew. History starts with dgxtop, so a window that holds no
-//! more than the window before it is left out instead of repeating its
-//! numbers, and a window only partly recorded says how much it holds.
+//! energy it drew; a temperature's mean and peak each in the level color of
+//! its share of 100 °C (D-104). History starts with dgxtop, so a window
+//! that holds no more than the window before it is left out instead of
+//! repeating its numbers, and a window only partly recorded says how much
+//! it holds.
 
 use dgxtop_core::view::{HistoryChartKind, HistoryWindowSummary};
 use ratatui::Frame;
@@ -352,6 +354,17 @@ fn value_cell(
     let text = match column {
         Column::Gpu => return TableCell::new("", theme.text_style()),
         Column::Window => return TableCell::new(window_text(block, window), theme.label_style()),
+        Column::Series(HistoryChartKind::GpuTemperature) => {
+            if let Some(cell) = block
+                .summary(window, HistoryChartKind::GpuTemperature)
+                .and_then(|summary| temperature_cell(summary, context))
+            {
+                return cell;
+            }
+            block
+                .summary(window, HistoryChartKind::GpuTemperature)
+                .map(series_text)
+        }
         Column::Series(kind) => block.summary(window, kind).map(series_text),
         Column::Energy => block
             .summary(window, HistoryChartKind::GpuPower)
@@ -364,6 +377,30 @@ fn value_cell(
         theme.text_style()
     };
     TableCell::new(text, style)
+}
+
+/// `45°C / 58°C` with the mean and the peak each in its level color
+/// (D-104); `None` while the history is answering or holds neither.
+fn temperature_cell(summary: &HistoryWindowSummary, context: &DisplayContext) -> Option<TableCell> {
+    if summary.pending || (summary.mean.is_none() && summary.peak.is_none()) {
+        return None;
+    }
+    let theme = &context.theme;
+    let part = |value: Option<f64>| match value {
+        Some(celsius) => (
+            format_value(celsius, summary.unit),
+            theme.text_style().fg(theme.temperature_color(celsius)),
+        ),
+        None => (NOT_AVAILABLE.to_owned(), theme.muted_style()),
+    };
+    Some(TableCell::of_parts(
+        vec![
+            part(summary.mean),
+            (" / ".to_owned(), theme.text_style()),
+            part(summary.peak),
+        ],
+        theme.text_style(),
+    ))
 }
 
 /// `12.0% / 90.0%`: the mean and the peak over the window.
@@ -462,6 +499,35 @@ mod tests {
                     .collect::<String>()
             })
             .collect()
+    }
+
+    /// A window's mean and peak temperature each take the level color of
+    /// its share of 100 °C (D-104).
+    #[test]
+    fn temperatures_are_written_in_their_level_colors() {
+        let context = display_context();
+        let summaries = gpu_window_stats();
+        let blocks = gpu_stats(&summaries);
+        let rows = table_rows(&blocks);
+        let width = 140;
+        let mut terminal = Terminal::new(TestBackend::new(width, rows)).unwrap();
+        terminal
+            .draw(|frame| render_gpu_stats(frame, frame.area(), &blocks, &context))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row: String = (0..width).map(|x| buffer[(x, 1)].symbol()).collect();
+        let mean = saturate_u16(row.find("45°C / 70°C").unwrap());
+        let peak = saturate_u16(row.find("70°C").unwrap());
+        // `°` is one column but two bytes: columns, not bytes, from here.
+        let column = |byte: u16| saturate_u16(display_width(&row[..usize::from(byte)]));
+        assert_eq!(
+            buffer[(column(mean), 1)].fg,
+            context.theme.temperature_color(45.0)
+        );
+        assert_eq!(
+            buffer[(column(peak), 1)].fg,
+            context.theme.temperature_color(70.0)
+        );
     }
 
     #[test]

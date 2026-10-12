@@ -435,8 +435,7 @@
                     "max_sessions",
                     "theme",
                     "enabled_modules",
-                    "network_max_visible",
-                    "redline_threshold_percent"
+                    "network_max_visible"
                   ]
                 },
                 "queues": {

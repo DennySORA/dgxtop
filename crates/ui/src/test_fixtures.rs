@@ -178,12 +178,16 @@ pub(crate) fn cpu_view() -> CpuView {
             label: "soc".into(),
             cell: conflict(CanonicalUnit::DegC, ("hwmon", 68.0), ("thermal", 42.0)),
         }],
-        power: vec![LabeledCell {
-            label: "pkg".into(),
+        package_power: vec![LabeledCell {
+            label: "package 0".into(),
             cell: MetricCell {
                 kind: SampleKind::Estimated,
                 ..ok(45.2, CanonicalUnit::Watts)
             },
+        }],
+        power: vec![LabeledCell {
+            label: "platform".into(),
+            cell: ok(61.5, CanonicalUnit::Watts),
         }],
         load: [
             ok(1.02, CanonicalUnit::Count),
@@ -880,7 +884,7 @@ pub(crate) fn header() -> HeaderView {
         hosts_total: 7,
         read_only: false,
         theme: Theme::Dark,
-        redline_threshold_percent: 80.0,
+        total_power: missing(CanonicalUnit::Watts, CellState::Unavailable),
     }
 }
 

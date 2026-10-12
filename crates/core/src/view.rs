@@ -75,6 +75,11 @@ pub struct LastGoodView {
     pub age_ms: u64,
 }
 
+/// Top of every temperature's scale, as a gauge's 100 % (D-45, D-104): the
+/// GPU's temperature bar and History chart, and the color of a temperature
+/// wherever it is written.
+pub const TEMPERATURE_SCALE_C: f64 = 100.0;
+
 /// Rows of each overview GPU's utilization chart (D-43).
 pub const OVERVIEW_GPU_CHART_ROWS: u16 = 2;
 /// Overview GPU panel geometry (D-38, D-43), shared so the Viewer lays the
@@ -205,6 +210,11 @@ pub struct CpuView {
     pub frequencies: Vec<FrequencyGroup>,
     pub package_temperatures: Vec<LabeledCell>,
     pub soc_temperatures: Vec<LabeledCell>,
+    /// Each CPU package's power: the CPU line's `⚡` and the CPU's part of
+    /// the host's total power (D-106).
+    pub package_power: Vec<LabeledCell>,
+    /// The platform's and the CPU clusters' power, listed when the panel
+    /// is expanded.
     pub power: Vec<LabeledCell>,
     pub load: [MetricCell; 3],
     pub tasks_running: MetricCell,
@@ -516,6 +526,18 @@ pub enum HistoryChartKind {
     GpuMemory,
     GpuTemperature,
     GpuPower,
+    /// What the CPU packages and the GPUs draw together, and each CPU
+    /// package's power, charted beside the GPUs' power (D-106).
+    TotalPower,
+    CpuPower,
+}
+
+impl HistoryChartKind {
+    /// Whether the chart draws a power, whose mean over the time it holds
+    /// is an energy.
+    pub const fn is_power(self) -> bool {
+        matches!(self, Self::GpuPower | Self::TotalPower | Self::CpuPower)
+    }
 }
 
 /// One GPU series over one window of the history view's statistics (D-48):
@@ -838,9 +860,10 @@ pub struct HeaderView {
     pub hosts_total: u32,
     pub read_only: bool,
     pub theme: Theme,
-    /// `viewer.redline_threshold_percent`: the fill from which gauges are
-    /// red (D-87), display only.
-    pub redline_threshold_percent: f64,
+    /// What the CPU packages and every GPU draw together
+    /// (`host.power.total`, D-106); missing while any of them does not
+    /// report, and then left out of the header.
+    pub total_power: MetricCell,
 }
 
 /// Per-session view state; the single authoritative copy lives in the Manager.
@@ -991,7 +1014,7 @@ mod tests {
                 hosts_total: 0,
                 read_only: false,
                 theme: Theme::Dark,
-                redline_threshold_percent: 80.0,
+                total_power: MetricCell::missing(CanonicalUnit::Watts, CellState::Unavailable),
             },
             session: SessionState {
                 session_id: SessionId::new("s").unwrap(),

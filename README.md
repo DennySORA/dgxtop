@@ -50,8 +50,8 @@ GPUs first, shows which job holds how much of their memory, and keeps a record o
 of the whole machine.
 
 - **Every GPU at a glance.** Utilization, memory, temperature, power, clocks and fans for each GPU,
-  with live charts. A gauge stays green below 50 % and turns from amber to red as it nears the
-  redline (80 % by default).
+  with live charts. Gauges, chart columns and temperatures shade in 100 steps from green at 0 %
+  through amber at 50 % to red at 100 % (a temperature on a 0–100 °C scale).
 - **Memory by process.** The eight processes holding the most GPU memory each get a color, the same
   in the memory bars, the charts and the process table, so you see which job holds how much. The
   color comes from the process name, so a job keeps it when the job or dgxtop restarts, unless another listed process already has it.
@@ -68,7 +68,8 @@ of the whole machine.
   network.
 - **Overview History.** CPU, memory, each GPU's utilization, memory, temperature and power, disks
   and network as bars of 1 minute to 24 hours on the local clock, with now, average and maximum on
-  every chart, and each GPU's averages, peaks and energy.
+  every chart, and each GPU's averages, peaks and energy. Where the CPU's power can be read, the
+  power charts start with the total of the CPU and the GPUs and the CPU's own, each with its energy.
 - **Full GPU details.** One GPU at a time:
   - performance state, throttle reasons and how long it was throttled, clocks;
   - memory and the memory bus, PCIe link and traffic, NVLink-C2C;
@@ -77,9 +78,12 @@ of the whole machine.
   - device, PCI and firmware, NUMA and CPU affinity, P2P paths.
 
   A value the GPU does not report gets no row.
-- **The whole machine.** CPU usage per core, CPU temperature and the current and maximum frequency
-  of each kind of core; memory, swap, buffers and cache; disks with free space, IOPS, latency and
-  drive temperature; network throughput, errors and drops.
+- **The whole machine.** CPU usage per core, CPU temperature and power and the current and maximum
+  frequency of each kind of core; memory, swap, buffers and cache; disks with free space, IOPS,
+  latency and drive temperature; network throughput, errors and drops. Where the CPU's power can be
+  read (powercap, or the GB10's power sensors), the header shows what the CPU and the GPUs draw
+  together; that is not the power at the wall socket, and it is left out while a part cannot be
+  read.
 - **Made for DGX Spark.** On the GB10's unified memory, the RAM bar splits into the system's share
   and each GPU job's share. dgxtop also reads the GB10's CPU cluster temperatures and its
   NVLink-C2C links, and ships a native aarch64 build.

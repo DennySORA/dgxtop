@@ -3,19 +3,19 @@
 //! text, so a monochrome terminal loses nothing semantically.
 
 use dgxtop_core::config::Theme;
-use dgxtop_core::view::{BannerLevel, PROCESS_COLOR_SLOTS, ViewModel};
+use dgxtop_core::view::{
+    BannerLevel, MetricCell, PROCESS_COLOR_SLOTS, TEMPERATURE_SCALE_C, ViewModel,
+};
 use ratatui::style::{Color, Modifier, Style};
 
-use crate::format::CellTone;
+use crate::format::{CellTone, cell_tone};
 
-/// Fill ratio from which a gauge leaves the "low" color for the gradient
-/// toward the redline (D-87).
-const GRADIENT_START: f64 = 0.50;
-/// The default `viewer.redline_threshold_percent` (80 %), in
-/// hundredths of a percent, for a palette no projection configured.
-const DEFAULT_REDLINE_HUNDREDTHS: u16 = 8_000;
-/// Hundredths of a percent in a whole fill (100 %).
-const FULL_HUNDREDTHS: f64 = 10_000.0;
+/// Steps of the level colors from an empty to a full gauge (D-104): each
+/// whole percent of a fill has a color of its own.
+const LEVEL_STEPS: u8 = 100;
+/// The step of a half fill, where the level color is the theme's amber,
+/// halfway from its green to its red.
+const MIDDLE_STEP: u8 = LEVEL_STEPS / 2;
 
 /// Colors of the tracked GPU processes, in slot order (D-64, D-65), the
 /// same in every theme: teal, orange, magenta, blue, rose, violet, olive,
@@ -40,8 +40,9 @@ const PROCESS_COLORS: [Color; PROCESS_COLOR_SLOTS] = [
 ];
 
 /// Title colors of the resources (D-74), bright and the same in every
-/// theme, so a resource's panels look alike on every page.
-const SECTION_COLORS: [(&str, Color); 9] = [
+/// theme, so a resource's panels look alike on every page; the host's
+/// power (D-106) takes the teal the removed Sources view had.
+const SECTION_COLORS: [(&str, Color); 10] = [
     ("GPU Processes", Color::Rgb(0xff, 0x9e, 0x64)),
     ("CPU", Color::Rgb(0x7a, 0xa2, 0xf7)),
     ("Memory", Color::Rgb(0x9e, 0xce, 0x6a)),
@@ -51,15 +52,22 @@ const SECTION_COLORS: [(&str, Color); 9] = [
     ("Network", Color::Rgb(0x7d, 0xcf, 0xff)),
     ("History", Color::Rgb(0xf7, 0x76, 0x8e)),
     ("Settings", Color::Rgb(0xc0, 0xca, 0xf5)),
+    ("Power", Color::Rgb(0x73, 0xda, 0xca)),
 ];
 
 /// The color `position` (0..=1) of the way from `from` to `to`, mixed in
-/// OKLab so the steps look even; a color that is not RGB stays `from`.
+/// OKLab so the steps look even; the ends are `from` and `to` exactly, and
+/// a color that is not RGB stays `from`.
 fn mix_oklab(from: Color, to: Color, position: f64) -> Color {
     let (Color::Rgb(r0, g0, b0), Color::Rgb(r1, g1, b1)) = (from, to) else {
         return from;
     };
-    let position = position.clamp(0.0, 1.0);
+    if position.is_nan() || position <= 0.0 {
+        return from;
+    }
+    if position >= 1.0 {
+        return to;
+    }
     let start = oklab([r0, g0, b0]);
     let end = oklab([r1, g1, b1]);
     let mixed: [f64; 3] =
@@ -139,10 +147,6 @@ pub struct ThemePalette {
     pub gauge_high: Color,
     pub gauge_track: Color,
     pub sparkline: Color,
-    /// `viewer.redline_threshold_percent` in hundredths of a percent: the
-    /// fill from which a gauge is fully red (D-87). An integer so the
-    /// palette stays comparable.
-    pub redline_hundredths: u16,
 }
 
 impl ThemePalette {
@@ -156,10 +160,9 @@ impl ThemePalette {
         }
     }
 
-    /// The palette a projection asks for: its theme and its redline.
+    /// The palette of the theme a projection asks for.
     pub fn for_model(model: &ViewModel) -> Self {
         Self::for_theme(model.header.theme)
-            .with_redline_percent(model.header.redline_threshold_percent)
     }
 
     const fn dark() -> Self {
@@ -185,7 +188,6 @@ impl ThemePalette {
             gauge_high: Color::Rgb(225, 70, 70),
             gauge_track: Color::Rgb(48, 48, 54),
             sparkline: Color::Rgb(110, 150, 230),
-            redline_hundredths: DEFAULT_REDLINE_HUNDREDTHS,
         }
     }
 
@@ -212,7 +214,6 @@ impl ThemePalette {
             gauge_high: Color::Rgb(220, 60, 60),
             gauge_track: Color::Rgb(40, 42, 46),
             sparkline: Color::Rgb(0, 160, 180),
-            redline_hundredths: DEFAULT_REDLINE_HUNDREDTHS,
         }
     }
 
@@ -239,7 +240,6 @@ impl ThemePalette {
             gauge_high: Color::Rgb(220, 60, 60),
             gauge_track: Color::Rgb(38, 42, 38),
             sparkline: Color::Rgb(60, 180, 80),
-            redline_hundredths: DEFAULT_REDLINE_HUNDREDTHS,
         }
     }
 
@@ -266,45 +266,45 @@ impl ThemePalette {
             gauge_high: Color::Rgb(220, 60, 60),
             gauge_track: Color::Rgb(42, 40, 36),
             sparkline: Color::Rgb(200, 150, 30),
-            redline_hundredths: DEFAULT_REDLINE_HUNDREDTHS,
         }
     }
 
-    /// This palette with the redline at `percent` (the configured
-    /// `viewer.redline_threshold_percent`), clamped to 0..=100; not a
-    /// number keeps the default.
-    pub fn with_redline_percent(mut self, percent: f64) -> Self {
-        let hundredths = if percent.is_nan() {
-            f64::from(DEFAULT_REDLINE_HUNDREDTHS)
-        } else {
-            (percent * 100.0).round().clamp(0.0, FULL_HUNDREDTHS)
-        };
-        // Clamped to 0..=10000 above, so the cast is exact.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        {
-            self.redline_hundredths = hundredths as u16;
-        }
-        self
-    }
-
-    /// The redline as a 0..=1 fill ratio.
-    pub fn redline_ratio(&self) -> f64 {
-        f64::from(self.redline_hundredths) / FULL_HUNDREDTHS
-    }
-
-    /// Gauge color for a 0..=1 fill ratio (D-87): green below 50 %, from
-    /// amber at 50 % toward red along an OKLab gradient, red from the
-    /// redline up. A redline at or below 50 % leaves no gradient: red from
-    /// the redline, green below it.
+    /// Gauge color for a 0..=1 fill ratio (D-104): one of a hundred steps
+    /// of an OKLab gradient, the theme's green at 0 %, its amber at 50 %
+    /// and its red at 100 %. A fill takes the step of its whole percent;
+    /// below 0 % (or not a number) it is green, above 100 % red.
     pub fn level_color(&self, ratio: f64) -> Color {
-        let redline = self.redline_ratio();
-        if ratio >= redline {
-            self.gauge_high
-        } else if ratio >= GRADIENT_START {
-            let position = (ratio - GRADIENT_START) / (redline - GRADIENT_START);
-            mix_oklab(self.gauge_mid, self.gauge_high, position)
+        let step = level_step(ratio);
+        if step <= MIDDLE_STEP {
+            mix_oklab(
+                self.gauge_low,
+                self.gauge_mid,
+                f64::from(step) / f64::from(MIDDLE_STEP),
+            )
         } else {
-            self.gauge_low
+            mix_oklab(
+                self.gauge_mid,
+                self.gauge_high,
+                f64::from(step - MIDDLE_STEP) / f64::from(LEVEL_STEPS - MIDDLE_STEP),
+            )
+        }
+    }
+
+    /// The level color of a temperature on its 0–100 °C scale (D-104),
+    /// the scale of the GPU's temperature bar and History chart.
+    pub fn temperature_color(&self, celsius: f64) -> Color {
+        self.level_color(celsius / TEMPERATURE_SCALE_C)
+    }
+
+    /// The style a temperature's value is written in: its level color
+    /// ([`Self::temperature_color`]) when it is read as it should be, else
+    /// the tone that says it is a fallback, stale, conflicting or missing.
+    pub fn temperature_style(&self, cell: &MetricCell) -> Style {
+        let tone = cell_tone(cell);
+        let style = self.tone_style(tone);
+        match (tone, cell.value_f64()) {
+            (CellTone::Normal, Some(celsius)) => style.fg(self.temperature_color(celsius)),
+            _ => style,
         }
     }
 
@@ -416,6 +416,20 @@ impl ThemePalette {
     }
 }
 
+/// The gradient step (0..=[`LEVEL_STEPS`]) of a 0..=1 fill ratio: its
+/// whole percent, clamped; not a number is step 0.
+fn level_step(ratio: f64) -> u8 {
+    if ratio.is_nan() {
+        return 0;
+    }
+    let steps = f64::from(LEVEL_STEPS);
+    let percent = (ratio * steps).round().clamp(0.0, steps);
+    // Clamped to 0..=100 above, so the cast is exact.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let step = percent as u8;
+    step
+}
+
 impl Default for ThemePalette {
     fn default() -> Self {
         Self::for_theme(Theme::Dark)
@@ -446,78 +460,58 @@ mod tests {
         }
     }
 
-    /// D-87 at the default redline (80 %): green below 50 %, the
-    /// amber at 50 %, between amber and red at the midpoint, red from 80 %.
-    #[test]
-    fn level_colors_run_from_amber_at_half_to_red_at_the_redline() {
-        let palette = ThemePalette::for_theme(Theme::Dark);
-        assert_eq!(palette.redline_ratio(), 0.80);
-        assert_eq!(palette.level_color(0.1), palette.gauge_low);
-        assert_eq!(palette.level_color(0.49), palette.gauge_low);
-        assert_eq!(palette.level_color(0.50), palette.gauge_mid);
-        assert_eq!(rgb(palette.gauge_mid), [230, 180, 60]);
-        assert_eq!(rgb(palette.gauge_high), [225, 70, 70]);
-        let midpoint = rgb(palette.level_color(0.65));
-        assert!(midpoint[1] < 180 && midpoint[1] > 70, "{midpoint:?}");
-        assert_ne!(palette.level_color(0.65), palette.gauge_mid);
-        assert_ne!(palette.level_color(0.65), palette.gauge_high);
-        assert_eq!(palette.level_color(0.80), palette.gauge_high);
-        assert_eq!(palette.level_color(0.95), palette.gauge_high);
-        assert_eq!(palette.level_color(1.5), palette.gauge_high);
-        assert_eq!(palette.level_color(f64::NAN), palette.gauge_low);
-    }
+    const THEMES: [Theme; 4] = [Theme::Dark, Theme::Cyan, Theme::Green, Theme::Amber];
 
+    /// D-104: green at 0 %, amber at 50 %, red only at 100 %, in every
+    /// theme; nothing turns fully red earlier.
     #[test]
-    fn a_custom_redline_moves_the_red() {
-        let palette = ThemePalette::for_theme(Theme::Cyan).with_redline_percent(90.0);
-        assert_eq!(palette.redline_hundredths, 9_000);
-        assert_ne!(palette.level_color(0.85), palette.gauge_high);
-        assert_eq!(palette.level_color(0.90), palette.gauge_high);
-        assert_eq!(
-            palette.level_color(0.70),
-            mix_oklab(palette.gauge_mid, palette.gauge_high, 0.5)
-        );
-        let edges = ThemePalette::default();
-        assert_eq!(edges.with_redline_percent(250.0).redline_hundredths, 10_000);
-        assert_eq!(edges.with_redline_percent(-1.0).redline_hundredths, 0);
-        assert_eq!(
-            edges.with_redline_percent(f64::NAN).redline_hundredths,
-            8_000
-        );
-    }
-
-    /// The viewer's palette takes the projection's redline, so an
-    /// applied configuration recolors the next frame (D-87).
-    #[test]
-    fn the_palette_follows_the_projections_redline() {
-        let mut model =
-            crate::test_fixtures::view_model(dgxtop_core::commands::ViewKind::Overview, 1);
-        let palette = ThemePalette::for_model(&model);
-        assert_eq!(palette.level_color(0.85), palette.gauge_high);
-        model.header.redline_threshold_percent = 90.0;
-        model.header.theme = Theme::Green;
-        let palette = ThemePalette::for_model(&model);
-        assert_eq!(palette.theme, Theme::Green);
-        assert_ne!(palette.level_color(0.85), palette.gauge_high);
-        assert_eq!(palette.level_color(0.90), palette.gauge_high);
-    }
-
-    /// A redline at or below 50 % leaves no gradient: red from the redline.
-    #[test]
-    fn a_low_redline_is_red_from_the_redline() {
-        for percent in [50.0, 30.0, 0.0] {
-            let palette = ThemePalette::default().with_redline_percent(percent);
-            let redline = percent / 100.0;
-            assert_eq!(palette.level_color(redline), palette.gauge_high);
-            assert_eq!(palette.level_color(0.6), palette.gauge_high);
-            if redline > 0.0 {
-                assert_eq!(palette.level_color(redline - 0.01), palette.gauge_low);
+    fn level_colors_run_from_green_through_amber_to_red_at_full() {
+        for theme in THEMES {
+            let palette = ThemePalette::for_theme(theme);
+            assert_eq!(palette.level_color(0.0), palette.gauge_low);
+            assert_eq!(palette.level_color(0.5), palette.gauge_mid);
+            assert_eq!(palette.level_color(1.0), palette.gauge_high);
+            for ratio in [0.1, 0.25, 0.49, 0.51, 0.8, 0.99] {
+                let color = palette.level_color(ratio);
+                assert!(
+                    ![palette.gauge_low, palette.gauge_mid, palette.gauge_high].contains(&color),
+                    "{theme:?} at {ratio} is a blend, not a band"
+                );
             }
+            assert_eq!(palette.level_color(-0.3), palette.gauge_low);
+            assert_eq!(palette.level_color(f64::NAN), palette.gauge_low);
+            assert_eq!(palette.level_color(1.5), palette.gauge_high);
+            assert_eq!(palette.level_color(f64::INFINITY), palette.gauge_high);
+        }
+        let dark = ThemePalette::for_theme(Theme::Dark);
+        assert_eq!(rgb(dark.gauge_low), [90, 200, 120]);
+        assert_eq!(rgb(dark.gauge_mid), [230, 180, 60]);
+        assert_eq!(rgb(dark.gauge_high), [225, 70, 70]);
+        // A quarter is a yellow green, 80 % an orange red.
+        assert_eq!(rgb(dark.level_color(0.25)), [172, 192, 95]);
+        assert_eq!(rgb(dark.level_color(0.8)), [230, 119, 69]);
+    }
+
+    /// One hundred steps: a fill takes its whole percent's color, and
+    /// every step from 0 % to 100 % has a color of its own.
+    #[test]
+    fn the_gradient_has_a_color_for_every_whole_percent() {
+        for theme in THEMES {
+            let palette = ThemePalette::for_theme(theme);
+            assert_eq!(palette.level_color(0.504), palette.level_color(0.50));
+            assert_eq!(palette.level_color(0.006), palette.level_color(0.01));
+            assert_ne!(palette.level_color(0.506), palette.level_color(0.50));
+            let steps: std::collections::BTreeSet<[u8; 3]> = (0..=10_000)
+                .map(|tenth_of_a_permille| {
+                    rgb(palette.level_color(f64::from(tenth_of_a_permille) / 10_000.0))
+                })
+                .collect();
+            assert_eq!(steps.len(), 101, "{theme:?}");
         }
     }
 
-    /// Between the band edges every step moves further from the amber
-    /// and closer to the red, in every theme.
+    /// From green to amber every step moves away from the green and toward
+    /// the amber; from amber to red away from the amber and toward the red.
     #[test]
     fn the_gradient_is_monotonic() {
         let distance = |a: [f64; 3], b: [f64; 3]| {
@@ -527,21 +521,51 @@ mod tests {
                 .sum::<f64>()
                 .sqrt()
         };
-        for theme in [Theme::Dark, Theme::Cyan, Theme::Green, Theme::Amber] {
+        for theme in THEMES {
             let palette = ThemePalette::for_theme(theme);
-            let amber = oklab(rgb(palette.gauge_mid));
-            let red = oklab(rgb(palette.gauge_high));
-            let mut previous = (0.0, distance(amber, red));
-            for step in 0..=30 {
-                let ratio = 0.50 + 0.30 * f64::from(step) / 30.0;
-                let color = oklab(rgb(palette.level_color(ratio)));
-                let now = (distance(amber, color), distance(color, red));
-                // One 8-bit step of rounding is allowed.
-                assert!(now.0 + 0.005 >= previous.0, "{theme:?} at {ratio}");
-                assert!(now.1 <= previous.1 + 0.005, "{theme:?} at {ratio}");
-                previous = now;
+            for (from, to, start) in [
+                (palette.gauge_low, palette.gauge_mid, 0.0),
+                (palette.gauge_mid, palette.gauge_high, 0.5),
+            ] {
+                let (from, to) = (oklab(rgb(from)), oklab(rgb(to)));
+                let mut previous = (0.0, distance(from, to));
+                for step in 0..=50 {
+                    let ratio = start + f64::from(step) / 100.0;
+                    let color = oklab(rgb(palette.level_color(ratio)));
+                    let now = (distance(from, color), distance(color, to));
+                    // One 8-bit step of rounding is allowed.
+                    assert!(now.0 + 0.005 >= previous.0, "{theme:?} at {ratio}");
+                    assert!(now.1 <= previous.1 + 0.005, "{theme:?} at {ratio}");
+                    previous = now;
+                }
             }
         }
+    }
+
+    /// A temperature takes the level color of its share of 100 °C (D-104).
+    #[test]
+    fn temperatures_take_the_level_color_of_their_hundred_degree_scale() {
+        let palette = ThemePalette::default();
+        assert_eq!(palette.temperature_color(0.0), palette.gauge_low);
+        assert_eq!(palette.temperature_color(50.0), palette.gauge_mid);
+        assert_eq!(palette.temperature_color(100.0), palette.gauge_high);
+        assert_eq!(palette.temperature_color(71.0), palette.level_color(0.71));
+        assert_ne!(palette.temperature_color(85.0), palette.gauge_high);
+        assert_eq!(palette.temperature_color(120.0), palette.gauge_high);
+        assert_eq!(palette.temperature_color(-5.0), palette.gauge_low);
+    }
+
+    /// The viewer's palette takes the projection's theme, so an applied
+    /// configuration recolors the next frame.
+    #[test]
+    fn the_palette_follows_the_projections_theme() {
+        let mut model =
+            crate::test_fixtures::view_model(dgxtop_core::commands::ViewKind::Overview, 1);
+        assert_eq!(ThemePalette::for_model(&model), ThemePalette::default());
+        model.header.theme = Theme::Green;
+        let palette = ThemePalette::for_model(&model);
+        assert_eq!(palette, ThemePalette::for_theme(Theme::Green));
+        assert_eq!(palette.level_color(1.0), palette.gauge_high);
     }
 
     #[test]
@@ -597,6 +621,7 @@ mod tests {
             "GPU Processes",
             "History",
             "Settings",
+            "Power",
         ];
         let colors: std::collections::BTreeSet<_> = titles
             .iter()

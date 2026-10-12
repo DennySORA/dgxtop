@@ -1,11 +1,13 @@
 //! CPU collector: utilization breakdown from `/proc/stat` tick counters,
 //! frequency/load/task pass-through, arbitrated temperatures (package, core,
-//! cluster and SoC are distinct keys; GB10's package from its clusters) and
+//! cluster and SoC are distinct keys; GB10's package from its clusters),
 //! CPU package/platform power from energy counters, hwmon power channels
-//! and the GB10 cluster formula.
+//! and the GB10 cluster formula, and the host's total power: the CPU
+//! packages' and the GPUs' together (D-106).
 
 mod power;
 mod temperature;
+mod total_power;
 mod utilization;
 
 use dgxtop_core::canonical::{CollectionBatch, CollectionPlan};
@@ -33,12 +35,13 @@ const PASS_THROUGH: [&str; 11] = [
 ];
 
 /// Metrics only this collector derives; adapters never provide them.
-const DERIVED_ONLY: [&str; 5] = [
+const DERIVED_ONLY: [&str; 6] = [
     ids::CPU_UTILIZATION_TOTAL,
     ids::CPU_UTILIZATION_USER,
     ids::CPU_UTILIZATION_SYSTEM,
     ids::CPU_UTILIZATION_IOWAIT,
     ids::CPU_UTILIZATION_STEAL,
+    ids::HOST_POWER_TOTAL,
 ];
 
 fn accepts(metric: &MetricDescriptor) -> bool {
@@ -80,6 +83,10 @@ impl Collector for CpuCollector {
         crate::shared::routes_to(adapter_id, read_group, SPEC.id)
     }
 
+    fn committed_metrics(&self) -> &'static [&'static str] {
+        &total_power::COMMITTED_METRICS
+    }
+
     fn collect(&self, plan: &CollectionPlan) -> CollectionBatch {
         context::run(plan, &SPEC, collect_cpu)
     }
@@ -88,6 +95,7 @@ impl Collector for CpuCollector {
 fn collect_cpu(session: &mut Session<'_>) {
     utilization::publish(session);
     power::publish(session);
+    total_power::publish(session);
     let mut selections = Selections::new();
     formulas::publish_pending(
         session,

@@ -5,7 +5,7 @@
 
 use dgxtop_core::gpu_state::{ThrottleSeverity, throttle_reasons, throttle_severity};
 use dgxtop_core::metric::ScalarView;
-use dgxtop_core::view::{CellState, GpuCard, GpuDetails, MetricCell};
+use dgxtop_core::view::{GpuCard, GpuDetails, MetricCell};
 use ratatui::style::Style;
 
 use crate::format::clean;
@@ -13,14 +13,10 @@ use crate::registry::DisplayContext;
 
 /// Whether the GPU view lists `cell`: not when the device does not support
 /// it or reports nothing for it, which the card's notes explain.
-pub(super) fn reported(cell: &MetricCell) -> bool {
-    cell.value.is_some() || !matches!(cell.state, CellState::Unsupported | CellState::Unavailable)
-}
+pub(super) use crate::modules::common::reported;
 
 /// Whether `cell` holds a value to show.
-pub(super) fn has_value(cell: &MetricCell) -> bool {
-    cell.state.has_value() && cell.value.is_some()
-}
+pub(super) use crate::modules::common::has_value;
 
 /// An exact count's value (the throttle bits).
 pub(super) fn exact_count(cell: &MetricCell) -> Option<u64> {
@@ -77,6 +73,7 @@ mod tests {
     use super::*;
     use crate::test_fixtures::{missing, ok};
     use dgxtop_core::metric::CanonicalUnit;
+    use dgxtop_core::view::CellState;
 
     #[test]
     fn unsupported_and_unreported_values_are_left_out() {

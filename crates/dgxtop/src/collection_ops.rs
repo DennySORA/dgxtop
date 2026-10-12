@@ -137,6 +137,7 @@ mod tests {
                 max_processes: 16,
                 max_process_gpu_links: 16,
             },
+            committed: Arc::default(),
         }
     }
 

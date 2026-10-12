@@ -304,6 +304,7 @@ mod tests {
                 "store.raw_candidate_seconds is retired and ignored (D-88); the next save leaves it out",
                 "store.max_query_scan_records is retired and ignored (D-90); the next save leaves it out",
                 "runtime.max_history_result_bytes is retired and ignored (D-90); the next save leaves it out",
+                "viewer.redline_threshold_percent is retired and ignored (D-105); the next save leaves it out",
             ]
         );
         let logger = MemoryLogger::default();

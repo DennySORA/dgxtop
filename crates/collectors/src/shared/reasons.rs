@@ -120,6 +120,8 @@ pub const FORMULA_GB10_CLUSTER_SUM: &str = "FORMULA_GB10_CLUSTER_SUM";
 pub const FORMULA_GB10_CLUSTER_MAX: &str = "FORMULA_GB10_CLUSTER_MAX";
 /// Power derived from an energy counter delta over the actual interval.
 pub const FORMULA_ENERGY_DELTA: &str = "FORMULA_ENERGY_DELTA";
+/// The host's total power: every CPU package's plus every GPU's (D-106).
+pub const FORMULA_HOST_POWER_TOTAL: &str = "FORMULA_HOST_POWER_TOTAL";
 
 // Suspect heuristics (diagnostics only, never invalidating).
 

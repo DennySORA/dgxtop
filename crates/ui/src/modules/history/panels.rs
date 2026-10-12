@@ -2,9 +2,11 @@
 //! a title over one strip per series, all on the window's time axis. The
 //! CPU and the memory (one strip each, against 100 % and the RAM total);
 //! the GPUs' utilization, memory in use, temperature and power (a strip per
-//! GPU, each against its own scale); the disk's read and write and the
-//! interface's receive and transmit rates (two strips on one scale, the
-//! tallest column of the pair, so their heights compare).
+//! GPU, each against its own scale), the power panel also leading with the
+//! host's total and each CPU package's power once the CPU's is read
+//! (D-106); the disk's read and write and the interface's receive and
+//! transmit rates (two strips on one scale, the tallest column of the pair,
+//! so their heights compare).
 
 use dgxtop_core::metric::CanonicalUnit;
 use dgxtop_core::view::{
@@ -71,7 +73,9 @@ impl<'a> Series<'a> {
             mean: chart.mean,
             peak: chart.peak,
             // The mean power times the time covered.
-            energy: (chart.kind == HistoryChartKind::GpuPower)
+            energy: chart
+                .kind
+                .is_power()
                 .then(|| Some(chart.mean? * nanos_to_seconds(chart.covered_ns?)))
                 .flatten(),
             state,
@@ -120,13 +124,16 @@ impl Panel<'_> {
     }
 }
 
-/// The GPU panels: their series and titles.
+/// The GPU panels: their series and titles; the power panel's title
+/// while only the GPUs' power is read.
 const GPU_PANELS: [(HistoryChartKind, &str); 4] = [
     (HistoryChartKind::GpuUtilization, "GPU utilization"),
     (HistoryChartKind::GpuMemory, "GPU memory"),
     (HistoryChartKind::GpuTemperature, "GPU temperature"),
     (HistoryChartKind::GpuPower, "GPU power"),
 ];
+/// The power panel's title once the host's power leads it (D-106).
+const POWER_TITLE: &str = "Power";
 
 /// A rate of a pair: its series, label and paint.
 type Rate = (HistoryChartKind, &'static str, Paint);
@@ -170,17 +177,23 @@ pub(super) fn panels(history: &HistoryView) -> Vec<Panel<'_>> {
         panels.push(single(title, series(memory), memory.scale_max));
     }
     for (kind, title) in GPU_PANELS {
-        let strips: Vec<Strip<'_>> = history
-            .charts
-            .iter()
-            .filter(|chart| chart.kind == kind)
-            .map(|chart| Strip {
-                label: gpu_label(&chart.subject),
-                series: series(chart),
-                scale: scale_or_peak(chart),
-                paint: Paint::Levels,
-            })
-            .collect();
+        let mut strips = if kind == HistoryChartKind::GpuPower {
+            host_power_strips(history)
+        } else {
+            Vec::new()
+        };
+        let title = if strips.is_empty() {
+            title
+        } else {
+            POWER_TITLE
+        };
+        strips.extend(
+            history
+                .charts
+                .iter()
+                .filter(|chart| chart.kind == kind)
+                .map(|chart| level_strip(gpu_label(&chart.subject), chart)),
+        );
         if !strips.is_empty() {
             panels.push(Panel {
                 title: title.to_owned(),
@@ -196,8 +209,43 @@ pub(super) fn panels(history: &HistoryView) -> Vec<Panel<'_>> {
     panels
 }
 
+/// A strip of `chart` labeled `label`, in the level colors of its scale.
+fn level_strip(label: String, chart: &HistoryChartView) -> Strip<'_> {
+    Strip {
+        label,
+        series: Series::of_chart(chart),
+        scale: scale_or_peak(chart),
+        paint: Paint::Levels,
+    }
+}
+
+/// The host's total power (`total`) and each CPU package's (`CPU`, or
+/// `CPU 0`, `CPU 1` on a host of several), which lead the power panel once
+/// the CPU's power is read (D-106); none before.
+fn host_power_strips(history: &HistoryView) -> Vec<Strip<'_>> {
+    let packages: Vec<&HistoryChartView> = history
+        .charts
+        .iter()
+        .filter(|chart| chart.kind == HistoryChartKind::CpuPower)
+        .collect();
+    let total = history
+        .charts
+        .iter()
+        .filter(|chart| chart.kind == HistoryChartKind::TotalPower)
+        .map(|chart| level_strip("total".to_owned(), chart));
+    let cpus = packages.iter().map(|chart| {
+        let label = if packages.len() == 1 {
+            "CPU".to_owned()
+        } else {
+            clean(&chart.subject)
+        };
+        level_strip(label, chart)
+    });
+    total.chain(cpus).collect()
+}
+
 /// The chart's fixed scale; without one (a GPU that reports no power
-/// limit), its peak, like a rate (D-41).
+/// limit, the host's and the CPU's power), its peak, like a rate (D-41).
 fn scale_or_peak(chart: &HistoryChartView) -> Option<f64> {
     chart
         .scale_max
@@ -321,6 +369,74 @@ mod tests {
         );
         assert_eq!(gpu_label("GPU 1 · NVIDIA GB10"), "GPU 1");
         assert_eq!(gpu_label("nameless"), "nameless");
+    }
+
+    /// Once the CPU's power is read the power panel leads with the host's
+    /// total and the CPU (D-106), each scaled to its peak, every strip with
+    /// its energy; until then it is the GPUs' power panel.
+    #[test]
+    fn the_power_panel_leads_with_the_total_and_the_cpu_once_read() {
+        let power_panel = |history: &HistoryView| -> (String, Vec<String>) {
+            let panels = panels(history);
+            let panel = panels
+                .iter()
+                .find(|panel| panel.title.ends_with("power") || panel.title == "Power")
+                .unwrap();
+            (
+                panel.title.clone(),
+                panel
+                    .strips
+                    .iter()
+                    .map(|strip| strip.label.clone())
+                    .collect(),
+            )
+        };
+        let mut history = history_view();
+        let gpus = vec!["GPU 0".to_owned(), "GPU 1".to_owned()];
+        assert_eq!(
+            power_panel(&history),
+            ("GPU power".to_owned(), gpus.clone())
+        );
+        let template = history.charts[0].clone();
+        let power = |kind, subject: &str, peak: f64| HistoryChartView {
+            kind,
+            subject: subject.to_owned(),
+            scale_max: None,
+            peak: Some(peak),
+            mean: Some(peak / 2.0),
+            covered_ns: Some(3_600 * 1_000_000_000),
+            ..template.clone()
+        };
+        history
+            .charts
+            .push(power(HistoryChartKind::TotalPower, "", 180.0));
+        history
+            .charts
+            .push(power(HistoryChartKind::CpuPower, "CPU 0", 45.0));
+        let (title, labels) = power_panel(&history);
+        assert_eq!(title, "Power");
+        assert_eq!(labels[..2], ["total".to_owned(), "CPU".to_owned()]);
+        assert_eq!(labels[2..], gpus[..]);
+        let panels = panels(&history);
+        let panel = panels.iter().find(|panel| panel.title == "Power").unwrap();
+        assert_eq!(panel.strips[0].scale, Some(180.0), "scaled to its peak");
+        // 90 W for an hour.
+        let energy = panel.strips[0].series.energy.unwrap();
+        assert!((energy - 324_000.0).abs() < 1e-6, "{energy}");
+        assert!(
+            panel
+                .strips
+                .iter()
+                .all(|strip| strip.series.energy.is_some())
+        );
+        // Several packages are named apart.
+        history
+            .charts
+            .push(power(HistoryChartKind::CpuPower, "CPU 1", 40.0));
+        assert_eq!(
+            power_panel(&history).1[..3],
+            ["total".to_owned(), "CPU 0".to_owned(), "CPU 1".to_owned()]
+        );
     }
 
     /// A power chart's energy is its mean over the time it holds (D-99):

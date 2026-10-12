@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use dgxtop_core::canonical::{
     AckStatus, CatalogSnapshot, CollectionBatch, CollectionLimits, CollectionPlan, CommitGuard,
-    GapRecord, PolicySnapshot, StoreAck,
+    CommittedSamples, GapRecord, PolicySnapshot, StoreAck,
 };
 use dgxtop_core::clock::{NANOS_PER_MILLI, NANOS_PER_SECOND};
 use dgxtop_core::config::{Config, SamplingConfig};
@@ -350,6 +350,10 @@ impl IngestionService {
                     .collect(),
                 now_boot_ns: now_ns,
                 limits: self.settings.limits,
+                committed: Arc::new(CommittedSamples::of(
+                    &snapshot,
+                    slot.collector.committed_metrics(),
+                )),
             };
             let batch_id = plan.batch_id;
             match self.collectors.try_dispatch(plan) {

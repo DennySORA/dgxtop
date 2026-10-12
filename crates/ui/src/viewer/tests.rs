@@ -9,8 +9,8 @@ use dgxtop_core::commands::ViewKind;
 use dgxtop_core::identity::ModuleId;
 use dgxtop_core::quality::SampleKind;
 use dgxtop_core::view::{
-    Banner, BannerLevel, DiskHistory, ModuleViews, OVERVIEW_GPU_CHART_ROWS, OverloadState,
-    ViewModel,
+    Banner, BannerLevel, CellState, DiskHistory, ModuleViews, OVERVIEW_GPU_CHART_ROWS,
+    OverloadState, ViewModel,
 };
 use ratatui::Frame;
 use ratatui::Terminal;
@@ -171,7 +171,7 @@ fn overview_follows_the_reference_layout_and_keeps_every_module_visible_when_wid
         "GPU 0 │ NVIDIA GB10 │",
         "GPU 1 │ NVIDIA GB10 │",
         // Parts that say different things are set apart (D-66).
-        "68°C │ 45.2 W · estimated │ 3.0/3.9 GHz",
+        "68°C │ ⚡ 45.2 W · estimated │ 3.0/3.9 GHz",
         "RAM 12.3 GiB / 64.0 GiB │ ■ OS 2.3 GiB",
         "[GPU] ■ other 10.0 GiB",
         "spark-01 │ 2x GPU │",
@@ -567,6 +567,33 @@ fn simulated_and_replay_values_are_tagged() {
         "{}",
         rendered.text()
     );
+}
+
+/// The host's total power follows its name in the header while it has a
+/// value, and is left out while it cannot be read (D-106).
+#[test]
+fn the_header_shows_the_total_power_only_while_it_is_read() {
+    let mut model = model(ViewKind::Overview);
+    let header = |model: &ViewModel| render(model, (200, 50)).rows[0].clone();
+    assert!(!header(&model).contains("total"), "{}", header(&model));
+    model.header.total_power = test_fixtures::ok(152.0, dgxtop_core::metric::CanonicalUnit::Watts);
+    assert!(
+        header(&model).contains("spark-01 │ ⚡ 152 W total │ 2x GPU"),
+        "{}",
+        header(&model)
+    );
+    for state in [
+        CellState::Stale,
+        CellState::Unavailable,
+        CellState::ReadFailed,
+    ] {
+        model.header.total_power.state = state;
+        assert!(
+            !header(&model).contains("total"),
+            "{state:?}: {}",
+            header(&model)
+        );
+    }
 }
 
 #[test]

@@ -52,7 +52,7 @@ pub struct RetiredConfigKey {
 }
 
 /// Configuration keys an earlier version wrote that this one ignores.
-pub const RETIRED_KEYS: [RetiredConfigKey; 3] = [
+pub const RETIRED_KEYS: [RetiredConfigKey; 4] = [
     // Nothing retains raw candidates since D-84.
     RetiredConfigKey {
         path: "store.raw_candidate_seconds",
@@ -66,6 +66,11 @@ pub const RETIRED_KEYS: [RetiredConfigKey; 3] = [
     RetiredConfigKey {
         path: "runtime.max_history_result_bytes",
         decision: "D-90",
+    },
+    // Level colors run from green at 0 % to red at 100 % since D-104.
+    RetiredConfigKey {
+        path: "viewer.redline_threshold_percent",
+        decision: "D-105",
     },
 ];
 
@@ -277,7 +282,10 @@ pub struct ViewerConfig {
     pub theme: Theme,
     pub enabled_modules: Vec<String>,
     pub network_max_visible: u32,
-    pub redline_threshold_percent: f64,
+    /// Retired (D-105): level colors run from green at 0 % to red at
+    /// 100 % (D-104), so no fill turns them red early.
+    #[serde(default, rename = "redline_threshold_percent", skip_serializing)]
+    retired_redline_threshold_percent: RetiredKey,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -391,6 +399,7 @@ impl Config {
             self.store.retired_raw_candidate_seconds,
             self.store.retired_max_query_scan_records,
             self.runtime.retired_max_history_result_bytes,
+            self.viewer.retired_redline_threshold_percent,
         ];
         RETIRED_KEYS
             .iter()
@@ -662,12 +671,6 @@ impl Config {
             range(viewer.network_max_visible, 1, 20),
             "viewer.network_max_visible",
             "must be 1..=20",
-        );
-        check(
-            viewer.redline_threshold_percent.is_finite()
-                && (0.0..=100.0).contains(&viewer.redline_threshold_percent),
-            "viewer.redline_threshold_percent",
-            "must be a finite number in 0..=100",
         );
 
         let queues = &self.queues;
@@ -1202,33 +1205,24 @@ pub fn map_legacy_config(legacy: &LegacyConfig, base: &Config) -> LegacyImportRe
         ),
     }
 
+    // Level colors no longer turn red early (D-104), so the redline has
+    // nowhere to go (D-105).
     match legacy.redline_threshold {
-        Some(threshold) if threshold.is_finite() && (0.0..=100.0).contains(&threshold) => {
-            candidate.viewer.redline_threshold_percent = threshold;
-            push(
-                "redline_threshold",
-                threshold.to_string(),
-                Some("viewer.redline_threshold_percent"),
-                Some(threshold.to_string()),
-                LegacyMappingStatus::Mapped,
-                "display warning only; not a data validity range",
-            );
-        }
         Some(threshold) => push(
             "redline_threshold",
             threshold.to_string(),
-            Some("viewer.redline_threshold_percent"),
             None,
-            LegacyMappingStatus::Rejected,
-            "outside 0..=100; default kept",
+            None,
+            LegacyMappingStatus::Unsupported,
+            "retired (D-105): level colors run from green at 0 % to red at 100 %; not imported",
         ),
         None => push(
             "redline_threshold",
             "absent".into(),
-            Some("viewer.redline_threshold_percent"),
+            None,
             None,
             LegacyMappingStatus::Absent,
-            "default kept",
+            "retired (D-105); nothing to import",
         ),
     }
 
@@ -1306,7 +1300,8 @@ mod tests {
             vec![
                 "store.raw_candidate_seconds",
                 "store.max_query_scan_records",
-                "runtime.max_history_result_bytes"
+                "runtime.max_history_result_bytes",
+                "viewer.redline_threshold_percent"
             ]
         );
         let text = reference.to_pretty_json().unwrap();
@@ -1326,12 +1321,20 @@ mod tests {
         ] {
             value["store"]["raw_candidate_seconds"] = retired.clone();
             value["store"]["max_query_scan_records"] = retired.clone();
-            value["runtime"]["max_history_result_bytes"] = retired;
+            value["runtime"]["max_history_result_bytes"] = retired.clone();
+            value["viewer"]["redline_threshold_percent"] = retired;
             let parsed = Config::from_json(&value.to_string()).unwrap();
             assert_eq!(parsed, reference);
         }
+        // The redline's range no longer exists either (D-105).
+        value["viewer"]["redline_threshold_percent"] = serde_json::json!(250.0);
+        assert!(Config::from_json(&value.to_string()).is_ok());
         assert_eq!(retired_by("runtime.max_history_result_bytes"), Some("D-90"));
         assert_eq!(retired_by("store.raw_candidate_seconds"), Some("D-88"));
+        assert_eq!(
+            retired_by("viewer.redline_threshold_percent"),
+            Some("D-105")
+        );
         assert_eq!(retired_by("store.max_history_points"), None);
     }
 
@@ -1347,6 +1350,12 @@ mod tests {
         ));
         let mut value: serde_json::Value = serde_json::from_str(REFERENCE_CONFIG_JSON).unwrap();
         value["store"]["max_history_result_bytes"] = serde_json::json!(65_536);
+        assert!(matches!(
+            Config::from_json(&value.to_string()),
+            Err(ConfigError::Parse { .. })
+        ));
+        let mut value: serde_json::Value = serde_json::from_str(REFERENCE_CONFIG_JSON).unwrap();
+        value["store"]["redline_threshold_percent"] = serde_json::json!(80.0);
         assert!(matches!(
             Config::from_json(&value.to_string()),
             Err(ConfigError::Parse { .. })
@@ -1579,6 +1588,14 @@ mod tests {
                 .iter()
                 .any(|mapping| mapping.status == LegacyMappingStatus::Unsupported)
         );
+        // The redline is retired (D-105): reported, never imported.
+        let redline = report
+            .mappings
+            .iter()
+            .find(|mapping| mapping.legacy_field == "redline_threshold")
+            .unwrap();
+        assert_eq!(redline.status, LegacyMappingStatus::Unsupported);
+        assert_eq!(redline.target_field, None);
         assert!(report.candidate.validate().is_ok());
     }
 

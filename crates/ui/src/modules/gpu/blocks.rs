@@ -43,7 +43,7 @@ use crate::format::{
     CellDetail, clean, fixed, format_duration_ms, format_energy, format_percent, format_si_rate,
     value_text,
 };
-use crate::modules::common::cell_spans;
+use crate::modules::common::{cell_spans, temperature_spans};
 use crate::num::saturate_u16;
 use crate::registry::DisplayContext;
 
@@ -167,6 +167,17 @@ impl CardInfo<'_> {
 
     fn metric(&self, key: &'static str, cell: &MetricCell) -> Option<BlockRow> {
         Some(BlockRow::new(key, self.value(cell)?))
+    }
+
+    /// A row of the GPU's temperature now, in its level color (D-104); its
+    /// fixed thresholds stay plain.
+    fn temperature(&self, key: &'static str, cell: &MetricCell) -> Option<BlockRow> {
+        reported(cell).then(|| {
+            BlockRow::new(
+                key,
+                temperature_spans(cell, CellDetail::GLANCE, self.context),
+            )
+        })
     }
 
     /// A row of the card's details.
@@ -484,7 +495,10 @@ impl CardInfo<'_> {
             let rank = |cell: &MetricCell| cell.value_f64().unwrap_or(f64::INFINITY);
             rank(left).total_cmp(&rank(right))
         });
-        let mut rows = vec![self.metric("temperature", &card.temperature), self.fans()];
+        let mut rows = vec![
+            self.temperature("temperature", &card.temperature),
+            self.fans(),
+        ];
         rows.extend(
             thresholds
                 .into_iter()
@@ -768,6 +782,29 @@ mod tests {
             .iter()
             .find(|text| text.starts_with(&format!("{title}: ")))
             .map_or("", String::as_str)
+    }
+
+    /// The Thermal block writes the temperature now in its level color
+    /// (D-104) and the device's fixed thresholds plainly.
+    #[test]
+    fn the_temperature_now_takes_its_level_color_and_thresholds_stay_plain() {
+        let context = display_context();
+        let card = gpu_view().cards.remove(0);
+        let shown = blocks(&card, None, &context);
+        let thermal = shown.iter().find(|block| block.title == "Thermal").unwrap();
+        let style_of = |key: &str| {
+            thermal
+                .rows
+                .iter()
+                .find(|row| row.key == key)
+                .map(|row| row.cells[0][0].style)
+                .unwrap()
+        };
+        assert_eq!(
+            style_of("temperature").fg,
+            Some(context.theme.temperature_color(71.0))
+        );
+        assert_eq!(style_of("slowdown"), context.theme.text_style());
     }
 
     #[test]

@@ -60,8 +60,8 @@ const RESULT_GRACE_NS: u64 = 100 * NANOS_PER_MILLI;
 /// merges them into its columns).
 pub(crate) const MIN_DISPLAY_POINTS: u32 = 60;
 /// Charts one session queries; the presentation picks at most this many:
-/// the host's six and four for each of eight GPUs (D-50).
-pub(crate) const MAX_CHARTS: usize = 38;
+/// the host's nine (D-50, D-106) and four for each of eight GPUs.
+pub(crate) const MAX_CHARTS: usize = 41;
 /// Series one session summarizes: four for each of eight GPUs.
 pub(crate) const MAX_STAT_SERIES: usize = 32;
 /// Windows of the statistics (D-48).
@@ -1093,7 +1093,10 @@ fn summaries_of(stats: &[StatState], active: bool) -> Vec<HistoryWindowSummary> 
                 mean: bucket.and_then(OverviewBucket::mean),
                 peak: bucket.and_then(OverviewBucket::peak),
                 covered_ns,
-                integral: (stat.spec.kind == HistoryChartKind::GpuPower)
+                integral: stat
+                    .spec
+                    .kind
+                    .is_power()
                     .then_some(bucket)
                     .flatten()
                     .map(|bucket| bucket.integral().unwrap_or(0.0)),

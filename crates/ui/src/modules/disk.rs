@@ -285,12 +285,15 @@ fn row_cells(row: &DiskRow<'_>, context: &DisplayContext) -> [TableCell; 11] {
     ]
 }
 
-/// The drive's temperature, or blank when it reports none: a drive without
-/// a sensor is not an error and never reads 0.
+/// The drive's temperature in its level color (D-104), or blank when it
+/// reports none: a drive without a sensor is not an error and never
+/// reads 0.
 fn temperature_cell(device: &DiskDeviceView, context: &DisplayContext) -> TableCell {
     let cell = &device.temperature;
     if cell.state.has_value() && cell.value.is_some() {
-        metric_table_cell(cell, &context.theme, 5)
+        let mut table_cell = metric_table_cell(cell, &context.theme, 5);
+        table_cell.style = context.theme.temperature_style(cell);
+        table_cell
     } else {
         TableCell::new("", context.theme.muted_style())
     }
@@ -363,6 +366,17 @@ mod tests {
         for value in ["ext4", "988 GiB", "900 GiB", "0.4 ms", "59°C"] {
             assert!(row.contains(value), "{value} missing in {row}");
         }
+    }
+
+    /// A drive's temperature is written in its level color (D-104).
+    #[test]
+    fn a_drive_temperature_takes_its_level_color() {
+        let context = test_fixtures::display_context();
+        let disk = disk_view();
+        let rows = table_rows(&disk);
+        let cell = &row_cells(&rows[0], &context)[10];
+        assert_eq!(cell.text, "59°C");
+        assert_eq!(cell.style.fg, Some(context.theme.temperature_color(59.0)));
     }
 
     /// A drive without a temperature leaves the cell blank, never 0 or a

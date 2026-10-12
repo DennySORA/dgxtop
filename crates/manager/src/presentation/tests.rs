@@ -6,10 +6,13 @@ use std::sync::Arc;
 use dgxtop_core::action::Signal;
 use dgxtop_core::commands::{SortKey, ViewKind};
 use dgxtop_core::config::BUILTIN_MODULES;
+use dgxtop_core::metric::{CanonicalUnit, ids};
 use dgxtop_core::naming::attributes;
 use dgxtop_core::observation::EntityKind;
 use dgxtop_core::testing::metric_key;
-use dgxtop_core::view::{BannerLevel, ConfirmationView, HistoryPointView, HistoryView, ViewModel};
+use dgxtop_core::view::{
+    BannerLevel, CellState, ConfirmationView, HistoryPointView, HistoryView, ViewModel,
+};
 
 use super::testkit::{
     Fixture, NOW, candidate, entity_record, explanation_for, gpu_link, history_chart, process_key,
@@ -215,19 +218,28 @@ fn confirmation() -> ConfirmationView {
     }
 }
 
-/// D-87: the header carries the effective redline, so a configuration
-/// applied at runtime recolors the next frame's gauges.
+/// D-106: the header carries the host's total power on every view, and
+/// says why it has none while the CPU or a GPU does not report.
 #[test]
-fn the_header_follows_the_effective_redline() {
+fn the_header_carries_the_total_power() {
     let mut fixture = Fixture::new();
     let model = build_view_model_measured(&fixture.context()).0;
-    assert_eq!(
-        model.header.redline_threshold_percent,
-        fixture.effective.viewer.redline_threshold_percent
+    assert_eq!(model.header.total_power.value, None);
+    assert_eq!(model.header.total_power.state, CellState::Unavailable);
+    fixture.add(
+        "cpu",
+        sample(ids::HOST_POWER_TOTAL, "host", "host").f64(152.5),
     );
-    fixture.effective.viewer.redline_threshold_percent = 92.5;
-    let applied = build_view_model_measured(&fixture.context()).0;
-    assert_eq!(applied.header.redline_threshold_percent, 92.5);
+    for view in ViewKind::ALL {
+        fixture.session.view = view;
+        let model = build_view_model_measured(&fixture.context()).0;
+        assert_eq!(
+            model.header.total_power.value_f64(),
+            Some(152.5),
+            "{view:?}"
+        );
+        assert_eq!(model.header.total_power.unit, CanonicalUnit::Watts);
+    }
 }
 
 #[test]

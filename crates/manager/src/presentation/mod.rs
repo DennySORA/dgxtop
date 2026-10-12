@@ -45,7 +45,8 @@ use dgxtop_core::canonical::{CatalogSnapshot, ImmutableSnapshot};
 use dgxtop_core::commands::ViewKind;
 use dgxtop_core::config::{BUILTIN_MODULES, Config, ValueOrigin};
 use dgxtop_core::identity::ModuleId;
-use dgxtop_core::naming::adapters;
+use dgxtop_core::metric::ids;
+use dgxtop_core::naming::{adapters, entity};
 use dgxtop_core::ports::TrendReader;
 use dgxtop_core::process_model::ProcessHistoryModel;
 use dgxtop_core::view::{
@@ -117,7 +118,7 @@ pub struct PresentationContext<'a> {
 }
 
 /// Builds the header shown on every view.
-pub fn build_header(context: &PresentationContext<'_>) -> HeaderView {
+fn build_header(context: &PresentationContext<'_>, reader: &MetricReader<'_>) -> HeaderView {
     let effective = context.settings.effective;
     let healthy = context
         .hosts
@@ -142,7 +143,7 @@ pub fn build_header(context: &PresentationContext<'_>) -> HeaderView {
         hosts_total: u32::try_from(context.hosts.len()).unwrap_or(u32::MAX),
         read_only: effective.actions.read_only || !effective.actions.enabled,
         theme: effective.viewer.theme,
-        redline_threshold_percent: effective.viewer.redline_threshold_percent,
+        total_power: reader.cell(ids::HOST_POWER_TOTAL, entity::HOST, entity::SCOPE_HOST),
     }
 }
 
@@ -179,7 +180,7 @@ pub fn build_view_model_measured(context: &PresentationContext<'_>) -> (ViewMode
         frame_revision: context.frame_revision,
         snapshot_revision: context.snapshot.revision,
         generated_boot_ns: context.now_boot_ns,
-        header: build_header(context),
+        header: build_header(context, &reader),
         session: context.session.clone(),
         modules: build_modules(context, &plan, &inputs),
         banners: banners::build_banners(context, &facts),

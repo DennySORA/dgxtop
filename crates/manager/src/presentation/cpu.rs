@@ -46,6 +46,7 @@ pub(crate) fn build_cpu_view(
         cores,
         package_temperatures: temperature_rows(reader),
         soc_temperatures: labeled_rows(reader, ids::SOC_TEMPERATURE),
+        package_power: labeled_rows(reader, ids::CPU_POWER_PACKAGE),
         power: power_rows(reader),
         load: [
             host(ids::CPU_LOAD_1M),
@@ -265,17 +266,14 @@ fn temperature_rows(reader: &MetricReader<'_>) -> Vec<LabeledCell> {
         .collect()
 }
 
-/// Package power first, then platform, then CPU cluster components.
+/// The platform's power, then the CPU cluster components a package's may
+/// be derived from (GB10, D-10).
 fn power_rows(reader: &MetricReader<'_>) -> Vec<LabeledCell> {
-    [
-        ids::CPU_POWER_PACKAGE,
-        ids::CPU_POWER_PLATFORM,
-        ids::CPU_POWER_CLUSTER,
-    ]
-    .iter()
-    .flat_map(|metric| labeled_rows(reader, metric))
-    .take(MAX_LABELED_ROWS)
-    .collect()
+    [ids::CPU_POWER_PLATFORM, ids::CPU_POWER_CLUSTER]
+        .iter()
+        .flat_map(|metric| labeled_rows(reader, metric))
+        .take(MAX_LABELED_ROWS)
+        .collect()
 }
 
 /// One labeled row per reported scope ("package 0", "SoC", "platform"),

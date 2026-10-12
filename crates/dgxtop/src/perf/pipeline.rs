@@ -254,6 +254,9 @@ impl ReplayPipeline {
             inputs,
             now_boot_ns: self.clock.now_boot_ns(),
             limits: self.limits,
+            // The benches time collection alone and commit no snapshot
+            // between jobs, so a derivation across domains reads nothing.
+            committed: Arc::default(),
         }
     }
 

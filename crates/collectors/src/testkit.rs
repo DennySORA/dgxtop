@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use dgxtop_core::canonical::{
     CanonicalValue, CatalogSnapshot, CollectionBatch, CollectionLimits, CollectionPlan,
-    CollectorState, PolicySnapshot,
+    CollectorState, CommittedSamples, PolicySnapshot,
 };
 use dgxtop_core::identity::{
     AdapterId, CollectorId, EntityId, MetricKey, OriginIdentity, ProfileId, ReadGroup, SourceId,
@@ -77,6 +77,7 @@ pub(crate) struct PlanBuilder {
     state_revision: u64,
     inputs: Vec<Arc<IngressBatch>>,
     limits: CollectionLimits,
+    committed: CommittedSamples,
 }
 
 impl PlanBuilder {
@@ -96,6 +97,7 @@ impl PlanBuilder {
             state_revision: 0,
             inputs: Vec::new(),
             limits: limits(),
+            committed: CommittedSamples::default(),
         }
     }
 
@@ -133,6 +135,12 @@ impl PlanBuilder {
 
     pub fn limits(mut self, limits: CollectionLimits) -> Self {
         self.limits = limits;
+        self
+    }
+
+    /// What the latest snapshot holds of other domains' metrics (D-106).
+    pub fn committed(mut self, committed: CommittedSamples) -> Self {
+        self.committed = committed;
         self
     }
 
@@ -174,6 +182,7 @@ impl PlanBuilder {
             inputs: self.inputs,
             now_boot_ns: self.now,
             limits: self.limits,
+            committed: Arc::new(self.committed),
         }
     }
 }

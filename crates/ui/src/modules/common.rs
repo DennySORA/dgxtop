@@ -3,7 +3,7 @@
 
 use dgxtop_core::identity::{EntityId, ModuleId, ProcessKey};
 use dgxtop_core::metric::CanonicalUnit;
-use dgxtop_core::view::{MetricCell, ViewModel};
+use dgxtop_core::view::{CellState, MetricCell, ViewModel};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -257,6 +257,52 @@ pub(crate) fn cell_spans(
         spans.push(Span::styled(annotation, context.theme.label_style()));
     }
     spans
+}
+
+/// [`cell_spans`] of a temperature: a value read as it should be is
+/// written in the level color of its share of 100 °C (D-104); a fallback,
+/// stale, conflicting or missing one keeps the tone that says so.
+pub(crate) fn temperature_spans(
+    cell: &MetricCell,
+    detail: CellDetail,
+    context: &DisplayContext,
+) -> Vec<Span<'static>> {
+    let mut spans = cell_spans(cell, detail, context);
+    if let Some(first) = spans.first_mut() {
+        first.style = context.theme.temperature_style(cell);
+    }
+    spans
+}
+
+/// `label value · annotations` of a temperature ([`temperature_spans`]).
+pub(crate) fn labeled_temperature(
+    label: &str,
+    cell: &MetricCell,
+    detail: CellDetail,
+    context: &DisplayContext,
+) -> Vec<Span<'static>> {
+    let mut spans = vec![Span::styled(
+        format!("{label} "),
+        context.theme.label_style(),
+    )];
+    spans.extend(temperature_spans(cell, detail, context));
+    spans
+}
+
+/// `⚡` before a power, in the theme's amber, as every headline writes it.
+pub(crate) fn power_icon(context: &DisplayContext) -> Span<'static> {
+    Span::styled("⚡", Style::new().fg(context.theme.warning))
+}
+
+/// Whether a line lists `cell`: not when the device does not support it or
+/// reports nothing for it (D-56); a read that failed still shows its state.
+pub(crate) fn reported(cell: &MetricCell) -> bool {
+    cell.value.is_some() || !matches!(cell.state, CellState::Unsupported | CellState::Unavailable)
+}
+
+/// Whether `cell` holds a current value to show.
+pub(crate) fn has_value(cell: &MetricCell) -> bool {
+    cell.state.has_value() && cell.value.is_some()
 }
 
 /// `label value · annotations` spans.
@@ -903,6 +949,9 @@ fn position_columns(
 pub(crate) struct TableCell {
     pub text: String,
     pub style: Style,
+    /// Parts of `text` in a style of their own: the display column they
+    /// start at, their width and their style.
+    pub accents: Vec<(usize, usize, Style)>,
 }
 
 impl TableCell {
@@ -910,6 +959,23 @@ impl TableCell {
         Self {
             text: text.into(),
             style,
+            accents: Vec::new(),
+        }
+    }
+
+    /// A cell written in `style` whose `parts` follow one another, each
+    /// part in the style given with it.
+    pub fn of_parts(parts: Vec<(String, Style)>, style: Style) -> Self {
+        let mut text = String::new();
+        let mut accents = Vec::new();
+        for (part, part_style) in parts {
+            accents.push((display_width(&text), display_width(&part), part_style));
+            text.push_str(&part);
+        }
+        Self {
+            text,
+            style,
+            accents,
         }
     }
 }
@@ -955,9 +1021,39 @@ pub(crate) fn draw_table_row(
     }
     for column in columns {
         if let Some(cell) = cells.get(column.spec) {
-            let style = row_style.map_or(cell.style, |row| cell.style.patch(row));
-            draw_aligned(buffer, row, column, &cell.text, style);
+            let patched = |style: Style| row_style.map_or(style, |row| style.patch(row));
+            draw_aligned(buffer, row, column, &cell.text, patched(cell.style));
+            draw_accents(buffer, row, column, cell, patched);
         }
+    }
+}
+
+/// Restyles the parts of `cell` that have a style of their own, when the
+/// whole text fits its column (a cut text keeps the cell's style).
+fn draw_accents(
+    buffer: &mut Buffer,
+    row: Rect,
+    column: &FittedColumn,
+    cell: &TableCell,
+    patched: impl Fn(Style) -> Style,
+) {
+    let text_width = display_width(&cell.text);
+    let x = row.x.saturating_add(column.x);
+    if cell.accents.is_empty() || text_width > usize::from(column.width) || x >= row.right() {
+        return;
+    }
+    let end = x.saturating_add(column.width).min(row.right());
+    let start = match column.align {
+        Align::Left => x,
+        Align::Right => end.saturating_sub(saturate_u16(text_width)),
+    };
+    for (offset, width, style) in &cell.accents {
+        let left = start.saturating_add(saturate_u16(*offset)).min(end);
+        let right = left.saturating_add(saturate_u16(*width)).min(end);
+        buffer.set_style(
+            Rect::new(left, row.y, right.saturating_sub(left), 1),
+            patched(*style),
+        );
     }
 }
 
@@ -1010,6 +1106,83 @@ mod tests {
         (0..buffer.area.width)
             .map(|x| buffer[(x, y)].symbol())
             .collect()
+    }
+
+    /// A temperature read as it should be is written in the level color
+    /// of its share of 100 °C (D-104); a stale or missing one keeps the
+    /// tone that says so.
+    #[test]
+    fn a_temperature_is_written_in_its_level_color() {
+        let context = display_context();
+        let theme = &context.theme;
+        let hot = ok(83.0, dgxtop_core::metric::CanonicalUnit::DegC);
+        let spans = temperature_spans(&hot, CellDetail::GLANCE, &context);
+        assert_eq!(spans[0].content, "83°C");
+        assert_eq!(spans[0].style.fg, Some(theme.temperature_color(83.0)));
+        assert_ne!(
+            spans[0].style.fg,
+            Some(theme.gauge_high),
+            "red only at 100 °C"
+        );
+        let stale =
+            crate::test_fixtures::stale(dgxtop_core::metric::CanonicalUnit::DegC, 83.0, 9_000);
+        let spans = temperature_spans(&stale, CellDetail::GLANCE, &context);
+        assert_eq!(
+            spans[0].style,
+            theme.tone_style(crate::format::CellTone::Stale)
+        );
+        let gone = missing(
+            dgxtop_core::metric::CanonicalUnit::DegC,
+            CellState::ReadFailed,
+        );
+        let spans = labeled_temperature("temp", &gone, CellDetail::GLANCE, &context);
+        assert_eq!(
+            spans[1].style,
+            theme.tone_style(crate::format::CellTone::Missing)
+        );
+    }
+
+    /// The parts of a table cell keep their own styles where the text
+    /// lands in its column, unless the text had to be cut.
+    #[test]
+    fn a_table_cell_draws_its_parts_in_their_styles() {
+        let red = Style::new().fg(Color::Rgb(225, 70, 70));
+        let green = Style::new().fg(Color::Rgb(90, 200, 120));
+        let cell = TableCell::of_parts(
+            vec![
+                ("45°C".to_owned(), green),
+                (" / ".to_owned(), Style::new()),
+                ("99°C".to_owned(), red),
+            ],
+            Style::new(),
+        );
+        assert_eq!(cell.text, "45°C / 99°C");
+        let draw = |width: u16| {
+            let column = FittedColumn {
+                spec: 0,
+                x: 0,
+                width,
+                align: Align::Right,
+                separated: false,
+            };
+            render_area(16, 1, |frame, row| {
+                draw_table_row(
+                    frame.buffer_mut(),
+                    row,
+                    &[column],
+                    std::slice::from_ref(&cell),
+                    None,
+                );
+            })
+        };
+        let fitted = draw(14);
+        assert_eq!(row_text(&fitted, 0), "   45°C / 99°C  ");
+        assert_eq!(fitted[(3, 0)].fg, green.fg.unwrap());
+        assert_eq!(fitted[(6, 0)].fg, green.fg.unwrap());
+        assert_eq!(fitted[(10, 0)].fg, red.fg.unwrap());
+        assert_eq!(fitted[(13, 0)].fg, red.fg.unwrap());
+        let cut = draw(6);
+        assert!((0..6).all(|x| cut[(x, 0)].fg != red.fg.unwrap()));
     }
 
     #[test]

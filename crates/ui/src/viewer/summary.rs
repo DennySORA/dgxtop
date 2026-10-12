@@ -19,6 +19,11 @@ fn value(cell: &MetricCell, palette: &ThemePalette) -> Span<'static> {
     Span::styled(value_text(cell), palette.tone_style(cell_tone(cell)))
 }
 
+/// A temperature in its level color (D-104).
+fn temperature(cell: &MetricCell, palette: &ThemePalette) -> Span<'static> {
+    Span::styled(value_text(cell), palette.temperature_style(cell))
+}
+
 fn label(text: impl Into<String>, palette: &ThemePalette) -> Span<'static> {
     Span::styled(text.into(), palette.title_style())
 }
@@ -62,11 +67,15 @@ fn cpu_lines(model: &ViewModel, palette: &ThemePalette, narrow: bool) -> Vec<Lin
         return vec![no_data("CPU", palette)];
     };
     let mut head = vec![label("CPU ", palette), value(&cpu.total, palette)];
-    if let Some(temperature) = cpu.package_temperatures.first() {
+    if let Some(sensor) = cpu.package_temperatures.first() {
         head.push(sep(" · ", palette));
-        head.push(value(&temperature.cell, palette));
+        head.push(temperature(&sensor.cell, palette));
     }
-    if let Some(power) = cpu.power.first() {
+    if let Some(power) = cpu
+        .package_power
+        .first()
+        .filter(|power| power.cell.state.has_value() && power.cell.value.is_some())
+    {
         head.push(sep(" · ", palette));
         head.push(value(&power.cell, palette));
     }
@@ -97,7 +106,7 @@ fn gpu_lines(model: &ViewModel, palette: &ThemePalette, narrow: bool) -> Vec<Lin
                 label(format!("{} ", clean(&card.label)), palette),
                 value(&card.utilization, palette),
                 sep(" · ", palette),
-                value(&card.temperature, palette),
+                temperature(&card.temperature, palette),
                 sep(" · ", palette),
                 value(&card.power_draw, palette),
             ];
@@ -317,6 +326,23 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect()
+    }
+
+    /// The summary writes temperatures in their level colors too (D-104).
+    #[test]
+    fn temperatures_take_their_level_colors() {
+        let model = test_fixtures::view_model(ViewKind::Overview, 1);
+        let palette = ThemePalette::default();
+        let lines = summary_lines(&model, &palette, 120);
+        for celsius in [68.0, 71.0] {
+            let text = format!("{celsius:.0}°C");
+            let span = lines
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .find(|span| span.content == text)
+                .unwrap_or_else(|| panic!("{text} missing"));
+            assert_eq!(span.style.fg, Some(palette.temperature_color(celsius)));
+        }
     }
 
     #[test]

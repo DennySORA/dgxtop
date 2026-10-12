@@ -220,13 +220,7 @@ fn render_bands(
         for (column, &position) in members.iter().enumerate() {
             let x = area.x + layout.panel_offset(saturate_u16(column));
             let panel_area = Rect::new(x, area.y, layout.panel_width, area.height);
-            render_panel(
-                frame,
-                panel_area,
-                &panels[position],
-                (layout.rows_of_strip(band), window),
-                context,
-            );
+            render_panel(frame, panel_area, &panels[position], window, context);
             for strip in &panels[position].strips {
                 output.label(format!(
                     "history {}: {}",
@@ -238,12 +232,15 @@ fn render_bands(
     }
 }
 
-/// A panel's title rule, then its strips, `strip_rows` rows each.
+/// A panel's title rule, then its strips sharing the rows under it: the
+/// band's strip height each, and more for a panel of fewer strips than the
+/// other panel of its band (the power panel leads with the host's power,
+/// D-106), so no rows stay blank under it.
 fn render_panel(
     frame: &mut Frame<'_>,
     area: Rect,
     panel: &Panel<'_>,
-    (strip_rows, window): (u16, Window),
+    window: Window,
     context: &DisplayContext,
 ) {
     let mut rows = RowCursor::new(area);
@@ -260,7 +257,8 @@ fn render_panel(
         .is_rate()
         .then(|| tallest_column(&panel.strips, window, plot_width(area.width)))
         .flatten();
-    for strip in &panel.strips {
+    let shares = strip_shares(rows.remaining(), panel.strips.len());
+    for (strip, strip_rows) in panel.strips.iter().zip(shares) {
         let Some(strip_area) = rows.take(strip_rows) else {
             break;
         };
@@ -270,6 +268,16 @@ fn render_panel(
         };
         render_strip(frame, strip_area, (&strip, alone), window, context);
     }
+}
+
+/// `rows` shared by `strips` strips, the first ones a row taller while
+/// some are left over.
+fn strip_shares(rows: u16, strips: usize) -> Vec<u16> {
+    let count = saturate_u16(strips).max(1);
+    let (each, extra) = (rows / count, rows % count);
+    (0..count)
+        .map(|index| each + u16::from(index < extra))
+        .collect()
 }
 
 /// `GPU power ──────────`: the title, why a query failed, and a rule to
@@ -453,6 +461,19 @@ fn utc_i64(utc_ns: u64) -> i64 {
 mod tests {
     use super::*;
     use crate::test_fixtures::history_view;
+
+    /// A panel of fewer strips than its band's other panel shares the
+    /// band's rows among them (D-106): no blank rows under it, the first
+    /// strips a row taller while rows are left over.
+    #[test]
+    fn strips_share_the_rows_under_their_title() {
+        assert_eq!(strip_shares(9, 3), vec![3, 3, 3]);
+        assert_eq!(strip_shares(9, 1), vec![9]);
+        assert_eq!(strip_shares(10, 3), vec![4, 3, 3]);
+        assert_eq!(strip_shares(11, 3), vec![4, 4, 3]);
+        assert_eq!(strip_shares(0, 2), vec![0, 0]);
+        assert_eq!(strip_shares(4, 0), vec![4]);
+    }
 
     fn draw_runs(
         view: Option<dgxtop_core::view::ProcessHistoryView>,
