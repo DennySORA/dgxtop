@@ -4,8 +4,8 @@
 
 **NVIDIA DGX Spark のために作ったターミナル GPU モニター**
 
-すべての GPU、それを使うプロセス、マシン全体を 1 画面で。<br>
-再起動しても履歴は残ります。NVIDIA GPU を搭載したどの Linux マシンでも動きます。
+すべての GPU、ジョブごとのメモリ使用量、マシン全体を 1 画面で。<br>
+GPU ジョブは開始から終了まで記録します。NVIDIA GPU を搭載したどの Linux マシンでも動きます。
 
 [English](../README.md) · [繁體中文](README.zh-TW.md) · [プロジェクトページ](https://dennysora.me/ja/projects/tools/dgxtop/)
 
@@ -14,9 +14,9 @@
 [![Rust](https://img.shields.io/badge/rust-1.92.0-orange.svg)](../rust-toolchain.toml)
 [![CI](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml/badge.svg)](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml)
 
-<img src="images/screenshots/dgx-spark-overview.png" alt="DGX Spark 上の dgxtop の Overview：CPU とメモリ、使用率 92% の GB10 GPU と RAM バー、ディスクとネットワークの表、GPU プロセス表" width="100%">
+<img src="images/screenshots/dgx-spark-overview.png" alt="DGX Spark 上の dgxtop の Overview：CPU、システムと色分けされた 2 つの GPU プロセスに分かれたユニファイドメモリ、GB10 GPU、ディスクとネットワークの表、GPU プロセス表" width="100%">
 
-<sub>DGX Spark の Overview。GB10 は CPU とメモリを共有しているため、GPU プロセスが使う RAM をシステムメモリの中に描きます。</sub>
+<sub>DGX Spark の Overview。GB10 は CPU とメモリを共有しているため、RAM バーにはシステムの分と、GPU プロセスごとの分がそれぞれの色で表示されます。</sub>
 
 </div>
 
@@ -28,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | 
 
 x86_64 または aarch64 の Linux で、glibc 2.34 以降（Ubuntu 22.04、Debian 12、RHEL 9 以降）。DGX Spark も含みます。WSL 2 では Linux 版が動きます。GPU の値には NVIDIA ドライバーが必要で、ない場合も CPU、メモリ、ディスク、ネットワークは表示します。WSL 1、musl、macOS、Windows には対応していません。
 
-インストーラーは CPU に合ったビルドを選び、リリースの `SHA256SUMS` で検証してから `~/.local/bin` にインストールします。以前のバージョンは残り、`./install.sh --rollback` で戻せます。特定のリリースを入れるには、`bash` の後ろに `-s -- --version v2.0.2` を付けます。
+インストーラーは CPU に合ったビルドを選び、リリースの `SHA256SUMS` で検証してから `~/.local/bin` にインストールします。以前のバージョンは残り、`./install.sh --rollback` で戻せます。特定のリリースを入れるには、`bash` の後ろに `-s -- --version v2.1.0` を付けます。
 
 Rust 1.92.0（`rust-toolchain.toml` で固定）を使ってソースからビルドすることもできます：
 
@@ -41,101 +41,118 @@ cargo build --release --locked
 
 ## 機能
 
-htop は CPU が中心で、nvtop や nvidia-smi は見ている間だけ GPU を表示します。dgxtop は GPU を中心に、マシン全体を並べて表示し、履歴も残します。
+htop は CPU が中心で、nvtop や nvidia-smi は見ている間だけ GPU を表示します。dgxtop は GPU を中心に、どのジョブが GPU メモリをどれだけ使っているかを示し、すべての GPU ジョブとマシン全体を記録します。
 
-- **すべての GPU をひと目で。** 各 GPU の使用率、メモリ、温度、電力、クロック、ファンをライブグラフ付きで表示します。
+- **すべての GPU をひと目で。** 各 GPU の使用率、メモリ、温度、電力、クロック、ファンをライブグラフ付きで表示します。ゲージは 50% 未満では緑で、レッドライン（既定 80%）に近づくにつれて橙から赤に変わります。
+- **プロセスごとのメモリ。** GPU メモリを最も多く使う 8 つのプロセスにはそれぞれ色が付き、メモリバー、グラフ、プロセス表で同じ色を使うので、どのジョブがどれだけ使っているかがひと目でわかります。色はプロセス名から決まるため、ジョブや dgxtop を再起動しても同じ色のままです。
+- **実行内容で名前を付ける。** `python -m vllm.entrypoints.openai.api_server` は `vllm.api_server`、`ComfyUI` フォルダーで実行した `python main.py` は `ComfyUI/main` と表示され、`python3` にはなりません。
+- **GPU プロセス。** GPU を使うすべてのプロセスを、GPU、種別（計算またはグラフィックス）、GPU 使用率、GPU メモリ、CPU、RAM とともに表示します。任意の列で並べ替え、GPU や名前で絞り込み、確認のうえで `K`（SIGTERM）または `F9`（SIGKILL）でプロセスを終了できます。
+- **Process History。** すべての GPU プロセスを、開始から終了までの 1 回の実行として記録します：実行時間、GPU メモリと RAM のピーク、GPU と CPU の使用率、そして終わり方（終了コードでの終了、シグナルによる終了、dgxtop からの終了、おそらく OOM killer、または実行中）。実行を開くと、完全なコマンドライン、作業フォルダー、そして CPU、メモリ、GPU、スレッド、開いているファイル、ディスク、ネットワークのグラフを表示します。
+- **Overview History。** CPU、メモリ、各 GPU の使用率・メモリ・温度・電力、ディスク、ネットワークを、ローカル時刻にそろえた 1 分から 24 時間のバーで表示します。すべてのグラフに現在値、平均、最大値があり、各 GPU の平均、ピーク、消費電力量も表示します。
 - **GPU の詳細。** 1 台ずつ表示します：
-  - パフォーマンスステートとスロットルの理由、クロック
+  - パフォーマンスステート、スロットルの理由とスロットルされた時間、クロック
   - メモリとメモリバス、PCIe リンクと転送量、NVLink-C2C
-  - 温度の上限、電力と消費電力量
-  - CUDA とドライバーのバージョン
-  - NUMA と CPU アフィニティ、P2P 経路、デバイスとファームウェア
+  - 温度の上限、ファン、電力上限と消費電力量
+  - CUDA、ドライバー、NVML、Linux カーネルのバージョン
+  - デバイス、PCI とファームウェア、NUMA と CPU アフィニティ、P2P 経路
 
   GPU が報告しない値は行を作りません。
-- **GPU プロセス。** GPU を使うすべてのプロセスを、GPU、種別（計算またはグラフィックス）、GPU メモリ、CPU、RAM とともに表示します。プロセスは実行ファイル名だけでなく、実行している内容で名前を付けます：`python -m vllm.entrypoints.openai.api_server` は `vllm.api_server`、`ComfyUI` フォルダで実行した `python main.py` は `ComfyUI/main` と表示します。GPU や名前で絞り込み、任意の列で並べ替え、確認のうえでプロセスを終了できます。GPU メモリを最も多く使う 8 つのプロセスにはそれぞれ色が付き、メモリと VRAM のバーやグラフの中のそのプロセスの部分と、名前の横の印に同じ色を使います。色は名前から決まるため、同じジョブはジョブや dgxtop を再起動しても同じ色になります（実行中の別のプロセスがその色を使っている場合を除きます）。
-- **履歴。** 1 本の時間軸に、1 列 1 本のバーで表示します。1 本はローカル時刻の 1・5・10・30 分、1・2・4・6・8・12・18・24 時間の平均です（`w` / `W`）：1 時間のバーは 15:00〜16:00、24 時間のバーは 1 日で、最新のバーはいま埋まりつつあるものです。バーは実際に含む時間の平均で（dgxtop を 15:15 に起動したら 15:00 のバーは 15:15〜16:00）、データのない時間は空白のままです：
-  - CPU、メモリ、ディスク、ネットワーク
-  - 各 GPU の使用率、メモリ、温度、電力
-  - すべてのグラフに現在値、平均、最大値
-  - 各 GPU の直近 1・6・12・24 時間の統計と消費電力量
-  - 色の付いたプロセスごとのメモリグラフの中の部分
-
-  履歴はディスクに保存され、再起動しても残り、保存期間の上限もありません：各バーのサイズは最新の 300 本を保持し、それより古い時間はより粗いサイズに残るので、24 時間のバーは 300 日前までさかのぼれます。1〜24 時間の統計もこれらのバーから合成します。プロセスごとの部分はメモリ上に保持し、dgxtop の実行中だけ記録します。
-- **プロセス履歴（Process History）。** dgxtop が見たすべての GPU プロセスを、新しく起動した順に表示します：起動時刻と実行時間、使った GPU、GPU メモリと RAM のピーク、負荷の色で示す GPU と CPU の使用率、同時に動いた子プロセスの最大数、そして終わり方（実行中、dgxtop が停止、シグナルで終了（`SIGKILL`、`SIGTERM` など）、終了コードで終了、OOM killer の可能性大、原因が見えないまま終了）。開くと、完全なコマンドライン（`e` で全体を表示、`y` でコピー）、作業ディレクトリ、実行ファイル、親プロセス、nice 値と cgroup、起動と終了の時刻、そして Overview History と同じレイアウトで平均と最大値を添えたグラフを表示します：プロセス自身と子プロセスの CPU とメモリ、スワップ、GPU 使用率とメモリ、スレッド・子プロセス・開いているファイルの数、ディスクの読み書き、ホストのネットワーク。`w`/`W` で 1 本のバーが表す時間を選べます：1・5・10・30 分、1・2・4・6・8・12・18・24 時間、または `auto`（実行期間全体が収まる最も細かい刻み）。各サイズは最新の 300 本を保持し、古いものはより粗いサイズにまとめられているので、どれだけ長く動いても 1 プロセスは約 1 MB まで、期間で消えることもありません。64 MiB のデータベースが満ちたときだけ、終了から最も時間が経ったものから削除します。
-- **マシン全体。** コアごとの CPU 使用率、ハードウェアが報告する CPU の温度と電力、メモリとスワップ、ディスクの転送量とファイルシステムの容量、ネットワークの転送量。
-- **DGX Spark のために。** GB10 は CPU とメモリを共有しています。dgxtop は GPU プロセスとシステム自体（OS）がそれぞれ使うシステム RAM の量、GB10 のクラスタセンサーから得た CPU 温度、GB10 の NVLink-C2C リンクを表示します。aarch64 ネイティブビルドです。
-- **アプリ内の設定。** サンプリング間隔と表示モジュールを変更できます。各設定の保存値と適用中の値、その出所、すぐ反映されるか再起動が必要かを表示します。
+- **マシン全体。** コアごとの CPU 使用率、CPU 温度、コアの種類ごとの現在と最大の周波数。メモリ、スワップ、バッファー、キャッシュ。ディスクの空き容量、IOPS、レイテンシー、ドライブ温度。ネットワークの転送量、エラー、ドロップ。
+- **DGX Spark のために。** GB10 のユニファイドメモリでは、RAM バーがシステムの分と GPU ジョブごとの分に分かれます。GB10 の CPU クラスター温度と NVLink-C2C リンクも読み取り、aarch64 ネイティブビルドを提供します。
+- **アプリ内の設定。** サンプリング間隔と表示モジュールを変更でき、各データソースの状態も確認できます。各設定の保存値と適用中の値、その出所、すぐ反映されるか再起動が必要かを表示します。
 
 ## 画面
 
 ### Overview
 
-各 GPU の使用率とメモリ、CPU とメモリ、最も忙しいディスクとネットワークインターフェース、GPU を使うプロセス。`c` で CPU をコアごとのバーとセンサーに展開します。
+各 GPU の使用率とメモリ、CPU、メモリ、最も忙しいディスクとネットワークインターフェース、色分けされた GPU プロセス。`c` で CPU をコアごとのバーとセンサーに展開します。
 
-<img src="images/screenshots/workstation-overview.png" alt="2 枚の GPU（RTX 5080 と RTX 3060）を積んだワークステーションでの Overview と、GPU メモリを使うプロセス" width="100%">
+<img src="images/screenshots/workstation-overview.png" alt="RTX 5080（使用率 97%）と RTX 3060 を積んだワークステーションでの Overview：ディスクとネットワークの表と、それぞれの色を持つ 4 つの GPU プロセス" width="100%">
 
 ### GPU
 
 1 台ずつ、4 本のライブバーと、ドライバーが報告するすべての情報を表示します。`h` / `l` で GPU を切り替えます。
 
-<img src="images/screenshots/dgx-spark-gpu.png" alt="DGX Spark の GB10 の GPU ビュー：状態、クロック、ユニファイドメモリ、PCIe、NVLink-C2C、温度しきい値、電力、CUDA 13.0、ドライバー、デバイス、トポロジ" width="100%">
+<img src="images/screenshots/dgx-spark-gpu.png" alt="DGX Spark の GB10 の GPU ビュー：状態、クロック、ユニファイドメモリ、PCIe、NVLink-C2C、温度しきい値、電力と消費電力量、CUDA 13.0、ドライバーと Linux カーネル、デバイス、PCI とファームウェア、トポロジ" width="100%">
 
-<img src="images/screenshots/workstation-gpu.png" alt="RTX 5080 の GPU ビュー：状態、クロック、VRAM と BAR1、PCIe Gen5、ファンとしきい値、電力上限、CUDA、ドライバー、デバイス、ファームウェア、2 枚目の GPU への P2P 経路" width="100%">
+<img src="images/screenshots/workstation-gpu.png" alt="高負荷の RTX 5080 の GPU ビュー：電力上限で制限された状態、クロック、VRAM と BAR1、PCIe Gen5、ファンとしきい値、電力上限、CUDA 13.4、ドライバー、デバイス、ファームウェア、2 枚目の GPU への経路" width="100%">
 
 <sub>上：ユニファイドメモリと NVLink-C2C を持つ GB10。下：VRAM と PCIe Gen5 の RTX 5080。シリアル番号と UUID は伏せています。</sub>
 
-### History
+### Overview History
 
-Overview の各リソースを 1 分から 24 時間のバー（`w` / `W`）、対になったパネルで 1 本の時間軸に並べます。下には各 GPU の直近 1・6・12・24 時間の統計を表示します。
+マシンの各リソースを 1 分から 24 時間のバー（`w` / `W`）で表示し、すべてのグラフに現在値、平均、最大値を、下には各 GPU の平均とピークを表示します。
 
-<img src="images/screenshots/dgx-spark-history.png" alt="DGX Spark の 1 時間分の履歴：CPU、メモリ、GPU 使用率、GPU メモリ、温度、電力と消費電力量、ディスク、ネットワーク" width="100%">
+<img src="images/screenshots/workstation-overview-history.png" alt="2 GPU ワークステーションの 1 分バーの Overview History：CPU、メモリ、GPU 使用率、GPU メモリ、GPU 温度、消費電力量付きの GPU 電力、ディスク、ネットワーク、各 GPU の平均とピークの表" width="100%">
 
-<img src="images/screenshots/workstation-history.png" alt="2 GPU ワークステーションの履歴と、GPU ごとの直近 1・6・12・24 時間の平均とピーク" width="100%">
+### Process History
 
-### Settings
+すべての GPU プロセスを実行ごとに新しい順で表示します：いつ始まり、どれだけ動き、GPU メモリと RAM のピークはいくつで、どう終わったか。`Enter` で実行を開くと、コマンドライン（`e` で全体を表示、`y` でコピー）、作業フォルダー、グラフを表示します。
 
-各設定の保存値と適用中の値、その出所、すぐ反映されるか再起動が必要か。表示モジュールのオン・オフも切り替えられます。
+<img src="images/screenshots/workstation-process-history.png" alt="GPU プロセスの実行を並べた Process History：開始時刻、PID、名前、GPU、実行時間、GPU メモリと RAM のピーク、GPU と CPU の使用率、実行中か終了かの状態" width="100%">
 
-<img src="images/screenshots/dgx-spark-settings.png" alt="各設定の保存値、適用中の値、出所、再起動の要否を並べた Settings ビューと、表示モジュールの切替" width="100%">
+<img src="images/screenshots/workstation-process-run.png" alt="開いた実行：PID、名前、GPU、開始、終了、実行時間、ユーザー、そして CPU、メモリ、GPU 使用率、GPU メモリ、スレッドと開いているファイル、ディスク、ネットワークのグラフ" width="100%">
+
+<sub>この実行のフォルダー、プログラム、cgroup、コマンドラインは伏せています。</sub>
 
 ## 特長
 
 - **1 台のマシンに複数の GPU。** DGX Spark（GB10）と、RTX 5080 と RTX 3060 を積んだワークステーションでテスト済みです。
-- **軽量。** Rust 製です。変化があったときだけ最大で毎秒 4 回描画し、データは固定の 256 MiB に収めます。
-- **どの端末サイズでも。** 80×24 以上ではフルレイアウト、それ未満ではコンパクト表示です。キーボードとマウスに対応しています。
-- **プライバシー。** ネットワークアクセスもテレメトリーもありません。設定と履歴は本人だけが読めるファイルです。プロセス履歴は GPU プロセスのコマンドライン、作業ディレクトリ、実行ファイルを保持します（直近 2000 プロセス）。環境変数は保存しません。
-- **安全なモード。** `--read-only` でプロセス操作を無効にします。`--replay` はシミュレーションデータでデモやテストを行い、`--diagnostics-json` はバージョンと状態を出力します。
+- **長く残る履歴。** 履歴はディスクに保存され、再起動しても残り、保存期限はありません。バーの大きさごとに最新の 300 本を残すので、1 分バーは直近 5 時間、24 時間バーは約 10 か月をカバーします。Process History は最新の 512 回の実行を表示します。記録するのは dgxtop の実行中です。
+- **軽量。** Rust 製です。描画は最大で毎秒 4 回、データは固定の 256 MiB に収めます。
+- **どの端末サイズでも。** ワイド、1 カラム、コンパクトのレイアウトで、40×10 まで対応します。キーボードとマウス、4 つの配色テーマに対応しています。
+- **プライバシー。** ネットワークアクセスもテレメトリーもありません。設定と履歴は本人だけが読めるファイルです。Process History は GPU プロセスのコマンドライン、作業フォルダー、プログラムを保存しますが、環境変数は保存しません。
+- **安全なプロセス操作。** 操作できるのは自分のプロセスだけで、root セッションからは操作できず、期限付きの確認の後にだけ実行します。シグナルは pidfd 経由で送るので、再利用された PID に届くことはなく、すべての操作を記録します。`--read-only` で無効にできます。
 - **安全な更新。** インストーラーはダウンロードしたファイルをすべて検証し、以前のバージョンを残すので、1 コマンドで戻せます。
 
 ## アーキテクチャ
 
-dgxtop は 6 つの構成要素からなる 1 つのプログラムです。読み取った値はデータ経路を、キー操作やコマンドは制御経路を通ります。
+dgxtop は 1 つのプログラムです。Adapter がそれぞれのバックグラウンドプロセスでハードウェアを読み、読み取った値はデータ経路を流れ、Manager が画面に描く表示用データにまとめます。
 
-<img src="images/architecture/architecture-overview.png" alt="dgxtop のアーキテクチャ：procfs、hwmon、thermal、powercap、NVML、ネットワーク、ファイルシステムの adapter host が Collector に値を渡し、Manager が Store に書き込んで表示用データを Viewer に渡す。Controller とプロセス操作の adapter は制御経路にある" width="100%">
+```mermaid
+flowchart LR
+    kernel["Linux カーネル<br/>NVIDIA ドライバー"] --> adapters["Adapters<br/>それぞれ別プロセス"]
+    adapters --> collectors[Collectors]
+    collectors --> state["State<br/>メモリ上のみ"]
+    state --> history[History]
+    history --> compression["Compression<br/>1 分から 24 時間のバー"]
+    history --> store[("Store<br/>SQLite とファイル")]
+    state --> manager[Manager]
+    history --> manager
+    manager --> viewer["Viewer<br/>Ratatui"]
+    viewer -. キーとマウス .-> manager
+    manager -. 確認済みの K または F9 .-> actions["プロセス操作<br/>pidfd、操作の記録"]
+```
 
 | 構成要素 | 役割 |
 |---|---|
-| Adapter | ハードウェアを読みます：`/proc`、hwmon、thermal zone、powercap、GPU の NVML、ネットワーク、ファイルシステム。各 adapter は専用のバックグラウンドプロセスで動きます。 |
-| Collector | 読み取り値を指標に整えます：単位、重複する出所、値ごとの最適な出所、カウンターからのレート。 |
-| Manager | サンプリングの計画、設定の適用、コマンドの確認を行い、データを書き込む唯一の構成要素です。 |
-| Store | ライブスナップショット、履歴、設定、プロセス操作の記録を保持します。 |
-| Viewer | 整えられた表示用データから、Ratatui で画面を描きます。 |
-| Controller | キー、マウス操作、コマンドラインオプションをコマンドに変換します。 |
+| Adapters | ハードウェアを読みます：`/proc`、hwmon、thermal zone、powercap、GPU の NVML、ネットワーク、ファイルシステム。それぞれ専用のバックグラウンドプロセスで動きます。読み取り専用のプローブが各 GPU プロセスを追跡します。 |
+| Collectors | 読み取り値を指標に整えます：単位、値ごとの最適な出所、カウンターからのレート、プロセスごとに 1 件の記録。 |
+| State | ライブスナップショットと短期のトレンドを、メモリ上にだけ保持します。 |
+| History | Overview History と Process History を保持し、何を残し何を手放すかを決めます。 |
+| Compression | サンプルを、ローカル時刻にそろえた 1 分から 24 時間のバーにまとめます。 |
+| Store | SQLite データベースとファイルを、頼まれたとおりにだけ読み書きします。 |
+| Manager | サンプリングの計画、設定の適用、コマンドとプロセス操作の確認を行い、表示用データを作ります。自身はデータを持ちません。 |
+| Viewer | Manager の表示用データから Ratatui で画面を描き、キーやマウス操作をコマンドに変換します。 |
+| Runtime | adapter プロセス、その IPC と上限付きのキュー、ログ、端末を管理します。 |
 
 <details>
 <summary>コードの構成</summary>
 
-コードは、共通の契約 crate を中心にした 8 つの crate からなる Rust workspace です。
+コードは、共通の契約 crate を中心にした 11 個の crate からなる Rust workspace です。
 
 | Crate | 内容 |
 |---|---|
-| `dgxtop` | プログラム本体：起動、コマンドライン、組み立て |
-| `dgxtop-core` | 共通の型：指標、単位、コマンド、インターフェース |
-| `dgxtop-runtime` | バックグラウンドプロセス、IPC、worker、端末 I/O |
-| `dgxtop-adapters` | procfs、sysfs、NVML、プロセス操作 |
-| `dgxtop-collectors` | 正規化、出所の選択、レート |
-| `dgxtop-store` | スナップショット、履歴、設定、操作の記録（SQLite） |
-| `dgxtop-manager` | サンプリング、設定、コマンド、表示用データ |
+| `dgxtop` | プログラム本体：コマンドライン、モード、起動、組み立て |
+| `dgxtop-core` | 共通の型：指標、コマンド、表示用データ、構成要素間のインターフェース |
+| `dgxtop-runtime` | バックグラウンドプロセス、IPC、キュー、ログ、端末、タイムゾーン |
+| `dgxtop-adapters` | procfs、hwmon、thermal、powercap、NVML、ネットワーク、ファイルシステム、プロセスのプローブとプロセス操作 |
+| `dgxtop-collectors` | 読み取り値からの指標：レート、出所の選択、プロセスの記録 |
+| `dgxtop-state` | ライブスナップショットと短期のトレンド |
+| `dgxtop-history` | Overview History、Process History と、それぞれが残すもの |
+| `dgxtop-compression` | 1 分から 24 時間のバー |
+| `dgxtop-store` | SQLite データベースとファイル |
+| `dgxtop-manager` | スケジューリング、設定、セッション、プロセス操作、表示用データ |
 | `dgxtop-ui` | 画面、ウィジェット、キーマップ |
 
 </details>
@@ -144,52 +161,53 @@ dgxtop は 6 つの構成要素からなる 1 つのプログラムです。読�
 
 ```bash
 dgxtop                       # ライブモニター
-dgxtop -i 0.5                # この実行だけ 500 ms でサンプリング（保存済み設定は変更しない）
+dgxtop -i 0.5                # この実行だけ 0.5 秒ごとにサンプリング（保存済み設定は変更しない）
+dgxtop -t amber              # この実行の配色テーマ：dark、cyan、green、amber
 dgxtop --no-gpu              # NVML host を起動しない
-dgxtop --read-only           # すべてのプロセス操作を無効化
+dgxtop --read-only           # プロセス操作を無効化
 dgxtop --replay fixture.json # シミュレーションデータのみ、読み取り専用、別の一時状態
-dgxtop --check-config        # 設定値と有効値を検証して表示し終了
+dgxtop --check-config        # 設定を検証し、保存値と適用中の値を表示
 dgxtop --diagnostics-json    # バージョン、SQLite、機能、ヘルスを JSON で出力
 dgxtop --import-legacy ~/.config/dgxtop/config.json --dry-run   # v1 → v2 の対応を表示
 dgxtop --version --verbose   # バージョン、commit、ツールチェーン、ターゲット、SQLite ランタイム
 ```
 
+`--config` と `--state-dir` には、設定ファイルと状態ディレクトリーの絶対パスを指定します。コマンドライン引数は、その実行に限って保存済み設定を上書きします。
+
+各パネルはタイトルの右側に自分のキーを表示し、フッターには全体のキーだけを残します。
+
 | キー | 動作 |
 |---|---|
-| `q`、`Ctrl-C` | 終了（フィルター編集中の `q` は文字入力、`Ctrl-C` は常に終了） |
 | `1`–`5`、`Tab`、`Shift-Tab` | Overview、GPU、Overview History、Process History、Settings |
-| `w` / `W`、`→` / `←` | 次／前の履歴グラフのバーのサイズ（1m〜24h）。開いた実行ではそのバーのサイズ |
-| `j`/`k`、`Enter` | Process History で実行を選んで開く／閉じる |
-| `e` / `y` | 開いた実行のコマンドライン全体を表示／コピー（OSC 52） |
-| `c` | CPU センサーとコアごとのバーの表示切替（CPU パネルのクリックでも可） |
+| `q`、`Ctrl-C` | 終了（フィルター入力中の `q` は文字入力、`Ctrl-C` は常に終了） |
+| `?`、`F1` | ヘルプ |
+| `+` / `-` | サンプリングを速く／遅く |
 | `j`/`k`、矢印、`PgUp`/`PgDn`、`Home`/`End` | 選択を移動 |
-| `h`/`l`、`←`/`→` | GPU ビューで前／次の GPU |
-| `g` | プロセス表の GPU フィルターを切替（全 GPU → 各 GPU） |
-| `/` | プロセスをフィルター（Enter で適用、Esc でクリア） |
-| `s` / `r` | ソート列／逆順 |
-| `+` / `-` | サンプリング間隔を変更 |
-| `K` | 選択したプロセスを終了（確認あり） |
-| `F9` | 選択したプロセスを SIGKILL で強制終了（確認あり） |
+| `c` | CPU センサーとコアごとのバーの表示切替（CPU パネルのクリックでも可） |
 | `[` / `]` | メモリパネルの GPU プロセスをスクロール |
+| `s` / `r` | 次のソート列／逆順 |
+| `g` | GPU フィルターを切替（全 GPU → 各 GPU） |
+| `/` | プロセスを名前でフィルター（`Enter` で適用、`Esc` でクリア） |
+| `K` / `F9` | 選択したプロセスを SIGTERM／SIGKILL で終了（確認あり） |
 | `y`/`Enter`、`n`/`Esc` | 保留中のプロセス操作を確認／取消 |
-| `F2`、`?`/`F1` | Settings ビュー、ヘルプ |
-
-コマンドライン引数は、その実行に限って保存済み設定を上書きします。
+| `h`/`l`、`←`/`→` | GPU ビューで前／次の GPU |
+| `w`/`W`、`→`/`←` | 履歴ビューで次／前のバーの大きさ |
+| `Enter` | Process History で選択した実行を開く／閉じる |
+| `e` / `y` | 開いた実行のコマンドライン全体を表示／コピー（OSC 52） |
+| `Space` | Settings で選択した表示モジュールのオン・オフ |
 
 ## 設定とファイル
 
 | 用途 | 場所 |
 |---|---|
 | 設定 | `$XDG_CONFIG_HOME/dgxtop/v2/config.json`（`~/.config/dgxtop/v2/config.json`） |
-| 履歴、各バーのサイズ（最大 64 MiB） | `$XDG_STATE_HOME/dgxtop/v2/history_tiers.sqlite3`（`~/.local/state/...`） |
-| 履歴の直近の分データ（最大 7 日、1 GiB） | `$XDG_STATE_HOME/dgxtop/v2/history.sqlite3` |
-| プロセス履歴（最大 64 MiB。`store.process_history_enabled`、未設定なら archive に従う） | `$XDG_STATE_HOME/dgxtop/v2/process_history.sqlite3` と `process_recent.json` |
-| プロセス操作の記録 | `$XDG_STATE_HOME/dgxtop/v2/audit.sqlite3` |
-| ログとインスタンスロック | `$XDG_STATE_HOME/dgxtop/v2/` |
+| Overview History：すべてのバー（約 40 MiB） | `$XDG_STATE_HOME/dgxtop/v2/history_tiers.sqlite3`（`~/.local/state/...`） |
+| Overview History：直近の分単位のデータ（7 日、最大 1 GiB） | `$XDG_STATE_HOME/dgxtop/v2/history.sqlite3` |
+| Process History（約 40 MiB） | `$XDG_STATE_HOME/dgxtop/v2/process_history.sqlite3` と `process_recent.json` |
+| プロセス操作の記録（30 日） | `$XDG_STATE_HOME/dgxtop/v2/audit.sqlite3` |
+| ログとインスタンスロック | `$XDG_STATE_HOME/dgxtop/v2/dgxtop.log`、`instance.lock` |
 
-ディレクトリは `0700`、ファイルは `0600` で作成します。v1 からのアップグレードでは `~/.config/dgxtop/config.json` を変更しません。`--import-legacy <path> --dry-run` で対応を確認してから、`--apply` で v2 の設定ファイルを書き込みます。
-
-データベースは移行しません。各データベースは独自のフォーマットバージョンを持ち、新しい dgxtop が異なるフォーマットを書く場合やデータベースを読めない場合、起動時に（`-wal`・`-shm` とともに）削除して空から始め、ログに 1 行記録します。旧バージョンが書いた `*.pre-v*.bak` バックアップなど、もう不要な残りファイルも削除します。`config.json` の設定は保持します。
+ディレクトリは `0700`、ファイルは `0600` で作成します。データベースがいっぱいになると、古いデータから手放します。Process History では、最も長く見ていない終了済みの実行からです。形式の異なる以前のバージョンのデータベースは、移行せずに空で作り直します。`config.json` は常に残ります。v1 からのアップグレードでは `~/.config/dgxtop/config.json` を変更しません。`--import-legacy <path> --dry-run` で対応を確認してから、`--apply` で v2 の設定ファイルを書き込みます。
 
 ## ライセンス
 

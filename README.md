@@ -4,8 +4,8 @@
 
 **A terminal GPU monitor built for NVIDIA DGX Spark**
 
-Every GPU, the processes using it and the whole machine on one screen,<br>
-with history that survives restarts. Runs on any Linux machine with NVIDIA GPUs.
+Every GPU, each job's share of its memory and the whole machine on one screen,<br>
+plus a record of every GPU job from start to end. Runs on any Linux machine with NVIDIA GPUs.
 
 [繁體中文](docs/README.zh-TW.md) · [日本語](docs/README.ja.md) · [Project page](https://dennysora.me/en/projects/tools/dgxtop/)
 
@@ -14,9 +14,9 @@ with history that survives restarts. Runs on any Linux machine with NVIDIA GPUs.
 [![Rust](https://img.shields.io/badge/rust-1.92.0-orange.svg)](rust-toolchain.toml)
 [![CI](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml/badge.svg)](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml)
 
-<img src="docs/images/screenshots/dgx-spark-overview.png" alt="dgxtop overview on a DGX Spark: CPU and memory, the GB10 GPU at 92 % utilization with its RAM bar, the disk and network tables, and the GPU process table" width="100%">
+<img src="docs/images/screenshots/dgx-spark-overview.png" alt="dgxtop Overview on a DGX Spark: the CPU, the unified memory split into the system and two GPU processes in their colors, the GB10 GPU, the disk and network tables, and the GPU process table" width="100%">
 
-<sub>Overview on a DGX Spark. The GB10 shares memory with the CPU, so the RAM its processes hold is drawn inside system memory.</sub>
+<sub>Overview on a DGX Spark. The GB10 shares memory with the CPU, so the RAM bar shows the system's share and each GPU process's share in its own color.</sub>
 
 </div>
 
@@ -32,7 +32,7 @@ memory, disks and network still work. WSL 1, musl, macOS and Windows are not sup
 
 The installer picks the build for your CPU, checks it against the release's `SHA256SUMS` and
 installs it to `~/.local/bin`. The previous version is kept, and `./install.sh --rollback` brings
-it back. For a specific release, append `-s -- --version v2.0.2` to `bash`.
+it back. For a specific release, append `-s -- --version v2.1.0` to `bash`.
 
 Or build from source with Rust 1.92.0 (pinned by `rust-toolchain.toml`):
 
@@ -46,143 +46,156 @@ cargo build --release --locked
 ## Features
 
 htop centers on the CPU, and nvtop and nvidia-smi show GPUs only while you watch. dgxtop puts the
-GPUs first, shows the whole machine around them, and keeps the history.
+GPUs first, shows which job holds how much of their memory, and keeps a record of every GPU job and
+of the whole machine.
 
 - **Every GPU at a glance.** Utilization, memory, temperature, power, clocks and fans for each GPU,
-  with live charts.
+  with live charts. A gauge stays green below 50 % and turns from amber to red as it nears the
+  redline (80 % by default).
+- **Memory by process.** The eight processes holding the most GPU memory each get a color, the same
+  in the memory bars, the charts and the process table, so you see which job holds how much. The
+  color comes from the process name, so a job keeps it when the job or dgxtop restarts.
+- **Named by what they run.** `python -m vllm.entrypoints.openai.api_server` shows as
+  `vllm.api_server`, and `python main.py` in a `ComfyUI` folder as `ComfyUI/main`, not as
+  `python3`.
+- **GPU processes.** Every process using a GPU, with its GPU, type (compute or graphics), GPU use,
+  GPU memory, CPU and RAM. Sort by any column, filter by GPU or name, and stop a process with `K`
+  (SIGTERM) or `F9` (SIGKILL) after a confirmation.
+- **Process History.** Every GPU process is recorded as a run, from start to end: its runtime, peak
+  GPU memory and RAM, GPU and CPU use, and how it ended: exited with a code, killed by a signal,
+  stopped from dgxtop, most likely the OOM killer, or still running. Open a run for its full
+  command line, working folder and charts of its CPU, memory, GPU, threads, open files, disk and
+  network.
+- **Overview History.** CPU, memory, each GPU's utilization, memory, temperature and power, disks
+  and network as bars of 1 minute to 24 hours on the local clock, with now, average and maximum on
+  every chart, and each GPU's averages, peaks and energy.
 - **Full GPU details.** One GPU at a time:
-  - performance state and throttle reasons, clocks;
+  - performance state, throttle reasons and how long it was throttled, clocks;
   - memory and the memory bus, PCIe link and traffic, NVLink-C2C;
-  - thermal limits, power and energy;
-  - CUDA and driver versions;
-  - NUMA and CPU affinity, P2P paths, device and firmware.
+  - thermal limits, fans, power limits and energy;
+  - CUDA, driver, NVML and Linux kernel versions;
+  - device, PCI and firmware, NUMA and CPU affinity, P2P paths.
 
   A value the GPU does not report gets no row.
-- **GPU processes.** Every process using a GPU, with its GPU, type (compute or graphics), GPU
-  memory, CPU and RAM. A process is named by what it runs, not only by its executable:
-  `python -m vllm.entrypoints.openai.api_server` shows as `vllm.api_server`, and `python main.py`
-  run in a `ComfyUI` folder as `ComfyUI/main`. Filter by GPU or name, sort by any column, and stop
-  a process after a confirmation. The eight processes holding the most GPU memory each get a
-  color: their parts of the memory and VRAM bars and charts use it, and so does the marker beside
-  their names. The color comes from the name, so a job gets the same color after it or dgxtop
-  restarts, unless another running process already holds it.
-- **History.** Charts on one time axis, one bar per column, each bar the average of 1, 5, 10 or
-  30 minutes or 1, 2, 4, 6, 8, 12, 18 or 24 hours (`w` / `W`) of the local clock: a 1-hour bar is
-  15:00–16:00, a 24-hour bar a day, the latest bar the one being filled now. A bar is the average
-  of the time it holds (dgxtop started at 15:15: the 15:00 bar is 15:15–16:00), and a time
-  without data stays a gap:
-  - CPU, memory, disks and network;
-  - each GPU's utilization, memory, temperature and power;
-  - now, average and maximum for every chart;
-  - each GPU's last 1, 6, 12 and 24 hours, with the energy it used;
-  - each colored process's part of the memory charts.
-
-  History is saved on disk and survives restarts and reboots, with no age limit: each bar size
-  keeps its latest 300 bars, the older time lives on in the coarser sizes, so the 24-hour bars
-  reach back 300 days. The 1-hour to 24-hour statistics are merged from those bars too. The
-  per-process parts are kept in memory, for as long as dgxtop runs.
-- **Process History.** Every GPU process dgxtop saw, the latest start first: when it started and
-  how long it ran, its GPUs, peak GPU memory and RAM, GPU and CPU use in the load colors, its most
-  child processes, and how it ended: still running, stopped by dgxtop, killed by a signal
-  (`SIGKILL`, `SIGTERM`, …), exited with a code, most likely the OOM killer, or ended without a
-  visible cause. Open one to see its full command line (`e` shows all of it, `y` copies it), its
-  working folder, program, parent process, niceness and control group, its start and end times,
-  and charts laid out like the Overview History's, with average and maximum: CPU and memory of the
-  process and of its child processes, swap, GPU utilization and memory, threads, child processes
-  and open files, disk reads and writes, and the host's network. `w`/`W` set how much time one bar
-  is: 1, 5, 10 or 30 minutes, 1, 2, 4, 6, 8, 12, 18 or 24 hours, or `auto` (the finest that shows
-  the whole run). Each bar size keeps its latest 300 bars, older ones live on in the coarser
-  sizes, so a run takes at most about a megabyte however long it lasts, and runs never expire by
-  age: the oldest ended ones give way only when the 64 MiB database fills.
-- **The whole machine.** CPU usage per core, CPU temperature and power where the hardware reports
-  them, memory and swap, disk throughput and filesystem capacity, network throughput.
-- **Made for DGX Spark.** The GB10 shares memory with the CPU: dgxtop shows how much system RAM GPU
-  processes hold and how much the system itself holds, the CPU temperature from the GB10's cluster
-  sensors, and the GB10's NVLink-C2C link. Native aarch64 build.
-- **Settings in the app.** Change the sampling interval and the display modules. Each setting shows
-  its saved and effective value, where it came from, and whether it applies now or after a restart.
+- **The whole machine.** CPU usage per core, CPU temperature and the current and maximum frequency
+  of each kind of core; memory, swap, buffers and cache; disks with free space, IOPS, latency and
+  drive temperature; network throughput, errors and drops.
+- **Made for DGX Spark.** On the GB10's unified memory, the RAM bar splits into the system's share
+  and each GPU job's share. dgxtop also reads the GB10's CPU cluster temperatures and its
+  NVLink-C2C links, and ships a native aarch64 build.
+- **Settings in the app.** Change the sampling interval and the display modules, and see each data
+  source's state. Every setting shows its saved and effective value, where it came from, and
+  whether it applies now or after a restart.
 
 ## Screens
 
 ### Overview
 
-Every GPU with its utilization and memory, CPU and memory, the busiest disks and network
-interfaces, and the processes using a GPU. `c` expands the CPU into per-core bars and sensors.
+Every GPU with its utilization and memory, the CPU, memory, busiest disks and network interfaces,
+and the GPU processes in their colors. `c` expands the CPU into per-core bars and sensors.
 
-<img src="docs/images/screenshots/workstation-overview.png" alt="dgxtop overview on a workstation with two GPUs, an RTX 5080 and an RTX 3060, with the processes holding GPU memory" width="100%">
+<img src="docs/images/screenshots/workstation-overview.png" alt="dgxtop Overview on a workstation with an RTX 5080 at 97 % and an RTX 3060, the disk and network tables, and four GPU processes, each with its color" width="100%">
 
 ### GPU
 
 One GPU at a time: four live bars, then everything the driver reports. `h` / `l` switches between
 GPUs.
 
-<img src="docs/images/screenshots/dgx-spark-gpu.png" alt="GPU view of the DGX Spark's GB10: state, clocks, unified memory, PCIe, NVLink-C2C, thermal thresholds, power, CUDA 13.0, driver, device and topology" width="100%">
+<img src="docs/images/screenshots/dgx-spark-gpu.png" alt="GPU view of the DGX Spark's GB10: state, clocks, unified memory, PCIe, NVLink-C2C, thermal thresholds, power and energy, CUDA 13.0, driver and Linux kernel, device, PCI and firmware, topology" width="100%">
 
-<img src="docs/images/screenshots/workstation-gpu.png" alt="GPU view of an RTX 5080: state, clocks, VRAM and BAR1, PCIe Gen5, fans and thresholds, power limits, CUDA, driver, device, firmware and the P2P path to the second GPU" width="100%">
+<img src="docs/images/screenshots/workstation-gpu.png" alt="GPU view of an RTX 5080 under load: power-capped state, clocks, VRAM and BAR1, PCIe Gen5, fans and thresholds, power limits, CUDA 13.4, driver, device, firmware and the path to the second GPU" width="100%">
 
 <sub>GB10 with unified memory and NVLink-C2C (top); RTX 5080 with VRAM and PCIe Gen5 (bottom). Serial numbers and UUIDs are masked.</sub>
 
-### History
+### Overview History
 
-The overview's resources as bars of 1 minute to 24 hours (`w` / `W`), in paired panels on one time
-axis, with each GPU's last 1, 6, 12 and 24 hours below.
+The machine's resources as bars of 1 minute to 24 hours (`w` / `W`), with now, average and maximum
+on every chart, and each GPU's averages and peaks below.
 
-<img src="docs/images/screenshots/dgx-spark-history.png" alt="History view of the DGX Spark over one hour: CPU, memory, GPU utilization, GPU memory, temperature, power with energy, disk and network" width="100%">
+<img src="docs/images/screenshots/workstation-overview-history.png" alt="Overview History of a two-GPU workstation in 1-minute bars: CPU, memory, GPU utilization, GPU memory, GPU temperature, GPU power with energy, disk and network, and a table of each GPU's average and peak" width="100%">
 
-<img src="docs/images/screenshots/workstation-history.png" alt="History view of the two-GPU workstation with each GPU's mean and peak over the last 1, 6, 12 and 24 hours" width="100%">
+### Process History
 
-### Settings
+Every GPU process as a run, newest first: when it started, how long it ran, its peak GPU memory and
+RAM, and how it ended. `Enter` opens a run with its command line (`e` shows all of it, `y` copies
+it), working folder and charts.
 
-Every setting with its saved and effective value, its origin and whether it applies live or needs a
-restart. Display modules can be switched on and off.
+<img src="docs/images/screenshots/workstation-process-history.png" alt="Process History listing GPU process runs with their start time, PID, name, GPU, runtime, peak GPU memory and RAM, GPU and CPU use and status, running or ended" width="100%">
 
-<img src="docs/images/screenshots/dgx-spark-settings.png" alt="Settings view listing each setting's saved value, effective value, origin and restart requirement, next to the display module toggles" width="100%">
+<img src="docs/images/screenshots/workstation-process-run.png" alt="An opened run: PID, name, GPU, start, end, runtime and user, then charts of its CPU, memory, GPU utilization, GPU memory, threads and open files, disk and network" width="100%">
+
+<sub>The run's folder, program, cgroup and command line are masked.</sub>
 
 ## Capabilities
 
 - **Several GPUs per machine.** Tested on a DGX Spark (GB10) and on a workstation with an RTX 5080
   and an RTX 3060.
-- **Light.** Written in Rust. It redraws only when something changes, at most 4 times a second, and
-  keeps its data within a fixed 256 MiB.
-- **Any terminal size.** The full layout from 80×24, a compact one below that. Keyboard and mouse.
+- **History that lasts.** History is saved on disk and survives restarts and reboots, with no age
+  limit: each bar size keeps its latest 300 bars, so 1-minute bars cover the last 5 hours and
+  24-hour bars about 10 months. Process History lists the latest 512 runs. dgxtop records while it
+  runs.
+- **Light.** Written in Rust. It redraws at most 4 times a second and keeps its data within a fixed
+  256 MiB.
+- **Any terminal size.** Wide, single-column and compact layouts, down to 40×10. Keyboard and mouse,
+  and four color themes.
 - **Private.** No network access and no telemetry. Settings and history are files only you can
-  read. Process History keeps the command lines, working folders and programs of GPU processes
-  (the latest 512 runs); environments are never stored.
-- **Safe modes.** `--read-only` turns off process actions. `--replay` shows simulated data for
-  demos and tests. `--diagnostics-json` prints versions and health.
+  read. Process History keeps the command lines, working folders and programs of GPU processes;
+  environments are never stored.
+- **Safe process actions.** Only your own processes, never from a root session, and only after a
+  confirmation that expires. Signals go through a pidfd, so a reused PID is never hit, and every
+  action is logged. `--read-only` turns them off.
 - **Safe upgrades.** The installer verifies every download and keeps the previous version for a
   one-command rollback.
 
 ## Architecture
 
-dgxtop is one program built from six components. Readings travel the data path; your keys and
-commands travel the control path.
+dgxtop is one program. Adapters read the hardware in their own background processes, the readings
+flow down the data path, and the Manager turns them into the views the screen draws.
 
-<img src="docs/images/architecture/architecture-overview.png" alt="dgxtop architecture: adapter hosts for procfs, hwmon, thermal, powercap, NVML, network and filesystem feed the collector, the manager writes the store and publishes view models to the viewer, and the controller and the process action adapter sit on the control path" width="100%">
+```mermaid
+flowchart LR
+    kernel["Linux kernel<br/>NVIDIA driver"] --> adapters["Adapters<br/>one process each"]
+    adapters --> collectors[Collectors]
+    collectors --> state["State<br/>in memory"]
+    state --> history[History]
+    history --> compression["Compression<br/>1 min to 24 h bars"]
+    history --> store[("Store<br/>SQLite and files")]
+    state --> manager[Manager]
+    history --> manager
+    manager --> viewer["Viewer<br/>Ratatui"]
+    viewer -. keys and mouse .-> manager
+    manager -. K or F9, confirmed .-> actions["Process actions<br/>pidfd, audit log"]
+```
 
 | Component | What it does |
 |---|---|
-| Adapters | Read the hardware: `/proc`, hwmon, thermal zones, powercap, NVML for the GPUs, network and filesystems. Each adapter runs in its own background process. |
-| Collectors | Turn raw readings into metrics: units, duplicates, the best source for each value, and rates from counters. |
-| Manager | Schedules sampling, applies settings, checks commands, and is the only part that writes data. |
-| Store | Holds the live snapshot, the history, the settings and the log of process actions. |
-| Viewer | Draws the screen with Ratatui from ready-made views of the data. |
-| Controller | Turns keys, mouse clicks and command-line options into commands. |
+| Adapters | Read the hardware: `/proc`, hwmon, thermal zones, powercap, NVML for the GPUs, network and filesystems, each in its own background process. A read-only probe follows each GPU process. |
+| Collectors | Turn raw readings into metrics: units, the best source for each value, rates from counters, one record per process. |
+| State | Holds the live snapshot and the short trends, in memory only. |
+| History | Keeps the Overview History and the Process History, and decides what is kept and what goes. |
+| Compression | Merges samples into bars from 1 minute to 24 hours, aligned to the local clock. |
+| Store | Reads and writes the SQLite databases and files, only as it is asked. |
+| Manager | Schedules sampling, applies settings, checks commands and process actions, and builds the views. It keeps no data itself. |
+| Viewer | Draws the screens with Ratatui from the Manager's views, and turns keys and mouse clicks into commands. |
+| Runtime | Supervises the adapter processes, their IPC and bounded queues, the log and the terminal. |
 
 <details>
 <summary>Code layout</summary>
 
-The code is a Rust workspace of eight crates around one shared contract crate.
+The code is a Rust workspace of eleven crates around one shared contract crate.
 
 | Crate | Contains |
 |---|---|
-| `dgxtop` | The program: startup, command line and wiring |
-| `dgxtop-core` | Shared types: metrics, units, commands and interfaces |
-| `dgxtop-runtime` | Background processes, IPC, workers and terminal I/O |
-| `dgxtop-adapters` | procfs, sysfs, NVML and process actions |
-| `dgxtop-collectors` | Normalization, source selection and rates |
-| `dgxtop-store` | Snapshot, history, settings and the action log (SQLite) |
-| `dgxtop-manager` | Sampling, settings, commands and views |
+| `dgxtop` | The program: command line, modes, startup and wiring |
+| `dgxtop-core` | Shared types: metrics, commands, views and the interfaces between components |
+| `dgxtop-runtime` | Background processes, IPC, queues, the log, the terminal and the time zone |
+| `dgxtop-adapters` | procfs, hwmon, thermal, powercap, NVML, network, filesystems, the process probe and process actions |
+| `dgxtop-collectors` | Metrics from readings: rates, source selection and process records |
+| `dgxtop-state` | The live snapshot and the short trends |
+| `dgxtop-history` | Overview History, Process History and what each keeps |
+| `dgxtop-compression` | Bars from 1 minute to 24 hours |
+| `dgxtop-store` | SQLite databases and files |
+| `dgxtop-manager` | Scheduling, settings, sessions, process actions and views |
 | `dgxtop-ui` | Screens, widgets and the key map |
 
 </details>
@@ -191,60 +204,58 @@ The code is a Rust workspace of eight crates around one shared contract crate.
 
 ```bash
 dgxtop                       # live monitor
-dgxtop -i 0.5                # 500 ms sampling for this run (saved settings are not changed)
+dgxtop -i 0.5                # sample every 0.5 s for this run (saved settings are not changed)
+dgxtop -t amber              # color theme for this run: dark, cyan, green or amber
 dgxtop --no-gpu              # do not start the NVML host
-dgxtop --read-only           # disable all process actions
+dgxtop --read-only           # no process actions
 dgxtop --replay fixture.json # simulated data only, read-only, separate temporary state
-dgxtop --check-config        # validate and print configured/effective settings, then exit
+dgxtop --check-config        # validate the configuration and print its saved and effective values
 dgxtop --diagnostics-json    # versions, SQLite, capabilities and health as JSON
 dgxtop --import-legacy ~/.config/dgxtop/config.json --dry-run   # show the v1 → v2 mapping
 dgxtop --version --verbose   # version, commit, toolchain, target, SQLite runtime
 ```
 
+`--config` and `--state-dir` take absolute paths for the configuration file and the state
+directory. Command-line values override saved settings only for the current run.
+
 Each panel names its own keys at the right of its title; the footer keeps the global ones.
 
 | Key | Action |
 |---|---|
-| `q`, `Ctrl-C` | Quit (`q` is text while editing a filter; `Ctrl-C` always quits) |
 | `1`–`5`, `Tab`, `Shift-Tab` | Overview, GPU, Overview History, Process History, Settings |
-| `w` / `W`, `→` / `←` | Next / previous bar size of the history charts (1m to 24h); in an opened run, its bar size |
-| `j`/`k`, `Enter` | In Process History, choose a run and open or close it |
-| `e` / `y` | In an opened run, show the whole command line / copy it (OSC 52) |
-| `c` | Show / hide the CPU sensors and per-core bars (or click the CPU panel) |
+| `q`, `Ctrl-C` | Quit (`q` is text while typing a filter; `Ctrl-C` always quits) |
+| `?`, `F1` | Help |
+| `+` / `-` | Faster / slower sampling |
 | `j`/`k`, arrows, `PgUp`/`PgDn`, `Home`/`End` | Move the selection |
-| `h`/`l`, `←`/`→` | Previous / next GPU in the GPU view |
-| `g` | Cycle the process GPU filter (all GPUs → each GPU) |
-| `/` | Filter processes (Enter applies, Esc clears) |
-| `s` / `r` | Sort column / reverse order |
-| `+` / `-` | Change the sampling interval |
-| `K` | Stop the selected process (asks for confirmation) |
-| `F9` | Force-kill the selected process with SIGKILL (asks for confirmation) |
+| `c` | Show or hide the CPU sensors and per-core bars (or click the CPU panel) |
 | `[` / `]` | Scroll the GPU processes of the memory panel |
+| `s` / `r` | Next sort column / reverse order |
+| `g` | Cycle the GPU filter (all GPUs → each GPU) |
+| `/` | Filter processes by name (`Enter` applies, `Esc` clears) |
+| `K` / `F9` | Stop the selected process with SIGTERM / SIGKILL (asks for confirmation) |
 | `y`/`Enter`, `n`/`Esc` | Confirm / cancel a pending process action |
-| `F2`, `?`/`F1` | Settings view, help |
-
-Command-line values override saved settings only for the current run.
+| `h`/`l`, `←`/`→` | Previous / next GPU in the GPU view |
+| `w`/`W`, `→`/`←` | Next / previous bar size in the history views |
+| `Enter` | Open or close the selected run in Process History |
+| `e` / `y` | Show the whole command line of the opened run / copy it (OSC 52) |
+| `Space` | Turn the selected display module on or off in Settings |
 
 ## Configuration and files
 
 | Purpose | Location |
 |---|---|
 | Configuration | `$XDG_CONFIG_HOME/dgxtop/v2/config.json` (`~/.config/dgxtop/v2/config.json`) |
-| History, every bar size (at most 64 MiB) | `$XDG_STATE_HOME/dgxtop/v2/history_tiers.sqlite3` (`~/.local/state/...`) |
-| History's recent minutes (at most 7 days and 1 GiB) | `$XDG_STATE_HOME/dgxtop/v2/history.sqlite3` |
-| Process History (at most 64 MiB; `store.process_history_enabled`, unset following the archive) | `$XDG_STATE_HOME/dgxtop/v2/process_history.sqlite3` and `process_recent.json` |
-| Log of process actions | `$XDG_STATE_HOME/dgxtop/v2/audit.sqlite3` |
-| Log file and instance lock | `$XDG_STATE_HOME/dgxtop/v2/` |
+| Overview History: every bar size (about 40 MiB) | `$XDG_STATE_HOME/dgxtop/v2/history_tiers.sqlite3` (`~/.local/state/...`) |
+| Overview History: recent minutes (7 days, at most 1 GiB) | `$XDG_STATE_HOME/dgxtop/v2/history.sqlite3` |
+| Process History (about 40 MiB) | `$XDG_STATE_HOME/dgxtop/v2/process_history.sqlite3` and `process_recent.json` |
+| Log of process actions (30 days) | `$XDG_STATE_HOME/dgxtop/v2/audit.sqlite3` |
+| Log file and instance lock | `$XDG_STATE_HOME/dgxtop/v2/dgxtop.log`, `instance.lock` |
 
-Directories are created `0700` and files `0600`. Upgrading from v1 never modifies
-`~/.config/dgxtop/config.json`: review the mapping with `--import-legacy <path> --dry-run`, then
-write the v2 file with `--apply`.
-
-The databases are never migrated. Each carries its own format version; when a new dgxtop writes a
-different format, or a database cannot be read, dgxtop deletes it (with its `-wal` and `-shm`) at
-startup and starts it empty, with one line in the log. Leftovers no version needs any more, such
-as the `*.pre-v*.bak` backups older versions wrote, are deleted too. Settings in `config.json` are
-kept.
+Directories are created `0700` and files `0600`. When a database is full, the oldest data gives way
+first: in Process History, the ended runs seen longest ago. A database from a version with another
+format is started empty instead of migrated; `config.json` is always kept. Upgrading from v1 never
+modifies `~/.config/dgxtop/config.json`: review the mapping with `--import-legacy <path> --dry-run`,
+then write the v2 file with `--apply`.
 
 ## License
 
