@@ -514,3 +514,33 @@ fn start_rejects_too_many_or_duplicate_hosts() {
     assert!(attempt(invalid, Vec::new()).is_err());
     assert_eq!(ledger.used(Partition::Reserve), 0, "no working set leaked");
 }
+
+#[test]
+fn first_success_reaches_the_manager_as_a_host_status() {
+    let calls = Arc::new(Calls::default());
+    let harness = start(
+        test_config(),
+        vec![in_process(
+            "replay",
+            ReadBehavior::Healthy,
+            Arc::clone(&calls),
+        )],
+        8 * MIB,
+    );
+    let healthy = harness.wait_state("replay", HostState::Healthy);
+    assert_eq!(healthy.last_success_boot_ns, None);
+    let plan = harness.plan("replay", 1, 1, 2_000);
+    harness.dispatch_when_ready(AdapterJob::Read(plan.clone()));
+    harness.batch_for(plan.request_id).unwrap();
+    // The Settings tab's LAST OK column reads the Manager's copy, which only
+    // HostStatus completions update (D-91).
+    let succeeded = harness.wait_for(|completion| {
+        matches!(completion, IngestionCompletion::HostStatus(status)
+            if status.last_success_boot_ns.is_some())
+    });
+    let IngestionCompletion::HostStatus(status) = succeeded else {
+        unreachable!()
+    };
+    assert_eq!(status.state, HostState::Healthy);
+    harness.handle.shutdown(Duration::from_secs(2));
+}

@@ -52,6 +52,7 @@ use super::launch::{
 use super::report::{HostShutdown, StopOutcome, StopStage};
 use super::requests::{self, Revisions, failed_completion, failure};
 use super::shared::Execution;
+use super::status_emission;
 use super::stderr_drain::StderrDrain;
 
 /// Poll interval while a reap or a credit retry is pending.
@@ -1345,7 +1346,7 @@ impl HostSlot {
     }
 
     /// Updates the shared view and emits a `HostStatus` completion when
-    /// anything but the success timestamp changed.
+    /// [`status_emission::should_emit`] says the Manager needs it.
     fn publish(&mut self, ctx: &mut LoopContext) {
         let status = self.status();
         {
@@ -1357,12 +1358,7 @@ impl HostSlot {
                 *pid = status.pid;
             }
         }
-        let changed = self.last_published.as_ref().is_none_or(|previous| {
-            let mut comparable = previous.clone();
-            comparable.last_success_boot_ns = status.last_success_boot_ns;
-            comparable != status
-        });
-        if changed {
+        if status_emission::should_emit(self.last_published.as_ref(), &status) {
             self.last_published = Some(status.clone());
             ctx.emit(IngestionCompletion::HostStatus(status));
         }

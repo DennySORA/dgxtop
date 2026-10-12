@@ -26,6 +26,7 @@ mod report;
 mod requests;
 mod shared;
 mod slot;
+mod status_emission;
 mod stderr_drain;
 
 use std::collections::HashSet;
