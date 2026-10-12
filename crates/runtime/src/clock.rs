@@ -83,26 +83,18 @@ impl TimeProvider for BootClock {
     }
 }
 
-/// The clock that keeps counting while the machine sleeps, and its name.
-/// macOS, where dgxtop builds for development, has no `CLOCK_BOOTTIME`; its
-/// `CLOCK_MONOTONIC` counts sleep as well.
-#[cfg(target_os = "linux")]
-const BOOT_CLOCK: (ClockId, &str) = (ClockId::CLOCK_BOOTTIME, "CLOCK_BOOTTIME");
-#[cfg(not(target_os = "linux"))]
-const BOOT_CLOCK: (ClockId, &str) = (ClockId::CLOCK_MONOTONIC, "CLOCK_MONOTONIC");
-
 fn read_boottime_ns() -> Result<u64, InfraError> {
-    let (clock, name) = BOOT_CLOCK;
-    let now = clock_gettime(clock)
-        .map_err(|errno| InfraError::Unavailable(format!("{name} unavailable: {errno}")))?;
+    let now = clock_gettime(ClockId::CLOCK_BOOTTIME)
+        .map_err(|errno| InfraError::Unavailable(format!("CLOCK_BOOTTIME unavailable: {errno}")))?;
     let seconds = u64::try_from(now.tv_sec())
-        .map_err(|_| InfraError::Unavailable(format!("{name} returned negative seconds")))?;
-    let nanos = u64::try_from(now.tv_nsec())
-        .map_err(|_| InfraError::Unavailable(format!("{name} returned negative nanoseconds")))?;
+        .map_err(|_| InfraError::Unavailable("CLOCK_BOOTTIME returned negative seconds".into()))?;
+    let nanos = u64::try_from(now.tv_nsec()).map_err(|_| {
+        InfraError::Unavailable("CLOCK_BOOTTIME returned negative nanoseconds".into())
+    })?;
     seconds
         .checked_mul(NANOS_PER_SECOND)
         .and_then(|whole| whole.checked_add(nanos))
-        .ok_or_else(|| InfraError::Unavailable(format!("{name} overflows u64 ns")))
+        .ok_or_else(|| InfraError::Unavailable("CLOCK_BOOTTIME overflows u64 ns".into()))
 }
 
 /// Stable host identity: `host-` + the first 16 hex digits of SHA-256 over

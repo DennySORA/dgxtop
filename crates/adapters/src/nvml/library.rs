@@ -29,7 +29,6 @@ use super::backend::{
     ProcessUtilizationSample, RetiredPageCause, StaticFact, ThermalThreshold, ThrottleCause,
     UtilizationRates,
 };
-use super::linux_only;
 
 /// Words of the CPU affinity mask asked for: 1024 CPUs.
 const CPU_AFFINITY_WORDS: usize = 16;
@@ -323,7 +322,7 @@ impl GpuInventory for NvmlLibraryBackend {
                 .board_part_number()
                 .ok()
                 .filter(|part| !part.trim().is_empty()),
-            minor_number: linux_only::minor_number(&device).ok(),
+            minor_number: device.minor_number().ok(),
             pci_device_id: pci.as_ref().map(|info| pci_id(info.pci_device_id)),
             pci_subsystem_id: pci
                 .as_ref()
@@ -338,7 +337,7 @@ impl GpuInventory for NvmlLibraryBackend {
     }
 
     fn persistence_mode(&self, uuid: &str) -> BackendResult<bool> {
-        query(linux_only::persistence_mode(&self.device(uuid)?))
+        query(self.device(uuid)?.is_in_persistent_mode())
     }
 
     fn fan_count(&self, uuid: &str) -> BackendResult<u32> {
@@ -395,10 +394,7 @@ impl GpuInventory for NvmlLibraryBackend {
     }
 
     fn cpu_affinity(&self, uuid: &str) -> BackendResult<Vec<u64>> {
-        query(linux_only::cpu_affinity(
-            &self.device(uuid)?,
-            CPU_AFFINITY_WORDS,
-        ))
+        query(self.device(uuid)?.cpu_affinity(CPU_AFFINITY_WORDS))
     }
 
     /// The link count and the first link's bandwidth: the binding reads
@@ -421,16 +417,15 @@ impl GpuInventory for NvmlLibraryBackend {
     }
 
     fn numa_affinity(&self, uuid: &str) -> BackendResult<Vec<u64>> {
-        query(linux_only::memory_affinity(
-            &self.device(uuid)?,
-            NUMA_AFFINITY_WORDS,
-            NUMA_NODE_SCOPE,
-        ))
+        query(
+            self.device(uuid)?
+                .memory_affinity(NUMA_AFFINITY_WORDS, NUMA_NODE_SCOPE),
+        )
     }
 
     fn peer_link(&self, uuid: &str, peer: &str) -> BackendResult<GpuLink> {
         let other = self.device(peer)?;
-        query(linux_only::common_ancestor(&self.device(uuid)?, other)).map(link_of)
+        query(self.device(uuid)?.topology_common_ancestor(other)).map(link_of)
     }
 
     fn peer_access(&self, uuid: &str, peer: &str) -> BackendResult<PeerAccess> {

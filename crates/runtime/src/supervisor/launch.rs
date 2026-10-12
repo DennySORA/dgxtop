@@ -212,7 +212,7 @@ pub(crate) fn set_nonblocking(fd: &OwnedFd) -> Result<(), InfraError> {
 
 /// Close-on-exec pipe so no other child inherits it.
 pub(crate) fn private_pipe() -> Result<(OwnedFd, OwnedFd), InfraError> {
-    crate::pipe::pipe2(OFlag::O_CLOEXEC)
+    nix::unistd::pipe2(OFlag::O_CLOEXEC)
         .map_err(|errno| InfraError::Unavailable(format!("pipe2 failed: {errno}")))
 }
 

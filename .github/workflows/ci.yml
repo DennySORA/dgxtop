@@ -31,21 +31,6 @@ jobs:
       - run: cargo check --workspace --all-targets --all-features --locked
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
-  macos:
-    name: macOS build (clippy)
-    # dgxtop runs on Linux; macOS builds it for development only, so every
-    # target must compile and pass clippy there. The test suites stay on Linux:
-    # some need its kernel interfaces (pidfd, /proc).
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          components: clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-
   boundaries:
     name: dependency boundaries
     runs-on: ubuntu-24.04

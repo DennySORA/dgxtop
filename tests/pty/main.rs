@@ -99,9 +99,7 @@ impl PtySession {
                 if libc::setsid() < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
-                // The request is a c_ulong on Linux and a c_uint on macOS;
-                // `as _` takes ioctl's own request type on both.
-                if libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
+                if libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())
