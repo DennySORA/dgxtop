@@ -44,7 +44,7 @@ cargo build --release --locked
 htop 以 CPU 為主，nvtop 和 nvidia-smi 只在你盯著的時候顯示 GPU。dgxtop 以 GPU 為主，顯示每個工作佔用多少 GPU 記憶體，並記錄每個 GPU 工作與整台機器。
 
 - **一眼看完所有 GPU。** 每張 GPU 的使用率、記憶體、溫度、功耗、時脈與風扇，附即時圖表。量表低於 50% 是綠色，接近紅線（預設 80%）時由橘轉紅。
-- **依程序區分記憶體。** 佔用 GPU 記憶體最多的八個程序各有一種顏色，記憶體長條、圖表與程序表都用同一種顏色，一眼看出哪個工作佔用多少。顏色由程序名稱決定，所以工作或 dgxtop 重開後顏色不變。
+- **依程序區分記憶體。** 佔用 GPU 記憶體最多的八個程序各有一種顏色，記憶體長條、圖表與程序表都用同一種顏色，一眼看出哪個工作佔用多少。顏色由程序名稱決定，所以工作或 dgxtop 重開後顏色不變，除非另一個列出的程序已經佔用那個顏色。
 - **用實際執行的程式命名。** `python -m vllm.entrypoints.openai.api_server` 顯示為 `vllm.api_server`，在 `ComfyUI` 資料夾執行的 `python main.py` 顯示為 `ComfyUI/main`，而不是 `python3`。
 - **GPU 程序。** 所有使用 GPU 的程序，以及所在的 GPU、類型（運算或圖形）、GPU 使用率、GPU 記憶體、CPU 與 RAM。可依任一欄排序、依 GPU 或名稱篩選，確認後用 `K`（SIGTERM）或 `F9`（SIGKILL）結束程序。
 - **程序歷史（Process History）。** 每個 GPU 程序從開始到結束都記錄成一次執行：執行時間、GPU 記憶體與 RAM 峰值、GPU 與 CPU 使用率，以及結束方式：以結束碼結束、被訊號終止、從 dgxtop 結束、很可能是 OOM killer，或仍在執行。打開一次執行，可以看到完整命令列、工作目錄，以及 CPU、記憶體、GPU、執行緒、開啟的檔案、磁碟與網路的圖表。
