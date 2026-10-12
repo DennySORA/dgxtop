@@ -21,7 +21,7 @@ use dgxtop::perf::threads::HarnessCpu;
 use dgxtop_core::commands::{
     COMMAND_SCHEMA_VERSION, CommandBody, CommandEnvelope, CommandResult, SortKey, ViewKind,
 };
-use dgxtop_core::identity::{EntityId, ProcessKey, SessionId};
+use dgxtop_core::identity::{EntityId, SessionId};
 use dgxtop_core::ports::SessionPort;
 use dgxtop_core::tiers::BarSize;
 use dgxtop_core::view::ViewModel;
@@ -54,8 +54,6 @@ const SORTS: [SortKey; 5] = [
     SortKey::HostMemory,
     SortKey::Pid,
 ];
-const PROCESS_FILTERS: [&str; 3] = ["py", "", "train"];
-const SOURCE_FILTERS: [&str; 4] = ["", "gpu", "temperature", ""];
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -65,23 +63,12 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[derive(Debug, Clone, Default)]
 pub struct ScriptHints {
     pub frame_revision: u64,
-    pub processes: Vec<ProcessKey>,
     pub gpus: Vec<EntityId>,
 }
 
 impl ScriptHints {
     pub fn absorb(&mut self, model: &ViewModel) {
         self.frame_revision = self.frame_revision.max(model.frame_revision);
-        if let Some(processes) = model.modules.processes.as_deref()
-            && !processes.rows.is_empty()
-        {
-            self.processes = processes
-                .rows
-                .iter()
-                .take(16)
-                .map(|row| row.key.clone())
-                .collect();
-        }
         if let Some(gpu) = model.modules.gpu.as_deref()
             && !gpu.cards.is_empty()
         {
@@ -207,8 +194,6 @@ impl ResultRouter {
 struct ViewChoice {
     view: ViewKind,
     entity: Option<EntityId>,
-    process: Option<ProcessKey>,
-    filter: String,
     sort: SortKey,
     ascending: bool,
     overview_bar: Option<BarSize>,
@@ -219,8 +204,6 @@ impl ViewChoice {
         Self {
             view,
             entity: None,
-            process: None,
-            filter: String::new(),
             sort: SortKey::GpuMemory,
             ascending: false,
             overview_bar: None,
@@ -231,8 +214,8 @@ impl ViewChoice {
         CommandBody::UpdateViewSession {
             view: self.view,
             selected_entity_id: self.entity,
-            selected_process: self.process,
-            filter: self.filter,
+            selected_process: None,
+            filter: String::new(),
             sort: self.sort,
             ascending: self.ascending,
             frame_revision,
@@ -251,17 +234,15 @@ fn cyclic<T: Clone>(items: &[T], index: u64) -> Option<T> {
 }
 
 /// The view command of script step `step` (deterministic 10 s cycle:
-/// overview, processes, GPU detail, sources, history, settings, actions).
+/// overview, GPU detail, history, settings). Only views the Manager serves
+/// are visited: it refuses the Processes, Sources and Actions views (D-91).
 pub fn view_command(step: u64, hints: &ScriptHints) -> CommandBody {
     let (cycle, phase) = (step / CYCLE_STEPS, step % CYCLE_STEPS);
     let choice = match phase {
-        0..=9 => overview(phase),
-        10..=27 => processes(phase - 10, hints),
-        28..=39 => gpu_detail(phase - 28, hints),
-        40..=49 => sources(phase - 40),
-        50..=79 => history(cycle),
-        80..=89 => ViewChoice::plain(ViewKind::Settings),
-        _ => ViewChoice::plain(ViewKind::Actions),
+        0..=19 => overview(phase % 10),
+        20..=39 => gpu_detail(phase - 20, hints),
+        40..=79 => history(cycle),
+        _ => ViewChoice::plain(ViewKind::Settings),
     };
     choice.into_command(hints.frame_revision)
 }
@@ -274,32 +255,10 @@ fn overview(step: u64) -> ViewChoice {
     }
 }
 
-/// Walks the visible rows by identity; the last steps try name filters.
-fn processes(step: u64, hints: &ScriptHints) -> ViewChoice {
-    let filter = match step.checked_sub(15) {
-        Some(index) => cyclic(&PROCESS_FILTERS, index)
-            .unwrap_or_default()
-            .to_owned(),
-        None => String::new(),
-    };
-    ViewChoice {
-        process: cyclic(&hints.processes, step),
-        filter,
-        ..ViewChoice::plain(ViewKind::Processes)
-    }
-}
-
 fn gpu_detail(step: u64, hints: &ScriptHints) -> ViewChoice {
     ViewChoice {
         entity: cyclic(&hints.gpus, step),
         ..ViewChoice::plain(ViewKind::GpuDetail)
-    }
-}
-
-fn sources(step: u64) -> ViewChoice {
-    ViewChoice {
-        filter: cyclic(&SOURCE_FILTERS, step).unwrap_or_default().to_owned(),
-        ..ViewChoice::plain(ViewKind::Sources)
     }
 }
 

@@ -94,7 +94,8 @@ impl PidfdActionAdapter {
         }
     }
 
-    /// Number of descriptors currently held.
+    /// Number of descriptors currently held (descriptor-leak tests).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn held_count(&self) -> usize {
         self.held.len()
     }

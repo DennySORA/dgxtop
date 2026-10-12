@@ -46,6 +46,7 @@ pub struct LoggerStats {
     pub queued_bytes: u64,
 }
 
+#[cfg(test)]
 impl LoggerStats {
     /// Dropped debug/info records.
     pub const fn dropped_low_priority(&self) -> u64 {

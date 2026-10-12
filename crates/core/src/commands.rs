@@ -167,11 +167,6 @@ impl CommandBody {
             Self::Shutdown { .. } => "Shutdown",
         }
     }
-
-    /// Pure navigation that may be coalesced under input bursts.
-    pub const fn is_coalescible_navigation(&self) -> bool {
-        matches!(self, Self::UpdateViewSession { .. })
-    }
 }
 
 /// Envelope carried from a Controller to the Manager.
