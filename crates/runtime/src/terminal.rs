@@ -202,7 +202,7 @@ mod tests {
     use std::time::Instant;
 
     fn pipe() -> (OwnedFd, OwnedFd) {
-        nix::unistd::pipe2(OFlag::O_CLOEXEC).unwrap()
+        crate::pipe::pipe2(OFlag::O_CLOEXEC).unwrap()
     }
 
     fn flags_of(fd: &OwnedFd) -> OFlag {

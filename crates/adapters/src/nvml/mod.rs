@@ -20,6 +20,7 @@ mod channels;
 mod discovery;
 mod inventory;
 mod library;
+mod linux_only;
 mod processes;
 mod stack;
 mod telemetry;

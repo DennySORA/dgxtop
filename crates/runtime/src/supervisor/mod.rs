@@ -110,7 +110,7 @@ impl Supervisor {
             .try_reserve(Partition::Reserve, working_set_bytes(specs.len()))
             .map_err(|error| InfraError::Unavailable(format!("supervisor working set: {error}")))?;
         let (wake_reader, wake_writer) =
-            nix::unistd::pipe2(OFlag::O_CLOEXEC | OFlag::O_NONBLOCK)
+            crate::pipe::pipe2(OFlag::O_CLOEXEC | OFlag::O_NONBLOCK)
                 .map_err(|errno| InfraError::Unavailable(format!("wake pipe: {errno}")))?;
         let shared = Arc::new(Shared::new(initial_state(&specs, &config), wake_writer));
         let (commands, command_receiver) = bounded(config.command_capacity + specs.len());

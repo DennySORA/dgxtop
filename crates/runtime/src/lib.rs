@@ -30,6 +30,7 @@ pub mod clock;
 pub mod host;
 pub mod ipc;
 pub mod logger;
+mod pipe;
 pub mod queues;
 pub mod signals;
 pub mod supervisor;
