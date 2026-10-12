@@ -129,6 +129,23 @@ impl Sandbox {
         );
     }
 
+    /// A "binary" that reports this version and target, then far more lines
+    /// than a pipe holds, as a long verbose report would.
+    fn binary_with_a_long_report(&self) -> PathBuf {
+        let path = self.root.join("long-report");
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\necho 'dgxtop {}'\necho 'target: {}'\ni=0\nwhile [ $i -lt 5000 ]; do echo \"detail line $i of a long verbose report\"; i=$((i+1)); done\n",
+                env!("CARGO_PKG_VERSION"),
+                release_target()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
     /// A "binary" that fails to load the way a build for a newer glibc does.
     fn binary_for_a_newer_glibc(&self) -> PathBuf {
         let path = self.root.join("needs-newer-glibc");
@@ -275,6 +292,19 @@ fn a_binary_reporting_another_version_is_refused() {
         stderr_of(&refused)
     );
     assert!(sandbox.install_dir_entries().is_empty());
+}
+
+/// The version and target lines are matched in the whole report. Read from a
+/// pipe under pipefail, a `grep -q` that stopped at the first line ended the
+/// writer of the rest with SIGPIPE and refused a release whose version matched.
+#[test]
+fn a_long_version_report_is_matched_without_a_broken_pipe() {
+    let sandbox = Sandbox::new("long-report");
+    let binary = sandbox.binary_with_a_long_report();
+    sandbox.publish(&current_tag(), &binary, &[]);
+    let installed = sandbox.install(&current_tag());
+    assert!(installed.status.success(), "{}", stderr_of(&installed));
+    assert_eq!(sandbox.install_dir_entries(), ["dgxtop"]);
 }
 
 #[test]

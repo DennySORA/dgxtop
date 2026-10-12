@@ -173,8 +173,10 @@ verify_binary() {
         fail "new binary does not run on this host: $report"
     fi
     # Whole-line fixed strings: v0.2 must not accept 0.2.0, nor '.' any byte.
-    printf '%s\n' "$report" | grep -qxF "dgxtop ${version#v}" || fail "binary version does not match ${version}"
-    printf '%s\n' "$report" | grep -qxF "target: ${target}" || fail "binary target does not match ${target}"
+    # A here-string, not a pipe: under pipefail, grep -q leaving at the first
+    # match would end the writer with SIGPIPE and fail a report that matched.
+    grep -qxF -- "dgxtop ${version#v}" <<<"$report" || fail "binary version does not match ${version}"
+    grep -qxF -- "target: ${target}" <<<"$report" || fail "binary target does not match ${target}"
 }
 
 install_release() {
