@@ -282,6 +282,20 @@ fn workflows_pin_actions_by_commit_and_build_from_the_lock_file() {
     }
 }
 
+/// The release page shows `docs/releases/<tag>.md` (D-102): the version the
+/// workspace is at must have its notes, so the PR that bumps it brings them.
+#[test]
+fn the_workspace_version_has_its_release_notes() {
+    let tag = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let notes = read(&format!("docs/releases/{tag}.md"));
+    assert!(
+        notes.contains(&tag),
+        "docs/releases/{tag}.md must name {tag}"
+    );
+    let workflow = read(".github/workflows/release.yml");
+    assert!(workflow.contains("body_path: docs/releases/${{ github.ref_name }}.md"));
+}
+
 /// Whether git tracks the lock file can only be checked once it is committed;
 /// this guards what the tree itself controls.
 #[test]

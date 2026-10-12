@@ -30,6 +30,9 @@ jobs:
         run: |
           version="$(cargo metadata --format-version 1 --locked --no-deps | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="dgxtop"))')"
           test "v${version}" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} != package version v${version}"; exit 1; }
+      # The release page shows docs/releases/<tag>.md, written in the release PR.
+      - name: The tag has its release notes
+        run: test -s "docs/releases/${GITHUB_REF_NAME}.md" || { echo "missing docs/releases/${GITHUB_REF_NAME}.md"; exit 1; }
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --all-features --locked
@@ -117,11 +120,7 @@ jobs:
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           make_latest: true
-          body: |
-            dgxtop for Linux on x86_64 and aarch64 with glibc 2.34 or newer; WSL 2 runs the Linux build.
-            Install: curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | bash
-            Hardware validation status, test evidence and known gaps: see docs/validation/VALIDATION.md.
-            A platform is only "validated" when that document lists measured evidence for it.
+          body_path: docs/releases/${{ github.ref_name }}.md
           files: |
             dist/dgxtop-*.tar.gz
             dist/SHA256SUMS
