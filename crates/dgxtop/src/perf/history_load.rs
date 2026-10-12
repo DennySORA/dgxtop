@@ -1,5 +1,5 @@
 //! Realistic-shape canonical history for the history benchmark
-//! (`PERFORMANCE.md` §2: "preload a real-shape 24 h aggregate, then measure"),
+//! (a real-shape 24 h aggregate is preloaded, then measured),
 //! read back through the Overview's sizes (D-82, D-90).
 //!
 //! The shape: up to 24 h of minute rollups, the newest 300 s at full

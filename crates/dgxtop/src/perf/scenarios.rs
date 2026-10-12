@@ -129,8 +129,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn spec_scenarios() -> Scenarios {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../spec/dgxtop-v2/bench/scenarios.json");
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../benches/scenarios.json");
         Scenarios::load(&path).unwrap()
     }
 

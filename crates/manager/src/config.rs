@@ -1,5 +1,4 @@
-//! ConfigurationService: CAS-protected configuration changes (CONFIG.md,
-//! AT08).
+//! ConfigurationService: CAS-protected configuration changes (AT08).
 //!
 //! Flow: validate → stage candidate → `ConfigJob::Persist` → receipt →
 //! infallible swap of saved + effective → caller applies the new epoch /
@@ -386,8 +385,8 @@ impl ConfigurationService {
             }
             None => {
                 // The rename may have replaced the file, so neither the old
-                // nor the new document can be claimed to be on disk
-                // (CONFIG.md): only the running configuration is known.
+                // nor the new document can be claimed to be on disk: only the
+                // running configuration is known.
                 self.last_result = Some(format!(
                     "commit uncertain; on-disk state unknown (running revision {} kept)",
                     self.saved.revision
@@ -563,7 +562,7 @@ fn with_module(saved: &Config, module: &str, enabled: bool) -> Config {
     candidate
 }
 
-/// Registry and pin rules that need runtime knowledge (CONFIG.md).
+/// Registry and pin rules that need runtime knowledge.
 fn registry_or_pin_problem(candidate: &Config, catalog: &CatalogSnapshot) -> Option<String> {
     if let Some(unknown) = candidate
         .viewer
@@ -734,7 +733,7 @@ mod tests {
     }
 
     /// A retired module id (D-91) may stay enabled in a saved file, as in
-    /// the spec's default, but cannot be toggled: it is no longer listed.
+    /// the REF configuration, but cannot be toggled: it is no longer listed.
     #[test]
     fn retired_modules_are_accepted_but_not_toggled() {
         let mut saved = Config::defaults().unwrap();
@@ -817,7 +816,7 @@ mod tests {
         );
     }
 
-    /// UI.md §6 Settings: the file's size against its limit, from the
+    /// The Settings view: the file's size against its limit, from the
     /// repository at load and from each durable save; a failed save keeps
     /// the previous file and so its size.
     #[test]

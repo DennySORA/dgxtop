@@ -1,7 +1,6 @@
 //! # dgxtop-runtime
 //!
-//! Execution mechanics of the dgxtop v2 rewrite (`spec/dgxtop-v2/RUNTIME.md`,
-//! `ARCHITECTURE.md` §10, `contracts/INTERFACES.md` §7/§10, `SECURITY.md` §4).
+//! Execution mechanics of dgxtop v2.
 //! This crate is mechanism, not policy: the Manager decides *what* to sample
 //! and *when*; the runtime decides *how* work crosses threads and processes
 //! without unbounded queues, unbounded allocation or blocking the caller.

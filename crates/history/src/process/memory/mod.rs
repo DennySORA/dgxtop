@@ -19,7 +19,7 @@
 //!
 //! Bounded: [`tracking::MAX_TRACKED_PROCESSES`] processes, each series at
 //! most the compression's buckets of every size, recorded while dgxtop
-//! runs (process memory never becomes a store series, METRICS.md). An
+//! runs (process memory never becomes a store series). An
 //! exited process keeps its record until it has not been listed for a day
 //! or the oldest exited record gives way to a new process; a process that
 //! loses its place takes its record with it, and its memory then counts

@@ -1,5 +1,5 @@
 //! XDG paths, private directories and the instance lock, plus the startup
-//! order of OPERATIONS.md §1 (safe paths and lock before config and SQLite).
+//! order (safe paths and lock before config and SQLite).
 
 // Test helpers panic on setup failures; the lints target production code.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

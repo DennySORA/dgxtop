@@ -1,4 +1,4 @@
-//! Free disk space probe for the 64 MiB low-water mark (`STORAGE.md` §6).
+//! Free disk space probe for the 64 MiB low-water mark.
 //!
 //! The probe runs on the I/O worker that owns the database and is not a
 //! substitute for handling `ENOSPC`/`SQLITE_FULL`; it only refuses new

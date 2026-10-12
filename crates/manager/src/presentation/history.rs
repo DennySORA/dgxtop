@@ -1,5 +1,5 @@
 //! Display downsampling of the history charts when a projection must
-//! shrink to its byte budget (STORAGE.md §5): pixel buckets keep
+//! shrink to its byte budget: pixel buckets keep
 //! min/max/mean, never bridge a gap or a time discontinuity, and leave the
 //! authoritative result untouched. A chart is never downsampled to its
 //! width: the HistoryService asks one bar per plot column already (D-50).

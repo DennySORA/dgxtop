@@ -1,5 +1,5 @@
-//! Process-tree and managed-memory sampling at ≤ 1 s intervals
-//! (`PERFORMANCE.md` §2): parent + every adapter host (`ProcessTreeStats`
+//! Process-tree and managed-memory sampling at ≤ 1 s intervals: the
+//! parent and every adapter host (`ProcessTreeStats`
 //! over `[own pid] + SupervisorHandle::managed_pids()`), the byte ledger,
 //! and the CPU the harness threads spent (to be excluded and reported).
 

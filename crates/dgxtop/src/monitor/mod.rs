@@ -1,6 +1,6 @@
 //! Monitor mode: wires every component and runs the terminal frontend.
 //!
-//! Startup order (spec/dgxtop-v2/OPERATIONS.md §1): CLI → safe paths and the
+//! Startup order: CLI → safe paths and the
 //! instance lock → configuration and admission → SQLite gate → store workers
 //! → Manager and adapter hosts → frontend (published before slow sources
 //! warm up). Shutdown is bounded: frontend, Manager, workers, hosts.
@@ -45,8 +45,8 @@ use crate::startup;
 use self::assemble::{AssembleInputs, Wiring};
 use self::workers::Workers;
 
-/// Bound of all application-controlled waits at shutdown together
-/// (RUNTIME.md §8), after the frontend exits.
+/// Bound of all application-controlled waits at shutdown together, after
+/// the frontend exits.
 const SHUTDOWN_BUDGET: Duration = Duration::from_secs(3);
 /// Part of the budget kept for flushing the log after everything else.
 const LOG_FLUSH_RESERVE: Duration = Duration::from_millis(250);

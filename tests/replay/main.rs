@@ -2,7 +2,7 @@
 //! adapter (catalog discovery + paged reads) and the real collectors, with the
 //! Store's acknowledgement simulated by adopting `next_state`. Verifies the
 //! adapter/collector naming contract end to end (AT03, AT04, AT07, AT09) and
-//! that replay data never becomes live or history-eligible (ADR08).
+//! that replay data never becomes live or history-eligible.
 
 // Test helpers may unwrap: a broken fixture must fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

@@ -298,7 +298,7 @@ impl AuditRepository for AuditSpy {
 }
 
 /// Real `statvfs` free space that a test can flip to "disk full", which makes
-/// the real audit repository refuse new records (STORAGE.md §6 low-water mark).
+/// the real audit repository refuse new records (the 64 MiB low-water mark).
 #[derive(Debug, Default)]
 pub struct DiskSpace {
     full: AtomicBool,

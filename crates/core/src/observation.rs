@@ -653,7 +653,7 @@ mod tests {
 
     #[test]
     fn spec_observation_example_parses_and_validates() {
-        let text = include_str!("../../../spec/dgxtop-v2/examples/observation.cpu-package.json");
+        let text = include_str!("../../../contracts/examples/observation.cpu-package.json");
         let observation: Observation = serde_json::from_str(text).unwrap();
         observation.validate().unwrap();
         assert_eq!(observation.value.unwrap().to_f64_lossy(), 68000.0);
@@ -664,7 +664,7 @@ mod tests {
 
     #[test]
     fn spec_batch_example_parses_with_null_failure_value() {
-        let text = include_str!("../../../spec/dgxtop-v2/examples/observation-batch.partial.json");
+        let text = include_str!("../../../contracts/examples/observation-batch.partial.json");
         let batch: ObservationBatch = serde_json::from_str(text).unwrap();
         assert_eq!(batch.records.len(), 2);
         assert_eq!(batch.records[1].read_status, ReadStatus::Timeout);
@@ -676,7 +676,7 @@ mod tests {
 
     #[test]
     fn failed_read_with_value_is_rejected() {
-        let text = include_str!("../../../spec/dgxtop-v2/examples/observation.cpu-package.json");
+        let text = include_str!("../../../contracts/examples/observation.cpu-package.json");
         let mut observation: Observation = serde_json::from_str(text).unwrap();
         observation.read_status = ReadStatus::Timeout;
         assert!(observation.validate().is_err());
@@ -688,12 +688,12 @@ mod tests {
     #[test]
     fn spec_ipc_request_and_manifest_parse() {
         let request: IpcRequest = serde_json::from_str(include_str!(
-            "../../../spec/dgxtop-v2/examples/ipc-request.read.json"
+            "../../../contracts/examples/ipc-request.read.json"
         ))
         .unwrap();
         request.validate().unwrap();
         let manifest: AdapterManifest = serde_json::from_str(include_str!(
-            "../../../spec/dgxtop-v2/examples/adapter-manifest.nvml.json"
+            "../../../contracts/examples/adapter-manifest.nvml.json"
         ))
         .unwrap();
         manifest.validate().unwrap();
@@ -702,7 +702,7 @@ mod tests {
     #[test]
     fn ipc_request_rejects_slots_on_discover_and_duplicates() {
         let mut request: IpcRequest = serde_json::from_str(include_str!(
-            "../../../spec/dgxtop-v2/examples/ipc-request.read.json"
+            "../../../contracts/examples/ipc-request.read.json"
         ))
         .unwrap();
         request.source_slots = vec![1, 1];

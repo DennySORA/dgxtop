@@ -1,5 +1,4 @@
-//! Non-blocking terminal output and hang-up-aware input readiness
-//! (`UI.md` §5).
+//! Non-blocking terminal output and hang-up-aware input readiness.
 //!
 //! A terminal that stops reading (a stuck PTY reader or a stopped tmux pane)
 //! must never block the render thread: writes go through `O_NONBLOCK` and

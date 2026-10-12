@@ -1,4 +1,4 @@
-//! Exclusive per-state-directory instance lock (`STORAGE.md` §1).
+//! Exclusive per-state-directory instance lock.
 //!
 //! Two dgxtop processes writing the same state directory would consume the
 //! same audit tokens and fight over the SQLite writers, so the second one must

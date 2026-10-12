@@ -70,7 +70,7 @@ const INIT_PROBE_KEY: &str = "nvml.init";
 /// Static manifest of the NVML adapter (`examples/adapter-manifest.nvml.json`).
 pub fn manifest() -> AdapterManifest {
     serde_json::from_str(include_str!(
-        "../../../../spec/dgxtop-v2/examples/adapter-manifest.nvml.json"
+        "../../../../contracts/examples/adapter-manifest.nvml.json"
     ))
     .unwrap_or_else(|error| panic!("embedded NVML manifest is invalid: {error}"))
 }

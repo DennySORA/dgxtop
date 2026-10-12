@@ -1,4 +1,4 @@
-//! Normal-data coverage (`PERFORMANCE.md` §2): the share of *scheduled*
+//! Normal-data coverage: the share of *scheduled*
 //! sampling slots whose read reached the store in a committed batch.
 //!
 //! The denominator is fixed in advance from the configured periods and the

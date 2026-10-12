@@ -1,5 +1,4 @@
-//! ProcessService: the only path to a user-process signal (SECURITY.md §3,
-//! AT10/AT32).
+//! ProcessService: the only path to a user-process signal (AT10/AT32).
 //!
 //! `requested → prepared → confirming → intent_pending → intent_committed →
 //! sending → signal_sent → exit_observed | still_running`, with

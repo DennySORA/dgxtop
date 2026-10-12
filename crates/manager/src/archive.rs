@@ -1,4 +1,4 @@
-//! Visible state of the optional history archive (STORAGE.md §1). A store
+//! Visible state of the optional history archive. A store
 //! acknowledgement only says "memory committed, archive pending"; the fate
 //! of each archive journal (committed or a gap) is reported afterwards and
 //! surfaces as the archive's persistence status.

@@ -749,8 +749,8 @@ pub struct GapRecord {
 pub struct SnapshotEntry {
     pub sample: CanonicalSample,
     pub last_good: Option<LastGood>,
-    /// From this boot time on the value is no longer current (STORAGE.md §3:
-    /// sample time + stale factor x source period). A backend that stops
+    /// From this boot time on the value is no longer current: the sample
+    /// time plus the stale factor times the source period. A backend that stops
     /// answering commits nothing, so readers compare it with their own now.
     /// `None` when the entry carries no value.
     pub stale_after_boot_ns: Option<u64>,
@@ -895,7 +895,7 @@ mod tests {
 
     #[test]
     fn spec_conflict_example_round_trips() {
-        let text = include_str!("../../../spec/dgxtop-v2/examples/canonical.conflict.json");
+        let text = include_str!("../../../contracts/examples/canonical.conflict.json");
         let sample: CanonicalSample = serde_json::from_str(text).unwrap();
         assert_eq!(sample.selection_state, SelectionState::Conflict);
         assert!(sample.value.is_none());

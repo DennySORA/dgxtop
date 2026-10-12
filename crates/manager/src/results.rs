@@ -1,4 +1,4 @@
-//! Idempotency cache for command results (RUNTIME.md §4).
+//! Idempotency cache for command results.
 //!
 //! The same `request_id` with the same payload digest returns the original
 //! result (or "in progress" while it is still pending); a different payload

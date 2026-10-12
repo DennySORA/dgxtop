@@ -13,8 +13,7 @@
 //! - a program the command line does not name (`python -c ...`): its
 //!   parent's name, else the interpreter in its folder.
 //!
-//! Only that name leaves this module (SECURITY.md: the full command line is
-//! never recorded). It is taken only where the interpreter's grammar puts
+//! Only that name leaves this module, never the command line itself. It is taken only where the interpreter's grammar puts
 //! its program, so an option value or code never becomes a name: Python's
 //! and Java's options are known in full; for the other interpreters an
 //! argument right after an option may be its value, so it names the

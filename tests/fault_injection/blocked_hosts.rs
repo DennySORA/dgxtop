@@ -288,8 +288,8 @@ fn at24_at39_unreapable_host_is_quarantined_never_respawned_and_shutdown_stays_b
 }
 
 /// A hung backend commits nothing, so its last values must age out: the
-/// state stamps each value with its stale deadline (`now >= deadline`,
-/// STORAGE.md §3) and the projection shows it as stale afterwards (AT24).
+/// state stamps each value with its stale deadline (`now >= deadline`)
+/// and the projection shows it as stale afterwards (AT24).
 #[test]
 #[ignore = "fault-injection run (opt-in): cargo test --test fault_injection -- --ignored"]
 fn at24_values_of_a_hung_backend_stop_being_shown_as_current() {

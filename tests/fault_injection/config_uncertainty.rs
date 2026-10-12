@@ -208,7 +208,7 @@ fn at36_uncertain_commit_that_cannot_be_reloaded_never_claims_the_old_file() {
     let on_disk = rig.reload_from_disk();
     assert_eq!((on_disk.revision, on_disk.sampling.interval_ms), (2, 2_000));
     // So the answer must not claim the old configuration or revision is
-    // what is stored (CONFIG.md: never claim the old version is still there).
+    // what is stored: it must never claim the old version is still there.
     assert!(
         !uncertain.message.contains("unchanged"),
         "claims an unchanged configuration: {uncertain:?}"

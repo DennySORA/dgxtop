@@ -8,7 +8,7 @@
 //!   cycle before every frame;
 //! * frame: the runner step that accepts the projection and draws it —
 //!   layout, module render, Ratatui diff and ANSI encoding into memory; the
-//!   terminal transport is a null sink (`PERFORMANCE.md`: transport excluded).
+//!   terminal transport is a null sink (the transport is excluded).
 //!
 //! Budget mapping: frames are `frame_p95_ms` / `frame_p99_ms`. Projection
 //! building is one stage of `projection_p95_ms` and is only compared with
@@ -98,7 +98,7 @@ fn main() -> ExitCode {
 
 fn run() -> BenchResult<PathBuf> {
     let args = common::parse_args(BENCH, false)?;
-    let spec = common::load_spec()?;
+    let inputs = common::load_inputs()?;
     let config = common::reference_config()?;
     let sizes = sizes(args.mode);
     let paths = common::output_paths(BENCH, &args);
@@ -107,9 +107,12 @@ fn run() -> BenchResult<PathBuf> {
         "headless 160x50 TuiLoop, ANSI encoded into memory, null transport",
         "single-threaded; projection build and frame step timed separately",
     )?;
-    let viewport = (spec.profile.terminal_columns, spec.profile.terminal_rows);
-    let profile = spec.profile.replay_profile(0);
-    let fixture = generate_ref_fixture(spec.seed, &profile);
+    let viewport = (
+        inputs.profile.terminal_columns,
+        inputs.profile.terminal_rows,
+    );
+    let profile = inputs.profile.replay_profile(0);
+    let fixture = generate_ref_fixture(inputs.seed, &profile);
     let census = FixtureCensus::of(&fixture);
     let mut world = SnapshotWorld::new(&fixture, profile.adapter_hosts, &config)?;
     drop(fixture);
@@ -158,7 +161,7 @@ fn run() -> BenchResult<PathBuf> {
         .iter()
         .filter_map(|detail| detail.build.as_ref().map(|summary| summary.p95_ms))
         .fold(f64::NAN, f64::max);
-    let projection_budget = spec
+    let projection_budget = inputs
         .budgets
         .limits
         .get("projection_p95_ms")
@@ -169,7 +172,7 @@ fn run() -> BenchResult<PathBuf> {
         runs,
         soak: None,
         details: json!({
-            "fixture": {"seed": spec.seed, "census": census, "simulated_latency_us": 0},
+            "fixture": {"seed": inputs.seed, "census": census, "simulated_latency_us": 0},
             "viewport": viewport,
             "warmup_cycles": sizes.warmup_cycles,
             "frames_per_view_per_run": sizes.frames_per_view,
@@ -192,7 +195,14 @@ fn run() -> BenchResult<PathBuf> {
             format!("worst projection build p95 {worst_build_p95:.3} ms (component of projection_p95_ms)"),
         ],
     };
-    common::finish(outcome, &spec, &config, environment, &mut evidence, &paths)
+    common::finish(
+        outcome,
+        &inputs,
+        &config,
+        environment,
+        &mut evidence,
+        &paths,
+    )
 }
 
 /// The replay pipeline committing into a real (replay-namespace) live state,

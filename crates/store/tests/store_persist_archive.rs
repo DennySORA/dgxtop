@@ -629,7 +629,7 @@ fn corrupt_and_other_format_archives_are_recreated() {
         .unwrap();
     drop(archive);
 
-    // An archive written before D-85 (the spec's schema, no format
+    // An archive written before D-85 (the first schema, no format
     // version) starts empty instead of being kept, and so does a newer one.
     for (label, stamp) in [("unstamped", 0), ("newer", format_stamp(2))] {
         let other = Fixture::new(label);

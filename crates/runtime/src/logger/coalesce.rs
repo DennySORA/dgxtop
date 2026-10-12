@@ -2,7 +2,7 @@
 //!
 //! A failing source logs the same error every cycle; writing it once per 30 s
 //! plus a "repeated N times" summary keeps the information while bounding the
-//! file growth (`OPERATIONS.md` §3).
+//! file growth.
 
 use std::collections::HashMap;
 

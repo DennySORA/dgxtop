@@ -1,5 +1,5 @@
 //! Fail-stop for unrecoverable invariant failures of the Manager and the hot
-//! store (spec/dgxtop-v2/SPEC.md §7, AT39). A panic on either thread is
+//! store (AT39). A panic on either thread is
 //! caught at the thread boundary: process actions stop sending, shutdown is
 //! requested so the frontend restores the terminal, and the process exits
 //! with a failure status. Nothing keeps sending signals with unknown state.

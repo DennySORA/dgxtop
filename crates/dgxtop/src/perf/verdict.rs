@@ -72,10 +72,8 @@ mod tests {
     use std::path::Path;
 
     fn budgets() -> Budgets {
-        Budgets::load(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/dgxtop-v2/bench/budgets.json"),
-        )
-        .unwrap()
+        Budgets::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../benches/budgets.json"))
+            .unwrap()
     }
 
     #[test]

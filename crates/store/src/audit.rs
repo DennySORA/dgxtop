@@ -1,7 +1,7 @@
 //! SQLite action audit (`audit.sqlite3`, WAL, `synchronous=FULL`).
 //!
-//! The audit is the gate of every destructive action (`SECURITY.md` §3,
-//! ADR16, ADR20): a signal may only be sent after [`SqliteAuditRepository`]
+//! The audit is the gate of every destructive action: a signal may only be
+//! sent after [`SqliteAuditRepository`]
 //! returned a `DurableReceipt`, which happens strictly after COMMIT of one
 //! small FULL transaction. Every condition that could make the intent
 //! non-durable (low disk, WAL backlog, size cap, busy past the deadline,

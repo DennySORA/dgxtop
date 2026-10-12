@@ -20,7 +20,7 @@ use dgxtop::perf::scenarios::{REF_PROFILE, ScenarioProfile, Scenarios};
 use dgxtop::perf::verdict::VerdictStatus;
 use dgxtop::perf::{Budgets, Environment, ReportKind, SoakResult};
 use dgxtop::version::BuildInfo;
-use dgxtop_core::config::{Config, DEFAULT_CONFIG_JSON, remove_retired_keys};
+use dgxtop_core::config::{Config, REFERENCE_CONFIG_JSON, remove_retired_keys};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -97,9 +97,9 @@ fn usage(bench: &str, accepts_soak: bool) -> String {
     )
 }
 
-/// `spec/dgxtop-v2` of this checkout.
-pub fn spec_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/dgxtop-v2")
+/// The root of this checkout.
+pub fn repository_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
 /// Cargo's target directory (parent of the benches' scratch directory).
@@ -145,39 +145,39 @@ impl Drop for RunDirectory {
     }
 }
 
-/// Spec inputs every bench reads: scenarios (REF profile + seed) and budgets.
-pub struct SpecInputs {
+/// Inputs every bench reads: scenarios (REF profile + seed) and budgets.
+pub struct BenchInputs {
     pub seed: u64,
     pub profile: ScenarioProfile,
     pub budgets: Budgets,
 }
 
-pub fn load_spec() -> BenchResult<SpecInputs> {
-    let scenarios = Scenarios::load(&spec_dir().join("bench/scenarios.json"))
+pub fn load_inputs() -> BenchResult<BenchInputs> {
+    let scenarios = Scenarios::load(&repository_dir().join("benches/scenarios.json"))
         .map_err(|error| error.to_string())?;
     let profile = scenarios
         .profile(REF_PROFILE)
         .map_err(|error| error.to_string())?
         .clone();
-    let budgets = Budgets::load(&spec_dir().join("bench/budgets.json"))
-        .map_err(|error| format!("bench/budgets.json: {error}"))?;
-    Ok(SpecInputs {
+    let budgets = Budgets::load(&repository_dir().join("benches/budgets.json"))
+        .map_err(|error| format!("benches/budgets.json: {error}"))?;
+    Ok(BenchInputs {
         seed: scenarios.seed,
         profile,
         budgets,
     })
 }
 
-/// The configuration every bench runs with: the REF fixed configuration,
-/// the spec's default document (`examples/config.default.json`). The
-/// built-in defaults differ from it by the history archive (D-51).
+/// The configuration every bench runs with: the REF fixed configuration
+/// (`contracts/examples/config.reference.json`). The built-in defaults
+/// differ from it by the history archive (D-51) and SIGKILL (D-71).
 pub fn reference_config() -> BenchResult<Config> {
     Config::reference().map_err(|error| format!("embedded default configuration: {error}"))
 }
 
-/// The spec's default document, the REF configuration as the spec wrote it.
+/// The REF configuration document as it is written.
 fn reference_document() -> Option<Value> {
-    serde_json::from_str(DEFAULT_CONFIG_JSON).ok()
+    serde_json::from_str(REFERENCE_CONFIG_JSON).ok()
 }
 
 /// Whether `config` is exactly the REF default document, apart from the
@@ -235,7 +235,7 @@ pub struct BenchOutcome {
 /// prints the console summary. Returns the report path.
 pub fn finish(
     outcome: BenchOutcome,
-    spec: &SpecInputs,
+    bench: &BenchInputs,
     config: &Config,
     environment: (Environment, EnvironmentDetails),
     evidence: &mut EvidenceWriter,
@@ -243,8 +243,8 @@ pub fn finish(
 ) -> BenchResult<PathBuf> {
     let (environment, details) = environment;
     let io = |error: std::io::Error| format!("evidence: {error}");
-    // The spec's evaluator compares the evidence with its default document,
-    // which still carries the keys D-88 retired.
+    // The evidence keeps the REF document as it is written, which still
+    // carries the keys D-88 retired.
     match reference_document().filter(|_| is_reference_config(config)) {
         Some(document) => evidence.write_json("config.json", &document),
         None => evidence.write_json("config.json", config),
@@ -271,7 +271,7 @@ pub fn finish(
     };
     let mut inputs = ReportInputs {
         mode: outcome.mode,
-        workload: spec.profile.workload(),
+        workload: bench.profile.workload(),
         runs: outcome.runs.clone(),
         soak,
         provenance: details.build.clone(),
@@ -282,14 +282,14 @@ pub fn finish(
         extra_blockers,
     };
     let blockers = acceptance_blockers(&inputs);
-    let summary = summary_document(&outcome, &spec.budgets, &blockers, &environment, &details);
+    let summary = summary_document(&outcome, &bench.budgets, &blockers, &environment, &details);
     evidence.write_json("summary.json", &summary).map_err(io)?;
     inputs.evidence_files = evidence.files().to_vec();
     let assembled = assemble(inputs);
     let document = serde_json::to_value(&assembled.report).map_err(|error| error.to_string())?;
     validate_against_schema(&document)?;
     write_report(&paths.report, &document)?;
-    print_console(&outcome, &spec.budgets, &assembled, paths);
+    print_console(&outcome, &bench.budgets, &assembled, paths);
     Ok(paths.report.clone())
 }
 
@@ -339,7 +339,7 @@ fn summary_document(
 
 /// Validates a report against `contracts/performance-report.schema.json`.
 pub fn validate_against_schema(document: &Value) -> BenchResult<()> {
-    let path = spec_dir().join("contracts/performance-report.schema.json");
+    let path = repository_dir().join("contracts/performance-report.schema.json");
     let text =
         std::fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     let schema: Value =

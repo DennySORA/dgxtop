@@ -619,7 +619,7 @@ fn current_frequency_record(
 /// The cached maximum, served with this read's time as NVML serves its
 /// metadata cache: the collector holds a static value fresh for three
 /// discovery periods, while the file is read again only for a new CPU
-/// generation (RUNTIME.md §3). The discovery read time made it stale after
+/// generation. The discovery read time made it stale after
 /// half a minute.
 fn static_record(
     context: &CpuRead<'_>,

@@ -1,5 +1,4 @@
-//! When a session's next projection is built (RUNTIME.md §5 presentation
-//! row, UI.md §4).
+//! When a session's next projection is built.
 //!
 //! Three things ask for a frame, each paced on its own:
 //! * **input** (a view update, a viewport, a configuration or action
@@ -19,7 +18,7 @@
 use dgxtop_core::clock::{NANOS_PER_MILLI, NANOS_PER_SECOND};
 
 /// Longest wait for the rest of a cycle's commits after the first. It also
-/// keeps the commit-to-projection latency within PERFORMANCE.md §2 (p95
+/// keeps the commit-to-projection latency within its budget (p95
 /// ≤ 100 ms).
 pub(crate) const SETTLE_NS: u64 = 50 * NANOS_PER_MILLI;
 /// Ages in projections advance at least this often without data.

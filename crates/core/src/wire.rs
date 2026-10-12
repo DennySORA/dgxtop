@@ -1,6 +1,6 @@
 //! JSON wire helpers shared by every contract type.
 //!
-//! The contracts in `spec/dgxtop-v2/contracts/*.schema.json` carry every `u64`
+//! The contracts in `contracts/*.schema.json` carry every `u64`
 //! as a decimal string (`^(0|[1-9][0-9]{0,19})$`) so that counters and boot
 //! clock nanoseconds never pass through an `f64`. SQLite stores the same values
 //! as fixed 20-digit zero padded TEXT so that lexical order equals numeric order.

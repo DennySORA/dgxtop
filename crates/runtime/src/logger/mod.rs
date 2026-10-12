@@ -1,4 +1,4 @@
-//! Bounded, rate-limited logging (`RUNTIME.md` §5 log row, `OPERATIONS.md` §3).
+//! Bounded, rate-limited logging.
 //!
 //! * [`FileLogger`]: a dedicated writer thread fed through a byte-accounted
 //!   queue (≤ 1 MiB). Callers never block: when the queue is under pressure

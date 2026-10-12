@@ -1,5 +1,5 @@
 //! The public Manager: construction, sessions, shutdown trigger and the
-//! single control thread (RUNTIME.md §4).
+//! single control thread.
 //!
 //! One iteration, within `runtime.control_slice_ms`:
 //! 1. out-of-band shutdown flag;
@@ -271,7 +271,7 @@ impl Manager {
 
 impl Drop for Manager {
     /// Runs on a normal return of [`Manager::run`] and while a panic unwinds
-    /// the control thread (fail-stop, SPEC.md §7): every frontend then stops
+    /// the control thread (fail-stop): every frontend then stops
     /// and restores its terminal instead of showing a frozen view.
     fn drop(&mut self) {
         self.core.release_sessions();

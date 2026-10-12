@@ -1,4 +1,4 @@
-//! Adapter-host supervision (`RUNTIME.md` §1, §8, §9; `INTERFACES.md` §7).
+//! Adapter-host supervision.
 //!
 //! One thread multiplexes every host's pipes with `poll` (plus a self-pipe
 //! woken by [`SupervisorHandle`]); it never runs adapter code and never

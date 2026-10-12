@@ -9,7 +9,7 @@
 # WSL 1 and musl are refused before anything is downloaded, and so are the
 # releases before v2.0.0 (the earlier dgxtop, packaged differently).
 #
-# Safety properties (spec/dgxtop-v2/OPERATIONS.md §4):
+# Safety properties:
 # * downloads into a temporary directory on the SAME filesystem as the target,
 # * verifies the archive against SHA256SUMS and the expected target triple,
 # * accepts an archive containing exactly one regular file named `dgxtop`

@@ -1,5 +1,5 @@
 //! PresentationService: frame intervals and byte accounting of projections
-//! (RUNTIME.md §5 presentation row, AT13).
+//! (AT13).
 //!
 //! The view models themselves are built by `crate::presentation`;
 //! `crate::pacing` decides *when* a session gets one (data at most
@@ -107,8 +107,8 @@ const PROJECTION_INTERVAL_NS: u64 = 50 * NANOS_PER_MILLI;
 
 /// Minimum spacing of any two projections, what input waits for. In the
 /// normal state a key is answered within 50 ms while data frames follow
-/// `fps` (UI.md §4, `crate::pacing`); outside it everything follows the
-/// reduced frame rate to shed work (RUNTIME.md §7).
+/// `fps` (`crate::pacing`); outside it everything follows the
+/// reduced frame rate to shed work.
 pub(crate) fn projection_interval_ns(normal: bool, fps: u32) -> u64 {
     let frame = frame_interval_ns(fps);
     if normal {

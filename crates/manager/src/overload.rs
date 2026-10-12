@@ -1,4 +1,4 @@
-//! Bounded overload control (RUNTIME.md §7).
+//! Bounded overload control.
 //!
 //! `normal → pressured → throttled → recovering → normal`:
 //! * pressured: any controlled queue ≥ 75 % (or collection service time above
@@ -139,7 +139,7 @@ impl OverloadController {
         signals: OverloadSignals,
     ) -> Option<OverloadTransition> {
         let previous = (self.state, self.multiplier);
-        // Any controlled queue, the ingress byte gate included (RUNTIME.md §7).
+        // Any controlled queue, the ingress byte gate included.
         let busiest_queue = signals.queue_utilization.max(signals.ingress_utilization);
         let pressure_now = busiest_queue >= PRESSURE_RATIO || signals.service_overrun;
         let memory_critical = signals.memory_utilization >= MEMORY_CRITICAL_RATIO;
@@ -290,7 +290,7 @@ mod tests {
             ingress_utilization: 0.75,
             ..OverloadSignals::default()
         };
-        // RUNTIME.md §7: any queue's bytes >= 75 % for 3 samples and 3 s.
+        // Any queue's bytes >= 75 % for 3 samples and 3 s.
         assert!(run(&mut overload, 0, 3, held).is_empty());
         let transitions = run(&mut overload, 3, 4, held);
         assert_eq!(transitions.len(), 1, "{transitions:?}");

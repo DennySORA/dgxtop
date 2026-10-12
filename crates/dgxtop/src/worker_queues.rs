@@ -6,7 +6,7 @@
 //! not here: their queues are `queues.collector_jobs` and
 //! `queues.history_requests`.
 
-/// Archive journals waiting (RUNTIME.md §5: at most 8 transaction batches);
+/// Archive journals waiting (at most 8 transaction batches);
 /// a full queue becomes an archive gap, never a wait in the state.
 pub const ARCHIVE_QUEUE: usize = 8;
 /// State jobs waiting: commits, gaps, maintenance and sampling changes.

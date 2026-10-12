@@ -1,4 +1,4 @@
-//! Read de-duplication (`RUNTIME.md` §2).
+//! Read de-duplication.
 //!
 //! Identical concurrent reads — same adapter, host generation, catalog
 //! revision, config epoch, cycle and read group — are dispatched once and
@@ -20,7 +20,7 @@ use uuid::Uuid;
 /// Shared outcome of one de-duplicated read.
 pub type BrokerResult = Result<Arc<IngressBatch>, AdapterFailure>;
 
-/// De-duplication key (`RUNTIME.md` §2 Broker key).
+/// De-duplication key.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BrokerKey {
     pub adapter_id: AdapterId,

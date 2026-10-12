@@ -1,7 +1,7 @@
 //! Frame timing for diagnostics and the benchmark harness. Compute time
 //! (layout + module render + Ratatui diff/encode into memory) and flush time
-//! (frame enqueued → last byte accepted by the terminal) are kept apart, as
-//! `PERFORMANCE.md` requires; percentiles use nearest rank.
+//! (frame enqueued → last byte accepted by the terminal) are kept apart;
+//! percentiles use nearest rank.
 
 use std::collections::VecDeque;
 use std::time::Duration;

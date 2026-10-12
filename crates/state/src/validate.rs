@@ -1,5 +1,5 @@
 //! Commit validation. Everything here runs before any state is touched, so a
-//! rejected batch leaves no trace (`INTERFACES.md` §8).
+//! rejected batch leaves no trace.
 
 use std::collections::{BTreeMap, BTreeSet};
 

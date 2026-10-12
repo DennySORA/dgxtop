@@ -1,4 +1,4 @@
-//! Audit capacity and timing limits (`STORAGE.md` §6 policy table).
+//! Audit capacity and timing limits.
 
 use std::time::Duration;
 

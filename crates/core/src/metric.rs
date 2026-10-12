@@ -703,7 +703,7 @@ pub struct MetricDescriptor {
     pub label: &'static str,
 }
 
-/// Metric id constants. Canonical ids follow `spec/dgxtop-v2/contracts/METRICS.md`.
+/// Metric id constants.
 pub mod ids {
     // CPU (canonical)
     pub const CPU_UTILIZATION_TOTAL: &str = "cpu.utilization.total";

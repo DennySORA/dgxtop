@@ -1,4 +1,4 @@
-//! Controller (`ARCHITECTURE.md` §8): input → typed intents, never side effects.
+//! Controller: input → typed intents, never side effects.
 //!
 //! Five parts: the InputBackend ([`crate::terminal::InputSource`]), the
 //! [`keymap`], the context router (this module: mode/view/HitMap routing),

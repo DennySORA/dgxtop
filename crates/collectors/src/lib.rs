@@ -1,6 +1,6 @@
 //! # dgxtop-collectors
 //!
-//! Pure domain collectors of dgxtop v2 (ARCHITECTURE.md §5): normalization,
+//! Pure domain collectors of dgxtop v2: normalization,
 //! validation, origin de-duplication, source arbitration, exact counter
 //! derivation and the six domain collectors, in two parts (D-79):
 //! [`system`] (CPU, GPU, memory, disk/filesystem, network) and [`process`]

@@ -345,7 +345,7 @@ pub struct PersistReceipt {
     pub sha256: String,
     pub path: String,
     /// Size of the committed file (the Settings view shows it beside the
-    /// limit, UI.md §6).
+    /// limit).
     pub file_bytes: u64,
 }
 
@@ -797,7 +797,7 @@ pub enum ControlCompletion {
     },
     Audit(AuditCompletion),
     Action(ActionCompletion),
-    /// Fate of the archive journal of `revision` (STORAGE.md §1: the store
+    /// Fate of the archive journal of `revision` (the store
     /// acknowledgement only says "archive pending"); `status` is the archive
     /// partition after the attempt, `None` when its worker never saw it.
     Archive {

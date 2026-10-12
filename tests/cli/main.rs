@@ -1,6 +1,6 @@
 //! CLI suite: one-shot modes of the real binary in isolated HOME/XDG
 //! directories (AT08 CLI precedence, AT18 legacy migration, AT20 version
-//! metadata, OPERATIONS.md §2) and the installer (`installer`: AT18
+//! metadata) and the installer (`installer`: AT18
 //! rollback, AT20 integrity checks).
 
 // Test helpers may unwrap: a broken fixture must fail loudly.
@@ -152,7 +152,7 @@ fn saved_value_survives_absent_cli_flags() {
     std::fs::create_dir_all(&directory).unwrap();
     std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
     let mut document: serde_json::Value = serde_json::from_str(include_str!(
-        "../../spec/dgxtop-v2/examples/config.default.json"
+        "../../contracts/examples/config.reference.json"
     ))
     .unwrap();
     document["sampling"]["interval_ms"] = serde_json::json!(5000);
@@ -167,7 +167,7 @@ fn saved_value_survives_absent_cli_flags() {
         text.contains("fast 5000 ms"),
         "absent --interval overwrote the saved value: {text}"
     );
-    // D-88, D-90: the spec's document still holds retired keys: loaded,
+    // D-88, D-90: the REF document still holds retired keys: loaded,
     // each noted.
     for retired in [
         "store.raw_candidate_seconds is retired and ignored (D-88)",
@@ -190,7 +190,7 @@ fn invalid_saved_config_is_reported_with_location() {
     std::fs::create_dir_all(&directory).unwrap();
     std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
     let mut document: serde_json::Value = serde_json::from_str(include_str!(
-        "../../spec/dgxtop-v2/examples/config.default.json"
+        "../../contracts/examples/config.reference.json"
     ))
     .unwrap();
     document["sampling"]["turbo"] = serde_json::json!(true);
@@ -216,7 +216,7 @@ fn future_schema_is_refused_and_never_rewritten() {
     std::fs::create_dir_all(&directory).unwrap();
     std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
     let mut document: serde_json::Value = serde_json::from_str(include_str!(
-        "../../spec/dgxtop-v2/examples/config.default.json"
+        "../../contracts/examples/config.reference.json"
     ))
     .unwrap();
     document["schema_version"] = serde_json::json!(3);

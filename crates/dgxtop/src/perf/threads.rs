@@ -1,6 +1,6 @@
 //! CPU time of the calling thread (`/proc/thread-self/stat`). The REF bench
-//! runs its measuring threads inside the measured process; `PERFORMANCE.md`
-//! requires the measurer's own cost to stay out of the dgxtop CPU figure
+//! runs its measuring threads inside the measured process; the measurer's
+//! own cost must stay out of the dgxtop CPU figure
 //! (and be reported), so those threads account for themselves here.
 
 use std::sync::Arc;

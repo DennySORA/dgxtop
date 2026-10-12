@@ -294,7 +294,7 @@ pub struct CommandResult {
     pub expires_boot_ns: Option<u64>,
 }
 
-/// Message marker of a `commit_uncertain` error (INTERFACES.md §9).
+/// Message marker of a `commit_uncertain` error.
 pub const COMMIT_UNCERTAIN_MARKER: &str = "(commit_uncertain)";
 
 impl CommandResult {
@@ -413,7 +413,7 @@ mod tests {
 
     #[test]
     fn spec_prepare_signal_example_parses() {
-        let text = include_str!("../../../spec/dgxtop-v2/examples/command.prepare-signal.json");
+        let text = include_str!("../../../contracts/examples/command.prepare-signal.json");
         let envelope: CommandEnvelope = serde_json::from_str(text).unwrap();
         envelope.validate_syntax().unwrap();
         assert!(matches!(
@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn spec_interval_result_example_parses() {
-        let text = include_str!("../../../spec/dgxtop-v2/examples/command-result.interval.json");
+        let text = include_str!("../../../contracts/examples/command-result.interval.json");
         let result: CommandResult = serde_json::from_str(text).unwrap();
         assert_eq!(result.status, CommandStatus::Completed);
         assert!(result.code.is_ok());

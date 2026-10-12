@@ -5,7 +5,7 @@ use dgxtop_core::errors::InfraError;
 
 use crate::ipc::IpcLimits;
 
-/// Hard cap on live + quarantined hosts (`RUNTIME.md` §1).
+/// Hard cap on live + quarantined hosts.
 pub const MAX_HOSTS: usize = 8;
 
 /// Timing and capacity knobs of the adapter-host supervisor.

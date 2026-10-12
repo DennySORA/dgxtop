@@ -1,7 +1,8 @@
 # dgxtop v2 — software validation report
 
 This report records what was actually executed against the v2 rewrite and what was not. It
-follows the rules of `spec/dgxtop-v2/ACCEPTANCE.md`:
+follows the acceptance rules of the v2 specification, which left the tree with D-103 and is in
+git history (`git show e433a3a:spec/dgxtop-v2/ACCEPTANCE.md`):
 
 - the only statuses are PASS, FAIL, NOT_RUN and BLOCKED;
 - PASS needs executed evidence for every clause;
@@ -163,7 +164,7 @@ Totals: PASS 14, FAIL 0, NOT_RUN 24, BLOCKED 2 (of 40).
 
 ## Details
 
-Clause labels follow the order of the clauses in `ACCEPTANCE.md` (S = success path, F =
+Clause labels follow the order of the clauses in the specification's `ACCEPTANCE.md` (S = success path, F =
 failure or edge case). Test identifiers name the package (crate tests), `package/target`
 (crate integration tests) or the workspace suite (`tests/<suite>`), then the test function.
 
@@ -783,7 +784,7 @@ failure or edge case). Test identifiers name the package (crate tests), `package
 | Clause | Tests | Note |
 |---|---|---|
 | S1 all 40 items have a task/AT/evidence status | `scripts/test_check_validation.py::CheckValidationTests::test_missing_duplicate_and_orphan_ids_are_rejected` | This report; `scripts/check_validation.py` enforces it in CI |
-| S2 ZIP CRC, hashes, links, schema and HTML complete | `scripts/test_verify_spec_copy.py::VerifySpecCopyTests::test_an_identical_copy_passes`, `scripts/test_verify_spec_copy.py::VerifySpecCopyTests::test_the_repository_copy_matches_its_manifest_except_the_left_out_files` | Browser HTML checks NOT_RUN; they run from the delivered archive (D-59) |
+| S2 ZIP CRC, hashes, links, schema and HTML complete |  | The spec copy and its check left the tree with D-103; the package checks run from the delivered archive (D-58) |
 | F1 missing/empty file, orphan id, wrong hash or untested PASS refused | `scripts/test_check_validation.py::CheckValidationTests::test_wrong_hash_wrong_exit_and_missing_logs_are_rejected`, `scripts/test_check_validation.py::CheckValidationTests::test_pass_needs_every_cited_test_to_have_passed` |  |
 | F2 spec and software acceptance kept apart |  | This report keeps them apart |
 
@@ -893,18 +894,13 @@ Micro benchmarks that measure no budgeted metric report a note instead:
 7. **Blocked work:**
    - AT28 needs three 1800 s REF runs from a committed source with ≥ 24 h uptime.
    - AT29 needs a soak driver and two 72 h runs.
-8. **Specification tooling:**
+8. **Specification:**
+   - The v2 specification left the tree with D-103: the code and its tests read only
+     `contracts/`, the store's DDL and `benches/`. It is in git history at `e433a3a`, and the
+     delivered archive at `0a348c0` (D-58).
    - The spec package's browser HTML checks were not run (Chromium and its Python package
-     are not installed).
-   - The spec's Python tests ran before this session's changes, and the spec copy has not
-     changed since (`spec-copy-verification`). Re-running them needs the pinned `jsonschema`,
-     which is not installed.
-   - The copy leaves out the package's agent instructions, HTML edition, validator and
-     reference models (D-59); the HTML and package checks run from the delivered archive.
-   - The delivered archive is kept in history, not in the tree (D-58). To rerun
-     `spec-copy-verification`, extract it with
-     `git show 0a348c0:dgxtop-spec-v2.zip > target/dgxtop-spec-v2.zip`, then pass that path to
-     `scripts/verify_spec_copy.py`.
+     are not installed); they run from the delivered archive.
+   - `spec-copy-verification` recorded the copy before it was removed; its script left with it.
 9. **Opt-in runs (D-53):**
    - The end-to-end suites (`just e2e`, recorded as `e2e-suites`) run only on the owner's
      request. A passing recording returns AT06, AT11, AT14, AT22, AT26, AT30, AT33 and AT39 to

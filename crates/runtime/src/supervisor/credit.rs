@@ -1,4 +1,4 @@
-//! Ingress byte credit (`RUNTIME.md` §5, §9).
+//! Ingress byte credit.
 //!
 //! A read reserves its provable worst case — wire + decoded — *before* it is
 //! dispatched, from the shared ingress gate (8 MiB, 32 batches by default).

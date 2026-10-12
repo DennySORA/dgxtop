@@ -1,4 +1,4 @@
-//! Exact counter engine (STORAGE.md §4).
+//! Exact counter engine.
 //!
 //! Deltas are exact `u64` subtractions between two readings of the SAME
 //! source incarnation (source id, generation and boot id). Rates divide the

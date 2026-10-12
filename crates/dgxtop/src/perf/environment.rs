@@ -1,4 +1,4 @@
-//! Test environment of a bench run (`PERFORMANCE.md` §1: CPU model, kernel,
+//! Test environment of a bench run (CPU model, kernel,
 //! Rust/SQLite/driver versions, filesystem, background load, release
 //! flags and commit are all recorded).
 //!

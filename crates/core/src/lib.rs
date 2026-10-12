@@ -1,8 +1,7 @@
 //! # dgxtop-core
 //!
-//! Cross-layer contracts shared by the six components (Adapter, Collector,
-//! Manager, Store, Viewer, Controller) of the dgxtop v2 rewrite
-//! (`spec/dgxtop-v2/`). This crate holds typed identities, units, quality
+//! Cross-layer contracts shared by the components of dgxtop v2 (Adapter,
+//! Collector, Manager, Store, Viewer, Controller). This crate holds typed identities, units, quality
 //! axes, commands/results, configuration, byte budgets and the ports
 //! between components. It performs no I/O and depends only on std plus small
 //! DTO/serialization crates.

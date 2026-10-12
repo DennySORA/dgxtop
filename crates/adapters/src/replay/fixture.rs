@@ -408,7 +408,7 @@ impl ReplayFixture {
     }
 
     /// The part one of `count` replay hosts serves (REF: one host per live
-    /// adapter, PERFORMANCE.md §1): the live adapter families (read-group
+    /// adapter): the live adapter families (read-group
     /// prefixes, ordered) whose ordinal is `index` modulo `count`, with their
     /// sources, their samples of every cycle, the faults of their read
     /// groups (and the faults of every group), and the entities their

@@ -243,7 +243,7 @@ fn the_cached_maximum_is_served_with_each_reads_time_and_never_reread() {
     // maximum kept its discovery read time and outlived the collector's
     // static deadline (three discovery periods). Like NVML's metadata cache,
     // every read serves the cached value with its own time, and the file is
-    // not read again while the CPU's generation stays (RUNTIME.md §3).
+    // not read again while the CPU's generation stays.
     let (tree, clock, mut adapter, _parent) = standard();
     tree.write(
         "/sys/devices/system/cpu/cpu1/cpufreq/cpuinfo_max_freq",

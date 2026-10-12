@@ -1,5 +1,5 @@
 //! Turns one REF measurement window into the schema's run metrics, each
-//! from the samples that define it (`PERFORMANCE.md` §2).
+//! from the samples that define it.
 
 use dgxtop::perf::coverage::CoverageReport;
 use dgxtop::perf::cpu_percent_of_one_core;

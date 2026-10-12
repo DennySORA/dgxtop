@@ -106,7 +106,7 @@ fn refreshed_last_good(value: &CanonicalValue) -> Option<LastGood> {
     })
 }
 
-/// Stale windows of the sources of one commit (STORAGE.md §3): a value is
+/// Stale windows of the sources of one commit: a value is
 /// current until `sample time + stale_factor x source period`.
 pub(crate) struct StaleWindows<'a> {
     pub(crate) periods: &'a BTreeMap<SourceId, u64>,

@@ -1,5 +1,4 @@
-//! XDG path resolution and private directory handling (`OPERATIONS.md` §1,
-//! `contracts/CONFIG.md`, `SECURITY.md` §5).
+//! XDG path resolution and private directory handling.
 //!
 //! * Config: `$XDG_CONFIG_HOME/dgxtop/v2/config.json`, falling back to
 //!   `$HOME/.config/dgxtop/v2/config.json`.

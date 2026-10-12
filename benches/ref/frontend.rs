@@ -5,7 +5,7 @@
 //!
 //! Frame time = the runner step that drew a frame minus the time the step
 //! spent waiting for input: projection accepted → layout, render, Ratatui
-//! diff and ANSI encoding done (`PERFORMANCE.md` §2, transport excluded).
+//! diff and ANSI encoding done (transport excluded).
 //! Every projection the runner takes is reported to the probes (projection
 //! latency) and to the script hints (valid selections).
 

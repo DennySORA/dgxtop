@@ -1,5 +1,5 @@
 //! GPU module projection: one card per `gpu:<UUID>` entity with every
-//! METRICS.md GPU field. Unsupported fields stay "unsupported" (never 0)
+//! GPU metric. Unsupported fields stay "unsupported" (never 0)
 //! and the views leave them out (D-52: no notes).
 
 use dgxtop_core::identity::EntityId;

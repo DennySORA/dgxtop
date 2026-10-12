@@ -1,5 +1,4 @@
-//! Versioned atomic JSON configuration repository (`STORAGE.md` §7,
-//! `contracts/CONFIG.md`, AT08, AT18, AT36).
+//! Versioned atomic JSON configuration repository (AT08, AT18, AT36).
 //!
 //! * `load`: a missing file yields the built-in defaults (nothing written);
 //!   a symlinked, foreign-owned or group/world-writable file is refused; a

@@ -1,9 +1,7 @@
 //! Contract suite: every serialized Rust DTO must validate against the JSON
-//! Schemas in `spec/dgxtop-v2/contracts/` (or, for a schema dgxtop extends
-//! by D-80, against its successor in `contracts/`), every synthetic example
-//! must parse into the Rust type and re-serialize to a schema-valid document
-//! under both, and the closed enum sets of the schemas must equal the Rust
-//! enums (AT02, AT40).
+//! Schemas in `contracts/`, every example in `contracts/examples/` must parse
+//! into the Rust type and re-serialize to a schema-valid document, and the
+//! closed enum sets of the schemas must equal the Rust enums (AT02, AT40).
 
 // Test helpers outside #[test] functions may unwrap: a broken fixture must fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -28,43 +26,24 @@ use dgxtop_core::quality::{Freshness, Quality, SampleKind, SelectionState};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-fn spec_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../spec/dgxtop-v2")
+/// dgxtop's contracts: the JSON Schemas and, under `examples/`, documents
+/// that follow them.
+fn contracts_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../contracts")
 }
 
 fn load_json(relative: &str) -> Value {
-    let path = spec_dir().join(relative);
+    let path = contracts_dir().join(relative);
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
 
-/// dgxtop's own contracts (D-80): the spec's schemas plus its extensions.
-fn repository_contract(schema_name: &str) -> Option<Value> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../contracts")
-        .join(schema_name);
-    let text = std::fs::read_to_string(&path).ok()?;
-    Some(serde_json::from_str(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display())))
-}
-
-fn compile(schema_name: &str, schema: &Value) -> jsonschema::Validator {
+fn validator(schema_name: &str) -> jsonschema::Validator {
     jsonschema::options()
         .should_validate_formats(true)
-        .build(schema)
+        .build(&load_json(schema_name))
         .unwrap_or_else(|error| panic!("{schema_name} does not compile: {error}"))
-}
-
-/// The schema a document is held to: dgxtop's when it extends the spec's.
-fn validator(schema_name: &str) -> jsonschema::Validator {
-    let schema = repository_contract(schema_name)
-        .unwrap_or_else(|| load_json(&format!("contracts/{schema_name}")));
-    compile(schema_name, &schema)
-}
-
-/// The sealed spec's schema itself.
-fn spec_validator(schema_name: &str) -> jsonschema::Validator {
-    compile(schema_name, &load_json(&format!("contracts/{schema_name}")))
 }
 
 #[track_caller]
@@ -117,8 +96,6 @@ macro_rules! example_round_trip {
                 .unwrap_or_else(|error| panic!("{} does not parse: {error}", $example));
             let reencoded = to_value(&parsed);
             assert_valid($schema, &reencoded);
-            // What the spec accepts, dgxtop writes back as the spec wrote it.
-            assert!(spec_validator($schema).is_valid(&reencoded), "{reencoded}");
         }
     };
 }
@@ -159,12 +136,11 @@ example_round_trip!(
     "command-result.schema.json",
     CommandResult
 );
-/// D-88: the spec's default document parses; dgxtop writes it back without
-/// the retired keys, which its contract no longer requires and the sealed
-/// spec still does, and everything else as the spec wrote it.
+/// D-88: the REF configuration, written by an earlier version, parses; dgxtop
+/// writes it back without the retired keys and everything else as written.
 #[test]
-fn example_config_default() {
-    let original = load_json("examples/config.default.json");
+fn example_config_reference() {
+    let original = load_json("examples/config.reference.json");
     assert_valid("config.schema.json", &original);
     let parsed = Config::from_json(&original.to_string()).unwrap();
     assert_eq!(
@@ -177,13 +153,9 @@ fn example_config_default() {
     );
     let reencoded = to_value(&parsed);
     assert_valid("config.schema.json", &reencoded);
-    assert!(!spec_validator("config.schema.json").is_valid(&reencoded));
     let mut expected = original.clone();
     dgxtop_core::config::remove_retired_keys(&mut expected);
     assert_eq!(reencoded, expected);
-    // A document of an earlier version keeps its retired key and stays
-    // valid under both schemas.
-    assert!(spec_validator("config.schema.json").is_valid(&original));
 }
 example_round_trip!(
     example_ipc_request,
@@ -198,11 +170,10 @@ example_round_trip!(
     AdapterManifest
 );
 
-/// D-80: the history's bar sizes and the Process History switch are
-/// dgxtop's extensions: its contracts accept them, the sealed spec does not,
-/// and documents without them stay valid under both.
+/// D-80: the contracts accept the history's bar sizes and the Process
+/// History switch, and hold the bar sizes to the sizes dgxtop has.
 #[test]
-fn contract_extensions_extend_the_spec() {
+fn contract_extensions_are_accepted() {
     let session = SessionId::new("session-1").unwrap();
     let with_bars = CommandEnvelope::new(
         session.clone(),
@@ -221,14 +192,12 @@ fn contract_extensions_extend_the_spec() {
     let encoded = to_value(&with_bars);
     assert_eq!(encoded["body"]["overview_bar"], "1h");
     assert_valid("command.schema.json", &encoded);
-    assert!(!spec_validator("command.schema.json").is_valid(&encoded));
     let mut wrong = encoded.clone();
     wrong["body"]["process_bar"] = json!("3h");
     assert_invalid("command.schema.json", &wrong);
-    let mut config = load_json("examples/config.default.json");
+    let mut config = load_json("examples/config.reference.json");
     config["store"]["process_history_enabled"] = json!(false);
     assert_valid("config.schema.json", &config);
-    assert!(!spec_validator("config.schema.json").is_valid(&config));
     let parsed = Config::from_json(&config.to_string()).unwrap();
     assert_eq!(parsed.store.process_history_enabled, Some(false));
 }
@@ -346,7 +315,7 @@ fn command_results_are_schema_valid() {
 
 #[test]
 fn every_error_code_is_a_schema_result_code() {
-    let schema = load_json("contracts/command-result.schema.json");
+    let schema = load_json("command-result.schema.json");
     let allowed: Vec<String> = schema["properties"]["code"]["enum"]
         .as_array()
         .unwrap()
@@ -391,7 +360,7 @@ fn every_error_code_is_a_schema_result_code() {
 
 #[test]
 fn canonical_units_match_schema_enum() {
-    let schema = load_json("contracts/canonical.schema.json");
+    let schema = load_json("canonical.schema.json");
     let mut allowed: Vec<String> = schema["properties"]["unit"]["enum"]
         .as_array()
         .unwrap()
@@ -421,7 +390,7 @@ fn canonical_units_match_schema_enum() {
 
 #[test]
 fn view_and_sort_enums_match_command_schema() {
-    let schema = load_json("contracts/command.schema.json");
+    let schema = load_json("command.schema.json");
     let update = schema["properties"]["body"]["oneOf"]
         .as_array()
         .unwrap()
@@ -557,7 +526,7 @@ fn unknown_fields_are_rejected_by_rust_and_schema() {
     assert_invalid("command.schema.json", &command);
     assert!(serde_json::from_value::<CommandEnvelope>(command).is_err());
 
-    let mut config = load_json("examples/config.default.json");
+    let mut config = load_json("examples/config.reference.json");
     config["runtime"]["turbo"] = json!(true);
     assert_invalid("config.schema.json", &config);
     assert!(Config::from_json(&config.to_string()).is_err());
@@ -606,8 +575,6 @@ fn every_schema_compiles() {
         "command.schema.json",
         "config.schema.json",
         "display-module.schema.json",
-        "history-query.schema.json",
-        "history-result.schema.json",
         "ipc-request.schema.json",
         "observation-batch.schema.json",
         "observation.schema.json",

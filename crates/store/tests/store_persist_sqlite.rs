@@ -1,4 +1,4 @@
-//! SQLite runtime gate (AT31), the verbatim spec DDL and every
+//! SQLite runtime gate (AT31), the verbatim audit and archive DDL and every
 //! partition's idempotent initialization.
 
 // Test helpers panic on setup failures; the lints target production code.
@@ -73,8 +73,8 @@ fn older_runtimes_and_mismatched_builds_are_refused() {
 
 #[test]
 fn ddl_is_the_spec_contract_verbatim() {
-    let audit = include_str!("../../../spec/dgxtop-v2/contracts/audit.sql");
-    let history = include_str!("../../../spec/dgxtop-v2/contracts/history.sql");
+    let audit = include_str!("../src/sqlite/audit.sql");
+    let history = include_str!("../src/sqlite/history.sql");
     assert_eq!(AUDIT_DDL, audit);
     assert_eq!(HISTORY_DDL, history);
     assert_eq!(SchemaKind::Audit.ddl(), audit);

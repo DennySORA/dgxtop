@@ -231,7 +231,7 @@ fn reference_fixture_is_byte_identical_and_matches_the_ref_workload() {
     fixture.validate().unwrap();
     assert_eq!(ReplayFixture::from_json_slice(&bytes).unwrap(), fixture);
 
-    // PERFORMANCE.md §1: 2048 sources in all (the catalog cap counts the
+    // The REF profile: 2048 sources in all (the catalog cap counts the
     // process row sources as well).
     assert_eq!(fixture.sources.len(), 2048);
     let key_sources: Vec<&FixtureSource> = fixture

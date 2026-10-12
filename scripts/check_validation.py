@@ -3,7 +3,7 @@
 
 Usage: scripts/check_validation.py [VALIDATION.md] [EVIDENCE_DIR] [WORKSPACE]
 
-Rules (spec/dgxtop-v2/ACCEPTANCE.md: PASS needs evidence; written code is not PASS):
+Rules (PASS needs evidence; written code is not PASS):
 - the status table lists AT01..AT40 exactly once each, nothing else, and only the
   statuses PASS, FAIL, NOT_RUN and BLOCKED;
 - every evidence log in the evidence table exists, is non-empty, has the SHA-256 and

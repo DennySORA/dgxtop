@@ -1,6 +1,5 @@
 //! Startup steps shared by every mode: path resolution, configuration load
-//! with explicit CLI overrides, and the provenance of every setting
-//! (spec/dgxtop-v2/OPERATIONS.md §1, contracts/CONFIG.md).
+//! with explicit CLI overrides, and the provenance of every setting.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

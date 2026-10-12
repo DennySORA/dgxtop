@@ -1,5 +1,5 @@
-//! Spec DDL (verbatim), every partition's format version, schema
-//! inspection and idempotent initialization.
+//! The DDL of every partition, its format version, schema inspection and
+//! idempotent initialization.
 //!
 //! One rule for every database dgxtop writes (D-85): a file is used only
 //! when it carries this build's format version, `user_version` and exactly
@@ -10,13 +10,13 @@ use std::collections::BTreeSet;
 
 use rusqlite::Connection;
 
-/// `contracts/audit.sql`, applied verbatim.
-pub const AUDIT_DDL: &str = include_str!("../../../../spec/dgxtop-v2/contracts/audit.sql");
-/// `contracts/history.sql`, applied verbatim.
-pub const HISTORY_DDL: &str = include_str!("../../../../spec/dgxtop-v2/contracts/history.sql");
-/// The process history's DDL (D-76, D-77), dgxtop's own: the spec has none.
+/// `audit.sql`, applied verbatim.
+pub const AUDIT_DDL: &str = include_str!("audit.sql");
+/// `history.sql`, applied verbatim.
+pub const HISTORY_DDL: &str = include_str!("history.sql");
+/// The process history's DDL (D-76, D-77).
 pub(crate) const PROCESS_HISTORY_DDL: &str = include_str!("../process_history/schema.sql");
-/// `PRAGMA user_version` written by the spec's DDL files.
+/// `PRAGMA user_version` written by `audit.sql` and `history.sql`.
 const SCHEMA_USER_VERSION: i64 = 2;
 /// `PRAGMA user_version` of the process history's DDL.
 const PROCESS_HISTORY_USER_VERSION: i64 = 3;
@@ -73,7 +73,7 @@ impl SchemaKind {
     }
 
     /// The version of the file's data format (D-85), kept in
-    /// `PRAGMA application_id`, apart from the app version and the spec's
+    /// `PRAGMA application_id`, apart from the app version and the DDL's
     /// `user_version`. Bump it whenever what the file holds changes meaning
     /// (tables, columns, packing, units): a file of any other format, or of
     /// none, is deleted and created afresh at the next start.
@@ -242,7 +242,7 @@ fn classify(kind: SchemaKind, found: &Found) -> Result<SchemaPlan, SchemaRefusal
 }
 
 /// Runs the DDL (it carries its own `BEGIN IMMEDIATE … COMMIT`), then
-/// stamps the format version: the spec's DDL is applied verbatim, so the
+/// stamps the format version: the DDL is applied verbatim, so the
 /// stamp is a header write of its own (D-85). On failure the open
 /// transaction is rolled back so nothing half-applied stays.
 pub(crate) fn apply_ddl(connection: &Connection, kind: SchemaKind) -> rusqlite::Result<()> {

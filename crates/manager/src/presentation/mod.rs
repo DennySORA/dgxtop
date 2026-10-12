@@ -287,7 +287,7 @@ fn build_modules(
     }
     // The process actions' state is the session's, not a module's: every
     // projection carries it, so a pending confirmation is a banner in
-    // every view (D-91, UI.md §2, §6).
+    // every view (D-91).
     modules.actions = Some(Arc::clone(&context.actions));
     modules
 }

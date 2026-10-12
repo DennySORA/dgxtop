@@ -1,4 +1,4 @@
-//! The terminal main-thread loop (`RUNTIME.md` §1, `UI.md` §4–§5).
+//! The terminal main-thread loop.
 //!
 //! Each step: poll input (until the next draw could happen, at most
 //! [`LONGEST_IDLE_POLL`], never a 0 ms busy loop),
@@ -46,7 +46,7 @@ pub const MIN_POLL: Duration = Duration::from_millis(1);
 const FLUSH_POLL: Duration = Duration::from_millis(1);
 /// Poll timeout while the terminal would block (retry cadence).
 const BLOCKED_POLL: Duration = Duration::from_millis(10);
-/// Bound of the terminal-restore wait at exit (`RUNTIME.md` §8).
+/// Bound of the terminal-restore wait at exit.
 pub const MAX_EXIT_WAIT: Duration = Duration::from_millis(250);
 /// A frame whose writing took longer is followed by a full redraw.
 pub const SLOW_FRAME: Duration = Duration::from_secs(1);

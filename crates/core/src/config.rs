@@ -1,16 +1,13 @@
 //! Complete v2 configuration (`contracts/config.schema.json`) and its semantic
-//! validation (`contracts/CONFIG.md`).
+//! validation.
 //!
 //! Every field is required and unknown keys are rejected, except the
 //! retired keys ([`RETIRED_KEYS`]) an earlier version wrote: those are
 //! accepted with any value, ignored and never written back (D-88, D-90).
-//! The source of the
-//! defaults is `spec/dgxtop-v2/examples/config.default.json`, embedded
-//! verbatim: the REF workload's configuration ([`Config::reference`]). The
-//! built-in defaults are that document with the owner's decisions applied
-//! ([`Config::defaults`]: the history archive on, D-51; SIGKILL allowed,
-//! D-71); the spec copy stays
-//! byte-identical (D-02).
+//! The REF workload's configuration, `contracts/examples/config.reference.json`,
+//! is embedded verbatim ([`Config::reference`]). The built-in defaults are
+//! that document with the owner's decisions applied ([`Config::defaults`]:
+//! the history archive on, D-51; SIGKILL allowed, D-71).
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -18,10 +15,9 @@ use thiserror::Error;
 use crate::budget::{MIB, Partition, PartitionLimits};
 use crate::identity::{MetricKey, SourceId};
 
-/// The embedded default configuration document of the spec (the REF
-/// workload's configuration).
-pub const DEFAULT_CONFIG_JSON: &str =
-    include_str!("../../../spec/dgxtop-v2/examples/config.default.json");
+/// The embedded configuration document of the REF workload.
+pub const REFERENCE_CONFIG_JSON: &str =
+    include_str!("../../../contracts/examples/config.reference.json");
 
 /// Current configuration schema version.
 pub const CONFIG_SCHEMA_VERSION: u32 = 2;
@@ -81,8 +77,8 @@ pub fn retired_by(path: &str) -> Option<&'static str> {
         .map(|retired| retired.decision)
 }
 
-/// Module ids of removed views a configuration may still enable (the
-/// spec's `config.default.json` does): accepted and ignored, never listed
+/// Module ids of removed views a configuration may still enable (the REF
+/// configuration does): accepted and ignored, never listed
 /// or toggled (D-91).
 pub const RETIRED_MODULES: [&str; 2] = ["sources", "actions"];
 
@@ -368,14 +364,14 @@ impl Config {
         Ok(config)
     }
 
-    /// The spec's default document, the REF workload's configuration. The
+    /// The REF workload's configuration document. The
     /// embedded document is validated by tests, so a failure here is a build
     /// defect, reported as a parse error.
     pub fn reference() -> Result<Self, ConfigError> {
-        Self::from_json(DEFAULT_CONFIG_JSON)
+        Self::from_json(REFERENCE_CONFIG_JSON)
     }
 
-    /// The built-in defaults: the spec's document with the owner's
+    /// The built-in defaults: the REF document with the owner's
     /// decisions: the history archive on, so the history view keeps earlier
     /// runs and boots (D-51), and SIGKILL allowed, so F9 force-kills after
     /// its confirmation (D-71). REF runs use [`Config::reference`].
@@ -809,7 +805,7 @@ impl Config {
             "must be 30000..=300000",
         );
 
-        // Cross-field capacity rules (CONFIG.md): per-field validity is not enough.
+        // Cross-field capacity rules: per-field validity is not enough.
         check(
             queues.commands <= runtime.max_pending_requests,
             "queues.commands",
@@ -1264,7 +1260,7 @@ mod tests {
 
     #[test]
     fn query_and_worker_defaults_match_the_runtime_limits() {
-        // AT38 / RUNTIME.md §5: <= 2000 bars a chart, 2 history workers;
+        // AT38: <= 2000 bars a chart, 2 history workers;
         // at most 2 compute workers by default.
         let defaults = Config::defaults().unwrap();
         assert_eq!(defaults.store.max_history_points, 2000);
@@ -1291,7 +1287,7 @@ mod tests {
         let text = config.to_pretty_json().unwrap();
         assert_eq!(Config::from_json(&text).unwrap(), config);
         let reference = Config::reference().unwrap();
-        let mut original: serde_json::Value = serde_json::from_str(DEFAULT_CONFIG_JSON).unwrap();
+        let mut original: serde_json::Value = serde_json::from_str(REFERENCE_CONFIG_JSON).unwrap();
         remove_retired_keys(&mut original);
         let reencoded: serde_json::Value =
             serde_json::from_str(&reference.to_pretty_json().unwrap()).unwrap();
@@ -1304,7 +1300,7 @@ mod tests {
     #[test]
     fn retired_keys_are_accepted_reported_and_never_written() {
         let reference = Config::reference().unwrap();
-        assert!(DEFAULT_CONFIG_JSON.contains("\"raw_candidate_seconds\""));
+        assert!(REFERENCE_CONFIG_JSON.contains("\"raw_candidate_seconds\""));
         assert_eq!(
             reference.retired_keys_present(),
             vec![
@@ -1322,7 +1318,7 @@ mod tests {
         assert!(saved.retired_keys_present().is_empty());
         assert_eq!(saved, reference, "the retired key changes nothing");
         // Out of its former range or of another type: still ignored.
-        let mut value: serde_json::Value = serde_json::from_str(DEFAULT_CONFIG_JSON).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(REFERENCE_CONFIG_JSON).unwrap();
         for retired in [
             serde_json::json!(0),
             serde_json::json!(601),
@@ -1343,13 +1339,13 @@ mod tests {
     /// unknown key like any other.
     #[test]
     fn a_retired_key_outside_its_section_is_rejected() {
-        let mut value: serde_json::Value = serde_json::from_str(DEFAULT_CONFIG_JSON).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(REFERENCE_CONFIG_JSON).unwrap();
         value["sampling"]["raw_candidate_seconds"] = serde_json::json!(60);
         assert!(matches!(
             Config::from_json(&value.to_string()),
             Err(ConfigError::Parse { .. })
         ));
-        let mut value: serde_json::Value = serde_json::from_str(DEFAULT_CONFIG_JSON).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(REFERENCE_CONFIG_JSON).unwrap();
         value["store"]["max_history_result_bytes"] = serde_json::json!(65_536);
         assert!(matches!(
             Config::from_json(&value.to_string()),
@@ -1361,14 +1357,14 @@ mod tests {
     }
 
     #[test]
-    fn the_built_in_defaults_keep_history_on_disk_and_the_reference_stays_the_spec() {
-        // D-51: the owner wants the history kept on disk; the spec document
+    fn the_built_in_defaults_keep_history_on_disk_and_the_reference_stays_as_written() {
+        // D-51: the owner wants the history kept on disk; the REF document
         // (and so the REF workload) keeps its archive off.
         let reference = Config::reference().unwrap();
         assert!(!reference.store.archive_enabled);
         let defaults = defaults();
         assert!(defaults.store.archive_enabled);
-        // D-71: F9 force-kills by default; the spec document keeps it off.
+        // D-71: F9 force-kills by default; the REF document keeps it off.
         assert!(!reference.actions.allow_force);
         assert!(defaults.actions.allow_force);
         // D-80: the Process History follows the archive unless set.
@@ -1383,13 +1379,13 @@ mod tests {
 
     #[test]
     fn unknown_keys_and_missing_fields_are_rejected() {
-        let mut value: serde_json::Value = serde_json::from_str(DEFAULT_CONFIG_JSON).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(REFERENCE_CONFIG_JSON).unwrap();
         value["sampling"]["unexpected"] = serde_json::json!(1);
         assert!(matches!(
             Config::from_json(&value.to_string()),
             Err(ConfigError::Parse { .. })
         ));
-        let mut value: serde_json::Value = serde_json::from_str(DEFAULT_CONFIG_JSON).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(REFERENCE_CONFIG_JSON).unwrap();
         value["sampling"]
             .as_object_mut()
             .unwrap()
@@ -1532,7 +1528,7 @@ mod tests {
             base.restart_required_changes(&candidate)
                 .contains(&"store.process_history_enabled")
         );
-        // Unset, it is not written: the spec's document stays valid.
+        // Unset, it is not written: the REF document stays as it is.
         let json = serde_json::to_value(&base).unwrap();
         assert!(json["store"].get("process_history_enabled").is_none());
         let mut set = json.clone();

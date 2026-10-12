@@ -1,5 +1,5 @@
 //! HistoryService: bounded, per-session Overview History reads for the
-//! history view (STORAGE.md §5, UI.md §6, D-46, D-48, D-82).
+//! history view (D-46, D-48, D-82).
 //!
 //! * Charts: the overview's series over a longer window, as the
 //!   presentation picks them ([`HistoryChartSpec`]): the CPU total, the RAM

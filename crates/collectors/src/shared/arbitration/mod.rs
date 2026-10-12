@@ -1,5 +1,4 @@
-//! Pure source arbitration for one `MetricKey` (ARCHITECTURE.md §5.4,
-//! `contracts/INTERFACES.md` §3).
+//! Pure source arbitration for one `MetricKey`.
 //!
 //! Steps: (1) semantic mapping, (2) normalization, (3) hard validation,
 //! (4) freshness, (5) origin de-duplication, (6) ordering, (7) inconsistency
@@ -31,7 +30,7 @@ pub(crate) use assess::{Assessment, assess, check_admission, check_namespace};
 use self::consistency::Consistency;
 use self::ranking::Ranking;
 
-/// Hard cap on candidates per series (RUNTIME.md §2).
+/// Hard cap on candidates per series.
 pub const MAX_CANDIDATES_PER_SERIES: usize = 4;
 
 /// How the catalog relates a candidate's source to the arbitrated key.

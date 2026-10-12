@@ -1,7 +1,7 @@
 //! Fixed worker pools and single-owner actors behind bounded channels.
 //!
-//! Threads are created once at spawn time and never per job (`RUNTIME.md`
-//! §1). Submission is `try_send`: a full queue is an immediate
+//! Threads are created once at spawn time and never per job.
+//! Submission is `try_send`: a full queue is an immediate
 //! [`DispatchError::Busy`], never a blocked caller. Every job runs inside
 //! `catch_unwind`, so one panicking job is reported and the worker keeps
 //! serving. [`PoolHandle::stop`] is bounded by its timeout: workers that are
@@ -20,7 +20,7 @@ use dgxtop_core::errors::InfraError;
 use dgxtop_core::ports::{Dispatch, DispatchError};
 use dgxtop_core::text::sanitize_message;
 
-/// Maximum workers per pool (the spec's largest pool has 4).
+/// Maximum workers per pool.
 pub const MAX_POOL_THREADS: usize = 16;
 /// Poll step while waiting for workers to finish in [`PoolHandle::stop`].
 const STOP_POLL: Duration = Duration::from_millis(2);

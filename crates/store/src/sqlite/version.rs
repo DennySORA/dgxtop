@@ -1,4 +1,4 @@
-//! Runtime SQLite version gate (`STORAGE.md` §6, ADR17, AT31).
+//! Runtime SQLite version gate (AT31).
 //!
 //! 3.51.3 is the conservative floor that contains the confirmed WAL-reset
 //! fix; it is not a claim that newer versions are bug free. Older runtimes

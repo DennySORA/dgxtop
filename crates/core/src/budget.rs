@@ -1,7 +1,7 @@
 //! Global managed-memory ledger and dual item/byte admission.
 //!
 //! `store.memory_limit_mib` is ONE budget for all managed dynamic data, split
-//! into fixed partitions (`spec/dgxtop-v2/RUNTIME.md` §6). Every buffer, queue
+//! into fixed partitions. Every buffer, queue
 //! entry, retained snapshot and IPC payload holds a [`BytePermit`] taken
 //! *before* allocation; dropping the permit returns the bytes. Moving a permit
 //! transfers ownership, so a payload is never counted twice or forgotten.
@@ -54,7 +54,7 @@ impl Partition {
         match self {
             Self::Catalog => 24,
             Self::HotState => 16,
-            // RUNTIME.md §6's 32 MiB plus what the aggregates and the
+            // The first budget's 32 MiB plus what the aggregates and the
             // removed history query partition no longer hold (D-98): raw
             // steps are the one share that grows with the sampling rate and
             // the series count.

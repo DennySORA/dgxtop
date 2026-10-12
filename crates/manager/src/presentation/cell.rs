@@ -66,7 +66,7 @@ pub fn build_metric_cell(
 
 /// A value nobody refreshed is stale once its deadline passed: a hung
 /// backend commits nothing, so the commit-time verdict would otherwise stay
-/// "ok" with an ever-growing age (STORAGE.md §3, AT24).
+/// "ok" with an ever-growing age (AT24).
 fn aged(state: CellState, entry: &SnapshotEntry, now_boot_ns: u64) -> CellState {
     let expired = entry
         .stale_after_boot_ns
@@ -413,7 +413,7 @@ mod tests {
     #[test]
     fn a_value_past_its_stale_deadline_is_stale_and_kept_only_as_last_good() {
         // A backend that stopped answering commits nothing: its last value
-        // ages past the deadline stamped at commit (STORAGE.md §3, AT24).
+        // ages past the deadline stamped at commit (AT24).
         let mut entry = sample("gpu.temperature", "gpu:GPU-a", "gpu")
             .f64(64.0)
             .read_at(NOW - 4_000_000_000)

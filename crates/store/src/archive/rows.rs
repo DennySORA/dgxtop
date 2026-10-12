@@ -2,7 +2,7 @@
 //!
 //! Boot-clock values become 20-digit TEXT, counter totals become u128
 //! decimal TEXT, and REAL is used only for gauge sums/min/max. A journal
-//! with any row the schema or the spec forbids (replay data, non-finite
+//! with any row the schema or the archive's rules forbid (replay data, non-finite
 //! values, inverted intervals, coverage above 60 s) is rejected as a whole
 //! before anything is written.
 

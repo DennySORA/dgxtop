@@ -11,7 +11,7 @@ use crate::format::CellTone;
 /// Fill ratio from which a gauge leaves the "low" color for the gradient
 /// toward the redline (D-87).
 const GRADIENT_START: f64 = 0.50;
-/// The spec's default `viewer.redline_threshold_percent` (80 %), in
+/// The default `viewer.redline_threshold_percent` (80 %), in
 /// hundredths of a percent, for a palette no projection configured.
 const DEFAULT_REDLINE_HUNDREDTHS: u16 = 8_000;
 /// Hundredths of a percent in a whole fill (100 %).
@@ -446,7 +446,7 @@ mod tests {
         }
     }
 
-    /// D-87 at the spec's default redline (80 %): green below 50 %, the
+    /// D-87 at the default redline (80 %): green below 50 %, the
     /// amber at 50 %, between amber and red at the midpoint, red from 80 %.
     #[test]
     fn level_colors_run_from_amber_at_half_to_red_at_the_redline() {

@@ -1,5 +1,5 @@
 //! Replay adapter (`replay` / `replay-N`): serves recorded or synthetic
-//! fixtures in the **replay namespace** only (ADR08). Every source of a
+//! fixtures in the **replay namespace** only. Every source of a
 //! fixture must be `replay` or `simulated`; live sample kinds are rejected
 //! at validation, so replay can never inject live data. Read groups mirror
 //! the live groups as `<live adapter>.<group>` (`naming::replay_group`) and

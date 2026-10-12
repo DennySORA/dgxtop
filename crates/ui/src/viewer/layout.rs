@@ -3,7 +3,7 @@
 //! the modules' overview cells, priority and minimum sizes, so a new module
 //! needs no layout change.
 //!
-//! Tiers (`UI.md` §2): width ≥ 120 → wide; 80–119 → single column summary +
+//! Tiers: width ≥ 120 → wide; 80–119 → single column summary +
 //! active detail; width < 80 or height < 24 → minimal summary with keyboard
 //! navigation; below 40×10 → the "terminal too small" screen. The wide tiers
 //! draw the tabs in the header row; the minimal tier has a selector row.

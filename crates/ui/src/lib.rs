@@ -1,7 +1,6 @@
 //! # dgxtop-ui
 //!
-//! Viewer and Controller of the dgxtop v2 rewrite (`spec/dgxtop-v2/UI.md`,
-//! `ARCHITECTURE.md` §8–§10, `contracts/INTERFACES.md` §6).
+//! Viewer and Controller of dgxtop v2.
 //!
 //! * **Viewer** ([`viewer`], [`registry`], [`modules`], [`format`],
 //!   [`widgets`], [`theme`]): formats one immutable

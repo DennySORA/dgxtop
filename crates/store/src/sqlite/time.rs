@@ -1,6 +1,6 @@
 //! UTC text used for SQLite `*_utc` columns and expiry cutoffs.
 //!
-//! UTC is only an index and a display value (`STORAGE.md` §3); it is never
+//! UTC is only an index and a display value; it is never
 //! used for durations inside a boot. Stored UTC must be RFC 3339 with a `Z`
 //! suffix so that lexical comparison orders it like time, which retention
 //! relies on.

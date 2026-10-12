@@ -473,7 +473,7 @@ fn remove_if_present(path: &Path) -> io::Result<()> {
     }
 }
 
-/// `0700`, owned by us, not a symlink (`SECURITY.md` §5).
+/// `0700`, owned by us, not a symlink.
 fn prepare_directory(directory: &Path) -> Result<(), InfraError> {
     DirBuilder::new()
         .recursive(true)

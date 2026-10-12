@@ -7,7 +7,7 @@
 //! first read after the writer has created the schema; each read is one
 //! short statement, so no read pins the WAL for long. Boot clocks differ
 //! between boots, so the minutes are placed by their UTC stamps, which
-//! STORAGE.md §3 allows for display.
+//! only order and display them.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

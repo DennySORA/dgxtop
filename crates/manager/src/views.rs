@@ -1,5 +1,5 @@
 //! ViewSessionService: the single authoritative `SessionState` per session
-//! (UI.md §3, AT13).
+//! (AT13).
 //!
 //! `UpdateViewSession` semantics follow `dgxtop_core::commands::CommandBody`:
 //! * `overview`: it holds the process table (D-36), so `selected_process`

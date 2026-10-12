@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::text::sanitize_message;
 
-/// Every error code allowed by `contracts/INTERFACES.md` and the command-result schema.
+/// Every error code the command-result schema allows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ErrorCode {
     ValidationFailed,

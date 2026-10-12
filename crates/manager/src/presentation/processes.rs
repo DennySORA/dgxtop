@@ -1,7 +1,7 @@
 //! Processes module projection: the processes that use a GPU (D-36), GPU
 //! and text filters, a stable sort whose tie-breaker is the ProcessKey, and
 //! a window around the selected ProcessKey. Only the window plus a small
-//! overscan is copied (RUNTIME.md §2); selection is never a row index.
+//! overscan is copied; selection is never a row index.
 
 use std::cmp::Ordering;
 

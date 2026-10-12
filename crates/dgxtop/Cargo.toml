@@ -49,7 +49,7 @@ nix.workspace = true
 libc.workspace = true
 proptest.workspace = true
 
-# Integration suites live at the repository root (spec/dgxtop-v2/IMPLEMENTATION_LAYOUT.md);
+# Integration suites live at the repository root;
 # the composition root owns them so they may assemble several concrete crates
 # without adding production dependency edges.
 [[test]]

@@ -1,5 +1,4 @@
-//! Out-of-band shutdown request and the bounded shutdown summary
-//! (RUNTIME.md §4/§8).
+//! Out-of-band shutdown request and the bounded shutdown summary.
 //!
 //! The request is an atomic flag plus a one-slot wake channel: it never
 //! queues behind normal commands, so a command flood cannot starve it.

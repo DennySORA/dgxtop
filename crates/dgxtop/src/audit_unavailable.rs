@@ -1,6 +1,6 @@
 //! Audit repository used when the SQLite runtime gate fails: every operation
 //! fails closed, so no process action can ever proceed without a durable
-//! intent (SECURITY.md §3).
+//! intent.
 
 use dgxtop_core::action::{
     ActionAttempt, ActionIntent, ActionOutcomeRecord, AuditExpiryReport, AuditFailure,

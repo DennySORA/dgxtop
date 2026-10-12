@@ -1,5 +1,5 @@
 //! The REF command workload: a bounded 10 Hz script of non-destructive view
-//! commands (`PERFORMANCE.md` §2), and the router that times each command
+//! commands, and the router that times each command
 //! from submission to the Manager's result.
 //!
 //! Benches cannot construct terminal key events (crossterm is not one of

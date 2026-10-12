@@ -1,7 +1,7 @@
 //! AT38: the history's reads are bounded by a deadline and run beside the
 //! state's commits. The Manager reads the history only through the
-//! Overview's sizes (D-82); the spec's point, byte and scan caps belonged
-//! to the query engine D-90 removed.
+//! Overview's sizes (D-82); the point, byte and scan caps belonged to the
+//! query engine D-90 removed.
 
 #[path = "store_hot_support.rs"]
 mod support;

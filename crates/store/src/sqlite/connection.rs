@@ -1,4 +1,4 @@
-//! Connection opening and per-partition PRAGMA profiles (`STORAGE.md` §6).
+//! Connection opening and per-partition PRAGMA profiles.
 
 use std::path::Path;
 use std::time::Duration;

@@ -32,7 +32,7 @@ use super::catalog::PublishedSources;
 use super::channels::Channel;
 use super::inventory::Inventory;
 
-/// Associations kept per GPU per cycle (spec default `max_process_gpu_links`).
+/// Associations kept per GPU per cycle (the default `max_process_gpu_links`).
 pub const MAX_PROCESSES_PER_GPU: usize = 1024;
 const COMPUTE_LIST_KEY: &str = "process.compute";
 const GRAPHICS_LIST_KEY: &str = "process.graphics";

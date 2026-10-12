@@ -51,7 +51,7 @@ pub fn sanitize_command_name(comm: &str) -> String {
 }
 
 /// Bounded, auditable form of untrusted text for persistent records
-/// (`contracts/INTERFACES.md`: displays strip control codes, the Store keeps
+/// (displays strip control codes, the Store keeps
 /// them escaped). Control characters, DEL, C1 and bidi overrides become
 /// `\u{XX}`; a literal backslash becomes `\\`, so the form is unambiguous.
 /// The result never exceeds `max_bytes` and never ends inside an escape.

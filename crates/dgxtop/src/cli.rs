@@ -1,4 +1,4 @@
-//! Command line (spec/dgxtop-v2/OPERATIONS.md §2).
+//! Command line.
 //!
 //! Every overridable setting is an `Option`: `None` means "not given" and
 //! must never overwrite a persisted value.

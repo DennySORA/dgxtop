@@ -1,4 +1,4 @@
-//! Adapter-host IPC (`contracts/INTERFACES.md` §7/§10, `SECURITY.md` §4).
+//! Adapter-host IPC.
 //!
 //! Wire format: a 4-byte big-endian payload length followed by UTF-8 JSON.
 //! The length is validated *before* any buffer is allocated; payloads are

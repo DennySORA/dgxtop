@@ -1,5 +1,5 @@
 //! SamplingScheduler: multi-rate, absolute-deadline scheduling of adapter
-//! reads and discovery (RUNTIME.md §3).
+//! reads and discovery.
 //!
 //! * Every read group follows its period class (`fast` → `sampling.interval_ms`,
 //!   `capacity` → `capacity_interval_ms`, `slow_health` →
@@ -1739,7 +1739,7 @@ mod tests {
             }
             bench.now += MS;
         }
-        // One shared slot per adapter (RUNTIME.md §3): its due groups go out
+        // One shared slot per adapter: its due groups go out
         // back to back, one per 1 ms tick, so a collector fed by several
         // groups of one host sees one burst per cycle. 5 s slow_health slots
         // land on 1 s fast slots.

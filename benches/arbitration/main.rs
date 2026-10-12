@@ -92,7 +92,7 @@ fn main() -> ExitCode {
 
 fn run() -> BenchResult<PathBuf> {
     let args = common::parse_args(BENCH, false)?;
-    let spec = common::load_spec()?;
+    let inputs = common::load_inputs()?;
     let config = common::reference_config()?;
     let sizes = sizes(args.mode);
     let paths = common::output_paths(BENCH, &args);
@@ -100,8 +100,8 @@ fn run() -> BenchResult<PathBuf> {
         "none (collectors only; no viewer)",
         "single-threaded in-process loop; reads untimed, collect() timed",
     )?;
-    let profile = spec.profile.replay_profile(0);
-    let fixture = generate_ref_fixture(spec.seed, &profile);
+    let profile = inputs.profile.replay_profile(0);
+    let fixture = generate_ref_fixture(inputs.seed, &profile);
     let fixture_bytes = fixture.to_json_bytes().map_err(|error| error.to_string())?;
     let census = FixtureCensus::of(&fixture);
     let mut pipeline = ReplayPipeline::new(&fixture, profile.adapter_hosts, &config, START_BOOT_NS)
@@ -131,7 +131,7 @@ fn run() -> BenchResult<PathBuf> {
         .iter()
         .filter_map(|detail| detail.cycle.as_ref().map(|summary| summary.p95_ms))
         .fold(f64::NAN, f64::max);
-    let projection_budget = spec
+    let projection_budget = inputs
         .budgets
         .limits
         .get("projection_p95_ms")
@@ -143,7 +143,7 @@ fn run() -> BenchResult<PathBuf> {
         soak: None,
         details: json!({
             "fixture": {
-                "seed": spec.seed,
+                "seed": inputs.seed,
                 "sha256": dgxtop_core::digest::sha256_hex(&fixture_bytes),
                 "bytes": fixture_bytes.len(),
                 "census": census,
@@ -172,7 +172,14 @@ fn run() -> BenchResult<PathBuf> {
             "fixture generated with simulated_latency_us=0: host read latency does not affect in-process collection".to_owned(),
         ],
     };
-    common::finish(outcome, &spec, &config, environment, &mut evidence, &paths)
+    common::finish(
+        outcome,
+        &inputs,
+        &config,
+        environment,
+        &mut evidence,
+        &paths,
+    )
 }
 
 /// Reads one cycle (untimed) and runs every collector on it.

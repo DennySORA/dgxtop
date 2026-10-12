@@ -1,7 +1,7 @@
 //! Rendering of one [`MetricCell`] with its evidence: value + unit, source,
 //! quality word, sample-kind tag, conflict values and last-good annotation.
 //!
-//! The rules are fixed by `ARCHITECTURE.md` §9 and `UI.md` §2:
+//! The rules:
 //! `68°C · package 0 · hwmon · usable`, `≠ source conflict · hwmon 68°C /
 //! thermal 42°C`, `stale · last 72°C 12s ago`; a cell without a value shows
 //! its state label and never `0` or blank.

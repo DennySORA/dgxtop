@@ -1,5 +1,5 @@
-//! Capability checks performed before anything reaches the action worker
-//! (SECURITY.md §1–3). The caller context is built from the REAL euid of
+//! Capability checks performed before anything reaches the action worker.
+//! The caller context is built from the REAL euid of
 //! this process and the setup's host/boot/namespace — never from command
 //! JSON. Every check fails closed.
 

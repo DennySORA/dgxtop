@@ -208,7 +208,7 @@ fn main() -> ExitCode {
 
 fn run() -> BenchResult<PathBuf> {
     let args = common::parse_args(BENCH, false)?;
-    let spec = common::load_spec()?;
+    let inputs = common::load_inputs()?;
     let config = common::reference_config()?;
     let sizes = sizes(args.mode);
     let paths = common::output_paths(BENCH, &args);
@@ -227,7 +227,7 @@ fn run() -> BenchResult<PathBuf> {
     .into_parts();
     let clock = BenchClock::new(PRELOAD_END_NS)?;
     let (mut feeder, preload, preload_seconds) =
-        preload_history(&config, spec.seed, &clock, &mut writer)?;
+        preload_history(&config, inputs.seed, &clock, &mut writer)?;
     let ledger_after_preload = ledger.snapshot();
     let charted: Vec<HistorySeries> = feeder
         .series()
@@ -320,7 +320,14 @@ fn run() -> BenchResult<PathBuf> {
             "bulk history is committed at a 60 s cadence (same rollups/bridges/segments as 1 s sampling), the newest 300 s at 1 s".to_owned(),
         ],
     };
-    common::finish(outcome, &spec, &config, environment, &mut evidence, &paths)
+    common::finish(
+        outcome,
+        &inputs,
+        &config,
+        environment,
+        &mut evidence,
+        &paths,
+    )
 }
 
 fn preload_history(

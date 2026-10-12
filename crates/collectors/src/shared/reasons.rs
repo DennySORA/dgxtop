@@ -3,7 +3,7 @@
 //!
 //! Codes are bounded (`1..=80` bytes) machine strings in `UPPER_SNAKE_CASE`.
 //! [`PINNED_SOURCE_UNAVAILABLE`] keeps the spelling of the arbitration
-//! contract (`contracts/INTERFACES.md` §3) so the pin outcome is searchable by
+//! contract so the pin outcome is searchable by
 //! the same name the policy documents use.
 
 use dgxtop_core::canonical::RejectReason;

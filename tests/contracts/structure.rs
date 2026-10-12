@@ -1,6 +1,6 @@
 //! Structural contracts that types alone cannot show, checked from the
 //! repository files so a wiring regression fails `cargo test`, not only the
-//! CI boundary script (`spec/dgxtop-v2/IMPLEMENTATION_LAYOUT.md`, AT01, AT05,
+//! CI boundary script (AT01, AT05,
 //! AT11, AT25, AT34, AT20, AT37).
 
 use std::path::{Path, PathBuf};

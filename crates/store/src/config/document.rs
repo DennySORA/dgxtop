@@ -146,7 +146,7 @@ pub(crate) fn parse_document(label: &str, bytes: &[u8]) -> Result<Config, Config
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dgxtop_core::config::DEFAULT_CONFIG_JSON;
+    use dgxtop_core::config::REFERENCE_CONFIG_JSON;
 
     #[test]
     fn future_schema_is_detected_even_with_unknown_fields() {
@@ -178,11 +178,11 @@ mod tests {
 
     #[test]
     fn nan_and_unknown_keys_are_rejected() {
-        let nan = DEFAULT_CONFIG_JSON.replace(
+        let nan = REFERENCE_CONFIG_JSON.replace(
             "\"temperature_disagreement_deg_c\": 8.0",
             "\"temperature_disagreement_deg_c\": NaN",
         );
-        assert_ne!(nan, DEFAULT_CONFIG_JSON);
+        assert_ne!(nan, REFERENCE_CONFIG_JSON);
         assert!(matches!(
             parse_document("mem", nan.as_bytes()),
             Err(ConfigLoadError::Invalid {
@@ -190,12 +190,12 @@ mod tests {
                 ..
             })
         ));
-        let unknown = DEFAULT_CONFIG_JSON.replacen(
+        let unknown = REFERENCE_CONFIG_JSON.replacen(
             "\"revision\": 1,",
             "\"revision\": 1, \"surprise\": true,",
             1,
         );
-        assert_ne!(unknown, DEFAULT_CONFIG_JSON);
+        assert_ne!(unknown, REFERENCE_CONFIG_JSON);
         assert!(matches!(
             parse_document("mem", unknown.as_bytes()),
             Err(ConfigLoadError::Invalid {
@@ -207,7 +207,8 @@ mod tests {
 
     #[test]
     fn old_schema_versions_are_validation_errors() {
-        let old = DEFAULT_CONFIG_JSON.replacen("\"schema_version\": 2", "\"schema_version\": 1", 1);
+        let old =
+            REFERENCE_CONFIG_JSON.replacen("\"schema_version\": 2", "\"schema_version\": 1", 1);
         assert!(matches!(
             parse_document("mem", old.as_bytes()),
             Err(ConfigLoadError::Invalid {

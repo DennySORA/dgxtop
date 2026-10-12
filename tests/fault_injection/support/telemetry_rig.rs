@@ -29,7 +29,7 @@ use super::workers::{
     Completions, WorkerSet, spawn_collector_pool, spawn_history_pool, spawn_state_worker,
 };
 
-/// Bound of the Manager's own shutdown wait (RUNTIME.md §8) plus slack.
+/// Bound of the Manager's own shutdown wait plus slack.
 const MANAGER_SHUTDOWN_BOUND: Duration = Duration::from_millis(3_500);
 /// Per-worker stop bound used by the composition root.
 const WORKER_STOP: Duration = Duration::from_millis(500);

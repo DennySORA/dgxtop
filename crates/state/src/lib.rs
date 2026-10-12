@@ -7,7 +7,7 @@
 //! trends) and hands every committed batch on to the history. No
 //! persistence, no history beyond the short trends, no I/O.
 //!
-//! The single-writer commit pipeline (`STORAGE.md` §1, `INTERFACES.md` §8):
+//! The single-writer commit pipeline:
 //! [`StateWriter`] is owned by the state actor thread. Each commit is
 //! validated completely before anything changes (epoch, base revision,
 //! values, namespace, units, memory admission), then samples, history

@@ -1,5 +1,4 @@
-//! Archive capacity, batching and timing limits (`STORAGE.md` §6 policy
-//! table).
+//! Archive capacity, batching and timing limits.
 
 use std::time::Duration;
 

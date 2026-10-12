@@ -5,7 +5,7 @@
 //! enforces the schema constraints of the fields it keeps. The schema's
 //! `topics` and `supports_compact` are left out, and of its slots only
 //! `overview` and `detail` are kept: nothing read them or placed a module
-//! in the others (D-91, a spec deviation).
+//! in the others (D-91).
 
 use dgxtop_core::identity::ModuleId;
 use thiserror::Error;
@@ -188,11 +188,11 @@ mod tests {
         output
     }
 
-    /// The kept fields match the spec's example exactly; only the dropped
+    /// The kept fields match the example exactly; only the dropped
     /// `topics` and `supports_compact` differ (D-91).
     #[test]
     fn to_json_matches_the_spec_example_without_the_dropped_fields() {
-        let example = include_str!("../../../../spec/dgxtop-v2/examples/display-module.cpu.json");
+        let example = include_str!("../../../../contracts/examples/display-module.cpu.json");
         let dropped_topics = "\"topics\":[\"cpu\",\"sources\",\"health\"],";
         let dropped_compact = ",\"supports_compact\":true";
         let minified = minify(example);

@@ -1,4 +1,4 @@
-//! Explicit import of the v1 configuration (`OPERATIONS.md` §4, AT18).
+//! Explicit import of the v1 configuration (AT18).
 //!
 //! The dry run reads and maps the legacy file and writes nothing. Applying
 //! writes only a new v2 file through the same atomic publish as a commit

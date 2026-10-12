@@ -1,5 +1,5 @@
-//! Composition-level fault-injection suite (spec/dgxtop-v2/ACCEPTANCE.md
-//! AT06, AT24, AT30, AT31, AT36, AT39).
+//! Composition-level fault-injection suite (AT06, AT24, AT30, AT31, AT36,
+//! AT39).
 //!
 //! Each scenario assembles the real concretes the composition root wires
 //! together — the Manager on its own control thread, the state actor,

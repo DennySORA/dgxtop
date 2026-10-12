@@ -3,7 +3,7 @@
 //! version and target check, the host checks (non-Linux, WSL 1, musl, a too
 //! old glibc) and the release checks (releases before v2, a missing archive),
 //! the atomic replacement that keeps `dgxtop.previous`, and rollback (AT18,
-//! AT20; OPERATIONS.md §4). Fake `uname` and `ldd` tools on PATH stand in for
+//! AT20). Fake `uname` and `ldd` tools on PATH stand in for
 //! other hosts. Nothing touches the real `~/.local/bin` and nothing goes to
 //! the network.
 

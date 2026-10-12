@@ -1,4 +1,4 @@
-//! Bounded, frame-atomic terminal output (`UI.md` §5).
+//! Bounded, frame-atomic terminal output.
 //!
 //! Ratatui encodes a frame into an in-memory buffer capped at 1 MiB; the
 //! runner then hands those bytes to the non-blocking [`TerminalTransport`]

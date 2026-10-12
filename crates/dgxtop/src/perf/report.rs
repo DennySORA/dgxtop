@@ -476,7 +476,7 @@ mod tests {
     #[test]
     fn any_adaptive_throttle_event_fails_its_gate() {
         let budgets = Budgets::load(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/dgxtop-v2/bench/budgets.json"),
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../benches/budgets.json"),
         )
         .unwrap();
         let status = |events: f64| {
@@ -504,7 +504,7 @@ mod tests {
     #[test]
     fn gates_cover_limits_duration_and_sample_minimums() {
         let budgets = Budgets::load(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/dgxtop-v2/bench/budgets.json"),
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../benches/budgets.json"),
         )
         .unwrap();
         let mut run = RunRecord {

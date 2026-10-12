@@ -564,8 +564,8 @@ pub struct HistoryChartView {
     /// [`HistoryWindowSummary::covered_ns`]), of the view's
     /// [`HistoryView::requested_span_ns`].
     pub covered_ns: Option<u64>,
-    /// Set when points were merged to fit the chart's width: the spec's
-    /// mark of a display-only compression (STORAGE.md §5).
+    /// Set when points were merged to fit the chart's width: the mark of
+    /// a display-only compression.
     pub display_downsampled: bool,
     pub pending: bool,
     pub error: Option<String>,
@@ -787,7 +787,7 @@ pub struct ActionsView {
     pub unknown_outcomes: u32,
 }
 
-/// Overload state machine (`RUNTIME.md` §7).
+/// Overload state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OverloadState {

@@ -1,6 +1,5 @@
 //! SQLite policy shared by every partition: the audit, the history
-//! archive, the process history and the history tiers (`STORAGE.md`
-//! §5–§8, ADR16/ADR17, D-85).
+//! archive, the process history and the history tiers (D-85).
 //!
 //! * Version gate: runtime `sqlite3_libversion_number() >= 3051003` and equal
 //!   to the build-time headers ([`ensure_sqlite_version`]).

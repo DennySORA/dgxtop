@@ -1,5 +1,5 @@
 //! Optional SQLite history archive (`history.sqlite3`, WAL,
-//! `synchronous=NORMAL`, off by default; ADR16).
+//! `synchronous=NORMAL`, on by default since D-51).
 //!
 //! The archive receives a bounded copy of finished minute buckets, counter
 //! bridges, segments and gaps. It is a best-effort durability layer: power

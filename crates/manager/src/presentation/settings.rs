@@ -15,7 +15,7 @@ use serde_json::Value;
 use super::SettingsInputs;
 use super::labels::{label_text, note_text};
 
-/// Whole sections that only take effect after a restart (CONFIG.md matrix).
+/// Whole sections that only take effect after a restart.
 const RESTART_ONLY_SECTIONS: [&str; 2] = ["queues", "runtime"];
 /// Individual restart-only fields (`Config::restart_required_changes`).
 const RESTART_ONLY_FIELDS: [&str; 8] = [

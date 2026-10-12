@@ -3,19 +3,18 @@
 //! identity part), the most bars a chart asks for, the coverage ratio,
 //! and a series in every boot ([`SeriesInEveryBoot`]).
 //!
-//! The spec's bounded query engine (`history-query.schema.json`,
-//! `history-result.schema.json`) is not implemented: the Manager reads the
-//! history only through the Overview's sizes (D-82, D-90).
+//! There is no general history query: the Manager reads the history only
+//! through the Overview's sizes (D-82, D-90).
 //!
 //! A series in every boot names what the archive and the Overview's sizes
 //! keep across boots (D-51, D-82): boots share no boot clock, so they are
-//! placed on the wall clock (STORAGE.md §3 lets UTC index and display).
+//! placed on the wall clock, which only orders and displays them.
 
 use serde::{Deserialize, Serialize};
 
 use crate::identity::{EntityId, HostId, MetricId, MetricKey, Scope};
 
-/// Most bars one chart asks for (the spec's point cap).
+/// Most bars one chart asks for.
 pub const MAX_HISTORY_POINTS: u32 = 2000;
 
 /// Aggregation method of a history segment.

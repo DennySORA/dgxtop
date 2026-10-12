@@ -8,7 +8,7 @@
 //!
 //! * Ingest: the state feeds it through the `HistoryIngest` port
 //!   ([`HistoryRecorder`]) inside each commit, so the history never lags
-//!   the snapshot. Per series (`MetricKey`, `STORAGE.md` §2–4) raw gauge
+//!   the snapshot. Per series (`MetricKey`) raw gauge
 //!   steps and exact counter intervals are kept apart in fixed-width
 //!   chunked logs (`raw_history_seconds`), segments are cut on
 //!   source/generation/policy/kind changes and gaps merged into one index.

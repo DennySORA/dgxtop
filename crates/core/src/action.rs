@@ -41,7 +41,7 @@ impl Signal {
     }
 }
 
-/// Action lifecycle (`SECURITY.md` §3). `SignalSent` is not `ExitObserved`.
+/// Action lifecycle. `SignalSent` is not `ExitObserved`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionState {

@@ -1,4 +1,4 @@
-//! Display module contract (`contracts/INTERFACES.md` §6) and the trusted,
+//! Display module contract and the trusted,
 //! compile-time module registry.
 //!
 //! A module renders only from the immutable [`ViewModel`] and its allocated

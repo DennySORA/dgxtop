@@ -1,7 +1,7 @@
 //! Performance evidence primitives shared by the benchmark harness and the
 //! validation report: nearest-rank quantiles, process-tree CPU accounting
-//! and the `performance-report.schema.json` document
-//! (spec/dgxtop-v2/PERFORMANCE.md §2, §5). Compiled only for the benches
+//! and the `performance-report.schema.json` document. Compiled only for
+//! the benches
 //! (`bench-support`) and this crate's tests: no CLI path uses it.
 //!
 //! Nothing here fabricates results: a report is `measured` only when built

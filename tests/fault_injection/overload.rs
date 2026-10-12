@@ -348,7 +348,7 @@ fn at30_overload_escalates_recovers_one_level_per_30s_and_keeps_control_flowing(
     assert_eq!(rig.transitions("overload normal -> pressured"), 0);
 }
 
-/// RUNTIME.md §7 enters `pressured` when any queue's bytes stay >= 75 % for
+/// The overload control enters `pressured` when any queue's bytes stay >= 75 % for
 /// 3 samples / 3 s; the byte-accounted ingress gate is one of those queues
 /// (it used to count only at >= 95 %, on the throttle path).
 #[test]

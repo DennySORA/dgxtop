@@ -1,4 +1,4 @@
-//! Async-signal-safe termination flag (`RUNTIME.md` §8, AT39).
+//! Async-signal-safe termination flag (AT39).
 //!
 //! SIGTERM, SIGINT and SIGHUP only store `true` into an atomic; all real
 //! shutdown work happens on normal threads that poll the flag. Nothing in the

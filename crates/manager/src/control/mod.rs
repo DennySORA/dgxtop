@@ -1,5 +1,5 @@
 //! The Manager control core: every service and the plumbing between them,
-//! driven by one thread (RUNTIME.md §4).
+//! driven by one thread.
 //!
 //! Handlers here only route typed inputs to the owning service and apply the
 //! returned effects (results, gaps, dirty sessions) in one place.

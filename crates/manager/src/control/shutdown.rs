@@ -1,4 +1,4 @@
-//! Bounded shutdown (RUNTIME.md §8, AT39): revoke every token not yet
+//! Bounded shutdown (AT39): revoke every token not yet
 //! sending, stop scheduling and collection, tell frontends to stop, wait at
 //! most 3 s (boot clock and real time) for config/audit/action completions,
 //! answer every accepted command once and report what is unfinished.

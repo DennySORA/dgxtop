@@ -119,7 +119,7 @@ impl<K: Eq + Hash + Clone> PendingRequests<K> {
 /// Each committed snapshot revision remembers the newest `read_finished`
 /// of its inputs; a published projection resolves every pending revision
 /// up to its `snapshot_revision` with `generated − read_finished`. Frame
-/// pacing and queueing are therefore included, as `PERFORMANCE.md` asks.
+/// pacing and queueing are therefore included.
 #[derive(Debug)]
 pub struct ProjectionLatencyTracker {
     pending: BTreeMap<u64, u64>,

@@ -10,7 +10,7 @@ use dgxtop_core::identity::{ProcessKey, SessionId};
 use dgxtop_core::view::ConfirmationView;
 use uuid::Uuid;
 
-/// Non-terminal actions at once (RUNTIME.md §4).
+/// Non-terminal actions at once.
 pub(crate) const MAX_INFLIGHT_ACTIONS: usize = 8;
 /// Terminal actions kept, so a late confirm or cancel of their token is
 /// answered with what became of them.

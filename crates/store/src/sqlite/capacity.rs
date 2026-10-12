@@ -1,5 +1,5 @@
 //! Disk footprint, page accounting, PASSIVE checkpoints and the pure
-//! admission policy shared by the audit and the archive (`STORAGE.md` §6).
+//! admission policy shared by the audit and the archive.
 //!
 //! Capacity counts the main file, `-wal` and `-shm`. Deleting rows does not
 //! shrink the main file (no VACUUM on the hot path), so admission uses the

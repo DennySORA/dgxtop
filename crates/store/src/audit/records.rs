@@ -418,7 +418,7 @@ mod tests {
         hostile.basename = "kworker/0:1H\u{1b}[2J".to_owned();
         let row = IntentRow::build(&hostile, "boot").unwrap();
         let target: StoredTarget = serde_json::from_str(&row.target_json).unwrap();
-        // INTERFACES.md: the Store keeps a bounded, auditable escaped form.
+        // The Store keeps a bounded, auditable escaped form.
         assert_eq!(target.basename, r"kworker/0:1H\u{1b}[2J");
         assert!(!row.target_json.contains('\u{1b}'));
     }

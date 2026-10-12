@@ -28,7 +28,7 @@ use crate::support::probes::{
 };
 use crate::support::workers::spawn_config_worker;
 
-/// The Manager's bounded shutdown wait (RUNTIME.md §8).
+/// The Manager's bounded shutdown wait.
 const CONTROL_BUDGET: Duration = Duration::from_secs(3);
 /// Scheduling slack on top of a budget.
 const SLACK: Duration = Duration::from_millis(500);

@@ -1,4 +1,4 @@
-//! Viewer composition (`ARCHITECTURE.md` §9): LayoutEngine, module registry,
+//! Viewer composition: LayoutEngine, module registry,
 //! chrome, banners, summary strip, help overlay and the HitMap of the frame.
 //!
 //! `Viewer::render` is pure presentation: it reads one immutable projection

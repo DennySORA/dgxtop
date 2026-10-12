@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """Checks the direct production dependencies between dgxtop's workspace crates.
 
-D-79 adds the state, history and compression components, so the spec's
-`spec/dgxtop-v2/tools/check_boundaries.py`, which pins the eight crates of the
-sealed layout, no longer describes this workspace. This is its successor with
-the same rules for the new crate list:
+The rules, for the crate list D-79 settled with the state, history and
+compression components:
 
 * every implementation crate depends on no workspace crate but `dgxtop-core`,
   except that `dgxtop-history` may use the pure `dgxtop-compression`;
 * only the composition root `dgxtop` depends on more;
-* crates that must stay pure or free of drivers forbid the same external
-  crates the spec's tool forbids, extended to the new components.
+* crates that must stay pure or free of drivers forbid the external crates
+  listed in PURE and FORBIDDEN below.
 
 It checks direct production edges only (dev dependencies are reviewed
 separately), not trait permissions or std::fs use in code.

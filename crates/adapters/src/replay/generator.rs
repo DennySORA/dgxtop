@@ -53,7 +53,7 @@ pub struct RefProfile {
     pub sampling_ms: u32,
     /// Distinct fixture cycles before the replay loops.
     pub cycles: u32,
-    /// Fixed per-read API delay of a replay host (PERFORMANCE.md: 1 ms).
+    /// Fixed per-read API delay of a replay host.
     pub simulated_latency_us: u32,
 }
 
@@ -204,7 +204,7 @@ impl Plan {
         let source_room = MAX_SOURCES - row_sources;
         let series = bounded(profile.series, 1, source_room);
         // `profile.sources` counts every catalog source, row sources included
-        // (PERFORMANCE.md §1 against the catalog cap of RUNTIME.md §5).
+        // (the REF profile's count against the catalog cap).
         let key_sources = usize::try_from(profile.sources)
             .unwrap_or(usize::MAX)
             .saturating_sub(row_sources);

@@ -1,4 +1,4 @@
-//! The keymap table (`UI.md` §3). One static table drives key dispatch, the
+//! The keymap table. One static table drives key dispatch, the
 //! footer hints and the help overlay, so they can never disagree.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};

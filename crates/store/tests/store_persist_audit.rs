@@ -1,7 +1,7 @@
 //! Action audit: durable receipts only after COMMIT, idempotency, recovery
 //! of intents without outcome (AT32 audit side), fail-closed capacity, WAL
 //! and busy handling (AT31), expiry on its owner's request (D-96),
-//! schema/version handling and corruption (STORAGE.md §6–§8).
+//! schema/version handling and corruption.
 
 // Test helpers panic on setup failures; the lints target production code.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

@@ -543,13 +543,12 @@ mod tests {
     #[test]
     fn spec_examples_decode() {
         let limits = IpcLimits::default();
-        let request = include_bytes!("../../../../spec/dgxtop-v2/examples/ipc-request.read.json");
+        let request = include_bytes!("../../../../contracts/examples/ipc-request.read.json");
         assert_eq!(
             decode_request(request, &limits).unwrap().source_slots,
             [0, 1]
         );
-        let batch =
-            include_bytes!("../../../../spec/dgxtop-v2/examples/observation-batch.partial.json");
+        let batch = include_bytes!("../../../../contracts/examples/observation-batch.partial.json");
         let decoded = decode_batch(batch, &limits).unwrap();
         assert_eq!(decoded.status, BatchStatus::Partial);
     }
