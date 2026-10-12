@@ -100,6 +100,7 @@ impl ScenarioProfile {
     }
 
     /// Whether this profile is the fixed REF workload the report schema demands.
+    #[cfg(test)]
     pub fn is_reference_workload(&self) -> bool {
         self.workload() == Workload::reference()
     }
