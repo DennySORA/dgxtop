@@ -224,6 +224,19 @@ dgxtop --import-legacy ~/.config/dgxtop/config.json --dry-run   # show the v1 â†
 dgxtop --version --verbose   # version, commit, toolchain, target, SQLite runtime
 ```
 
+**CPU power and total power:** run dgxtop with `sudo` to read CPU power counters that require
+root access. Linux powercap/RAPL energy counters are usually root-only; without access, CPU
+power and the CPU + GPU total stay hidden even when GPU power is available.
+
+```bash
+sudo -H "$HOME/.local/bin/dgxtop"  # installed with the installer above
+sudo -H ./target/release/dgxtop   # built from source; run from the repository directory
+```
+
+The hardware and driver must still expose CPU power data, and every GPU must report its power
+for the total to appear. `sudo` cannot provide missing sensors. With default paths, these commands
+use root's configuration and history. Process termination (`K` / `F9`) is disabled in root sessions.
+
 `--config` and `--state-dir` take absolute paths for the configuration file and the state
 directory. Command-line values override saved settings only for the current run.
 

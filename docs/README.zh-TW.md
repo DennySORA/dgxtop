@@ -174,6 +174,15 @@ dgxtop --import-legacy ~/.config/dgxtop/config.json --dry-run   # 顯示 v1 → 
 dgxtop --version --verbose   # 版本、commit、工具鏈、target、SQLite runtime
 ```
 
+**CPU 功率與總功率：** 請以 `sudo` 啟動 dgxtop，以讀取需要 root 權限的 CPU 功率資料。Linux 的 powercap/RAPL 能量計數器通常只允許 root 讀取；缺少權限時，即使 GPU 功率正常，CPU 功率與 CPU＋GPU 總功率仍會隱藏。
+
+```bash
+sudo -H "$HOME/.local/bin/dgxtop"  # 透過上面的安裝程式安裝
+sudo -H ./target/release/dgxtop   # 從原始碼建置；在專案目錄執行
+```
+
+硬體與驅動仍須提供 CPU 功率資料，且每張 GPU 都能回報功率，才會顯示總值；`sudo` 無法補上不存在的感測器。使用預設路徑時，上述指令會採用 root 的設定與歷史。root 工作階段不允許結束程序（`K`／`F9`）。
+
 `--config` 與 `--state-dir` 以絕對路徑指定設定檔與狀態目錄。命令列參數只在本次執行時覆寫已保存的設定。
 
 每個面板的標題右側列出它自己的按鍵；底部只保留全域按鍵。

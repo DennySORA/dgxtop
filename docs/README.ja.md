@@ -174,6 +174,15 @@ dgxtop --import-legacy ~/.config/dgxtop/config.json --dry-run   # v1 → v2 の�
 dgxtop --version --verbose   # バージョン、commit、ツールチェーン、ターゲット、SQLite ランタイム
 ```
 
+**CPU 電力と合計電力：** root 権限が必要な CPU 電力データを読むには、`sudo` で dgxtop を起動してください。Linux の powercap/RAPL エネルギーカウンターは通常 root だけが読み取れます。権限がない場合、GPU 電力が取得できても、CPU 電力と CPU＋GPU の合計電力は表示されません。
+
+```bash
+sudo -H "$HOME/.local/bin/dgxtop"  # 上記のインストーラーでインストールした場合
+sudo -H ./target/release/dgxtop   # ソースからビルドした場合。リポジトリー内で実行
+```
+
+ハードウェアとドライバーが CPU 電力データを提供し、すべての GPU が電力を報告できる場合に合計を表示します。`sudo` でも存在しないセンサーの値は取得できません。デフォルトのパスでは、上記のコマンドは root の設定と履歴を使います。root セッションではプロセスの終了操作（`K`／`F9`）は無効です。
+
 `--config` と `--state-dir` には、設定ファイルと状態ディレクトリーの絶対パスを指定します。コマンドライン引数は、その実行に限って保存済み設定を上書きします。
 
 各パネルはタイトルの右側に自分のキーを表示し、フッターには全体のキーだけを残します。
