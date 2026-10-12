@@ -7,7 +7,7 @@
 所有 GPU、每個工作佔用多少記憶體與整台機器，一個畫面看完；<br>
 每個 GPU 工作從開始到結束都有紀錄。任何裝有 NVIDIA GPU 的 Linux 主機都能使用。
 
-[English](../README.md) · [日本語](README.ja.md) · [專案頁面](https://dennysora.me/zh-hant/projects/tools/dgxtop/)
+[English](../README.md) · [日本語](README.ja.md) · [專案頁面](https://dennysora.me/zh-hant/projects/tools/dgxtop/) · [運作原理](https://dennysora.me/zh-hant/projects/tools/dgxtop/#architecture)
 
 [![Release](https://img.shields.io/github/v/release/DennySORA/dgxtop)](https://github.com/DennySORA/dgxtop/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../LICENSE)
@@ -99,7 +99,7 @@ htop 以 CPU 為主，nvtop 和 nvidia-smi 只在你盯著的時候顯示 GPU。
 
 - **一台機器多張 GPU。** 已在 DGX Spark（GB10）與裝有 RTX 5080 和 RTX 3060 的工作站上測試。
 - **長久保存的歷史。** 歷史寫入磁碟，重開程式或重開機都還在，沒有保存期限：每種長條保留最新的 300 條，所以 1 分鐘長條涵蓋最近 5 小時，24 小時長條大約 10 個月。程序歷史列出最新的 512 次執行。dgxtop 在執行期間記錄。
-- **輕量。** 以 Rust 撰寫。每秒最多重繪 4 次，資料使用量固定在 256 MiB 以內。
+- **輕量。** 以 Rust 撰寫。預設每秒繪製 4 次新資料，資料使用量固定在 256 MiB 以內。
 - **任何終端尺寸。** 寬版、單欄與精簡版面，最小到 40×10。支援鍵盤與滑鼠，有四種配色主題。
 - **隱私。** 不連網，也不回傳任何資料。設定與歷史是只有你能讀的檔案。程序歷史會保存 GPU 程序的命令列、工作目錄與程式；環境變數從不儲存。
 - **安全的程序操作。** 只能操作自己的程序，root 工作階段不能操作，而且要在會過期的確認之後才執行。訊號經由 pidfd 送出，不會誤送到重複使用的 PID，每次操作都有紀錄。`--read-only` 可以關閉程序操作。
@@ -135,6 +135,8 @@ flowchart LR
 | Manager | 排定採樣、套用設定、檢查指令與程序操作，並產生畫面資料。本身不保存資料。 |
 | Viewer | 用 Manager 產生的畫面資料，以 Ratatui 繪製畫面，並把按鍵與滑鼠點擊轉成指令。 |
 | Runtime | 管理 adapter 程序、它們的 IPC 與有上限的佇列、日誌與終端。 |
+
+專案頁面上的[技術深入解析](https://dennysora.me/zh-hant/projects/tools/dgxtop/#architecture)先跟著一筆資料從核心走到畫面，再說明 adapter 子程序、來源仲裁、分層歷史、程序歷史、GPU 記憶體的配色、安全的程序操作、上限與過載，以及磁碟上的檔案，每一節都附圖。
 
 <details>
 <summary>程式碼結構</summary>

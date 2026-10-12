@@ -7,7 +7,7 @@
 すべての GPU、ジョブごとのメモリ使用量、マシン全体を 1 画面で。<br>
 GPU ジョブは開始から終了まで記録します。NVIDIA GPU を搭載したどの Linux マシンでも動きます。
 
-[English](../README.md) · [繁體中文](README.zh-TW.md) · [プロジェクトページ](https://dennysora.me/ja/projects/tools/dgxtop/)
+[English](../README.md) · [繁體中文](README.zh-TW.md) · [プロジェクトページ](https://dennysora.me/ja/projects/tools/dgxtop/) · [仕組み](https://dennysora.me/ja/projects/tools/dgxtop/#architecture)
 
 [![Release](https://img.shields.io/github/v/release/DennySORA/dgxtop)](https://github.com/DennySORA/dgxtop/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../LICENSE)
@@ -99,7 +99,7 @@ htop は CPU が中心で、nvtop や nvidia-smi は見ている間だけ GPU �
 
 - **1 台のマシンに複数の GPU。** DGX Spark（GB10）と、RTX 5080 と RTX 3060 を積んだワークステーションでテスト済みです。
 - **長く残る履歴。** 履歴はディスクに保存され、再起動しても残り、保存期限はありません。バーの大きさごとに最新の 300 本を残すので、1 分バーは直近 5 時間、24 時間バーは約 10 か月をカバーします。Process History は最新の 512 回の実行を表示します。記録するのは dgxtop の実行中です。
-- **軽量。** Rust 製です。描画は最大で毎秒 4 回、データは固定の 256 MiB に収めます。
+- **軽量。** Rust 製です。新しいデータの描画は既定で毎秒 4 回、データは固定の 256 MiB に収めます。
 - **どの端末サイズでも。** ワイド、1 カラム、コンパクトのレイアウトで、40×10 まで対応します。キーボードとマウス、4 つの配色テーマに対応しています。
 - **プライバシー。** ネットワークアクセスもテレメトリーもありません。設定と履歴は本人だけが読めるファイルです。Process History は GPU プロセスのコマンドライン、作業フォルダー、プログラムを保存しますが、環境変数は保存しません。
 - **安全なプロセス操作。** 操作できるのは自分のプロセスだけで、root セッションからは操作できず、期限付きの確認の後にだけ実行します。シグナルは pidfd 経由で送るので、再利用された PID に届くことはなく、すべての操作を記録します。`--read-only` で無効にできます。
@@ -135,6 +135,8 @@ flowchart LR
 | Manager | サンプリングの計画、設定の適用、コマンドとプロセス操作の確認を行い、表示用データを作ります。自身はデータを持ちません。 |
 | Viewer | Manager の表示用データから Ratatui で画面を描き、キーやマウス操作をコマンドに変換します。 |
 | Runtime | adapter プロセス、その IPC と上限付きのキュー、ログ、端末を管理します。 |
+
+プロジェクトページの[技術解説](https://dennysora.me/ja/projects/tools/dgxtop/#architecture)では、1 つのサンプルをカーネルから画面まで追い、adapter プロセス、出所の選択、階層化された履歴、Process History、GPU メモリの色分け、安全なプロセス操作、上限と過負荷、ディスク上のファイルを、図とともに説明しています。
 
 <details>
 <summary>コードの構成</summary>

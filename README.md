@@ -7,7 +7,7 @@
 Every GPU, each job's share of its memory and the whole machine on one screen,<br>
 plus a record of every GPU job from start to end. Runs on any Linux machine with NVIDIA GPUs.
 
-[繁體中文](docs/README.zh-TW.md) · [日本語](docs/README.ja.md) · [Project page](https://dennysora.me/en/projects/tools/dgxtop/)
+[繁體中文](docs/README.zh-TW.md) · [日本語](docs/README.ja.md) · [Project page](https://dennysora.me/en/projects/tools/dgxtop/) · [How it works](https://dennysora.me/en/projects/tools/dgxtop/#architecture)
 
 [![Release](https://img.shields.io/github/v/release/DennySORA/dgxtop)](https://github.com/DennySORA/dgxtop/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -134,8 +134,8 @@ it), working folder and charts.
   limit: each bar size keeps its latest 300 bars, so 1-minute bars cover the last 5 hours and
   24-hour bars about 10 months. Process History lists the latest 512 runs. dgxtop records while it
   runs.
-- **Light.** Written in Rust. It redraws at most 4 times a second and keeps its data within a fixed
-  256 MiB.
+- **Light.** Written in Rust. It draws new data 4 times a second by default and keeps its data within
+  a fixed 256 MiB.
 - **Any terminal size.** Wide, single-column and compact layouts, down to 40×10. Keyboard and mouse,
   and four color themes.
 - **Private.** No network access and no telemetry. Settings and history are files only you can
@@ -178,6 +178,11 @@ flowchart LR
 | Manager | Schedules sampling, applies settings, checks commands and process actions, and builds the views. It keeps no data itself. |
 | Viewer | Draws the screens with Ratatui from the Manager's views, and turns keys and mouse clicks into commands. |
 | Runtime | Supervises the adapter processes, their IPC and bounded queues, the log and the terminal. |
+
+The [technical deep dive](https://dennysora.me/en/projects/tools/dgxtop/#architecture) on the project page
+follows one sample from the kernel to the screen, then explains the adapter processes, source selection,
+tiered history, Process History, GPU memory colors, safe process actions, limits and overload, and the
+files on disk, each with a diagram.
 
 <details>
 <summary>Code layout</summary>
