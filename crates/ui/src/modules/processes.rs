@@ -90,10 +90,10 @@ impl DisplayModule for ProcessesModule {
         let rows = model.modules.processes.as_deref().map_or(1, |view| {
             usize::try_from(view.total_rows).unwrap_or(usize::MAX)
         });
-        // Borders, header, its rule, the status line and the rows a blank
-        // row apart (D-72).
+        // Borders, header, its rule, the status line and one row per
+        // process (D-100).
         let rows = saturate_u16(rows.max(1));
-        Some(rows.saturating_mul(2).saturating_sub(1).saturating_add(5))
+        Some(rows.saturating_add(5))
     }
 
     fn render(
@@ -135,17 +135,7 @@ impl DisplayModule for ProcessesModule {
             return output.finish();
         }
         let table = TableLayout::new(inner);
-        // A blank row between two processes while all of them fit so, else
-        // one row each (D-72).
-        let spaced = view.rows.len().saturating_mul(2).saturating_sub(1)
-            <= usize::from(table.body.height)
-            && view.rows.len() > 1;
-        let capacity = if spaced {
-            table.body.height.saturating_add(1) / 2
-        } else {
-            table.body.height
-        };
-        let window = DisplayWindow::new(view, capacity);
+        let window = DisplayWindow::new(view, table.body.height);
         let filter = view.gpu_filter.as_ref().map(|(id, _)| id);
         let drawn: Vec<(&ProcessRowView, bool, [TableCell; 11])> = view
             .rows
@@ -172,10 +162,7 @@ impl DisplayModule for ProcessesModule {
             draw_header_rule(buffer, rule, &columns, context);
         }
         let mut cursor = RowCursor::new(table.body);
-        for (index, (row, selected, cells)) in drawn.into_iter().enumerate() {
-            if spaced && index > 0 {
-                cursor.next_row();
-            }
+        for (row, selected, cells) in drawn {
             let Some(rect) = cursor.next_row() else { break };
             let style = selected.then(|| context.theme.selected_row_style());
             draw_table_row(frame.buffer_mut(), rect, &columns, &cells, style);
@@ -674,10 +661,10 @@ mod tests {
         );
     }
 
-    /// A gray rule sets the header apart, and while every process fits so a
-    /// blank row sets each apart; with more, one row each (D-72).
+    /// A gray rule sets the header apart, and every process takes one row,
+    /// with no blank row between two (D-100).
     #[test]
-    fn rows_stand_a_row_apart_while_they_all_fit() {
+    fn each_process_takes_one_row_with_no_blank_row_between() {
         let context = test_fixtures::display_context();
         let draw = |count: usize, height: u16| -> Vec<String> {
             let view = test_fixtures::processes_view(count, 0, u32::try_from(count).unwrap());
@@ -705,10 +692,10 @@ mod tests {
                 .map(|(y, _)| y)
                 .collect()
         };
-        // Three processes in a body of six rows: a blank row between each.
-        let spaced = draw(3, 10);
-        assert!(spaced[2].contains("─┼─"), "{}", spaced.join("\n"));
-        assert_eq!(rows_of(&spaced), vec![3, 5, 7], "{}", spaced.join("\n"));
+        // Three processes in a body of six rows: still one row each.
+        let few = draw(3, 10);
+        assert!(few[2].contains("─┼─"), "{}", few.join("\n"));
+        assert_eq!(rows_of(&few), vec![3, 4, 5], "{}", few.join("\n"));
         // Six processes in the same body of five rows: one row each.
         let packed = draw(6, 10);
         assert_eq!(
