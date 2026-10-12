@@ -2,10 +2,10 @@
 
 # dgxtop
 
-**Linux 上的 NVIDIA GPU 終端監控工具，記錄每個 GPU 工作**
+**Linux 與 DGX Spark 上的 NVIDIA GPU 終端監控工具**
 
 所有 GPU、每個工作佔用多少記憶體與整台機器，一個畫面看完；<br>
-每個 GPU 工作從開始到結束都有紀錄，包括它怎麼結束。為 DGX Spark 打造，也在 RTX 工作站上測試過。
+每個 GPU 工作從開始到結束都有紀錄，包括它怎麼結束。
 
 [English](../README.md) · [日本語](README.ja.md) · [專案頁面](https://dennysora.me/zh-hant/projects/tools/dgxtop/) · [運作原理](https://dennysora.me/zh-hant/projects/tools/dgxtop/#architecture)
 

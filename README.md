@@ -2,10 +2,10 @@
 
 # dgxtop
 
-**A Linux terminal monitor for NVIDIA GPUs that records every GPU job**
+**A terminal monitor for NVIDIA GPUs on Linux and DGX Spark**
 
 Every GPU, each job's share of its memory and the whole machine on one screen,<br>
-and every GPU job from start to end with how it ended. Built for DGX Spark, also tested on an RTX workstation.
+plus a record of every GPU job from start to end, including how it ended.
 
 [繁體中文](docs/README.zh-TW.md) · [日本語](docs/README.ja.md) · [Project page](https://dennysora.me/en/projects/tools/dgxtop/) · [How it works](https://dennysora.me/en/projects/tools/dgxtop/#architecture)
 

@@ -2,10 +2,10 @@
 
 # dgxtop
 
-**すべての GPU ジョブを記録する、Linux 向け NVIDIA GPU ターミナルモニター**
+**Linux と DGX Spark の NVIDIA GPU 向けターミナルモニター**
 
 すべての GPU、ジョブごとのメモリ使用量、マシン全体を 1 画面で。<br>
-GPU ジョブは開始から終了まで、終わり方も含めて記録します。DGX Spark のために作り、RTX ワークステーションでもテストしています。
+GPU ジョブは開始から終了まで、終わり方も含めて記録します。
 
 [English](../README.md) · [繁體中文](README.zh-TW.md) · [プロジェクトページ](https://dennysora.me/ja/projects/tools/dgxtop/) · [仕組み](https://dennysora.me/ja/projects/tools/dgxtop/#architecture)
 
