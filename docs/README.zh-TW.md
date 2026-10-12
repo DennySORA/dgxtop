@@ -28,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | 
 
 支援 x86_64 或 aarch64 的 Linux，glibc 2.34 以上（Ubuntu 22.04、Debian 12、RHEL 9 及更新版本），包括 DGX Spark。WSL 2 可以執行 Linux 版。GPU 指標需要 NVIDIA 驅動；沒有驅動時，CPU、記憶體、磁碟與網路照常顯示。不支援 WSL 1、musl、macOS 與 Windows。
 
-安裝程式會依 CPU 選擇對應的版本，以 release 的 `SHA256SUMS` 驗證後安裝到 `~/.local/bin`。舊版本會保留，執行 `./install.sh --rollback` 就能還原。要安裝特定版本，在 `bash` 後面加上 `-s -- --version v2.1.0`。
+安裝程式會依 CPU 選擇對應的版本，以 release 的 `SHA256SUMS` 驗證後安裝到 `~/.local/bin`。舊版本會保留，執行 `./install.sh --rollback` 就能還原。要安裝特定版本，在 `bash` 後面加上 `-s -- --version v2.2.0`。
 
 也可以用 Rust 1.92.0 從原始碼建置（由 `rust-toolchain.toml` 固定）：
 
