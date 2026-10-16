@@ -610,6 +610,47 @@ fn confirmation_tokens_come_from_drained_results() {
     );
 }
 
+/// While a signal is on its way the loop looks for its results within
+/// [`SIGNAL_POLL`] (D-109): for the token, then for the outcome.
+#[test]
+fn a_signal_on_its_way_is_polled_within_milliseconds() {
+    let mut rig = Rig::new(Mode::AcceptAll, (160, 50));
+    rig.publish_revision(ViewKind::Overview, 1);
+    rig.steps_until(20, |rig| rig.frames() == 1);
+    rig.script.push(Step::Event(Event::Key(KeyEvent::new(
+        KeyCode::F(9),
+        KeyModifiers::NONE,
+    ))));
+    rig.steps_until(20, |rig| !rig.submitted_bodies().is_empty());
+    let prepare = rig.session.lock().unwrap().submitted.pop().unwrap();
+    assert!(matches!(prepare.body, CommandBody::PrepareSignal { .. }));
+    assert!(rig.tui.controller().awaits_signal());
+    rig.polls.lock().unwrap().clear();
+    rig.steps_until(20, |_| false);
+    {
+        let polls = rig.polls.lock().unwrap();
+        assert!(
+            polls.iter().all(|(timeout, _)| *timeout <= SIGNAL_POLL),
+            "{polls:?}"
+        );
+    }
+    let mut result = CommandResult::completed(prepare.request_id, "prepared");
+    result.confirmation_token = Some(test_fixtures::token());
+    rig.session.lock().unwrap().results.push_back(result);
+    rig.steps_until(20, |rig| !rig.tui.controller().awaits_signal());
+    assert!(
+        !rig.tui.controller().awaits_signal(),
+        "the user decides now"
+    );
+    assert_eq!(rig.tui.controller().mode(), ModeKind::Confirm);
+    rig.script.key('y');
+    rig.steps_until(20, |rig| !rig.submitted_bodies().is_empty());
+    assert!(
+        rig.tui.controller().awaits_signal(),
+        "the outcome is awaited"
+    );
+}
+
 #[test]
 fn idle_polls_are_bounded_and_never_zero() {
     let mut rig = Rig::new(Mode::AcceptAll, (80, 24));

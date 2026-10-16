@@ -266,6 +266,16 @@ fn every_command_body() -> Vec<CommandBody> {
         CommandBody::CancelSignal {
             confirmation_token: token(),
         },
+        CommandBody::DeleteRuns {
+            runs: vec![process_key(); dgxtop_core::commands::MAX_DELETE_RUNS],
+        },
+        CommandBody::SetFolded {
+            panels: dgxtop_core::view::FOLDABLE_PANELS
+                .iter()
+                .map(|panel| (*panel).to_owned())
+                .collect(),
+        },
+        CommandBody::SetFolded { panels: Vec::new() },
         CommandBody::SetModuleEnabled {
             module_id: ModuleId::new("history").unwrap(),
             enabled: false,

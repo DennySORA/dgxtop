@@ -282,6 +282,9 @@ pub struct ViewerConfig {
     pub theme: Theme,
     pub enabled_modules: Vec<String>,
     pub network_max_visible: u32,
+    /// The panels folded away (D-114); absent means none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folded: Vec<String>,
     /// Retired (D-105): level colors run from green at 0 % to red at
     /// 100 % (D-104), so no fill turns them red early.
     #[serde(default, rename = "redline_threshold_percent", skip_serializing)]
@@ -671,6 +674,11 @@ impl Config {
             range(viewer.network_max_visible, 1, 20),
             "viewer.network_max_visible",
             "must be 1..=20",
+        );
+        check(
+            crate::view::are_foldable(&viewer.folded),
+            "viewer.folded",
+            "must hold distinct foldable panels",
         );
 
         let queues = &self.queues;
@@ -1286,6 +1294,28 @@ mod tests {
         let reencoded: serde_json::Value =
             serde_json::from_str(&reference.to_pretty_json().unwrap()).unwrap();
         assert_eq!(original, reencoded);
+    }
+
+    /// `viewer.folded` (D-114): absent means none and none is not
+    /// written, so files without it stay as they were; it holds distinct
+    /// foldable panels.
+    #[test]
+    fn folds_are_optional_and_only_foldable_panels() {
+        let mut config = defaults();
+        assert!(config.viewer.folded.is_empty());
+        assert!(!config.to_pretty_json().unwrap().contains("folded"));
+        config.viewer.folded = vec!["network".into(), "history.power".into()];
+        let text = config.to_pretty_json().unwrap();
+        assert_eq!(Config::from_json(&text).unwrap(), config);
+        assert!(config.validate().is_ok());
+        for wrong in [vec!["gpu".to_owned()], vec!["disk".into(), "disk".into()]] {
+            config.viewer.folded = wrong;
+            let issues = config.validate().unwrap_err();
+            assert!(
+                issues.iter().any(|issue| issue.path == "viewer.folded"),
+                "{issues:?}"
+            );
+        }
     }
 
     /// D-88: a document of an earlier version with a retired key loads,

@@ -14,6 +14,7 @@ use super::ControlCore;
 use crate::config::{ConfigDecision, ConfigRequest};
 use crate::effects::Effects;
 use crate::process::{Now, PrepareRequest, TokenCommand};
+use crate::process_link::Deletion;
 use crate::results::CacheLookup;
 use crate::session::QueuedCommand;
 use crate::views::{ViewContext, ViewUpdate};
@@ -172,6 +173,10 @@ impl ControlCore {
                 );
                 self.apply(fx);
             }
+            CommandBody::DeleteRuns { runs } => self.delete_runs(request_id, runs),
+            CommandBody::SetFolded { panels } => {
+                self.submit_config(request_id, ConfigRequest::Folds { panels }, now);
+            }
             // The session refuses it before the queue (D-93); kept total.
             CommandBody::Shutdown { .. } => self.finish(CommandResult::rejected(
                 request_id,
@@ -179,6 +184,29 @@ impl ControlCore {
                 "Shutdown is not a queued command; quit through request_shutdown",
             )),
         }
+    }
+
+    /// Hands a deletion of Process History runs to the process actor
+    /// (D-108); the list loses the ended ones with the actor's next model.
+    fn delete_runs(&mut self, request_id: Uuid, runs: Vec<ProcessKey>) {
+        let count = runs.len();
+        let result = match self.process_history.delete(runs) {
+            Deletion::Sent => CommandResult::completed(
+                request_id,
+                &format!("deleting the ended runs of the {count} asked for; a running run stays"),
+            ),
+            Deletion::Busy => CommandResult::rejected(
+                request_id,
+                ErrorCode::Busy,
+                "the process history is busy; nothing was deleted",
+            ),
+            Deletion::Off => CommandResult::rejected(
+                request_id,
+                ErrorCode::Unavailable,
+                "no process history to delete from",
+            ),
+        };
+        self.finish(result);
     }
 
     fn submit_config(&mut self, request_id: Uuid, request: ConfigRequest, now: Now) {

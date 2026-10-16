@@ -18,6 +18,10 @@
 //!   group is still in flight or still waiting is recorded as `skipped_due` and
 //!   never becomes a second request.
 //! * Paged groups continue with the next page of the same cycle immediately.
+//! * A group can be read early, outside its slots (rate limited): when a
+//!   process dgxtop signaled exits, the process groups are read again so the
+//!   table drops it at once (D-109). The slots stay as they were; a read in
+//!   flight is followed by the early one.
 //! * Discovery runs at start, every `discovery_interval_ms`, paged, and early
 //!   (rate limited) after host recovery or when unknown sources appear. An
 //!   adapter whose discovery reports `unavailable`/`permission_denied` is not
@@ -51,6 +55,9 @@ const REPLY_GRACE_NS: u64 = 250 * NANOS_PER_MILLI;
 const DISPATCH_RETRY_NS: u64 = 20 * NANOS_PER_MILLI;
 /// Minimum spacing of early (recovery / unknown source) discovery requests.
 const EARLY_DISCOVERY_GAP_NS: u64 = 2 * NANOS_PER_SECOND;
+/// Minimum spacing of the early reads of one group: a burst of exits reads
+/// it once.
+const EARLY_READ_GAP_NS: u64 = 200 * NANOS_PER_MILLI;
 /// Upper bound of pages one read cycle or discovery round may span.
 pub(crate) const MAX_PAGES_PER_CYCLE: u32 = 64;
 /// Longest effective period after overload multiplication.
@@ -173,6 +180,8 @@ struct GroupSchedule {
     next_due_ns: u64,
     pending_since_ns: Option<u64>,
     skipped_due: u64,
+    /// When the group was last asked to read early.
+    early_since_ns: Option<u64>,
 }
 
 impl GroupSchedule {
@@ -194,6 +203,7 @@ impl GroupSchedule {
             next_due_ns: 0,
             pending_since_ns: None,
             skipped_due: 0,
+            early_since_ns: None,
         };
         group.replan(adapter, inputs, now_ns);
         group
@@ -671,6 +681,30 @@ impl HostSchedule {
         })
     }
 
+    /// Reads `group` once more as soon as the host is free (module docs);
+    /// whether the read was asked for.
+    fn request_early_read(&mut self, group: &str, now_ns: u64) -> bool {
+        if !self.enabled || !self.reads_active() || !self.dispatchable {
+            return false;
+        }
+        let Some(schedule) = self
+            .groups
+            .iter_mut()
+            .find(|candidate| candidate.name == group)
+        else {
+            return false;
+        };
+        let rate_limited = schedule
+            .early_since_ns
+            .is_some_and(|last| now_ns < last.saturating_add(EARLY_READ_GAP_NS));
+        if rate_limited || schedule.pending_since_ns.is_some() {
+            return false;
+        }
+        schedule.pending_since_ns = Some(now_ns);
+        schedule.early_since_ns = Some(now_ns);
+        true
+    }
+
     fn request_early_discovery(&mut self, now_ns: u64) -> bool {
         let discovering = matches!(
             self.inflight,
@@ -1101,6 +1135,20 @@ impl SamplingScheduler {
         if groups_changed && host.kind != AdapterKind::Live {
             host.rebuild_groups(&settings, multiplier, now_ns);
         }
+    }
+
+    /// An early (rate limited) read of `group` of `adapter_id`, outside its
+    /// slots (module docs).
+    pub(crate) fn request_early_read(
+        &mut self,
+        adapter_id: &AdapterId,
+        group: &str,
+        now_ns: u64,
+    ) -> bool {
+        !self.stopped
+            && self
+                .host_mut(adapter_id)
+                .is_some_and(|host| host.request_early_read(group, now_ns))
     }
 
     /// Early (rate limited) discovery, e.g. for unknown sources.
@@ -1775,6 +1823,95 @@ mod tests {
         // may go out before the discovery.
         let counts = bench.drive(10, 1, true);
         assert_eq!(counts.discoveries.get("hwmon"), Some(&1));
+    }
+
+    /// The next slot of `group` of `adapter`.
+    fn next_slot(bench: &Bench, adapter: &AdapterId, group: &str) -> u64 {
+        bench
+            .scheduler
+            .hosts
+            .iter()
+            .find(|host| &host.adapter_id == adapter)
+            .and_then(|host| host.groups.iter().find(|schedule| schedule.name == group))
+            .map(|schedule| schedule.next_due_ns)
+            .unwrap()
+    }
+
+    /// An early read goes out at the next tick, outside the group's slots,
+    /// at most once per [`EARLY_READ_GAP_NS`]; one asked while the group is
+    /// in flight follows it; an unknown group or a host not read asks
+    /// nothing (D-109).
+    #[test]
+    fn an_early_read_goes_out_at_once_and_is_rate_limited() {
+        let process = naming::groups::PROCESS;
+        let config = Config::defaults().unwrap();
+        let mut bench = bench(&[manifest("procfs", 100)], &config);
+        let procfs = adapter_id("procfs");
+        assert!(
+            !bench
+                .scheduler
+                .request_early_read(&procfs, process, bench.now),
+            "not discovered yet"
+        );
+        bench.host_up("procfs");
+        bench.drive(1_000, 1, true);
+        // Away from a slot, so only the early read can go out.
+        while next_slot(&bench, &procfs, process) <= bench.now + 20 * MS {
+            bench.drive(30, 1, true);
+        }
+        let slot = next_slot(&bench, &procfs, process);
+        assert!(
+            bench
+                .scheduler
+                .request_early_read(&procfs, process, bench.now)
+        );
+        assert!(
+            !bench
+                .scheduler
+                .request_early_read(&procfs, process, bench.now),
+            "already waiting"
+        );
+        let counts = bench.drive(5, 1, true);
+        assert_eq!(reads(&counts, "procfs", process), 1, "{counts:?}");
+        assert_eq!(next_slot(&bench, &procfs, process), slot, "the slots stay");
+        assert!(
+            !bench
+                .scheduler
+                .request_early_read(&procfs, process, bench.now),
+            "within the gap"
+        );
+        // A read in flight: the early read follows it.
+        bench.now += EARLY_READ_GAP_NS;
+        let plan = loop {
+            bench.scheduler.tick(bench.now, context());
+            if let Some(AdapterJob::Read(plan)) = bench.port.take().into_iter().next() {
+                break plan;
+            }
+            bench.now += MS;
+        };
+        let busy = dgxtop_core::observation::split_page(plan.read_group.as_str())
+            .0
+            .to_owned();
+        assert!(
+            bench
+                .scheduler
+                .request_early_read(&procfs, &busy, bench.now)
+        );
+        assert_eq!(
+            bench.scheduler.tick(bench.now, context()).dispatched,
+            0,
+            "one request at a time"
+        );
+        let matched = bench.scheduler.match_reply(&procfs, plan.request_id, 1);
+        assert!(matches!(matched, ReplyMatch::Read(_)));
+        // The slot's other groups were due first; then the early read.
+        let counts = bench.drive(10, 1, true);
+        assert_eq!(reads(&counts, "procfs", &busy), 1, "{counts:?}");
+        assert!(!bench.scheduler.request_early_read(
+            &procfs,
+            "unknown",
+            bench.now + EARLY_READ_GAP_NS
+        ));
     }
 
     #[test]

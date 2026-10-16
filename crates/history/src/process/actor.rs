@@ -122,6 +122,7 @@ impl ProcessHistory {
                 self.service.open(&request.key);
                 self.model.show(request);
             }
+            ProcessHistoryInput::Delete(keys) => self.service.delete(&keys),
             ProcessHistoryInput::Flush => {
                 self.service.flush(now);
                 self.flushes += 1;

@@ -12,8 +12,9 @@ use super::ModuleBuildError;
 use super::common::{
     ColumnSpec, ManifestSpec, Output, RATE_ROWS, RateHistory, RowCursor, TableCell, build_manifest,
     cell_label, draw_colored_header, draw_table_row, fit_columns, message, metric_table_cell,
-    no_data, panel, rate_rows, render_rate_rows,
+    no_data, panel, panel_with_keys, rate_rows, render_rate_rows,
 };
+use super::folds::{fold_keys, render_folded};
 use crate::format::{clean, format_compact_count, state_label_for_width};
 use crate::num::saturate_u16;
 use crate::registry::{
@@ -98,7 +99,19 @@ impl DisplayModule for NetworkModule {
             || "Network".to_owned(),
             |busiest| format!("Network [{}]", clean(&busiest.name)),
         );
-        let inner = panel(frame, area, &title, context);
+        if context.folded.contains("network") {
+            render_folded(
+                frame,
+                area,
+                (&title, "network"),
+                (&self.manifest, model),
+                context,
+                &mut output,
+            );
+            return output.finish();
+        }
+        // Its fold key, where it acts (D-114).
+        let inner = panel_with_keys(frame, area, &title, &fold_keys("network"), context);
         if network.interfaces.is_empty() {
             message(
                 frame,

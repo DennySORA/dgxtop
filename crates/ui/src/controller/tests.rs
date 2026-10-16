@@ -426,32 +426,35 @@ fn the_memory_legend_scrolls_apart_from_the_process_selection() {
     );
 }
 
-/// ←/→ switch the history bar size in History and the GPU in the GPU view:
-/// one key, the action of the page it is pressed on (D-70).
+/// In the Overview History ←/→ step the bar size (time) and ↑/↓ pick the
+/// GPU (D-107); in the GPU view ←/→ pick the GPU and ↑/↓ turn the pages of
+/// its sections (D-110).
 #[test]
 fn arrows_act_on_the_page_they_are_pressed_on() {
     use crate::controller::keymap::{KeyAction, ModeKind, resolve};
     let arrow = |code: KeyCode| crossterm::event::KeyEvent::new(code, KeyModifiers::NONE);
+    let history = |code| resolve(&arrow(code), ModeKind::Normal, ViewKind::History);
+    let gpu = |code| resolve(&arrow(code), ModeKind::Normal, ViewKind::GpuDetail);
+    assert_eq!(history(KeyCode::Right), Some(KeyAction::NextHistoryBarSize));
     assert_eq!(
-        resolve(&arrow(KeyCode::Right), ModeKind::Normal, ViewKind::History),
-        Some(KeyAction::NextHistoryBarSize)
-    );
-    assert_eq!(
-        resolve(&arrow(KeyCode::Left), ModeKind::Normal, ViewKind::History),
+        history(KeyCode::Left),
         Some(KeyAction::PreviousHistoryBarSize)
     );
     assert_eq!(
-        resolve(
-            &arrow(KeyCode::Right),
-            ModeKind::Normal,
-            ViewKind::GpuDetail
-        ),
-        Some(KeyAction::NextGpu)
+        history(KeyCode::Char('w')),
+        Some(KeyAction::NextHistoryBarSize)
     );
     assert_eq!(
-        resolve(&arrow(KeyCode::Left), ModeKind::Normal, ViewKind::GpuDetail),
-        Some(KeyAction::PreviousGpu)
+        history(KeyCode::Char('W')),
+        Some(KeyAction::PreviousHistoryBarSize)
     );
+    assert_eq!(history(KeyCode::Down), Some(KeyAction::HistoryDown));
+    assert_eq!(history(KeyCode::Up), Some(KeyAction::HistoryUp));
+    assert_eq!(history(KeyCode::PageDown), Some(KeyAction::PageDown));
+    assert_eq!(gpu(KeyCode::Right), Some(KeyAction::NextGpu));
+    assert_eq!(gpu(KeyCode::Left), Some(KeyAction::PreviousGpu));
+    assert_eq!(gpu(KeyCode::Down), Some(KeyAction::MoveDown));
+    assert_eq!(gpu(KeyCode::PageUp), Some(KeyAction::PageUp));
 }
 
 /// `4` opens the Process History tab and `3` the Overview History one; in
@@ -540,8 +543,12 @@ fn w_steps_the_window_or_an_opened_runs_bar_size() {
         "back past auto to a day"
     );
     harness.keys(&[code(KeyCode::Right)]);
-    assert_eq!(bars(&harness), (BarSize::FiveMinutes, BarSize::Auto));
-    harness.keys(&[code(KeyCode::Left), key('3'), key('W'), key('W')]);
+    assert_eq!(
+        bars(&harness),
+        (BarSize::FiveMinutes, BarSize::Auto),
+        "→ steps the bar size like w"
+    );
+    harness.keys(&[code(KeyCode::Left), key('3'), key('h'), key('W')]);
     assert_eq!(
         bars(&harness),
         (BarSize::OneDay, BarSize::OneDay),
@@ -643,23 +650,25 @@ fn other_keys_are_ignored_while_confirming() {
     assert!(harness.controller.quit_requested(), "quit still works");
 }
 
+/// While the token is on its way no typing can start (D-109): `/` waits
+/// like every key but the answers, so a `y` meant as text never confirms;
+/// the token arrives into the confirmation, unanswered.
 #[test]
-fn a_token_arriving_while_typing_is_cancelled_not_activated() {
+fn no_typing_starts_while_a_token_is_on_its_way() {
     let mut harness = Harness::new(ViewKind::Overview);
     harness.keys(&[shift('K')]);
     let prepare = harness.take().pop().unwrap();
     harness.keys(&[key('/')]);
+    assert_eq!(harness.controller.mode(), ModeKind::Confirm);
+    assert_eq!(harness.controller.ui_state(harness.now).early_answer, None);
     let mut result = CommandResult::completed(prepare.request_id, "prepared");
     result.confirmation_token = Some(token());
     harness.deliver(result);
-    assert_eq!(harness.controller.mode(), ModeKind::Filter);
-    let submitted = harness.submitted();
-    assert!(matches!(&submitted[0], CommandBody::CancelSignal { .. }));
-    harness.keys(&[key('y')]);
-    let ModeView::Filter { buffer, .. } = harness.controller.ui_state(harness.now).mode else {
-        panic!("still typing");
-    };
-    assert_eq!(buffer, "y", "y stays text; nothing is confirmed");
+    assert!(harness.submitted().is_empty(), "{:?}", harness.submitted());
+    assert!(matches!(
+        harness.controller.ui_state(harness.now).mode,
+        ModeView::Confirm { .. }
+    ));
 }
 
 #[test]
@@ -916,4 +925,951 @@ fn results_become_honest_notices() {
             .iter()
             .any(|notice| notice.text.contains("terminated"))
     );
+}
+
+/// The History module's id.
+fn history_module() -> ModuleId {
+    ModuleId::new(crate::modules::HISTORY_MODULE_ID).unwrap()
+}
+
+/// A frame of the Overview History scrolled past `above` bands with
+/// `below` bands waiting, as its time axis tells (D-107).
+fn history_bands(harness: &mut Harness, above: usize, below: usize) {
+    page_frame(harness, history_module(), (above, below));
+}
+
+/// A frame where `module` drew its page with `above` units scrolled past
+/// and `below` waiting (D-107, D-110).
+fn page_frame(harness: &mut Harness, module: ModuleId, (above, below): (usize, usize)) {
+    let mut map = HitMap::new(harness.hit_map.frame_revision());
+    let rows = ratatui::layout::Rect::new(1, 40, 120, 1);
+    for (control_id, count) in [(controls::PAGE_ABOVE, above), (controls::PAGE_BELOW, below)] {
+        for _ in 0..count {
+            map.push_clipped(
+                crate::registry::HitTarget {
+                    frame_revision: 0,
+                    module_id: module.clone(),
+                    control_id,
+                    entity_id: None,
+                    process_key: None,
+                    rect: rows,
+                },
+                rows,
+            );
+        }
+    }
+    harness.hit_map = map;
+}
+
+/// The Overview History's band offset the controller keeps.
+fn history_offset(harness: &Harness) -> u16 {
+    harness
+        .controller
+        .ui_state(harness.now)
+        .offsets
+        .get(&history_module())
+        .copied()
+        .unwrap_or(0)
+}
+
+/// The runs the controller has marked.
+fn marked_pids(harness: &Harness) -> Vec<i32> {
+    harness
+        .controller
+        .ui_state(harness.now)
+        .marked
+        .iter()
+        .map(|key| key.pid.get())
+        .collect()
+}
+
+/// Answers each DeleteRuns sent with `status` until none is left
+/// unanswered (the next command leaves once the last is answered); the
+/// commands' runs.
+fn answer_deletions(harness: &mut Harness, completed: bool) -> Vec<Vec<ProcessKey>> {
+    let mut answered = Vec::new();
+    loop {
+        let sent: Vec<CommandEnvelope> = harness
+            .take()
+            .into_iter()
+            .filter(|envelope| matches!(envelope.body, CommandBody::DeleteRuns { .. }))
+            .collect();
+        if sent.is_empty() {
+            return answered;
+        }
+        for envelope in sent {
+            assert!(
+                envelope.encoded_len() <= dgxtop_core::config::MIN_COMMAND_BYTES,
+                "every command fits any Manager"
+            );
+            let CommandBody::DeleteRuns { runs } = envelope.body else {
+                unreachable!()
+            };
+            answered.push(runs);
+            let result = if completed {
+                CommandResult::completed(envelope.request_id, "deleting")
+            } else {
+                CommandResult::rejected(envelope.request_id, ErrorCode::Busy, "busy")
+            };
+            harness.deliver(result);
+        }
+    }
+}
+
+/// The texts of the notices shown.
+fn notice_texts(harness: &Harness) -> Vec<String> {
+    harness
+        .controller
+        .ui_state(harness.now)
+        .notices
+        .into_iter()
+        .map(|notice| notice.text)
+        .collect()
+}
+
+/// The runs of each DeleteRuns sent.
+fn deletions(harness: &Harness) -> Vec<Vec<i32>> {
+    harness
+        .submitted()
+        .into_iter()
+        .filter_map(|body| match body {
+            CommandBody::DeleteRuns { runs } => {
+                Some(runs.iter().map(|key| key.pid.get()).collect())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// ↑/↓ on the Overview History pick the GPU its GPU panels show, and so
+/// does a click on the picker's chip (D-107). The view holds every GPU's
+/// charts, so nothing is sent; on a host of one GPU the keys do nothing,
+/// and on the Process History they move the run cursor.
+#[test]
+fn up_and_down_pick_the_gpu_the_overview_history_shows() {
+    let mut harness = Harness::new(ViewKind::History);
+    let gpus: Vec<EntityId> =
+        crate::modules::history_gpus(harness.model.modules.history.as_deref().unwrap())
+            .into_iter()
+            .map(|(gpu, _)| gpu)
+            .collect();
+    assert_eq!(gpus.len(), 2);
+    let picked = |harness: &Harness| {
+        harness
+            .controller
+            .ui_state(harness.now)
+            .picks
+            .get(&history_module())
+            .cloned()
+    };
+    harness.keys(&[code(KeyCode::Down)]);
+    assert_eq!(picked(&harness), Some(gpus[1].clone()));
+    harness.keys(&[key('j')]);
+    assert_eq!(
+        picked(&harness),
+        Some(gpus[1].clone()),
+        "the last GPU stays"
+    );
+    harness.keys(&[code(KeyCode::Up)]);
+    assert_eq!(picked(&harness), Some(gpus[0].clone()));
+    let chip = harness
+        .hit_map
+        .targets()
+        .iter()
+        .find(|target| {
+            target.control_id == controls::HISTORY_GPU
+                && target.entity_id.as_ref() == Some(&gpus[1])
+        })
+        .expect("the frame drew GPU 1's chip")
+        .rect;
+    harness.keys(&[click(chip.x, chip.y)]);
+    assert_eq!(picked(&harness), Some(gpus[1].clone()));
+    harness.keys(&[key('4'), code(KeyCode::Up)]);
+    assert_eq!(
+        picked(&harness),
+        Some(gpus[1].clone()),
+        "the Process History has no GPU panels"
+    );
+    assert!(
+        harness.submitted().iter().all(|body| !matches!(
+            body,
+            CommandBody::UpdateViewSession {
+                selected_entity_id: Some(_),
+                ..
+            }
+        )),
+        "the pick is presentation only: {:?}",
+        harness.submitted()
+    );
+    let mut model = test_fixtures::view_model(ViewKind::History, 5);
+    Arc::make_mut(model.modules.history.as_mut().unwrap())
+        .charts
+        .retain(|chart| chart.series.entity_id != gpus[1]);
+    let mut single = Harness::with_model(model);
+    single.keys(&[code(KeyCode::Down)]);
+    assert_eq!(picked(&single), None, "one GPU: nothing to pick");
+}
+
+/// PgDn/PgUp scroll the Overview History a band at a time and g/G to the
+/// first and the last bands, counted from the bands the frame showed:
+/// PgDn stops at the last band, and after a taller frame PgUp moves at
+/// once (D-107).
+#[test]
+fn the_overview_history_scrolls_from_the_bands_the_frame_showed() {
+    let mut harness = Harness::new(ViewKind::History);
+    history_bands(&mut harness, 0, 0);
+    harness.keys(&[code(KeyCode::PageDown)]);
+    assert_eq!(history_offset(&harness), 0, "everything shows");
+    history_bands(&mut harness, 0, 2);
+    harness.keys(&[code(KeyCode::PageDown)]);
+    assert_eq!(history_offset(&harness), 1);
+    history_bands(&mut harness, 1, 1);
+    harness.keys(&[code(KeyCode::PageDown)]);
+    assert_eq!(history_offset(&harness), 2);
+    history_bands(&mut harness, 2, 0);
+    harness.keys(&[code(KeyCode::PageDown)]);
+    assert_eq!(history_offset(&harness), 2, "the last band shows");
+    harness.keys(&[code(KeyCode::PageUp)]);
+    assert_eq!(history_offset(&harness), 1);
+    history_bands(&mut harness, 0, 3);
+    harness.keys(&[shift('G')]);
+    assert_eq!(history_offset(&harness), 3);
+    // A taller terminal shows from the first band on.
+    history_bands(&mut harness, 0, 0);
+    harness.keys(&[code(KeyCode::PageUp)]);
+    assert_eq!(history_offset(&harness), 0);
+    history_bands(&mut harness, 2, 1);
+    harness.keys(&[code(KeyCode::End)]);
+    assert_eq!(history_offset(&harness), 3);
+    harness.keys(&[key('g')]);
+    assert_eq!(history_offset(&harness), 0);
+    harness.keys(&[shift('G'), code(KeyCode::Home)]);
+    assert_eq!(history_offset(&harness), 0);
+    assert!(
+        harness.submitted().is_empty(),
+        "scrolling is presentation only: {:?}",
+        harness.submitted()
+    );
+}
+
+/// g/Home and G/End on the Process History: the newest and the oldest
+/// run, from an opened run too, which goes back to the list (D-108).
+#[test]
+fn the_process_history_goes_to_its_first_and_last_run() {
+    let mut harness = Harness::new(ViewKind::History);
+    let state = |harness: &Harness| {
+        let ui = harness.controller.ui_state(harness.now);
+        (
+            ui.tabs.get(&history_module()).copied().unwrap_or(0),
+            ui.scroll.get(&history_module()).copied().unwrap_or(0),
+        )
+    };
+    harness.keys(&[key('4'), shift('G')]);
+    assert_eq!(state(&harness), (1, 1));
+    assert_eq!(harness.last_session().2.unwrap().pid.get(), 41);
+    harness.keys(&[key('g')]);
+    assert_eq!(state(&harness), (1, 0));
+    assert_eq!(harness.last_session().2.unwrap().pid.get(), 42);
+    harness.keys(&[code(KeyCode::End), code(KeyCode::Enter)]);
+    assert_eq!(state(&harness), (2, 1));
+    harness.keys(&[code(KeyCode::Home)]);
+    assert_eq!(state(&harness), (1, 0), "back to the top of the list");
+}
+
+/// Space marks the run under the cursor and goes to the next; `a` marks
+/// every ended run, or unmarks all once they all are; Esc forgets the
+/// marks. Marks are made on the list only (D-108).
+#[test]
+fn runs_are_marked_one_by_one_or_all_at_once() {
+    let mut harness = Harness::new(ViewKind::History);
+    harness.keys(&[key(' '), key('a')]);
+    assert!(
+        marked_pids(&harness).is_empty(),
+        "the Overview History lists no runs"
+    );
+    harness.keys(&[key('4'), key(' ')]);
+    assert_eq!(marked_pids(&harness), vec![42]);
+    assert_eq!(
+        harness.last_session().2.unwrap().pid.get(),
+        41,
+        "the cursor went to the next run"
+    );
+    harness.keys(&[key(' ')]);
+    assert_eq!(
+        marked_pids(&harness),
+        vec![41, 42],
+        "a running run is marked too"
+    );
+    harness.keys(&[key(' ')]);
+    assert_eq!(marked_pids(&harness), vec![42], "Space again unmarks it");
+    harness.keys(&[key('a')]);
+    assert!(
+        marked_pids(&harness).is_empty(),
+        "every ended run was marked: all are unmarked"
+    );
+    harness.keys(&[key('a')]);
+    assert_eq!(marked_pids(&harness), vec![42], "the ended runs only");
+    harness.keys(&[code(KeyCode::Enter), key(' '), key('a')]);
+    assert_eq!(
+        marked_pids(&harness),
+        vec![42],
+        "an opened run takes no marks"
+    );
+    harness.keys(&[code(KeyCode::Esc)]);
+    assert!(marked_pids(&harness).is_empty());
+    assert!(deletions(&harness).is_empty());
+}
+
+/// `d` asks before anything is deleted, then sends the ended runs among
+/// the marked ones, else the run under the cursor; a running run stays.
+/// n/Esc sends nothing (D-108).
+#[test]
+fn d_deletes_the_ended_runs_it_asked_about() {
+    let mut harness = Harness::new(ViewKind::History);
+    harness.keys(&[key('d')]);
+    assert_eq!(
+        harness.controller.mode(),
+        ModeKind::Normal,
+        "no run on the Overview History"
+    );
+    harness.keys(&[key('4'), key('d')]);
+    assert_eq!(
+        harness.controller.ui_state(harness.now).mode,
+        ModeView::ConfirmDelete {
+            runs: 1,
+            running: 0
+        }
+    );
+    harness.keys(&[key('n')]);
+    assert_eq!(harness.controller.mode(), ModeKind::Normal);
+    harness.keys(&[code(KeyCode::Delete), code(KeyCode::Esc)]);
+    assert_eq!(harness.controller.mode(), ModeKind::Normal);
+    assert!(deletions(&harness).is_empty(), "nothing is sent unasked");
+    harness.keys(&[key('d'), key('y')]);
+    assert_eq!(deletions(&harness), vec![vec![42]]);
+    assert_eq!(harness.controller.mode(), ModeKind::Normal);
+    harness.keys(&[key('d')]);
+    assert!(
+        notice_texts(&harness).contains(&"still deleting: 1 run left".to_owned()),
+        "one deletion at a time: {:?}",
+        notice_texts(&harness)
+    );
+    assert_eq!(harness.controller.mode(), ModeKind::Normal);
+    answer_deletions(&mut harness, true);
+    // The running run under the cursor: nothing to ask.
+    harness.keys(&[key('j'), key('d')]);
+    assert_eq!(harness.controller.mode(), ModeKind::Normal);
+    let notices = harness.controller.ui_state(harness.now).notices;
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.text.contains("a running run stays")),
+        "{notices:?}"
+    );
+    // Both marked: the ended one goes, the running one stays marked.
+    harness.keys(&[key('g'), key(' '), key(' '), key('d')]);
+    assert_eq!(
+        harness.controller.ui_state(harness.now).mode,
+        ModeView::ConfirmDelete {
+            runs: 1,
+            running: 1
+        }
+    );
+    harness.keys(&[code(KeyCode::Enter)]);
+    assert_eq!(deletions(&harness), vec![vec![42]]);
+    assert_eq!(
+        marked_pids(&harness),
+        vec![41, 42],
+        "marks go once the deletion is answered"
+    );
+    answer_deletions(&mut harness, true);
+    assert_eq!(marked_pids(&harness), vec![41]);
+}
+
+/// On an opened run `d` deletes that run, whatever is marked, then the
+/// page goes back to the list; the result is said in a notice (D-108).
+#[test]
+fn an_opened_run_is_deleted_alone_and_the_list_comes_back() {
+    let mut harness = Harness::new(ViewKind::History);
+    harness.keys(&[key('4'), key('j'), key(' '), key('g'), code(KeyCode::Enter)]);
+    assert_eq!(marked_pids(&harness), vec![41]);
+    harness.keys(&[key('d')]);
+    assert_eq!(
+        harness.controller.ui_state(harness.now).mode,
+        ModeView::ConfirmDelete {
+            runs: 1,
+            running: 0
+        }
+    );
+    harness.keys(&[key('y')]);
+    let sent = harness.take();
+    let deletion = sent
+        .iter()
+        .find(|envelope| matches!(envelope.body, CommandBody::DeleteRuns { .. }))
+        .expect("DeleteRuns sent");
+    let CommandBody::DeleteRuns { runs } = &deletion.body else {
+        unreachable!()
+    };
+    assert_eq!(
+        runs.iter().map(|key| key.pid.get()).collect::<Vec<_>>(),
+        [42]
+    );
+    assert_eq!(
+        harness
+            .controller
+            .ui_state(harness.now)
+            .tabs
+            .get(&history_module())
+            .copied(),
+        Some(crate::views::PROCESS_LIST_PAGE)
+    );
+    harness.deliver(CommandResult::completed(
+        deletion.request_id,
+        "deleting 1 run; running ones stay",
+    ));
+    let notices = harness.controller.ui_state(harness.now).notices;
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.text == "deleted 1 run from the Process History"),
+        "{notices:?}"
+    );
+}
+
+/// A deletion of many runs goes out a command at a time, each command
+/// within the smallest byte cap a Manager has, the next once the last is
+/// answered; its outcome is told once, at the end (D-108).
+#[test]
+fn a_large_deletion_is_sent_a_bounded_command_at_a_time() {
+    let mut model = test_fixtures::view_model(ViewKind::History, 5);
+    let runs = Arc::make_mut(model.modules.process_history.as_mut().unwrap());
+    let ended = runs.runs[0].clone();
+    runs.runs = (0..300)
+        .map(|index| {
+            let mut run = ended.clone();
+            run.key.pid = dgxtop_core::identity::Pid::new(1_000 + index).unwrap();
+            run
+        })
+        .collect();
+    runs.opened = None;
+    let mut harness = Harness::with_model(model);
+    harness.keys(&[key('4'), key('a'), key('d')]);
+    assert_eq!(
+        harness.controller.ui_state(harness.now).mode,
+        ModeView::ConfirmDelete {
+            runs: 300,
+            running: 0
+        }
+    );
+    harness.keys(&[key('y')]);
+    assert_eq!(deletions(&harness).len(), 1, "one command at a time");
+    let answered = answer_deletions(&mut harness, true);
+    assert!(answered.len() > 1, "{} commands", answered.len());
+    let pids: Vec<i32> = answered.concat().iter().map(|key| key.pid.get()).collect();
+    assert_eq!(pids, (1_000..1_300).collect::<Vec<_>>(), "every run once");
+    assert!(marked_pids(&harness).is_empty());
+    let notices = notice_texts(&harness);
+    assert_eq!(
+        notices
+            .iter()
+            .filter(|text| text.starts_with("deleted"))
+            .collect::<Vec<_>>(),
+        ["deleted 300 runs from the Process History"]
+    );
+}
+
+/// A command of the deletion refused stops it: the runs not deleted keep
+/// their marks, and the notices say why and how many (D-108).
+#[test]
+fn a_refused_deletion_stops_and_keeps_the_marks() {
+    let mut model = test_fixtures::view_model(ViewKind::History, 5);
+    let runs = Arc::make_mut(model.modules.process_history.as_mut().unwrap());
+    let ended = runs.runs[0].clone();
+    runs.runs = (0..100)
+        .map(|index| {
+            let mut run = ended.clone();
+            run.key.pid = dgxtop_core::identity::Pid::new(2_000 + index).unwrap();
+            run
+        })
+        .collect();
+    runs.opened = None;
+    let mut harness = Harness::with_model(model);
+    harness.keys(&[key('4'), key('a'), key('d'), key('y')]);
+    let refused = answer_deletions(&mut harness, false);
+    assert_eq!(refused.len(), 1, "nothing more is sent");
+    assert_eq!(marked_pids(&harness).len(), 100);
+    let notices = notice_texts(&harness);
+    assert!(
+        notices
+            .iter()
+            .any(|text| text.starts_with("runs not deleted: ")),
+        "{notices:?}"
+    );
+    assert!(
+        notices
+            .iter()
+            .any(|text| text == "the deletion stopped: 0 runs deleted, 100 not"),
+        "{notices:?}"
+    );
+    harness.keys(&[key('d')]);
+    assert_eq!(
+        harness.controller.ui_state(harness.now).mode,
+        ModeView::ConfirmDelete {
+            runs: 100,
+            running: 0
+        },
+        "asked again"
+    );
+}
+
+/// A deletion's command without an answer in time stops the deletion:
+/// whether it deleted its runs is unknown, so nothing more is sent.
+#[test]
+fn an_unanswered_deletion_stops_with_a_warning() {
+    let mut harness = Harness::new(ViewKind::History);
+    harness.keys(&[key('4'), key('d'), key('y')]);
+    assert_eq!(deletions(&harness).len(), 1);
+    harness.now += Duration::from_secs(61);
+    harness.controller.tick(harness.now);
+    let notices = notice_texts(&harness);
+    assert!(
+        notices.iter().any(|text| {
+            text == "no answer to the deletion; it stopped with 1 run not known deleted"
+        }),
+        "{notices:?}"
+    );
+    harness.keys(&[key('d')]);
+    assert_eq!(
+        harness.controller.mode(),
+        ModeKind::Confirm,
+        "a new deletion may be asked"
+    );
+}
+
+/// While a signal waits for its confirmation the Process History does not
+/// ask to delete, so y/Enter always answer the question shown (D-108): the
+/// keys that would ask wait with the rest (D-109).
+#[test]
+fn a_pending_signal_keeps_the_deletion_question_away() {
+    let mut harness = Harness::new(ViewKind::Overview);
+    harness.keys(&[shift('K')]);
+    let prepare = harness.take().pop().expect("PrepareSignal submitted");
+    assert!(matches!(prepare.body, CommandBody::PrepareSignal { .. }));
+    let mut model = test_fixtures::view_model(ViewKind::History, 6);
+    model.modules = harness.model.modules.clone();
+    harness.project(model);
+    harness.keys(&[key('4'), key('d')]);
+    assert!(
+        !matches!(
+            harness.controller.ui_state(harness.now).mode,
+            ModeView::ConfirmDelete { .. }
+        ),
+        "the signal's answer is awaited"
+    );
+    let mut result = CommandResult::completed(prepare.request_id, "prepared");
+    result.confirmation_token = Some(token());
+    result.expires_boot_ns = Some(harness.model.generated_boot_ns + 9_000_000_000);
+    harness.deliver(result);
+    assert_eq!(harness.controller.mode(), ModeKind::Confirm);
+    harness.keys(&[key('y')]);
+    let bodies = harness.submitted();
+    assert!(
+        bodies
+            .iter()
+            .any(|body| matches!(body, CommandBody::ConfirmSignal { .. })),
+        "{bodies:?}"
+    );
+    assert!(deletions(&harness).is_empty());
+}
+
+/// The prepare of a signal that `F9` sent, and its token-bearing result.
+fn prepared_f9(harness: &mut Harness) -> (CommandEnvelope, CommandResult) {
+    harness.keys(&[code(KeyCode::F(9))]);
+    let prepare = harness
+        .take()
+        .into_iter()
+        .rev()
+        .find(|envelope| matches!(envelope.body, CommandBody::PrepareSignal { .. }))
+        .expect("PrepareSignal submitted");
+    let mut result = CommandResult::completed(prepare.request_id, "prepared");
+    result.confirmation_token = Some(token());
+    result.expires_boot_ns = Some(harness.model.generated_boot_ns + 9_000_000_000);
+    (prepare, result)
+}
+
+/// y/Enter pressed before the token arrives are kept, and the kill goes
+/// out the moment the token does: a fast F9 then y is never lost (D-109).
+/// The banner says what will happen.
+#[test]
+fn a_kill_confirmed_before_its_token_is_sent_when_the_token_arrives() {
+    for confirm_key in [key('y'), code(KeyCode::Enter)] {
+        let mut harness = Harness::new(ViewKind::Overview);
+        let (_, result) = prepared_f9(&mut harness);
+        assert_eq!(
+            harness.controller.mode(),
+            ModeKind::Confirm,
+            "it takes its answer"
+        );
+        harness.keys(&[confirm_key]);
+        let ui = harness.controller.ui_state(harness.now);
+        assert_eq!(ui.early_answer, Some(true));
+        assert!(harness.submitted().is_empty(), "nothing without the token");
+        harness.deliver(result);
+        let submitted = harness.submitted();
+        assert!(
+            matches!(&submitted[..], [CommandBody::ConfirmSignal { confirmation_token }] if *confirmation_token == token()),
+            "{submitted:?}"
+        );
+        assert_eq!(
+            harness.controller.mode(),
+            ModeKind::Normal,
+            "the token is used"
+        );
+    }
+}
+
+/// n/Esc before the token arrives cancel it on arrival, so nothing is
+/// sent; the last answer counts (D-109).
+#[test]
+fn a_kill_cancelled_before_its_token_is_never_sent() {
+    let mut harness = Harness::new(ViewKind::Overview);
+    let (_, result) = prepared_f9(&mut harness);
+    harness.keys(&[key('y'), code(KeyCode::Esc)]);
+    assert_eq!(
+        harness.controller.ui_state(harness.now).early_answer,
+        Some(false)
+    );
+    harness.deliver(result);
+    let submitted = harness.submitted();
+    assert!(
+        matches!(&submitted[..], [CommandBody::CancelSignal { confirmation_token }] if *confirmation_token == token()),
+        "{submitted:?}"
+    );
+    assert_eq!(harness.controller.mode(), ModeKind::Normal);
+    // Other keys wait while the token is on its way.
+    let mut waiting = Harness::new(ViewKind::Overview);
+    prepared_f9(&mut waiting);
+    waiting.keys(&[key('j'), key('/'), code(KeyCode::Tab)]);
+    assert!(waiting.submitted().is_empty(), "{:?}", waiting.submitted());
+    assert_eq!(waiting.controller.mode(), ModeKind::Confirm);
+}
+
+/// K and F9 act on the row the user selected last, though the frame still
+/// highlights the one before (the highlight follows a step later); a
+/// selection the frame did not draw is never a target (D-109).
+#[test]
+fn a_kill_targets_the_row_selected_last_when_it_was_drawn() {
+    let mut harness = Harness::new(ViewKind::Overview);
+    let drawn: Vec<ProcessKey> = harness
+        .hit_map
+        .targets()
+        .iter()
+        .filter(|target| target.control_id == controls::PROCESS_ROW)
+        .filter_map(|target| target.process_key.clone())
+        .collect();
+    let highlighted = harness.hit_map.visible_selected_process().cloned().unwrap();
+    let next = drawn.first().cloned().expect("another row is drawn");
+    // A click selects another drawn row; F9 at once, before a new frame.
+    let row = harness
+        .hit_map
+        .targets()
+        .iter()
+        .find(|target| target.process_key.as_ref() == Some(&next))
+        .unwrap()
+        .rect;
+    harness.press(click(row.x, row.y));
+    harness.keys(&[code(KeyCode::F(9))]);
+    let targets: Vec<ProcessKey> = harness
+        .submitted()
+        .into_iter()
+        .filter_map(|body| match body {
+            CommandBody::PrepareSignal { target, .. } => Some(target),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        targets,
+        vec![next.clone()],
+        "not the stale highlight {highlighted:?}"
+    );
+    // The selection goes out before the prepare, so the Manager checks the
+    // prepare against it.
+    let bodies = harness.submitted();
+    let selection = bodies
+        .iter()
+        .position(|body| matches!(body, CommandBody::UpdateViewSession { selected_process: Some(key), .. } if *key == next))
+        .expect("selection sent");
+    let prepare = bodies
+        .iter()
+        .position(|body| matches!(body, CommandBody::PrepareSignal { .. }))
+        .unwrap();
+    assert!(selection < prepare);
+    // A selection the frame did not draw falls back to the drawn highlight.
+    let mut offscreen = Harness::new(ViewKind::Overview);
+    let mut map = HitMap::new(offscreen.hit_map.frame_revision());
+    for target in offscreen.hit_map.targets() {
+        if target.control_id != controls::PROCESS_ROW {
+            map.push_clipped(target.clone(), target.rect);
+        }
+    }
+    offscreen.hit_map = map;
+    offscreen.press(click(row.x, row.y));
+    offscreen.keys(&[code(KeyCode::F(9))]);
+    let fallback: Vec<ProcessKey> = offscreen
+        .submitted()
+        .into_iter()
+        .filter_map(|body| match body {
+            CommandBody::PrepareSignal { target, .. } => Some(target),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fallback, vec![highlighted]);
+}
+
+/// In the GPU view ↑/↓ (j/k, PgUp/PgDn) turn the pages of the GPU's
+/// sections and Home/End go to the first and the last, counted from the
+/// pages the frame showed, never past the last; ←/→ still pick the GPU,
+/// and turning pages sends nothing (D-110).
+#[test]
+fn the_gpu_view_turns_the_pages_of_its_sections() {
+    let mut harness = Harness::new(ViewKind::GpuDetail);
+    let gpu = ModuleId::new(crate::modules::GPU_MODULE_ID).unwrap();
+    let page = |harness: &Harness| {
+        harness
+            .controller
+            .ui_state(harness.now)
+            .offsets
+            .get(&gpu)
+            .copied()
+            .unwrap_or(0)
+    };
+    page_frame(&mut harness, gpu.clone(), (0, 0));
+    harness.keys(&[code(KeyCode::Down)]);
+    assert_eq!(page(&harness), 0, "one page");
+    page_frame(&mut harness, gpu.clone(), (0, 2));
+    harness.keys(&[key('j')]);
+    assert_eq!(page(&harness), 1);
+    page_frame(&mut harness, gpu.clone(), (1, 1));
+    harness.keys(&[code(KeyCode::PageDown)]);
+    assert_eq!(page(&harness), 2);
+    page_frame(&mut harness, gpu.clone(), (2, 0));
+    harness.keys(&[code(KeyCode::Down)]);
+    assert_eq!(page(&harness), 2, "the last page shows");
+    harness.keys(&[key('k')]);
+    assert_eq!(page(&harness), 1);
+    page_frame(&mut harness, gpu.clone(), (1, 1));
+    harness.keys(&[code(KeyCode::End)]);
+    assert_eq!(page(&harness), 2);
+    harness.keys(&[code(KeyCode::Home)]);
+    assert_eq!(page(&harness), 0);
+    assert!(harness.submitted().is_empty(), "{:?}", harness.submitted());
+    harness.keys(&[code(KeyCode::Right)]);
+    assert!(harness.last_session().1.is_some(), "→ picks the next GPU");
+}
+
+/// In the filter input Ctrl-B/F/A/E move the cursor like ←/→/Home/End, for
+/// a keyboard without them (D-111); they are never typed as text.
+#[test]
+fn readline_keys_move_the_filter_cursor() {
+    let mut harness = Harness::new(ViewKind::Overview);
+    harness.keys(&[key('/'), key('a'), key('b'), key('c')]);
+    harness.keys(&[
+        ctrl('a'),
+        key('x'),
+        ctrl('e'),
+        key('y'),
+        ctrl('b'),
+        key('z'),
+        ctrl('f'),
+        key('w'),
+    ]);
+    let ModeView::Filter { buffer, .. } = harness.controller.ui_state(harness.now).mode else {
+        panic!("typing");
+    };
+    assert_eq!(buffer, "xabczyw");
+}
+
+/// On an opened run PgDn/PgUp (Ctrl-D/Ctrl-U) turn its pages, counted from
+/// the pages the frame showed (D-112); another run, closing the run or the
+/// Overview History starts from the first page again.
+#[test]
+fn an_opened_run_turns_its_pages_and_starts_each_run_at_the_first() {
+    let mut harness = Harness::new(ViewKind::History);
+    harness.keys(&[key('4'), code(KeyCode::Enter)]);
+    page_frame(&mut harness, history_module(), (0, 1));
+    harness.keys(&[code(KeyCode::PageDown)]);
+    assert_eq!(history_offset(&harness), 1);
+    page_frame(&mut harness, history_module(), (1, 0));
+    harness.keys(&[ctrl('d')]);
+    assert_eq!(history_offset(&harness), 1, "the last page shows");
+    harness.keys(&[ctrl('u')]);
+    assert_eq!(history_offset(&harness), 0);
+    page_frame(&mut harness, history_module(), (0, 1));
+    harness.keys(&[code(KeyCode::PageDown)]);
+    assert_eq!(history_offset(&harness), 1);
+    harness.keys(&[key('j')]);
+    assert_eq!(
+        history_offset(&harness),
+        0,
+        "the next run starts at its first page"
+    );
+    page_frame(&mut harness, history_module(), (0, 1));
+    harness.keys(&[code(KeyCode::PageDown), code(KeyCode::Enter)]);
+    assert_eq!(history_offset(&harness), 0, "back on the list");
+    harness.keys(&[code(KeyCode::Enter), code(KeyCode::PageDown), key('3')]);
+    assert_eq!(
+        history_offset(&harness),
+        0,
+        "the Overview History from its top"
+    );
+    assert!(
+        harness
+            .submitted()
+            .iter()
+            .all(|body| matches!(body, CommandBody::UpdateViewSession { .. })),
+        "turning pages sends nothing: {:?}",
+        harness.submitted()
+    );
+}
+
+/// `/` on the Process History filters its runs by name or PID (D-113): the
+/// History session carries the filter, the list starts at its first
+/// match, an opened run leaves for the list, and the Overview History has
+/// no list to filter.
+#[test]
+fn slash_filters_the_process_historys_runs() {
+    let mut harness = Harness::new(ViewKind::History);
+    harness.keys(&[key('/')]);
+    assert_eq!(
+        harness.controller.mode(),
+        ModeKind::Normal,
+        "no list on the Overview History"
+    );
+    harness.keys(&[key('4'), key('j'), code(KeyCode::Enter), key('/')]);
+    assert_eq!(harness.controller.mode(), ModeKind::Filter);
+    assert_eq!(
+        harness
+            .controller
+            .ui_state(harness.now)
+            .tabs
+            .get(&history_module())
+            .copied(),
+        Some(crate::views::PROCESS_LIST_PAGE),
+        "the run leaves for the list"
+    );
+    harness.keys(&[key('c'), key('o'), key('m'), code(KeyCode::Enter)]);
+    let (view, _, selected, filter, _) = harness.last_session();
+    assert_eq!((view, filter.as_str()), (ViewKind::History, "com"));
+    assert_eq!(selected, None, "the list starts at its first match");
+    assert_eq!(
+        harness
+            .controller
+            .ui_state(harness.now)
+            .scroll
+            .get(&history_module())
+            .copied(),
+        Some(0)
+    );
+    harness.keys(&[key('/'), code(KeyCode::Esc)]);
+    assert_eq!(harness.last_session().3, "", "Esc clears it");
+}
+
+/// The panels folded now, in order.
+fn folded_now(harness: &Harness) -> Vec<String> {
+    harness
+        .controller
+        .ui_state(harness.now)
+        .folded
+        .iter()
+        .cloned()
+        .collect()
+}
+
+/// The saves of folded panels sent and not yet taken.
+fn fold_saves(harness: &Harness) -> Vec<(u128, Vec<String>)> {
+    harness
+        .sink
+        .submitted
+        .borrow()
+        .iter()
+        .filter_map(|envelope| match &envelope.body {
+            CommandBody::SetFolded { panels } => {
+                Some((envelope.request_id.as_u128(), panels.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The last fold save sent.
+fn last_fold_save(harness: &Harness) -> CommandEnvelope {
+    harness
+        .sink
+        .submitted
+        .borrow()
+        .iter()
+        .rev()
+        .find(|envelope| matches!(envelope.body, CommandBody::SetFolded { .. }))
+        .cloned()
+        .expect("a fold save")
+}
+
+/// `i`/`n` fold the Overview's disk I/O and network panels on the next
+/// frame, and the set is saved through the Manager one command at a time,
+/// a busy save tried again; `o` unfolds them (D-114).
+#[test]
+fn overview_panels_fold_at_once_and_are_saved_one_save_at_a_time() {
+    let mut harness = Harness::new(ViewKind::Overview);
+    harness.keys(&[key('i')]);
+    assert_eq!(folded_now(&harness), ["disk"]);
+    let saves = fold_saves(&harness);
+    assert_eq!(saves.len(), 1);
+    assert_eq!(saves[0].1, ["disk"]);
+    harness.keys(&[key('n')]);
+    assert_eq!(folded_now(&harness), ["disk", "network"], "shown at once");
+    assert_eq!(fold_saves(&harness).len(), 1, "one save at a time");
+    let first = last_fold_save(&harness);
+    harness.deliver(CommandResult::completed(first.request_id, "saved"));
+    let saves = fold_saves(&harness);
+    assert_eq!(saves.len(), 2);
+    assert_eq!(saves[1].1, ["disk", "network"], "the rest follows");
+    let busy = last_fold_save(&harness);
+    harness.deliver(CommandResult::rejected(
+        busy.request_id,
+        ErrorCode::Busy,
+        "busy",
+    ));
+    harness.keys(&[]);
+    assert_eq!(fold_saves(&harness).len(), 2, "a moment later");
+    harness.now += Duration::from_millis(300);
+    harness.keys(&[]);
+    assert_eq!(fold_saves(&harness).len(), 3, "tried again");
+    let again = last_fold_save(&harness);
+    harness.deliver(CommandResult::completed(again.request_id, "saved"));
+    harness.keys(&[key('o')]);
+    assert!(folded_now(&harness).is_empty());
+    let saves = fold_saves(&harness);
+    assert_eq!(saves.last().unwrap().1, Vec::<String>::new());
+}
+
+/// The saved folds show from the first projection, nothing sent; the
+/// Overview History's panels fold on its first page only (D-114).
+#[test]
+fn saved_folds_show_at_start_and_history_panels_fold_on_their_page() {
+    let mut harness = Harness::new(ViewKind::History);
+    let mut model = test_fixtures::view_model(ViewKind::History, 6);
+    model.folded = vec!["history.disk".to_owned()];
+    harness.project(model);
+    assert_eq!(folded_now(&harness), ["history.disk"]);
+    assert!(fold_saves(&harness).is_empty(), "nothing to save");
+    harness.keys(&[key('c'), key('i')]);
+    assert_eq!(folded_now(&harness), ["history.cpu"]);
+    harness.keys(&[key('4'), key('m'), key('o')]);
+    assert_eq!(
+        folded_now(&harness),
+        ["history.cpu"],
+        "not on the Process History"
+    );
+    harness.keys(&[key('3'), key('o')]);
+    assert!(folded_now(&harness).is_empty());
 }

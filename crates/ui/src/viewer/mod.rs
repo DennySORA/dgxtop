@@ -153,6 +153,9 @@ impl Viewer {
         let detail = self.detail_candidate(view);
         let preferred = |index: usize, width: u16| {
             let module = self.registry.module_at(index)?;
+            if is_folded(input.ui, module.manifest()) {
+                return Some(FOLDED_ROWS);
+            }
             let collapsed = (!is_expanded(input.ui, module.manifest()))
                 .then(|| module.collapsed_rows(model, width, Slot::Overview))
                 .flatten();
@@ -247,6 +250,15 @@ impl Viewer {
                 .get(&module.manifest().module_id)
                 .copied()
                 .unwrap_or(0),
+            offset: input
+                .ui
+                .offsets
+                .get(&module.manifest().module_id)
+                .copied()
+                .unwrap_or(0),
+            marked: std::sync::Arc::clone(&input.ui.marked),
+            picked: input.ui.picks.get(&module.manifest().module_id).cloned(),
+            folded: std::sync::Arc::clone(&input.ui.folded),
         };
         let outcome =
             isolation::render_isolated(|| module.render(&context, model, placement.area, frame));
@@ -276,9 +288,17 @@ impl Viewer {
             .enumerate()
             .filter(|(_, module)| module.manifest().has_slot(Slot::Overview))
             .filter(|(_, module)| module_enabled(model, module.manifest()))
-            .map(|(index, module)| Candidate {
-                expanded: is_expanded(ui, module.manifest()),
-                ..candidate(index, module.manifest(), module.overview_cell())
+            .map(|(index, module)| {
+                // A folded module keeps one row and gives the others the
+                // rest (D-114).
+                let folded = is_folded(ui, module.manifest());
+                let base = candidate(index, module.manifest(), module.overview_cell());
+                Candidate {
+                    expanded: is_expanded(ui, module.manifest()),
+                    folded,
+                    min_rows: if folded { FOLDED_ROWS } else { base.min_rows },
+                    ..base
+                }
             })
             .collect()
     }
@@ -326,7 +346,15 @@ fn candidate(
         priority: manifest.priority,
         cell,
         expanded: false,
+        folded: false,
     }
+}
+
+/// Rows a folded module keeps (D-114).
+const FOLDED_ROWS: u16 = 1;
+
+fn is_folded(ui: &UiState, manifest: &DisplayModuleManifest) -> bool {
+    ui.folded.contains(manifest.module_id.as_str())
 }
 
 fn is_expanded(ui: &UiState, manifest: &DisplayModuleManifest) -> bool {

@@ -2,6 +2,7 @@
 //! 100×30, 80×24, 40×10 and 20×5, plus semantics (missing states, conflicts,
 //! tags, banners, registry extension, panic isolation, HitMap).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use dgxtop_core::action::Signal;
@@ -182,6 +183,8 @@ fn overview_follows_the_reference_layout_and_keeps_every_module_visible_when_wid
         "CPU ▸ Grace ARM Neoverse-V2",
         "(c/click cores)",
         "(j/k/↑/↓ select · s sort · r reverse · g GPU filter · / filter · K terminate · F9 kill)",
+        "(i fold)",
+        "(n fold)",
         "45.3%",
         "Memory · shared with GPU",
         "Disk I/O [nvme0n1]",
@@ -365,6 +368,31 @@ fn panel_row(rendered: &Rendered, title: &str) -> usize {
     row_index(rendered, &format!("{title} ─"))
 }
 
+/// At the owner's 213×41 the Overview History of two GPUs shows every
+/// panel of the GPU picked, with nothing left to scroll to (D-107).
+#[test]
+fn the_overview_history_fits_a_213_by_41_terminal() {
+    let rendered = render(&history_model(), (213, 41));
+    let text = rendered.text();
+    for title in [
+        "CPU utilization",
+        "Memory used · 64.0 GiB",
+        "GPU utilization",
+        "GPU memory",
+        "GPU temperature",
+        "GPU power",
+        "Disk · nvme0n1",
+        "Network · enp1s0",
+    ] {
+        panel_row(&rendered, title);
+    }
+    assert!(
+        text.contains("[GPU 0]") && text.contains(" GPU 1 "),
+        "{text}"
+    );
+    assert!(!text.contains("below") && !text.contains("above"), "{text}");
+}
+
 #[test]
 fn history_says_when_it_loads_fails_is_partly_recorded_or_has_no_series() {
     let mut model = history_model();
@@ -420,16 +448,11 @@ fn history_says_when_it_loads_fails_is_partly_recorded_or_has_no_series() {
         unavailable.text()
     );
     history.error = None;
-    // A short terminal: the bar names the panels left out; nothing claims
-    // there is no data.
+    // A short terminal: the bar names the panels below, which PgDn
+    // scrolls to (D-107); nothing claims there is no data.
     model.modules.history = Some(Arc::new(history.clone()));
     let short = render(&model, (100, 10));
-    assert!(
-        // The twelve bar sizes (D-78) leave room for the first part only.
-        short.contains("+7 panels on a taller terminal"),
-        "{}",
-        short.text()
-    );
+    assert!(short.contains("PgDn/^D 7 panels below"), "{}", short.text());
     assert!(!short.contains("no series"), "{}", short.text());
     history.charts.clear();
     model.modules.history = Some(Arc::new(history));
@@ -670,6 +693,133 @@ fn gpu_view_shows_the_host_kernel_in_the_driver_block() {
     let mut unknown = model;
     unknown.header.kernel = None;
     assert!(!render(&unknown, (200, 60)).contains("Linux kernel"));
+}
+
+/// Folded panels keep one row and give the others the rest (D-114): on
+/// the Overview the disk I/O and network modules fold to one row side by
+/// side and the processes take their rows, a single fold sitting above the
+/// open module, which takes the row's width; on the Overview History
+/// folded panels keep their title row, first, and the others grow. Each
+/// row names the key unfolding it; a click on it unfolds too.
+#[test]
+fn folded_panels_keep_a_row_and_give_the_others_the_rest() {
+    let overview = model(ViewKind::Overview);
+    let folding = |panels: &[&str]| UiState {
+        folded: Arc::new(panels.iter().map(|panel| (*panel).to_owned()).collect()),
+        ..UiState::default()
+    };
+    let plain = render(&overview, (160, 50));
+    let folded = render_with(
+        &Viewer::builtin(),
+        Some(&overview),
+        &folding(&["disk", "network"]),
+        (160, 50),
+    );
+    let text = folded.text();
+    let row = &folded.rows[row_index(&folded, "▸ Disk I/O [nvme0n1]")];
+    assert!(
+        row.contains("(i unfold)")
+            && row.contains("▸ Network [enp1s0]")
+            && row.contains("(n unfold)"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("╭ Disk I/O") && !text.contains("╭ Network"),
+        "{text}"
+    );
+    let processes =
+        |rendered: &Rendered| rendered.rows.len() - row_index(rendered, "GPU Processes");
+    assert!(
+        processes(&folded) > processes(&plain),
+        "the processes take the rows: {text}"
+    );
+    assert_eq!(
+        folded.report.hit_map.count(controls::PANEL_FOLD),
+        2,
+        "each folded row unfolds on a click"
+    );
+    let one = render_with(
+        &Viewer::builtin(),
+        Some(&overview),
+        &folding(&["disk"]),
+        (160, 50),
+    );
+    let text = one.text();
+    let disk = row_index(&one, "▸ Disk I/O [nvme0n1]");
+    let network = row_index(&one, "Network [enp1s0]");
+    assert!(disk < network, "the fold above the open module: {text}");
+    assert!(
+        one.rows[network].starts_with("╭ Network") && one.rows[network].trim_end().ends_with('╮'),
+        "{text}"
+    );
+    assert!(
+        one.rows[network].trim_end().chars().count() > 150,
+        "the whole width: {text}"
+    );
+    let history = history_model();
+    let folded = render_with(
+        &Viewer::builtin(),
+        Some(&history),
+        &folding(&["history.disk", "history.network"]),
+        (213, 41),
+    );
+    let text = folded.text();
+    let row = &folded.rows[row_index(&folded, "▸ Disk · nvme0n1")];
+    assert!(
+        row.contains("(i unfold)")
+            && row.contains("▸ Network · enp1s0")
+            && row.contains("(n unfold)"),
+        "{text}"
+    );
+    assert!(
+        row_index(&folded, "▸ Disk · nvme0n1") < row_index(&folded, "CPU utilization"),
+        "folded rows first: {text}"
+    );
+    // Each open panel names the key folding it.
+    for (title, keys) in [
+        ("CPU utilization", "(c fold)"),
+        ("Memory used", "(m fold)"),
+        ("GPU utilization", "(u fold)"),
+        ("GPU memory", "(v fold)"),
+        ("GPU temperature", "(t fold)"),
+        ("GPU power", "(p fold)"),
+    ] {
+        let row = &folded.rows[row_index(&folded, title)];
+        assert!(row.contains(keys), "{title}: {row}");
+    }
+}
+
+/// A GPU view too short for its sections shows them in pages (D-110): the
+/// selector row says the page and what the next holds, the title names
+/// `↑/↓ page`, and the frame tells the controller the pages around it.
+#[test]
+fn a_short_gpu_view_shows_its_sections_in_pages() {
+    let model = model(ViewKind::GpuDetail);
+    let gpu = ModuleId::new(crate::modules::GPU_MODULE_ID).unwrap();
+    let first = render(&model, (100, 24));
+    let text = first.text();
+    assert!(text.contains("page 1 of "), "{text}");
+    assert!(text.contains("↑/↓ page"), "{text}");
+    let count = |rendered: &Rendered, control| rendered.report.hit_map.count_of(&gpu, control);
+    assert_eq!(count(&first, controls::PAGE_ABOVE), 0);
+    let pages = 1 + count(&first, controls::PAGE_BELOW);
+    assert!(pages > 1, "{text}");
+    let ui = UiState {
+        offsets: BTreeMap::from([(gpu.clone(), 1)]),
+        ..UiState::default()
+    };
+    let second = render_with(&Viewer::builtin(), Some(&model), &ui, (100, 24));
+    assert!(
+        second.contains(&format!("page 2 of {pages}")),
+        "{}",
+        second.text()
+    );
+    assert_eq!(count(&second, controls::PAGE_ABOVE), 1);
+    assert_eq!(count(&second, controls::PAGE_BELOW), pages - 2);
+    // A tall terminal holds every section: no pages.
+    let tall = render(&model, (200, 60));
+    assert!(!tall.contains("page 1 of"), "{}", tall.text());
+    assert_eq!(count(&tall, controls::PAGE_BELOW), 0);
 }
 
 #[test]

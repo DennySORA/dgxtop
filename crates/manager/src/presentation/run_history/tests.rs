@@ -112,13 +112,56 @@ fn model() -> ProcessHistoryModel {
 }
 
 fn view(model: &ProcessHistoryModel, opened: Option<&RunRequest>) -> ProcessHistoryView {
+    filtered(model, opened, "")
+}
+
+fn filtered(
+    model: &ProcessHistoryModel,
+    opened: Option<&RunRequest>,
+    filter: &str,
+) -> ProcessHistoryView {
     build_process_history_view(&RunHistoryInputs {
         model,
         opened,
         utc_offset_s: 3_600,
         bar: BarSize::Auto,
         scales: &scales(),
+        filter,
     })
+}
+
+/// The session's filter keeps the runs whose name or PID hold it, any
+/// case, before the rows are bounded (D-113): an older run that matches
+/// is listed though newer ones are not.
+#[test]
+fn the_filter_keeps_the_runs_whose_name_or_pid_hold_it() {
+    let mut model = model();
+    model.more_runs = 0;
+    let mut runs: Vec<RunRow> = (1..=250)
+        .map(|pid| {
+            let mut run = row(pid, bucket(0, 10.0, 4));
+            run.name = if pid == 7 {
+                "ComfyUI/main".to_owned()
+            } else {
+                "acme_llm.train".to_owned()
+            };
+            run
+        })
+        .collect();
+    runs.reverse();
+    model.runs = runs;
+    let pids = |view: &ProcessHistoryView| -> Vec<i32> {
+        view.runs.iter().map(|run| run.key.pid.get()).collect()
+    };
+    let all = filtered(&model, None, "");
+    assert_eq!(all.runs.len(), MAX_RUN_ROWS);
+    assert_eq!(all.more_runs, 50);
+    let comfy = filtered(&model, None, "  comfyui ");
+    assert_eq!(pids(&comfy), vec![7], "the oldest rows are searched too");
+    assert_eq!(comfy.more_runs, 0);
+    assert_eq!(pids(&filtered(&model, None, "249")), vec![249]);
+    let none = filtered(&model, None, "nothing");
+    assert!(none.runs.is_empty() && none.more_runs == 0);
 }
 
 /// The rows come in the model's order with the figures of their whole

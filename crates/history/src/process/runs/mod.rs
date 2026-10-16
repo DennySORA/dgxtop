@@ -434,6 +434,28 @@ impl ProcessHistoryBook {
         giving_way.len()
     }
 
+    /// Forgets the ended runs among `keys`, from the book and the store (a
+    /// session's deletion, D-108). A run still running stays: the next
+    /// table would follow it again at once. How many went.
+    pub(crate) fn delete_ended(&mut self, keys: &[ProcessKey]) -> usize {
+        let ended: BTreeSet<ProcessKey> = keys
+            .iter()
+            .filter(|key| {
+                self.runs
+                    .get(*key)
+                    .is_some_and(|run| run.info.end.is_some())
+            })
+            .cloned()
+            .collect();
+        for key in &ended {
+            self.forget(key);
+        }
+        if !ended.is_empty() {
+            self.revision += 1;
+        }
+        ended.len()
+    }
+
     /// The store keeps only the `runs` last seen (it holds runs the book
     /// no longer lists).
     pub(crate) fn keep_stored_runs(&mut self, usage: StoreUsage) {

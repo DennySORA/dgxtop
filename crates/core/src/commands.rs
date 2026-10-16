@@ -16,6 +16,9 @@ use crate::identity::{EntityId, ModuleId, ProcessKey, SessionId};
 pub const COMMAND_SCHEMA_VERSION: u32 = 2;
 /// Maximum filter text in bytes.
 pub const MAX_FILTER_BYTES: usize = 256;
+/// Runs one [`CommandBody::DeleteRuns`] deletes at most; a selection of
+/// more goes in several commands ([`delete_run_batches`]).
+pub const MAX_DELETE_RUNS: usize = 256;
 
 /// Logical views selectable through a view session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -104,8 +107,9 @@ impl SortKey {
 ///   filter (None = all GPUs), `filter` = name filter.
 /// * `gpu_detail`: `selected_entity_id` = shown GPU.
 /// * `history`/`sources`: `selected_entity_id` = series selector
-///   (`metric_id|scope|entity_id`), `filter` = the sources text filter
-///   (empty on the history view).
+///   (`metric_id|scope|entity_id`), `filter` = the sources text filter; on
+///   the history view the Process History's runs whose name or PID hold it
+///   (D-113).
 /// * `overview_bar` / `process_bar` (D-80, a contract extension in
 ///   `contracts/command.schema.json`): the bar sizes of the Overview and the
 ///   Process History; unset is 1 minute and `auto`.
@@ -149,6 +153,18 @@ pub enum CommandBody {
         enabled: bool,
         expected_config_revision: u32,
     },
+    /// Deletes ended runs from the Process History (D-108): from its list
+    /// and its stores. A run still running stays; at most
+    /// [`MAX_DELETE_RUNS`] a command.
+    DeleteRuns {
+        runs: Vec<ProcessKey>,
+    },
+    /// The panels folded away (D-114), all of them: saved in
+    /// `viewer.folded` without an expected revision, since only the
+    /// frontends' layout reads them.
+    SetFolded {
+        panels: Vec<String>,
+    },
     Shutdown {
         reason: String,
     },
@@ -164,6 +180,8 @@ impl CommandBody {
             Self::ConfirmSignal { .. } => "ConfirmSignal",
             Self::CancelSignal { .. } => "CancelSignal",
             Self::SetModuleEnabled { .. } => "SetModuleEnabled",
+            Self::DeleteRuns { .. } => "DeleteRuns",
+            Self::SetFolded { .. } => "SetFolded",
             Self::Shutdown { .. } => "Shutdown",
         }
     }
@@ -194,6 +212,10 @@ pub enum CommandSyntaxError {
     Revision,
     #[error("command payload exceeds {0} bytes")]
     TooLarge(u64),
+    #[error("runs must hold 1..={MAX_DELETE_RUNS} runs")]
+    Runs,
+    #[error("panels must be distinct foldable panels")]
+    Folded,
 }
 
 impl CommandEnvelope {
@@ -246,6 +268,16 @@ impl CommandEnvelope {
                     return Err(CommandSyntaxError::ReasonTooLong);
                 }
             }
+            CommandBody::DeleteRuns { runs } => {
+                if runs.is_empty() || runs.len() > MAX_DELETE_RUNS {
+                    return Err(CommandSyntaxError::Runs);
+                }
+            }
+            CommandBody::SetFolded { panels } => {
+                if !crate::view::are_foldable(panels) {
+                    return Err(CommandSyntaxError::Folded);
+                }
+            }
             CommandBody::PrepareSignal { .. }
             | CommandBody::ConfirmSignal { .. }
             | CommandBody::CancelSignal { .. } => {}
@@ -260,10 +292,51 @@ impl CommandEnvelope {
 
     /// Serialized size, used for the per-command byte cap.
     pub fn encoded_len(&self) -> u64 {
-        serde_json::to_vec(self)
-            .map(|bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX))
-            .unwrap_or(u64::MAX)
+        encoded_len(self)
     }
+}
+
+/// Bytes of `value` as JSON on the wire.
+fn encoded_len(value: &impl Serialize) -> u64 {
+    serde_json::to_vec(value)
+        .map(|bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX))
+        .unwrap_or(u64::MAX)
+}
+
+/// `runs` in the run lists of [`CommandBody::DeleteRuns`] commands for
+/// `session_id`, in order (D-108): each command's envelope stays within
+/// `max_bytes` (every Manager takes [`crate::config::MIN_COMMAND_BYTES`])
+/// and holds at most [`MAX_DELETE_RUNS`] runs. A run too long for any
+/// command still gets one of its own, which the session then refuses.
+pub fn delete_run_batches(
+    session_id: &SessionId,
+    runs: &[ProcessKey],
+    max_bytes: u64,
+) -> Vec<Vec<ProcessKey>> {
+    let empty = CommandEnvelope::new(
+        session_id.clone(),
+        CommandBody::DeleteRuns { runs: Vec::new() },
+    );
+    let mut batches = Vec::new();
+    let mut batch: Vec<ProcessKey> = Vec::new();
+    let mut bytes = empty.encoded_len();
+    for run in runs {
+        // A run after the first adds its separating comma.
+        let added = encoded_len(run).saturating_add(u64::from(!batch.is_empty()));
+        let full = batch.len() == MAX_DELETE_RUNS || bytes.saturating_add(added) > max_bytes;
+        if !batch.is_empty() && full {
+            batches.push(std::mem::take(&mut batch));
+            bytes = empty.encoded_len();
+        }
+        bytes = bytes
+            .saturating_add(encoded_len(run))
+            .saturating_add(u64::from(!batch.is_empty()));
+        batch.push(run.clone());
+    }
+    if !batch.is_empty() {
+        batches.push(batch);
+    }
+    batches
 }
 
 /// Command status (`command-result.schema.json`).
@@ -474,6 +547,87 @@ mod tests {
             interval.validate_syntax(),
             Err(CommandSyntaxError::Interval)
         );
+    }
+
+    /// A deletion of many runs goes in commands each within the byte cap
+    /// given and [`MAX_DELETE_RUNS`] runs, in order; every run once
+    /// (D-108).
+    #[test]
+    fn a_deletion_of_many_runs_is_batched_within_the_cap() {
+        let session = SessionId::new("tui").unwrap();
+        let run = |pid: i64| ProcessKey {
+            pid: crate::identity::Pid::new(pid).unwrap(),
+            ..crate::testing::test_process_key(1)
+        };
+        let runs: Vec<ProcessKey> = (1..=600).map(run).collect();
+        let cap = crate::config::MIN_COMMAND_BYTES;
+        let batches = delete_run_batches(&session, &runs, cap);
+        assert!(batches.len() > 1);
+        assert_eq!(batches.concat(), runs, "every run once, in order");
+        for batch in &batches {
+            let envelope = CommandEnvelope::new(
+                session.clone(),
+                CommandBody::DeleteRuns {
+                    runs: batch.clone(),
+                },
+            );
+            assert!(envelope.encoded_len() <= cap, "{}", envelope.encoded_len());
+            envelope.validate_syntax().unwrap();
+        }
+        // The batch before the last could not take one run more.
+        let first = &batches[0];
+        let fuller = CommandEnvelope::new(
+            session.clone(),
+            CommandBody::DeleteRuns {
+                runs: runs[..=first.len()].to_vec(),
+            },
+        );
+        assert!(fuller.encoded_len() > cap);
+        let roomy = delete_run_batches(&session, &runs, u64::MAX);
+        assert_eq!(
+            roomy.iter().map(Vec::len).collect::<Vec<_>>(),
+            [MAX_DELETE_RUNS, MAX_DELETE_RUNS, 600 - 2 * MAX_DELETE_RUNS]
+        );
+        assert!(delete_run_batches(&session, &[], cap).is_empty());
+        let tiny = delete_run_batches(&session, &runs[..3], 1);
+        assert_eq!(tiny.len(), 3, "a run too long for any command goes alone");
+    }
+
+    /// The folds name distinct foldable panels, or none (D-114).
+    #[test]
+    fn folds_name_distinct_foldable_panels() {
+        let session = SessionId::new("s").unwrap();
+        let folds = |panels: &[&str]| {
+            CommandEnvelope::new(
+                session.clone(),
+                CommandBody::SetFolded {
+                    panels: panels.iter().map(|panel| (*panel).to_owned()).collect(),
+                },
+            )
+            .validate_syntax()
+        };
+        assert_eq!(folds(&[]), Ok(()));
+        assert_eq!(folds(&crate::view::FOLDABLE_PANELS), Ok(()));
+        assert_eq!(folds(&["disk", "disk"]), Err(CommandSyntaxError::Folded));
+        assert_eq!(folds(&["gpu"]), Err(CommandSyntaxError::Folded));
+    }
+
+    #[test]
+    fn a_deletion_holds_one_to_max_delete_runs_runs() {
+        let session = SessionId::new("s").unwrap();
+        let deletion = |count: usize| {
+            CommandEnvelope::new(
+                session.clone(),
+                CommandBody::DeleteRuns {
+                    runs: vec![crate::testing::test_process_key(1); count],
+                },
+            )
+            .validate_syntax()
+        };
+        assert_eq!(deletion(0), Err(CommandSyntaxError::Runs));
+        assert_eq!(deletion(1), Ok(()));
+        assert_eq!(deletion(MAX_DELETE_RUNS), Ok(()));
+        assert_eq!(deletion(MAX_DELETE_RUNS + 1), Err(CommandSyntaxError::Runs));
     }
 
     #[test]

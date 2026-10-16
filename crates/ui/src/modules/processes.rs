@@ -17,8 +17,8 @@ use ratatui::layout::Rect;
 use super::ModuleBuildError;
 use super::common::{
     ColumnSpec, FittedColumn, ManifestSpec, Output, RowCursor, TableCell, build_manifest,
-    draw_column_separators, draw_table_header, draw_table_row, fit_separated_columns, message,
-    no_data, panel, panel_with_keys,
+    draw_column_separators, draw_table_header, draw_table_row, fit_separated_columns, fitting_keys,
+    message, no_data, panel, panel_with_keys,
 };
 use crate::format::{
     NOT_AVAILABLE, clean, display_width, format_optional_bytes, format_optional_percent,
@@ -34,6 +34,11 @@ const SELECTION_MARKER: &str = "▶";
 /// The keys acting on this table, at the right of its title (D-70).
 const PROCESS_KEYS: &str =
     "j/k/↑/↓ select · s sort · r reverse · g GPU filter · / filter · K terminate · F9 kill";
+/// The shortest of them.
+const SHORT_PROCESS_KEYS: &str = "j/k select · s sort · / filter · K terminate · F9 kill";
+
+/// The keys at the right of the title, the fullest that fits first.
+const PROCESS_KEY_FORMS: &[&str] = &[PROCESS_KEYS, SHORT_PROCESS_KEYS];
 /// A tracked process's color, before its name (D-64).
 const COLOR_SWATCH: &str = "■";
 /// Position of the swatch column in [`COLUMNS`].
@@ -115,7 +120,9 @@ impl DisplayModule for ProcessesModule {
             output.label("processes: no data");
             return output.finish();
         };
-        let inner = panel_with_keys(frame, area, &title_text(view), PROCESS_KEYS, context);
+        let title = title_text(view);
+        let keys = fitting_keys(area.width, &title, PROCESS_KEY_FORMS);
+        let inner = panel_with_keys(frame, area, &title, keys, context);
         output.label(format!(
             "processes: {} rows, sort {} {}",
             view.total_rows,

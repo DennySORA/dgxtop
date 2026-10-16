@@ -70,6 +70,8 @@ pub struct Candidate {
     pub cell: Option<OverviewCell>,
     /// The user expanded this module: its row grows before the others.
     pub expanded: bool,
+    /// The user folded this module to one row (D-114).
+    pub folded: bool,
 }
 
 /// A module placed into an area.
@@ -329,6 +331,16 @@ fn grid_rows(candidates: &[Candidate], width: u16) -> Vec<GridRow> {
     let mut rows = Vec::new();
     for mut members in by_row.into_values() {
         members.sort_by_key(|member| (member.cell.map_or(0, |cell| cell.column), member.index));
+        // Folded members keep one row of their own above the others, which
+        // share the row's width (D-114).
+        let (folded, open): (Vec<Candidate>, Vec<Candidate>) =
+            members.into_iter().partition(|member| member.folded);
+        if !folded.is_empty() && !open.is_empty() {
+            rows.push(GridRow { members: folded });
+            members = open;
+        } else {
+            members = if folded.is_empty() { open } else { folded };
+        }
         let needed = members
             .iter()
             .map(|member| member.min_columns)
@@ -449,6 +461,7 @@ mod tests {
             priority,
             cell,
             expanded: false,
+            folded: false,
         }
     }
 

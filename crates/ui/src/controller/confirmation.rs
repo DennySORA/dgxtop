@@ -1,7 +1,10 @@
 //! ConfirmationInput: the one-time confirmation token lives only here, in
 //! controller memory. It is never rendered, logged or exposed through the
-//! UI state; `y`/`Enter` only act while a token is active, and a token that
-//! arrives while the user is typing elsewhere is cancelled, never activated.
+//! UI state; `y`/`Enter` act on an active token, and a token that arrives
+//! while the user is typing elsewhere is cancelled, never activated. A
+//! `y`/`Enter` (or `n`/`Esc`) pressed while the token is on its way is kept
+//! and answers it the moment it arrives (D-109): a kill typed fast is
+//! never lost.
 
 use std::time::Duration;
 
@@ -23,6 +26,8 @@ enum State {
         target: ProcessKey,
         signal: Signal,
         since: Duration,
+        /// The answer given before the token arrived: true confirms.
+        answer: Option<bool>,
     },
     Active {
         token: ConfirmationToken,
@@ -45,6 +50,9 @@ pub enum PrepareOutcome {
     /// A token arrived while another input mode was active: it must be
     /// cancelled at once (the caller submits the returned CancelSignal).
     MustCancel(ConfirmationToken),
+    /// The token arrived already answered: the caller confirms (true) or
+    /// cancels it at once, then reports [`ConfirmationInput::finish`].
+    Answered(bool),
     /// The prepare failed; no confirmation exists.
     Failed,
 }
@@ -103,7 +111,24 @@ impl ConfirmationInput {
             target,
             signal,
             since: now,
+            answer: None,
         };
+    }
+
+    /// Keeps the answer for the token on its way (true confirms); the
+    /// latest answer counts. Nothing while no token is awaited.
+    pub fn answer_early(&mut self, confirmed: bool) {
+        if let State::Awaiting { answer, .. } = &mut self.state {
+            *answer = Some(confirmed);
+        }
+    }
+
+    /// The answer kept for the token on its way.
+    pub fn early_answer(&self) -> Option<bool> {
+        match &self.state {
+            State::Awaiting { answer, .. } => *answer,
+            _ => None,
+        }
     }
 
     /// Handles a result that may carry the token. `may_activate` is false
@@ -118,6 +143,7 @@ impl ConfirmationInput {
             request_id,
             target,
             signal,
+            answer,
             ..
         } = &self.state
         else {
@@ -127,6 +153,7 @@ impl ConfirmationInput {
             return PrepareOutcome::Unrelated;
         }
         if let Some(token) = result.confirmation_token.clone() {
+            let answer = *answer;
             if !may_activate {
                 self.state = State::Idle;
                 return PrepareOutcome::MustCancel(token);
@@ -138,7 +165,7 @@ impl ConfirmationInput {
                 signal: *signal,
                 expires_at,
             };
-            return PrepareOutcome::Activated;
+            return answer.map_or(PrepareOutcome::Activated, PrepareOutcome::Answered);
         }
         match result.status {
             CommandStatus::Accepted | CommandStatus::InProgress => PrepareOutcome::Waiting,

@@ -391,7 +391,7 @@ fn mode_kind(mode: &ModeView) -> ModeKind {
     match mode {
         ModeView::Normal => ModeKind::Normal,
         ModeView::Filter { .. } => ModeKind::Filter,
-        ModeView::Confirm { .. } => ModeKind::Confirm,
+        ModeView::Confirm { .. } | ModeView::ConfirmDelete { .. } => ModeKind::Confirm,
         ModeView::Help { .. } => ModeKind::Help,
     }
 }
@@ -450,9 +450,9 @@ pub fn render_footer(
     ];
     let badge = match &ui.mode {
         ModeView::Normal => None,
-        // The process table is the only filtered list (D-91).
-        ModeView::Filter { .. } => Some(" FILTER process name ".to_owned()),
-        ModeView::Confirm { .. } => Some(" CONFIRM ".to_owned()),
+        // The process table and the Process History's runs (D-113).
+        ModeView::Filter { .. } => Some(" FILTER name or PID ".to_owned()),
+        ModeView::Confirm { .. } | ModeView::ConfirmDelete { .. } => Some(" CONFIRM ".to_owned()),
         ModeView::Help { .. } => Some(" HELP ".to_owned()),
     };
     if let Some(badge) = badge {

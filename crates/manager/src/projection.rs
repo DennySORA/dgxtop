@@ -164,6 +164,7 @@ mod tests {
             modules: ModuleViews::default(),
             banners: Vec::new(),
             enabled_modules: Vec::new(),
+            folded: Vec::new(),
             permit: None,
         }
     }

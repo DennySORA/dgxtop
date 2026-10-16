@@ -9,10 +9,14 @@
 //! revision of the frame the user saw, never as a row index.
 
 mod confirmation;
+mod deletion;
 mod filter;
+mod folds;
+mod history;
 pub mod keymap;
 mod navigation;
 mod notices;
+mod paging;
 mod requests;
 mod session;
 
@@ -42,10 +46,11 @@ pub use session::SessionFields;
 
 use confirmation::PrepareOutcome;
 use notices::Notices;
+use paging::PageStep;
 use requests::{PendingRequests, RequestKind};
 use session::SessionDrafts;
 
-use crate::modules::{CPU_MODULE_ID, HISTORY_MODULE_ID, MEMORY_MODULE_ID};
+use crate::modules::{CPU_MODULE_ID, GPU_MODULE_ID, HISTORY_MODULE_ID, MEMORY_MODULE_ID};
 use crate::registry::controls;
 pub use crate::viewer::UiState;
 use crate::viewer::{HitMap, ModeView};
@@ -97,7 +102,15 @@ pub struct ControllerContext<'a> {
 enum InputMode {
     Normal,
     Filter(FilterEdit),
-    Help { scroll: u16 },
+    Help {
+        scroll: u16,
+    },
+    /// Asking to delete these ended runs from the Process History (D-108);
+    /// `running` marked runs stay.
+    ConfirmDelete {
+        runs: Vec<ProcessKey>,
+        running: usize,
+    },
 }
 
 /// A selection move whose target lies outside the projected window.
@@ -129,6 +142,16 @@ pub struct Controller {
     scroll: BTreeMap<ModuleId, u16>,
     /// Each module's inner tab (D-72).
     tabs: BTreeMap<ModuleId, u8>,
+    /// How far each module's page is scrolled down (D-107).
+    offsets: BTreeMap<ModuleId, u16>,
+    /// The runs marked in the Process History (D-108).
+    marked: BTreeSet<ProcessKey>,
+    /// The entity picked in each module: the Overview History's GPU (D-107).
+    picks: BTreeMap<ModuleId, EntityId>,
+    /// The deletion of Process History runs being sent (D-108).
+    deletion: Option<deletion::RunDeletion>,
+    /// The panels folded away and their saving (D-114).
+    folds: folds::Folds,
     /// A command line to copy with the next frame (D-76).
     clipboard: Option<String>,
 }
@@ -179,6 +202,11 @@ impl Controller {
             scroll: BTreeMap::new(),
             clipboard: None,
             tabs: BTreeMap::new(),
+            offsets: BTreeMap::new(),
+            marked: BTreeSet::new(),
+            picks: BTreeMap::new(),
+            deletion: None,
+            folds: folds::Folds::default(),
         }
     }
 
@@ -191,6 +219,12 @@ impl Controller {
     /// for it at the input cadence instead of its idle one.
     pub fn awaits_results(&self) -> bool {
         !self.requests.is_empty()
+    }
+
+    /// Whether a signal is on its way: its token or its outcome is looked
+    /// for at once (D-109), since a kill is never something to wait for.
+    pub fn awaits_signal(&self) -> bool {
+        self.confirmation.is_awaiting() || self.requests.has_signal_pending()
     }
 
     /// Increments whenever something the Viewer shows changed.
@@ -208,15 +242,17 @@ impl Controller {
         self.bump();
     }
 
-    /// Current input mode.
+    /// Current input mode. A signal waiting for its token already takes
+    /// its answer (D-109).
     pub fn mode(&self) -> ModeKind {
-        if self.confirmation.is_active() {
+        if self.confirmation.is_active() || self.confirmation.is_awaiting() {
             return ModeKind::Confirm;
         }
         match self.mode {
             InputMode::Normal => ModeKind::Normal,
             InputMode::Filter(_) => ModeKind::Filter,
             InputMode::Help { .. } => ModeKind::Help,
+            InputMode::ConfirmDelete { .. } => ModeKind::Confirm,
         }
     }
 
@@ -235,15 +271,24 @@ impl Controller {
                 cursor: edit.cursor(),
             },
             (None, InputMode::Help { scroll }) => ModeView::Help { scroll: *scroll },
+            (None, InputMode::ConfirmDelete { runs, running }) => ModeView::ConfirmDelete {
+                runs: runs.len(),
+                running: *running,
+            },
             (None, InputMode::Normal) => ModeView::Normal,
         };
         UiState {
             mode,
             notices: self.notices.visible(),
             awaiting_confirmation: self.confirmation.is_awaiting(),
+            early_answer: self.confirmation.early_answer(),
             expanded: self.expanded.clone(),
             scroll: self.scroll.clone(),
             tabs: self.tabs.clone(),
+            offsets: self.offsets.clone(),
+            marked: std::sync::Arc::new(self.marked.clone()),
+            picks: self.picks.clone(),
+            folded: std::sync::Arc::new(self.folds.shown().clone()),
         }
     }
 
@@ -262,13 +307,15 @@ impl Controller {
         }
     }
 
-    /// End of an input batch: submits the coalesced session update.
+    /// End of an input batch: submits the coalesced session update and the
+    /// folds still to save (D-114).
     pub fn finish_input_batch<S: CommandSink + ?Sized>(
         &mut self,
         context: &ControllerContext<'_>,
         sink: &S,
     ) {
         self.flush_staged(context, sink);
+        self.save_folds(context, sink);
     }
 
     /// Housekeeping on the loop clock (notices, token and request expiry).
@@ -294,6 +341,7 @@ impl Controller {
             self.bump();
         }
         self.requests.expire(now);
+        self.expire_deletion(now);
     }
 
     fn handle_key<S: CommandSink + ?Sized>(
@@ -328,7 +376,8 @@ impl Controller {
             KeyAction::ToggleHelp => self.set_mode(InputMode::Help { scroll: 0 }),
             KeyAction::CloseHelp => self.set_mode(InputMode::Normal),
             KeyAction::DismissNotices => {
-                if self.notices.clear() {
+                let dismissed = self.notices.clear();
+                if self.clear_marks() || dismissed {
                     self.bump();
                 }
             }
@@ -370,8 +419,14 @@ impl Controller {
                 };
                 self.show_tab(target, context);
             }
-            KeyAction::NextGpu => self.navigate_gpu(Movement::Down(1), context),
-            KeyAction::PreviousGpu => self.navigate_gpu(Movement::Up(1), context),
+            KeyAction::NextGpu | KeyAction::PreviousGpu => {
+                let movement = if action == KeyAction::NextGpu {
+                    Movement::Down(1)
+                } else {
+                    Movement::Up(1)
+                };
+                self.navigate_gpu(movement, context);
+            }
             KeyAction::CycleGpuFilter => self.cycle_gpu_filter(context),
             KeyAction::StartFilter => self.start_filter(context),
             KeyAction::CycleSort => {
@@ -384,8 +439,8 @@ impl Controller {
             KeyAction::SlowerInterval => self.change_interval(false, context, sink),
             KeyAction::Terminate => self.prepare_signal(Signal::Sigterm, context, sink),
             KeyAction::Kill => self.prepare_signal(Signal::Sigkill, context, sink),
-            KeyAction::Confirm => self.confirm(context, sink),
-            KeyAction::Cancel => self.cancel(context, sink),
+            KeyAction::Confirm => self.answer(true, context, sink),
+            KeyAction::Cancel => self.answer(false, context, sink),
             KeyAction::NextHistoryBarSize => self.cycle_history_bar_size(true, context),
             KeyAction::PreviousHistoryBarSize => self.cycle_history_bar_size(false, context),
             KeyAction::ToggleModule => self.toggle_module(context, sink),
@@ -399,9 +454,33 @@ impl Controller {
                     self.scroll_module(memory, action == KeyAction::ScrollMemoryDown);
                 }
             }
-            KeyAction::HistoryDown | KeyAction::HistoryUp | KeyAction::HistoryOpen => {
+            // The Overview History: ↑/↓ pick the GPU, g/G scroll (D-107).
+            KeyAction::HistoryDown | KeyAction::HistoryUp if self.history_page() == 0 => {
+                let movement = if action == KeyAction::HistoryDown {
+                    Movement::Down(1)
+                } else {
+                    Movement::Up(1)
+                };
+                self.navigate_history_gpu(movement, context);
+            }
+            KeyAction::HistoryFirst | KeyAction::HistoryLast if self.history_page() == 0 => {
+                let step = if action == KeyAction::HistoryFirst {
+                    PageStep::First
+                } else {
+                    PageStep::Last
+                };
+                self.scroll_page(HISTORY_MODULE_ID, step, context);
+            }
+            KeyAction::HistoryDown
+            | KeyAction::HistoryUp
+            | KeyAction::HistoryFirst
+            | KeyAction::HistoryLast
+            | KeyAction::HistoryOpen => {
                 self.navigate_history(action, context);
             }
+            KeyAction::HistoryMark => self.toggle_mark(context),
+            KeyAction::HistoryMarkAll => self.toggle_mark_all(context),
+            KeyAction::HistoryDelete => self.ask_delete(context),
             KeyAction::HistoryExpandCommand => {
                 if self.history_page() == 2
                     && let Ok(history) = ModuleId::new(HISTORY_MODULE_ID)
@@ -410,6 +489,8 @@ impl Controller {
                 }
             }
             KeyAction::HistoryCopyCommand => self.copy_command(context),
+            KeyAction::Fold(panel) => self.toggle_fold(panel, context, sink),
+            KeyAction::UnfoldAll => self.unfold_all(context, sink),
             KeyAction::FilterApply => self.finish_filter(true, context),
             KeyAction::FilterClear => self.finish_filter(false, context),
         }
@@ -469,20 +550,38 @@ impl Controller {
     /// Shows `tab`: its view and, for a history tab, its page (D-75); the
     /// process history keeps an open process open.
     fn show_tab(&mut self, tab: views::Tab, context: &ControllerContext<'_>) {
-        if let Ok(history) = ModuleId::new(HISTORY_MODULE_ID) {
-            let page = self.history_page();
-            match tab {
-                views::Tab::OverviewHistory => {
-                    self.tabs.insert(history, 0);
-                }
-                views::Tab::ProcessHistory if page == 0 => {
-                    self.tabs.insert(history, views::PROCESS_LIST_PAGE);
-                }
-                _ => {}
+        let page = self.history_page();
+        match tab {
+            views::Tab::OverviewHistory => self.set_history_page(0),
+            views::Tab::ProcessHistory if page == 0 => {
+                self.set_history_page(views::PROCESS_LIST_PAGE);
             }
+            _ => {}
         }
         self.bump();
         self.show_view(tab.view(), context);
+    }
+
+    /// Shows the history module's `page`; another page starts at its top
+    /// (the module's offset scrolls the Overview History and turns a run's
+    /// pages, D-107, D-112).
+    fn set_history_page(&mut self, page: u8) {
+        let Ok(history) = ModuleId::new(HISTORY_MODULE_ID) else {
+            return;
+        };
+        if self.tabs.insert(history.clone(), page) != Some(page) {
+            self.offsets.remove(&history);
+        }
+        self.bump();
+    }
+
+    /// An opened run shows from its first page.
+    fn reset_run_page(&mut self) {
+        if let Ok(history) = ModuleId::new(HISTORY_MODULE_ID)
+            && self.offsets.remove(&history).is_some()
+        {
+            self.bump();
+        }
     }
 
     /// The history module's page (0 the overview history).
@@ -508,10 +607,17 @@ impl Controller {
     fn navigate(&mut self, movement: Movement, context: &ControllerContext<'_>) {
         match current_view(context) {
             ViewKind::Overview => self.navigate_processes(movement, context),
-            ViewKind::GpuDetail => self.navigate_gpu(movement, context),
+            // Pages of the GPU's sections; `←`/`→` pick the GPU (D-110).
+            ViewKind::GpuDetail => {
+                self.scroll_page(GPU_MODULE_ID, PageStep::of(movement), context);
+            }
             ViewKind::Settings => self.navigate_modules(movement, context),
-            // The history view charts fixed series (D-46); nothing to
-            // pick, and the retired views are never shown (D-91).
+            // PgUp/PgDn scroll the Overview History's bands (D-107) and
+            // turn an opened run's pages (D-112).
+            ViewKind::History if self.history_page() != views::PROCESS_LIST_PAGE => {
+                self.scroll_page(HISTORY_MODULE_ID, PageStep::of(movement), context);
+            }
+            // The retired views are never shown (D-91).
             ViewKind::History | ViewKind::Processes | ViewKind::Sources | ViewKind::Actions => {}
         }
     }
@@ -622,9 +728,15 @@ impl Controller {
         });
     }
 
+    /// `/`: a filter of the Overview's processes, or of the Process
+    /// History's runs (D-113), which an opened run leaves for the list.
     fn start_filter(&mut self, context: &ControllerContext<'_>) {
-        if current_view(context) != ViewKind::Overview {
-            return;
+        match current_view(context) {
+            ViewKind::Overview => {}
+            ViewKind::History if self.history_page() != 0 => {
+                self.set_history_page(views::PROCESS_LIST_PAGE);
+            }
+            _ => return,
         }
         let initial = self
             .drafts
@@ -644,7 +756,17 @@ impl Controller {
         } else {
             String::new()
         };
-        self.reorder(context, |fields| fields.filter = text);
+        let runs = current_view(context) == ViewKind::History;
+        self.reorder(context, |fields| {
+            fields.filter = text;
+            // The run list starts at its first match.
+            if runs {
+                fields.selected_process = None;
+            }
+        });
+        if runs && let Ok(history) = ModuleId::new(HISTORY_MODULE_ID) {
+            self.scroll.insert(history, 0);
+        }
     }
 
     fn edit_filter(&mut self, key: &KeyEvent, now: Duration) {
@@ -654,7 +776,16 @@ impl Controller {
         let control = key
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
-        let outcome = match key.code {
+        // Readline's Ctrl keys stand in for the arrows, Home and End on a
+        // keyboard without them.
+        let code = match key.code {
+            KeyCode::Char('b') if control => KeyCode::Left,
+            KeyCode::Char('f') if control => KeyCode::Right,
+            KeyCode::Char('a') if control => KeyCode::Home,
+            KeyCode::Char('e') if control => KeyCode::End,
+            code => code,
+        };
+        let outcome = match code {
             KeyCode::Char(character) if !control => edit.insert(character).map(|()| true),
             KeyCode::Backspace => {
                 edit.backspace();
@@ -773,14 +904,25 @@ impl Controller {
             .map_or(scroll.min(last), saturate_u16);
         let moved = match action {
             KeyAction::HistoryOpen => {
-                self.tabs
-                    .insert(history.clone(), if tab == 1 { 2 } else { 1 });
+                self.set_history_page(if tab == 1 { 2 } else { 1 });
                 cursor
             }
             KeyAction::HistoryDown => cursor.saturating_add(1).min(last),
             KeyAction::HistoryUp => cursor.saturating_sub(1),
+            // The top or the end of the list, from an opened run too.
+            KeyAction::HistoryFirst | KeyAction::HistoryLast => {
+                self.set_history_page(views::PROCESS_LIST_PAGE);
+                if action == KeyAction::HistoryFirst {
+                    0
+                } else {
+                    last
+                }
+            }
             _ => return,
         };
+        if moved != cursor {
+            self.reset_run_page();
+        }
         self.scroll.insert(history, moved);
         self.bump();
         if let Some(run) = runs.runs.get(usize::from(moved)) {
@@ -863,6 +1005,22 @@ impl Controller {
             controls::SETTINGS_MODULE => {
                 if let Some(entity) = target.entity_id {
                     self.select_entity(context, entity);
+                }
+            }
+            controls::HISTORY_GPU => {
+                if let Some(gpu) = target.entity_id {
+                    self.pick_history_gpu(gpu);
+                }
+            }
+            // A folded panel's row unfolds it; the input batch saves it.
+            controls::PANEL_FOLD => {
+                if let Some(panel) = target.entity_id.as_ref().and_then(|entity| {
+                    dgxtop_core::view::FOLDABLE_PANELS
+                        .iter()
+                        .find(|panel| **panel == entity.as_str())
+                }) {
+                    self.folds.toggle(panel);
+                    self.bump();
                 }
             }
             _ => {}
@@ -1076,7 +1234,7 @@ impl Controller {
             );
             return;
         }
-        let Some(target) = context.hit_map.visible_selected_process().cloned() else {
+        let Some(target) = self.signal_target(context) else {
             self.notify(
                 BannerLevel::Info,
                 "no visible selected process: select one in the process table first",
@@ -1100,6 +1258,97 @@ impl Controller {
                 .begin(request_id, target, signal, context.now);
             self.bump();
         }
+    }
+
+    /// Folds or unfolds `panel` (D-114): an Overview History panel on that
+    /// page only.
+    fn toggle_fold<S: CommandSink + ?Sized>(
+        &mut self,
+        panel: &'static str,
+        context: &ControllerContext<'_>,
+        sink: &S,
+    ) {
+        let history = panel.starts_with("history.");
+        if history && (current_view(context) != ViewKind::History || self.history_page() != 0) {
+            return;
+        }
+        self.folds.toggle(panel);
+        self.bump();
+        self.save_folds(context, sink);
+    }
+
+    /// `o`: unfolds every panel of the view (D-114).
+    fn unfold_all<S: CommandSink + ?Sized>(&mut self, context: &ControllerContext<'_>, sink: &S) {
+        let history = match current_view(context) {
+            ViewKind::Overview => false,
+            ViewKind::History if self.history_page() == 0 => true,
+            _ => return,
+        };
+        if self
+            .folds
+            .unfold(|panel| panel.starts_with("history.") == history)
+        {
+            self.bump();
+            self.save_folds(context, sink);
+        }
+    }
+
+    /// Saves the folds when they differ from what the Manager saved, one
+    /// command at a time.
+    fn save_folds<S: CommandSink + ?Sized>(&mut self, context: &ControllerContext<'_>, sink: &S) {
+        let Some(panels) = self.folds.due(context.now) else {
+            return;
+        };
+        let body = CommandBody::SetFolded {
+            panels: panels.clone(),
+        };
+        match self.submit(body, RequestKind::Folds, context, sink) {
+            Some(request_id) => self.folds.sent(request_id, panels),
+            None => self.folds.refused(context.now),
+        }
+    }
+
+    /// y/Enter (`confirmed`) or n/Esc: a signal's confirmation first, the
+    /// one the banner shows (D-108), kept for its token when that is still
+    /// on its way (D-109); else the deletion prompt.
+    fn answer<S: CommandSink + ?Sized>(
+        &mut self,
+        confirmed: bool,
+        context: &ControllerContext<'_>,
+        sink: &S,
+    ) {
+        if self.confirmation.is_awaiting() {
+            self.confirmation.answer_early(confirmed);
+            self.bump();
+            return;
+        }
+        if !self.confirmation.is_active()
+            && let InputMode::ConfirmDelete { runs, .. } =
+                std::mem::replace(&mut self.mode, InputMode::Normal)
+        {
+            if confirmed {
+                self.confirm_delete(&runs, context, sink);
+            } else {
+                self.bump();
+            }
+            return;
+        }
+        if confirmed {
+            self.confirm(context, sink);
+        } else {
+            self.cancel(context, sink);
+        }
+    }
+
+    /// The process K and F9 act on: the one the user selected last when
+    /// the frame drew its row, though the highlight follows a step later
+    /// (D-109); else the row drawn selected. Never a row not drawn.
+    fn signal_target(&mut self, context: &ControllerContext<'_>) -> Option<ProcessKey> {
+        self.drafts
+            .current(context.model, context.now)
+            .and_then(|fields| fields.selected_process)
+            .filter(|key| context.hit_map.draws_process(key))
+            .or_else(|| context.hit_map.visible_selected_process().cloned())
     }
 
     fn confirm<S: CommandSink + ?Sized>(&mut self, context: &ControllerContext<'_>, sink: &S) {
@@ -1168,6 +1417,15 @@ impl Controller {
                 self.drafts.on_result(request_id, accepted);
             }
             Some(RequestKind::Prepare { .. }) => self.on_prepare_result(result, context, sink),
+            Some(RequestKind::DeleteRuns) if terminal => {
+                self.on_deletion_result(request_id, result, context, sink);
+            }
+            Some(RequestKind::Folds) if terminal => {
+                if let Some(Some(text)) = self.folds.answered(request_id, result, context.now) {
+                    self.notify(BannerLevel::Warning, text, context.now);
+                }
+                self.save_folds(context, sink);
+            }
             _ => {}
         }
         if let Some((level, text)) = requests::notice_for(kind.as_ref(), result) {
@@ -1198,6 +1456,8 @@ impl Controller {
                     context.now,
                 );
             }
+            PrepareOutcome::Answered(true) => self.confirm(context, sink),
+            PrepareOutcome::Answered(false) => self.cancel(context, sink),
             PrepareOutcome::Activated | PrepareOutcome::Failed => self.bump(),
             PrepareOutcome::Waiting | PrepareOutcome::Unrelated => {}
         }
@@ -1207,6 +1467,11 @@ impl Controller {
     /// toward an off-window target with the best known row.
     pub fn on_projection(&mut self, model: &ViewModel, context: &ControllerContext<'_>) {
         self.drafts.on_projection(model);
+        let shown = self.folds.shown().clone();
+        self.folds.adopt(&model.folded);
+        if *self.folds.shown() != shown {
+            self.bump();
+        }
         let Some(seek) = self.seek.clone() else {
             return;
         };

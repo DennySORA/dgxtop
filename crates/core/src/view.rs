@@ -540,30 +540,6 @@ impl HistoryChartKind {
     }
 }
 
-/// One GPU series over one window of the history view's statistics (D-48):
-/// its mean and peak and, for power, the energy measured over the covered
-/// time.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct HistoryWindowSummary {
-    pub kind: HistoryChartKind,
-    /// The device summarized (`GPU 0 · NVIDIA GB10`).
-    pub subject: String,
-    pub window_label: String,
-    /// The window's length, so the Viewer never reads it from the label
-    /// (D-99).
-    pub span_ns: u64,
-    pub unit: CanonicalUnit,
-    /// Time-weighted mean over the covered part of the window.
-    pub mean: Option<f64>,
-    pub peak: Option<f64>,
-    /// Time the history holds in the window: the time its aligned buckets
-    /// recorded (D-50, D-82); its share of `span_ns` is the coverage.
-    pub covered_ns: Option<u64>,
-    /// Mean times covered time (joules for power); `None` for other series.
-    pub integral: Option<f64>,
-    pub pending: bool,
-}
-
 /// One chart of the history view: a series over the requested window.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HistoryChartView {
@@ -582,8 +558,8 @@ pub struct HistoryChartView {
     /// Largest value in the window (from the bucket maxima when buckets
     /// merge several samples).
     pub peak: Option<f64>,
-    /// Time the history holds in the window (see
-    /// [`HistoryWindowSummary::covered_ns`]), of the view's
+    /// Time the history holds in the window: the time its aligned buckets
+    /// recorded (D-50, D-82), of the view's
     /// [`HistoryView::requested_span_ns`].
     pub covered_ns: Option<u64>,
     /// Set when points were merged to fit the chart's width: the mark of
@@ -605,7 +581,32 @@ pub struct HistoryPart {
     pub means: Vec<Option<f64>>,
 }
 
-/// Rows of runs a Process History projection carries at most.
+/// The panels a frontend may fold away (D-114), saved in `viewer.folded`:
+/// the Overview's disk I/O and network modules, then the Overview
+/// History's panels.
+pub const FOLDABLE_PANELS: [&str; 10] = [
+    "disk",
+    "network",
+    "history.cpu",
+    "history.memory",
+    "history.gpu_utilization",
+    "history.gpu_memory",
+    "history.gpu_temperature",
+    "history.power",
+    "history.disk",
+    "history.network",
+];
+
+/// Whether `panels` are distinct foldable panels (D-114).
+pub fn are_foldable(panels: &[String]) -> bool {
+    let mut seen = std::collections::BTreeSet::new();
+    panels
+        .iter()
+        .all(|panel| FOLDABLE_PANELS.contains(&panel.as_str()) && seen.insert(panel.as_str()))
+}
+
+/// Rows of runs a Process History projection carries at most: the newest
+/// its session's filter keeps (D-113).
 pub const MAX_RUN_ROWS: usize = 200;
 /// Bars a run chart carries at most (the widest plot).
 pub const MAX_RUN_CHART_POINTS: usize = 1_000;
@@ -615,7 +616,7 @@ pub const MAX_RUN_CHART_POINTS: usize = 1_000;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessHistoryView {
     pub runs: Vec<RunRowView>,
-    /// Runs listed beyond [`MAX_RUN_ROWS`].
+    /// Runs the filter keeps beyond [`MAX_RUN_ROWS`].
     pub more_runs: usize,
     pub opened: Option<RunDetailView>,
     /// Runs outlive dgxtop (its stores are on).
@@ -710,8 +711,6 @@ pub struct HistoryView {
     #[serde(default)]
     pub utc_offset_s: i32,
     pub charts: Vec<HistoryChartView>,
-    /// Each GPU's statistics over the last 1 h, 6 h, 12 h and 24 h (D-48).
-    pub summaries: Vec<HistoryWindowSummary>,
     pub disk: DiskHistory,
     /// Why there is nothing to chart (no history service, no series yet).
     pub error: Option<String>,
@@ -911,6 +910,9 @@ pub struct ViewModel {
     pub modules: ModuleViews,
     pub banners: Vec<Banner>,
     pub enabled_modules: Vec<ModuleId>,
+    /// The panels folded away, as saved (`viewer.folded`, D-114).
+    #[serde(default)]
+    pub folded: Vec<String>,
     /// Bytes accounted in the presentation partition while this projection lives.
     #[serde(skip)]
     pub permit: Option<BytePermit>,
@@ -1030,6 +1032,7 @@ mod tests {
             modules: ModuleViews::default(),
             banners: Vec::new(),
             enabled_modules: Vec::new(),
+            folded: Vec::new(),
             permit,
         }
     }

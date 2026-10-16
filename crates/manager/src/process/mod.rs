@@ -14,7 +14,9 @@
 //!   TTL, with the same session and policy revision, dispatches the single
 //!   `ActionOp::Send` — a late receipt never sends;
 //! * `signal_sent` is not `exit_observed`: exit is polled non-blockingly every
-//!   250 ms for at most 10 s;
+//!   50 ms for at most 10 s, and an observed exit has the process table read
+//!   again at once, so the process leaves it without waiting for the next
+//!   slot (D-109);
 //! * outcomes that cannot be proven are `unknown` and are never retried;
 //!   intents found without outcome at startup are surfaced, never resent.
 
@@ -57,7 +59,7 @@ use record::{
 const PREPARE_TIMEOUT_NS: u64 = 2 * NANOS_PER_SECOND;
 /// After the send deadline, a missing `Sent` report means "outcome unknown".
 const SEND_GRACE_NS: u64 = 2 * NANOS_PER_SECOND;
-const EXIT_POLL_NS: u64 = 250 * NANOS_PER_MILLI;
+const EXIT_POLL_NS: u64 = 50 * NANOS_PER_MILLI;
 const EXIT_WATCH_NS: u64 = 10 * NANOS_PER_SECOND;
 /// An unanswered exit poll is re-issued after this time.
 const EXIT_POLL_STUCK_NS: u64 = 2 * NANOS_PER_SECOND;
@@ -310,7 +312,12 @@ impl ProcessService {
             ActionCompletion::ExitObserved {
                 request_id,
                 observation,
-            } => self.on_exit(request_id, observation, now),
+            } => {
+                // A process still running changes nothing shown.
+                if !self.on_exit(request_id, observation, now, fx) {
+                    return;
+                }
+            }
             ActionCompletion::Released { handle } => {
                 if let Some(record) = self
                     .records
@@ -1314,18 +1321,26 @@ impl ProcessService {
         self.append_outcome(index, ActionState::SignalSent, "Ok", "signal sent", now);
     }
 
-    fn on_exit(&mut self, request_id: Uuid, observation: ExitObservation, now: Now) {
+    /// An exit poll's answer; whether the action ended (exited, or still
+    /// running when the watch is over).
+    fn on_exit(
+        &mut self,
+        request_id: Uuid,
+        observation: ExitObservation,
+        now: Now,
+        fx: &mut Effects,
+    ) -> bool {
         let Some(index) = self.records.by_confirm(request_id, None) else {
-            return;
+            return false;
         };
         let Some(record) = self.records.get_mut(index) else {
-            return;
+            return false;
         };
         let Some(watch) = record.exit.as_mut() else {
-            return;
+            return false;
         };
         if record.state != ActionState::SignalSent {
-            return;
+            return false;
         }
         watch.outstanding_since_ns = None;
         watch.last = Some(observation);
@@ -1340,13 +1355,15 @@ impl ProcessService {
                 "process exit observed",
                 now,
             );
-            return;
+            fx.reread_processes();
+            return true;
         }
         if now.boot_ns >= watch.until_ns {
             self.conclude_watch(index, "process still running after 10 s", now);
-        } else {
-            watch.next_poll_ns = now.boot_ns.saturating_add(EXIT_POLL_NS);
+            return true;
         }
+        watch.next_poll_ns = now.boot_ns.saturating_add(EXIT_POLL_NS);
+        false
     }
 }
 

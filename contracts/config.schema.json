@@ -370,6 +370,25 @@
           "minimum": 1,
           "maximum": 20
         },
+        "folded": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 10,
+          "items": {
+            "enum": [
+              "disk",
+              "network",
+              "history.cpu",
+              "history.memory",
+              "history.gpu_utilization",
+              "history.gpu_memory",
+              "history.gpu_temperature",
+              "history.power",
+              "history.disk",
+              "history.network"
+            ]
+          }
+        },
         "redline_threshold_percent": {
           "type": "number",
           "minimum": 0,

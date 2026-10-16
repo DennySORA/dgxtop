@@ -6,10 +6,11 @@
 use std::collections::VecDeque;
 
 use dgxtop_compression::bars_of;
+use dgxtop_core::process_history::MAX_LISTED_RUNS;
 use dgxtop_core::process_model::{
     ProcessHistoryModel, RunBars, RunDetail, RunRequest, RunRow, TrackedProcess, WriteProgress,
 };
-use dgxtop_core::view::{MAX_RUN_CHART_POINTS, MAX_RUN_ROWS};
+use dgxtop_core::view::MAX_RUN_CHART_POINTS;
 
 use super::memory::ProcessMemoryBook;
 use super::runs::{ProcessHistoryBook, Run};
@@ -159,21 +160,23 @@ fn tracked_of(memory: &ProcessMemoryBook) -> Vec<TrackedProcess> {
         .collect()
 }
 
-/// The runs, the latest start first, at most [`MAX_RUN_ROWS`], and how
-/// many more there are.
+/// The runs, the running ones first (D-115), each part the latest start
+/// first, every one listed (at most [`MAX_LISTED_RUNS`]: each session's
+/// projection takes the ones its filter keeps, D-113), and how many more
+/// there are.
 fn rows_of(book: &ProcessHistoryBook) -> (Vec<RunRow>, usize) {
     let mut runs: Vec<&Run> = book.runs().collect();
     runs.sort_by(|left, right| {
         right
-            .info()
-            .started_utc_ns
-            .cmp(&left.info().started_utc_ns)
+            .is_live()
+            .cmp(&left.is_live())
+            .then_with(|| right.info().started_utc_ns.cmp(&left.info().started_utc_ns))
             .then_with(|| left.info().key.cmp(&right.info().key))
     });
-    let more = runs.len().saturating_sub(MAX_RUN_ROWS);
+    let more = runs.len().saturating_sub(MAX_LISTED_RUNS);
     let rows = runs
         .iter()
-        .take(MAX_RUN_ROWS)
+        .take(MAX_LISTED_RUNS)
         .map(|run| row_of(run))
         .collect();
     (rows, more)

@@ -643,6 +643,9 @@ pub enum ProcessHistoryInput {
     },
     /// A session shows this run.
     Show(RunRequest),
+    /// A session deleted these runs (D-108): the ended ones leave the list
+    /// and the stores; a run still running stays.
+    Delete(Vec<ProcessKey>),
     /// At shutdown: whatever is left goes to the stores.
     Flush,
 }

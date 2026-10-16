@@ -9,8 +9,8 @@
 //! * `history`: `selected_entity_id` is a series selector
 //!   (`metric_id|scope|entity_id`), `selected_process` the run the Process
 //!   History tab opened (D-76), of any boot, never validated against the
-//!   live table; it takes no `filter`, its bar sizes are `overview_bar` and
-//!   `process_bar` (D-80);
+//!   live table; its `filter` keeps the runs whose name or PID hold it
+//!   (D-113), its bar sizes are `overview_bar` and `process_bar` (D-80);
 //! * the Processes, Sources and Actions views were removed (D-91) and are
 //!   refused.
 //!
@@ -354,18 +354,9 @@ fn validate_view(
             .selected_entity_id
             .as_ref()
             .map_or(Ok(()), |gpu| validate_gpu(gpu, stale, context)),
-        ViewKind::History => {
-            validate_series(update, context)?;
-            // The bar sizes travel in their own fields (D-80).
-            if !update.filter.is_empty() {
-                return Err(ErrorDetail::new(
-                    ErrorCode::ValidationFailed,
-                    "the history view takes no filter; its bar sizes are overview_bar and \
-                     process_bar",
-                ));
-            }
-            Ok(())
-        }
+        // Its filter keeps the Process History's runs (D-113); the bar
+        // sizes travel in their own fields (D-80).
+        ViewKind::History => validate_series(update, context),
         ViewKind::Settings => Ok(()),
         ViewKind::Processes | ViewKind::Sources | ViewKind::Actions => Err(ErrorDetail::new(
             ErrorCode::Unsupported,
@@ -715,8 +706,9 @@ mod tests {
             )
             .is_err()
         );
-        // The history view's bar sizes have their own fields (D-80); its
-        // filter stays empty, and an `Auto` Overview bar is the default.
+        // The history view's bar sizes have their own fields (D-80), and an
+        // `Auto` Overview bar is the default; its filter keeps the Process
+        // History's runs (D-113), cleaned like the Overview's.
         let mut window = update(ViewKind::History, None, None, 0);
         window.overview_bar = BarSize::Auto;
         window.process_bar = BarSize::EighteenHours;
@@ -726,8 +718,9 @@ mod tests {
             (state.overview_bar, state.process_bar),
             (BarSize::OneMinute, BarSize::EighteenHours)
         );
-        window.filter = "24h".into();
-        assert!(apply(&mut bench, window, &rows, &catalog).is_err());
+        window.filter = "Comfy\u{1b}[31m".into();
+        apply(&mut bench, window, &rows, &catalog).unwrap();
+        assert_eq!(bench.service.state(&bench.session).unwrap().filter, "Comfy");
         let mut overview = update(ViewKind::Overview, None, None, 0);
         overview.filter = "py\u{1b}[31m".into();
         apply(&mut bench, overview, &rows, &catalog).unwrap();

@@ -739,3 +739,42 @@ fn whole_figures_follow_the_samples_and_outlive_the_buckets() {
     let last = book.run(&key(*pids.last().unwrap())).unwrap();
     assert!(!last.series().is_empty());
 }
+
+/// A session's deletion (D-108): the ended runs asked for leave the book
+/// and go to the store's journal; a running run stays, and a key the book
+/// does not hold changes nothing.
+#[test]
+fn a_deletion_forgets_the_ended_runs_asked_for() {
+    let mut book = book();
+    observe(
+        &mut book,
+        1,
+        vec![row(1, 10.0, Some(GIB)), row(2, 10.0, Some(GIB))],
+    );
+    probe(
+        &mut book,
+        &report(2, None, vec![reading(1, ProbeLiveness::Gone, None)]),
+        now(2),
+    );
+    assert_eq!(end_of(&book, 1), Some(EndCause::NotVisible));
+    book.take_journal();
+    let revision = book.revision();
+    assert_eq!(book.delete_ended(&[key(1), key(2), key(3)]), 1);
+    assert!(book.run(&key(1)).is_none());
+    assert!(book.run(&key(2)).unwrap().is_live(), "a running run stays");
+    assert_eq!(book.revision(), revision + 1);
+    let forgotten: Vec<i32> = book
+        .take_journal()
+        .forget
+        .iter()
+        .map(|key| key.pid.get())
+        .collect();
+    assert_eq!(forgotten, vec![1]);
+    assert_eq!(book.delete_ended(&[key(1), key(2)]), 0);
+    assert_eq!(
+        book.revision(),
+        revision + 1,
+        "nothing went, nothing changed"
+    );
+    assert!(book.take_journal().forget.is_empty());
+}

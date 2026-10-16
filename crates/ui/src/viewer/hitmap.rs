@@ -2,7 +2,7 @@
 //! frame the user actually saw, together with that frame's revision, so a
 //! click can never be retargeted to whatever row now occupies the position.
 
-use dgxtop_core::identity::ProcessKey;
+use dgxtop_core::identity::{ModuleId, ProcessKey};
 use ratatui::layout::{Position, Rect};
 
 use crate::registry::{HitTarget, controls};
@@ -55,6 +55,14 @@ impl HitMap {
             .find(|target| target.rect.contains(position))
     }
 
+    /// Targets of `control_id` that `module_id` drew.
+    pub fn count_of(&self, module_id: &ModuleId, control_id: &str) -> usize {
+        self.targets
+            .iter()
+            .filter(|target| &target.module_id == module_id && target.control_id == control_id)
+            .count()
+    }
+
     pub fn count(&self, control_id: &str) -> usize {
         self.targets
             .iter()
@@ -62,7 +70,17 @@ impl HitMap {
             .count()
     }
 
-    /// The selected process row as drawn (the only valid terminate target).
+    /// Whether the frame drew a row of `key` (selected or not).
+    pub fn draws_process(&self, key: &ProcessKey) -> bool {
+        self.targets.iter().any(|target| {
+            matches!(
+                target.control_id,
+                controls::PROCESS_ROW | controls::PROCESS_ROW_SELECTED
+            ) && target.process_key.as_ref() == Some(key)
+        })
+    }
+
+    /// The selected process row as drawn.
     pub fn visible_selected_process(&self) -> Option<&ProcessKey> {
         self.targets
             .iter()

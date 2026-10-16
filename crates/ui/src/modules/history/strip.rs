@@ -526,7 +526,7 @@ mod tests {
             slot: 2,
             means: vec![Some(30.0 * GIB); 60],
         }];
-        let panels = panels(&history);
+        let panels = panels(&history, None);
         let strip = panels
             .iter()
             .find(|panel| panel.title == "GPU memory")
@@ -550,7 +550,7 @@ mod tests {
     #[test]
     fn a_rate_pair_scales_to_its_tallest_column() {
         let history = history_view();
-        let panels = panels(&history);
+        let panels = panels(&history, None);
         let disk = &panels[6];
         // One column a minute: the read's last minute averages 59 KiB/s,
         // the tallest column of the pair, below its 64 KiB/s window peak.
@@ -566,7 +566,7 @@ mod tests {
         let mut history = history_view();
         history.charts[0].pending = true;
         history.charts[1].error = Some("deadline".into());
-        let panels = panels(&history);
+        let panels = panels(&history, None);
         let loading = draw(&panels[0].strips[0], true, (84, 2));
         assert!(loading[0].trim_end().ends_with(LOADING), "{loading:#?}");
         let failed = draw(&panels[1].strips[0], true, (84, 2));

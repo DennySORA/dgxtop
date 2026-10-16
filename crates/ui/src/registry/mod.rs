@@ -8,6 +8,9 @@
 
 mod manifest;
 
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
 use dgxtop_core::commands::ViewKind;
 use dgxtop_core::identity::{EntityId, ModuleId, ProcessKey};
 use dgxtop_core::view::ViewModel;
@@ -25,7 +28,7 @@ pub const MAX_MODULES: usize = 64;
 const MAX_WARNINGS: usize = 16;
 
 /// Presentation-only context of one render call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DisplayContext {
     pub theme: ThemePalette,
     /// Whole terminal area of this frame.
@@ -48,6 +51,17 @@ pub struct DisplayContext {
     pub scroll: u16,
     /// The module's inner tab (D-72): 0 its first page.
     pub tab: u8,
+    /// How far the user scrolled the module's page down (the Overview
+    /// History's bands, D-107); the module clamps it to what it has.
+    pub offset: u16,
+    /// The items the user marked in the module's list (the Process
+    /// History's runs, D-108).
+    pub marked: Arc<BTreeSet<ProcessKey>>,
+    /// The entity the user picked in the module (the GPU the Overview
+    /// History's GPU panels show, D-107); the module's first when none.
+    pub picked: Option<EntityId>,
+    /// The panels folded away (D-114).
+    pub folded: Arc<BTreeSet<String>>,
 }
 
 /// Clickable region produced by a module, resolved by the Controller through
@@ -148,6 +162,18 @@ pub mod controls {
     /// A part of the module that drew the target the mouse wheel scrolls
     /// (D-70).
     pub const MODULE_SCROLL: &str = "module.scroll";
+    /// A folded panel's row (carries the panel's fold id as its entity id,
+    /// D-114): a click unfolds it.
+    pub const PANEL_FOLD: &str = "panel.fold";
+    /// The Overview History's GPU picker chip (carries the GPU entity id,
+    /// D-107): picks the GPU its GPU panels show.
+    pub const HISTORY_GPU: &str = "history.gpu";
+    /// One a unit of the module's page scrolled past, and one a unit
+    /// waiting below the ones shown: a band of the Overview History's panels
+    /// (D-107), a page of the GPU view's sections (D-110). The controller
+    /// scrolls the module's page from what the frame showed.
+    pub const PAGE_ABOVE: &str = "module.page_above";
+    pub const PAGE_BELOW: &str = "module.page_below";
 }
 
 /// Why a module was not registered.

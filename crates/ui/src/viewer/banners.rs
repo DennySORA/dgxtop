@@ -9,8 +9,8 @@ use unicode_width::UnicodeWidthChar;
 
 use super::ui_state::{ModeView, UiState};
 use crate::format::{
-    COMPACT_CONFIRMATION_WIDTH, CONFIRM_HINT, clean, confirmation_lines, display_width,
-    format_countdown_ms, format_interval_ms,
+    COMPACT_CONFIRMATION_WIDTH, CONFIRM_DELETE_HINT, CONFIRM_HINT, clean, confirmation_lines,
+    counted, display_width, format_countdown_ms, format_interval_ms,
 };
 use crate::num::saturate_u16;
 use crate::theme::ThemePalette;
@@ -125,6 +125,11 @@ fn confirmation_block(
     projection_age_ms: u64,
     width: u16,
 ) -> Option<BannerBlock> {
+    // The controller asks to delete only while no signal waits for its own
+    // confirmation, so y/Enter answers this question (D-108).
+    if let ModeView::ConfirmDelete { runs, running } = ui.mode {
+        return Some(deletion_block(runs, running, width));
+    }
     let projected = model
         .modules
         .actions
@@ -169,7 +174,7 @@ fn confirmation_block(
     let hint = if ui.is_confirming() {
         CONFIRM_HINT
     } else {
-        "waiting for the confirmation token…"
+        awaiting_hint(ui.early_answer)
     };
     // Question, then the keys, then the remaining details: when rows run out
     // the least important lines are the ones left out.
@@ -185,6 +190,47 @@ fn confirmation_block(
         level: BannerLevel::Confirmation,
         lines,
     })
+}
+
+/// The keys while the token is on its way: they already answer it, and
+/// once answered, what happens when it arrives (D-109).
+const fn awaiting_hint(early_answer: Option<bool>) -> &'static str {
+    match early_answer {
+        None => {
+            "waiting for the confirmation token · y / Enter sends once it arrives · n / Esc cancel"
+        }
+        Some(true) => "sending as soon as the confirmation token arrives · n / Esc cancel",
+        Some(false) => "cancelling: nothing will be sent",
+    }
+}
+
+/// The Process History's deletion prompt: the question, the keys, then
+/// what stays (D-108).
+fn deletion_block(runs: usize, running: usize, width: u16) -> BannerBlock {
+    let separator = if width < COMPACT_CONFIRMATION_WIDTH {
+        " "
+    } else {
+        " · "
+    };
+    let mut lines = vec![
+        format!(
+            "CONFIRM{separator}Delete {} from the Process History?",
+            counted(runs, "ended run")
+        ),
+        CONFIRM_DELETE_HINT.to_owned(),
+        "their samples go with them · this cannot be undone".to_owned(),
+    ];
+    if running > 0 {
+        lines.push(format!(
+            "{} marked stay{}: a running run is kept until it ends",
+            counted(running, "running run"),
+            if running == 1 { "s" } else { "" }
+        ));
+    }
+    BannerBlock {
+        level: BannerLevel::Confirmation,
+        lines,
+    }
 }
 
 fn overload_block(model: &ViewModel) -> Option<BannerBlock> {
@@ -311,6 +357,58 @@ mod tests {
         assert!(text.contains("pid 4242"));
         assert!(text.contains("y / Enter send"));
         assert!(!text.contains(test_fixtures::token().as_str()));
+    }
+
+    /// While the token is on its way the keys already answer it, and the
+    /// banner says what happens on its arrival (D-109).
+    #[test]
+    fn a_signal_on_its_way_says_its_keys_and_its_answer() {
+        let model = test_fixtures::view_model(ViewKind::Overview, 1);
+        let hint = |early_answer| {
+            let ui = UiState {
+                awaiting_confirmation: true,
+                early_answer,
+                ..UiState::default()
+            };
+            collect(&model, &ui, &[], 0, 160)[0].lines[1].clone()
+        };
+        assert!(hint(None).contains("y / Enter sends once it arrives"));
+        assert!(hint(Some(true)).starts_with("sending as soon as"));
+        assert_eq!(hint(Some(false)), "cancelling: nothing will be sent");
+    }
+
+    /// The Process History's deletion prompt (D-108): the question, its
+    /// own keys, that it cannot be undone and the marked running runs that
+    /// stay; a projected signal confirmation does not take its place.
+    #[test]
+    fn the_deletion_prompt_says_what_goes_and_what_stays() {
+        let mut model = test_fixtures::view_model(ViewKind::History, 1);
+        model.modules.actions = Some(Arc::new(test_fixtures::actions_view(true)));
+        let ask = |runs, running, width| {
+            let ui = UiState {
+                mode: ModeView::ConfirmDelete { runs, running },
+                ..UiState::default()
+            };
+            let blocks = collect(&model, &ui, &[], 0, width);
+            assert_eq!(blocks[0].level, BannerLevel::Confirmation);
+            blocks[0].lines.clone()
+        };
+        assert_eq!(
+            ask(3, 1, 120),
+            [
+                "CONFIRM · Delete 3 ended runs from the Process History?",
+                "y / Enter delete · n / Esc cancel",
+                "their samples go with them · this cannot be undone",
+                "1 running run marked stays: a running run is kept until it ends",
+            ]
+        );
+        let one = ask(1, 0, 40);
+        assert_eq!(
+            one[0],
+            "CONFIRM Delete 1 ended run from the Process History?"
+        );
+        assert_eq!(one.len(), 3, "no running run to mention: {one:?}");
+        assert!(ask(2, 2, 120)[3].starts_with("2 running runs marked stay:"));
     }
 
     #[test]

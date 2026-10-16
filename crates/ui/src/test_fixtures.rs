@@ -17,10 +17,10 @@ use dgxtop_core::testing::test_process_key;
 use dgxtop_core::view::{
     ActionsView, CellState, ConfirmationView, ConflictView, CoreView, CpuView, DiskDeviceView,
     DiskHistory, DiskView, FilesystemView, FrequencyGroup, GpuCard, GpuDetails, GpuView,
-    HeaderView, HistoryChartKind, HistoryChartView, HistoryPointView, HistoryView,
-    HistoryWindowSummary, HostState, HostStatus, InterfaceView, LabeledCell, LastGoodView,
-    MemoryView, MetricCell, ModuleViews, NetworkView, OverloadState, ProcessGpuView,
-    ProcessRowView, ProcessesView, SessionState, SettingField, SettingsView, Trend, ViewModel,
+    HeaderView, HistoryChartKind, HistoryChartView, HistoryPointView, HistoryView, HostState,
+    HostStatus, InterfaceView, LabeledCell, LastGoodView, MemoryView, MetricCell, ModuleViews,
+    NetworkView, OverloadState, ProcessGpuView, ProcessRowView, ProcessesView, SessionState,
+    SettingField, SettingsView, Trend, ViewModel,
 };
 
 pub(crate) const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
@@ -37,6 +37,10 @@ pub(crate) fn display_context() -> crate::registry::DisplayContext {
         expanded: false,
         scroll: 0,
         tab: 0,
+        offset: 0,
+        marked: std::sync::Arc::default(),
+        picked: None,
+        folded: std::sync::Arc::default(),
     }
 }
 
@@ -377,53 +381,6 @@ pub(crate) fn gpu_view() -> GpuView {
         selected: None,
         unavailable_reason: None,
     }
-}
-
-/// Whole nanoseconds of `seconds` (a fixture's covered time).
-fn seconds_to_ns(seconds: f64) -> u64 {
-    format!("{:.0}", seconds * 1e9).parse().unwrap_or(0)
-}
-
-/// Each GPU over the last 1 h to 24 h: busier the shorter the window, with
-/// the history covering half of the last day.
-pub(crate) fn gpu_window_stats() -> Vec<HistoryWindowSummary> {
-    let mut stats = Vec::new();
-    for subject in ["GPU 0 · NVIDIA GB10", "GPU 1 · NVIDIA GB10"] {
-        for (kind, unit) in [
-            (HistoryChartKind::GpuUtilization, CanonicalUnit::Percent),
-            (HistoryChartKind::GpuMemory, CanonicalUnit::Bytes),
-            (HistoryChartKind::GpuTemperature, CanonicalUnit::DegC),
-            (HistoryChartKind::GpuPower, CanonicalUnit::Watts),
-        ] {
-            for (window, hours, busy, coverage) in [
-                ("1h", 1.0, 1.0, 1.0),
-                ("6h", 6.0, 0.8, 1.0),
-                ("12h", 12.0, 0.6, 1.0),
-                ("24h", 24.0, 0.5, 0.5),
-            ] {
-                let (mean, peak) = match kind {
-                    HistoryChartKind::GpuUtilization => (12.0 * busy, 90.0),
-                    HistoryChartKind::GpuMemory => (2.0 * GIB * busy, 3.0 * GIB),
-                    HistoryChartKind::GpuTemperature => (45.0, 70.0),
-                    _ => (80.0 * busy, 250.0),
-                };
-                stats.push(HistoryWindowSummary {
-                    kind,
-                    subject: subject.to_owned(),
-                    window_label: window.to_owned(),
-                    span_ns: seconds_to_ns(hours * 3600.0),
-                    unit,
-                    mean: Some(mean),
-                    peak: Some(peak),
-                    covered_ns: Some(seconds_to_ns(hours * 3600.0 * coverage)),
-                    integral: (kind == HistoryChartKind::GpuPower)
-                        .then_some(mean * hours * 3600.0 * coverage),
-                    pending: false,
-                });
-            }
-        }
-    }
-    stats
 }
 
 pub(crate) fn memory_view() -> MemoryView {
@@ -769,7 +726,6 @@ pub(crate) fn history_view() -> HistoryView {
                 (15_104.0, 16_384.0),
             ),
         ],
-        summaries: gpu_window_stats(),
         disk: DiskHistory::On,
         error: None,
     }
@@ -923,6 +879,7 @@ pub(crate) fn view_model(view: ViewKind, frame_revision: u64) -> ViewModel {
         modules: full_modules(false),
         banners: Vec::new(),
         enabled_modules: Vec::new(),
+        folded: Vec::new(),
         permit: None,
     }
 }

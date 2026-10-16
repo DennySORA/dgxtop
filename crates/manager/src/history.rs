@@ -9,23 +9,17 @@
 //!   ending with the bar being filled now ([`BarGrid`]); a bar is the mean
 //!   of the time it holds, a time without data is a gap. Every chart of a
 //!   session draws the same bars, so all of them share one time axis.
-//! * Statistics (D-48): each GPU's utilization, memory in use, temperature
-//!   and power over the last 1 h, 6 h, 12 h and 24 h, each a merge of the
-//!   aligned buckets that cover it (never a sliding average), refreshed once
-//!   a minute. A bar size change redraws the charts and keeps the
-//!   statistics.
-//! * The history answers both from its own sizes (`OverviewReader`, D-82),
+//! * The history answers them from its own sizes (`OverviewReader`, D-82),
 //!   which are its cache: each round asks a chart's whole window and gets
 //!   its bars, the window's mean, peak and time held and, for a memory
 //!   chart, the tracked processes' parts (D-64, D-99). The service keeps
 //!   only the latest answer of each read and shapes the view; a round's
 //!   view is built once, when its last answer arrives.
 //! * Only sessions currently on the history view read. A bar size, chart or
-//!   column change bumps the charts' generation (new statistics series bump
-//!   theirs), cancels the group's running reads and makes their late answers
-//!   stale. At most `queues.history_requests` reads run at once, each with
-//!   deadline `now + runtime.history_deadline_ms`; the charts' go first.
-//!   Refreshed at the bar size (5 s to 60 s), three times slower while
+//!   column change bumps the charts' generation, cancels the running reads
+//!   and makes their late answers stale. The GPUs' 1 h to 24 h statistics of
+//!   D-48 are gone (D-107): the charts and their bar sizes show the same. At most `queues.history_requests` reads run at once, each with
+//!   deadline `now + runtime.history_deadline_ms`. Refreshed at the bar size (5 s to 60 s), three times slower while
 //!   throttled.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -44,7 +38,7 @@ use dgxtop_core::ports::{CancelFlag, Dispatch, DispatchError, HistoryJob};
 use dgxtop_core::tiers::{BarSize, Tier};
 use dgxtop_core::view::{
     DiskHistory, HistoryChartKind, HistoryChartView, HistoryPart, HistoryPointView, HistoryView,
-    HistoryWindowSummary, SessionState, history_plot_columns,
+    SessionState, history_plot_columns,
 };
 use uuid::Uuid;
 
@@ -62,49 +56,8 @@ pub(crate) const MIN_DISPLAY_POINTS: u32 = 60;
 /// Charts one session queries; the presentation picks at most this many:
 /// the host's nine (D-50, D-106) and four for each of eight GPUs.
 pub(crate) const MAX_CHARTS: usize = 41;
-/// Series one session summarizes: four for each of eight GPUs.
-pub(crate) const MAX_STAT_SERIES: usize = 32;
-/// Windows of the statistics (D-48).
-const STAT_WINDOWS: [HistoryWindow; 4] = [
-    HistoryWindow::OneHour,
-    HistoryWindow::SixHours,
-    HistoryWindow::TwelveHours,
-    HistoryWindow::OneDay,
-];
-/// Statistics over an hour or more change slowly.
-const STATS_REFRESH_MS: u64 = 60_000;
 /// Bar size of the charts when the session gives none.
 const DEFAULT_BAR: BarSize = BarSize::OneMinute;
-
-/// The statistics' windows (D-48).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum HistoryWindow {
-    OneHour,
-    SixHours,
-    TwelveHours,
-    OneDay,
-}
-
-impl HistoryWindow {
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::OneHour => "1h",
-            Self::SixHours => "6h",
-            Self::TwelveHours => "12h",
-            Self::OneDay => "24h",
-        }
-    }
-
-    const fn span_ns(self) -> u64 {
-        let hours = match self {
-            Self::OneHour => 1,
-            Self::SixHours => 6,
-            Self::TwelveHours => 12,
-            Self::OneDay => 24,
-        };
-        hours * 3_600 * 1_000_000_000
-    }
-}
 
 /// What a session's charts draw (D-78, D-82): `columns` bars of `bar` on
 /// the local clock, the last one being filled now.
@@ -162,11 +115,10 @@ pub(crate) struct HistoryChartSpec {
 }
 
 /// What the presentation picks for a session on the history view: the
-/// charts drawn over its window and the series summarized over 1 h to 24 h.
+/// charts drawn over its window.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct HistoryPicks {
     pub(crate) charts: Vec<HistoryChartSpec>,
-    pub(crate) stats: Vec<HistoryChartSpec>,
 }
 
 /// What the presentation picks a session's series from.
@@ -176,43 +128,15 @@ pub(crate) struct ChartRequest<'a> {
     pub(crate) shown: &'a [HistoryChartSpec],
 }
 
-/// The query groups of a session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Group {
-    Charts,
-    Stats,
-}
-
-/// One read of a session: the bars of chart `index` or the windows of
-/// statistics series `index`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Purpose {
-    Bars(usize),
-    Windows(usize),
-}
-
-impl Purpose {
-    const fn group(self) -> Group {
-        match self {
-            Self::Bars(_) => Group::Charts,
-            Self::Windows(_) => Group::Stats,
-        }
-    }
-
-    const fn index(self) -> usize {
-        match self {
-            Self::Bars(index) | Self::Windows(index) => index,
-        }
-    }
-}
-
+/// One read of a session: the bars of one of its charts.
 #[derive(Debug)]
 struct Inflight {
     session_id: SessionId,
     generation: u64,
     /// The round it was sent in: only the current round's reads end it.
     round: u64,
-    purpose: Purpose,
+    /// The chart read.
+    chart: usize,
     deadline_ns: u64,
     cancel: CancelFlag,
 }
@@ -222,14 +146,6 @@ struct ChartState {
     spec: HistoryChartSpec,
     /// The history's latest answer for the chart's window (D-99).
     bars: Option<OverviewBars>,
-    error: Option<String>,
-}
-
-#[derive(Debug)]
-struct StatState {
-    spec: HistoryChartSpec,
-    /// One bucket per [`STAT_WINDOWS`] window.
-    windows: Option<Vec<OverviewBucket>>,
     error: Option<String>,
 }
 
@@ -243,17 +159,7 @@ impl ChartState {
     }
 }
 
-impl StatState {
-    fn new(spec: HistoryChartSpec) -> Self {
-        Self {
-            spec,
-            windows: None,
-            error: None,
-        }
-    }
-}
-
-/// Reads of one group with their queue and schedule.
+/// The charts' reads with their queue and schedule.
 #[derive(Debug, Default)]
 struct Round {
     generation: u64,
@@ -337,9 +243,7 @@ struct SessionHistory {
     /// Snapshot revision the series were last picked from.
     charts_revision: Option<u64>,
     charts: Vec<ChartState>,
-    stats: Vec<StatState>,
-    chart_round: Round,
-    stat_round: Round,
+    round: Round,
     /// Whether the history keeps the sizes on disk and why not, as it last
     /// said.
     disk: Option<(bool, Option<String>)>,
@@ -347,70 +251,23 @@ struct SessionHistory {
 }
 
 impl SessionHistory {
-    fn round(&self, group: Group) -> &Round {
-        match group {
-            Group::Charts => &self.chart_round,
-            Group::Stats => &self.stat_round,
+    /// Drops the charts' answers and queue for a new generation.
+    fn restart(&mut self) {
+        self.round.restart();
+        for chart in &mut self.charts {
+            chart.bars = None;
+            chart.error = None;
         }
     }
 
-    fn round_mut(&mut self, group: Group) -> &mut Round {
-        match group {
-            Group::Charts => &mut self.chart_round,
-            Group::Stats => &mut self.stat_round,
-        }
+    fn begin_round(&mut self, at: (u64, i64)) {
+        let refresh = self.grid.refresh_ms();
+        self.round.begin(self.charts.len(), at, refresh);
     }
 
-    fn restart(&mut self, group: Group) {
-        self.round_mut(group).restart();
-        match group {
-            Group::Charts => {
-                for chart in &mut self.charts {
-                    chart.bars = None;
-                    chart.error = None;
-                }
-            }
-            Group::Stats => {
-                for stat in &mut self.stats {
-                    stat.windows = None;
-                    stat.error = None;
-                }
-            }
-        }
-    }
-
-    fn begin_round(&mut self, group: Group, at: (u64, i64)) {
-        match group {
-            Group::Charts => {
-                let refresh = self.grid.refresh_ms();
-                self.chart_round.begin(self.charts.len(), at, refresh);
-            }
-            Group::Stats => {
-                self.stat_round
-                    .begin(self.stats.len(), at, STATS_REFRESH_MS);
-            }
-        }
-    }
-
-    fn series_count(&self, group: Group) -> usize {
-        match group {
-            Group::Charts => self.charts.len(),
-            Group::Stats => self.stats.len(),
-        }
-    }
-
-    fn set_error(&mut self, purpose: Purpose, error: String) {
-        match purpose {
-            Purpose::Bars(index) => {
-                if let Some(chart) = self.charts.get_mut(index) {
-                    chart.error = Some(error);
-                }
-            }
-            Purpose::Windows(index) => {
-                if let Some(stat) = self.stats.get_mut(index) {
-                    stat.error = Some(error);
-                }
-            }
+    fn set_error(&mut self, chart: usize, error: String) {
+        if let Some(chart) = self.charts.get_mut(chart) {
+            chart.error = Some(error);
         }
     }
 }
@@ -486,9 +343,7 @@ impl HistoryService {
             grid: BarGrid::new(DEFAULT_BAR, MIN_DISPLAY_POINTS),
             charts_revision: None,
             charts: Vec::new(),
-            stats: Vec::new(),
-            chart_round: Round::default(),
-            stat_round: Round::default(),
+            round: Round::default(),
             disk: None,
             view: Arc::new(empty_view()),
         };
@@ -497,7 +352,7 @@ impl HistoryService {
     }
 
     pub(crate) fn close_session(&mut self, session_id: &SessionId) {
-        self.cancel_queries(session_id, &[Group::Charts, Group::Stats]);
+        self.cancel_queries(session_id);
         self.sessions.remove(session_id);
     }
 
@@ -508,8 +363,7 @@ impl HistoryService {
         }
         self.inflight.clear();
         for session in self.sessions.values_mut() {
-            session.chart_round.queue.clear();
-            session.stat_round.queue.clear();
+            session.round.queue.clear();
             session.active = false;
         }
     }
@@ -528,7 +382,7 @@ impl HistoryService {
 
     /// Applies a session's view state; returns whether its history view
     /// changed. Opening the view picks its series afresh; a bar size change
-    /// redraws the charts and keeps the statistics.
+    /// redraws the charts.
     pub(crate) fn sync_session(
         &mut self,
         session_id: &SessionId,
@@ -548,20 +402,12 @@ impl HistoryService {
         if !changed {
             return false;
         }
-        let leaving_or_opening = wanted.is_none() || opening;
-        let groups: &[Group] = if leaving_or_opening {
-            &[Group::Charts, Group::Stats]
-        } else {
-            &[Group::Charts]
-        };
-        self.cancel_queries(session_id, groups);
+        self.cancel_queries(session_id);
         let at = (now_ns, self.now_utc_ns());
         let Some(session) = self.sessions.get_mut(session_id) else {
             return false;
         };
-        for group in groups {
-            session.restart(*group);
-        }
+        session.restart();
         let Some(grid) = wanted else {
             session.active = false;
             self.rebuild(session_id);
@@ -572,12 +418,10 @@ impl HistoryService {
             // Pick the series afresh: the busiest disk and interface are
             // those of the moment the view opens.
             session.charts.clear();
-            session.stats.clear();
             session.charts_revision = None;
-            session.begin_round(Group::Stats, at);
         }
         session.active = true;
-        session.begin_round(Group::Charts, at);
+        session.begin_round(at);
         self.rebuild(session_id);
         true
     }
@@ -592,8 +436,8 @@ impl HistoryService {
 
     /// Gives every active session the series `pick` chooses from snapshot
     /// `revision` (it also receives the session's current charts, so it can
-    /// keep a device the session already shows). Other series restart their
-    /// group's reads; a new scale or name only redraws. Returns the sessions
+    /// keep a device the session already shows). Other series restart the
+    /// reads; a new scale or name only redraws. Returns the sessions
     /// whose view changed.
     pub(crate) fn update_charts(
         &mut self,
@@ -621,8 +465,7 @@ impl HistoryService {
                 .collect();
             let mut picked = pick(&ChartRequest { shown: &shown });
             picked.charts.truncate(MAX_CHARTS);
-            picked.stats.truncate(MAX_STAT_SERIES);
-            let chart_change = pick_change(
+            let change = pick_change(
                 &session
                     .charts
                     .iter()
@@ -630,25 +473,14 @@ impl HistoryService {
                     .collect::<Vec<_>>(),
                 &picked.charts,
             );
-            let stat_change = pick_change(
-                &session
-                    .stats
-                    .iter()
-                    .map(|stat| &stat.spec)
-                    .collect::<Vec<_>>(),
-                &picked.stats,
-            );
-            for (group, change) in [(Group::Charts, chart_change), (Group::Stats, stat_change)] {
-                if change == PickChange::Restart {
-                    self.cancel_queries(&session_id, &[group]);
-                }
+            if change == PickChange::Restart {
+                self.cancel_queries(&session_id);
             }
             let Some(session) = self.sessions.get_mut(&session_id) else {
                 continue;
             };
-            apply_charts(session, chart_change, picked.charts, at);
-            apply_stats(session, stat_change, picked.stats, at);
-            if chart_change != PickChange::Unchanged || stat_change != PickChange::Unchanged {
+            apply_charts(session, change, picked.charts, at);
+            if change != PickChange::Unchanged {
                 self.rebuild(&session_id);
                 dirty.push(session_id);
             }
@@ -676,33 +508,25 @@ impl HistoryService {
     ) -> Option<SessionId> {
         let inflight = self.inflight.remove(&request_id)?;
         let session = self.sessions.get_mut(&inflight.session_id)?;
-        let group = inflight.purpose.group();
         if &inflight.session_id != session_id
             || inflight.generation != generation
-            || session.round(group).generation != generation
+            || session.round.generation != generation
         {
             return None;
         }
-        match (inflight.purpose, result) {
-            (Purpose::Bars(index), Ok(OverviewAnswer::Bars(bars))) => {
+        match result {
+            Ok(OverviewAnswer::Bars(bars)) => {
                 session.disk = Some((bars.kept_on_disk, bars.store_issue.clone()));
-                let chart = session.charts.get_mut(index)?;
+                let chart = session.charts.get_mut(inflight.chart)?;
                 chart.error = None;
                 chart.bars = Some(bars);
             }
-            (Purpose::Windows(index), Ok(OverviewAnswer::Windows(windows))) => {
-                let stat = session.stats.get_mut(index)?;
-                stat.error = None;
-                stat.windows = Some(windows);
+            Ok(_) => {
+                session.set_error(inflight.chart, "history answered another read".to_owned());
             }
-            (purpose, Ok(_)) => {
-                session.set_error(purpose, "history answered another read".to_owned());
-            }
-            (purpose, Err(error)) => {
-                session.set_error(purpose, error.message);
-            }
+            Err(error) => session.set_error(inflight.chart, error.message),
         }
-        if !session.round_mut(group).finish(inflight.round) {
+        if !session.round.finish(inflight.round) {
             return None;
         }
         let session_id = inflight.session_id;
@@ -715,12 +539,7 @@ impl HistoryService {
             .sessions
             .values()
             .filter(|session| session.active)
-            .flat_map(|session| {
-                [
-                    session.chart_round.refresh_due_ns,
-                    session.stat_round.refresh_due_ns,
-                ]
-            });
+            .map(|session| session.round.refresh_due_ns);
         let deadlines = self
             .inflight
             .values()
@@ -740,12 +559,14 @@ impl HistoryService {
         Some(BarGrid::new(state.overview_bar, columns))
     }
 
-    fn cancel_queries(&mut self, session_id: &SessionId, groups: &[Group]) {
+    fn cancel_queries(&mut self, session_id: &SessionId) {
         // Entries stay until their answer or deadline so the running-job
         // bound holds; their answers are dropped by the generation check.
-        for inflight in self.inflight.values().filter(|inflight| {
-            &inflight.session_id == session_id && groups.contains(&inflight.purpose.group())
-        }) {
+        for inflight in self
+            .inflight
+            .values()
+            .filter(|inflight| &inflight.session_id == session_id)
+        {
             inflight.cancel.cancel();
         }
     }
@@ -753,20 +574,14 @@ impl HistoryService {
     fn schedule_refreshes(&mut self, now_ns: u64, limited: bool) {
         let at = (now_ns, self.now_utc_ns());
         for session in self.sessions.values_mut().filter(|session| session.active) {
-            for group in [Group::Charts, Group::Stats] {
-                if now_ns < session.round(group).refresh_due_ns {
-                    continue;
-                }
-                session.begin_round(group, at);
-                if limited {
-                    let period = match group {
-                        Group::Charts => session.grid.refresh_ms(),
-                        Group::Stats => STATS_REFRESH_MS,
-                    };
-                    let slower = ms_to_ns(period * (LIMITED_REFRESH_FACTOR - 1));
-                    let round = session.round_mut(group);
-                    round.refresh_due_ns = round.refresh_due_ns.saturating_add(slower);
-                }
+            if now_ns < session.round.refresh_due_ns {
+                continue;
+            }
+            session.begin_round(at);
+            if limited {
+                let period = session.grid.refresh_ms();
+                let slower = ms_to_ns(period * (LIMITED_REFRESH_FACTOR - 1));
+                session.round.refresh_due_ns = session.round.refresh_due_ns.saturating_add(slower);
             }
         }
     }
@@ -788,12 +603,11 @@ impl HistoryService {
             let Some(session) = self.sessions.get_mut(&inflight.session_id) else {
                 continue;
             };
-            let group = inflight.purpose.group();
-            if session.round(group).generation != inflight.generation {
+            if session.round.generation != inflight.generation {
                 continue;
             }
-            session.set_error(inflight.purpose, "history read timed out".to_owned());
-            if session.round_mut(group).finish(inflight.round) {
+            session.set_error(inflight.chart, "history read timed out".to_owned());
+            if session.round.finish(inflight.round) {
                 let session_id = inflight.session_id.clone();
                 self.rebuild(&session_id);
                 tick.dirty.push(session_id);
@@ -830,28 +644,21 @@ impl HistoryService {
         }
     }
 
-    /// Sends the session's next read: the charts' before the statistics'.
+    /// Sends the session's next chart read.
     fn dispatch_next(&mut self, session_id: &SessionId, now_ns: u64) -> Dispatched {
         let shift = self.shift_ns();
         let Some(session) = self.sessions.get_mut(session_id) else {
             return Dispatched::Nothing;
         };
-        let purpose = match session.chart_round.queue.pop_front() {
-            Some(index) => Purpose::Bars(index),
-            None => match session.stat_round.queue.pop_front() {
-                Some(index) => Purpose::Windows(index),
-                None => return Dispatched::Nothing,
-            },
+        let Some(chart) = session.round.queue.pop_front() else {
+            return Dispatched::Nothing;
         };
-        if purpose.index() >= session.series_count(purpose.group()) {
-            let round_over = session.round_mut(purpose.group()).finish_one();
+        if chart >= session.charts.len() {
+            let round_over = session.round.finish_one();
             return Dispatched::Failed { round_over };
         }
-        let request = request_of(session, purpose, shift);
-        let (generation, round) = {
-            let round = session.round(purpose.group());
-            (round.generation, round.serial)
-        };
+        let request = request_of(session, chart, shift);
+        let (generation, round) = (session.round.generation, session.round.serial);
         let cancel = CancelFlag::new();
         let deadline_ns = now_ns.saturating_add(ms_to_ns(u64::from(self.settings.deadline_ms)));
         let request_id = Uuid::new_v4();
@@ -871,7 +678,7 @@ impl HistoryService {
                         session_id: session_id.clone(),
                         generation,
                         round,
-                        purpose,
+                        chart,
                         deadline_ns,
                         cancel,
                     },
@@ -879,13 +686,12 @@ impl HistoryService {
                 Dispatched::Sent
             }
             Err(DispatchError::Busy) => {
-                let round = session.round_mut(purpose.group());
-                round.queue.push_front(purpose.index());
+                session.round.queue.push_front(chart);
                 Dispatched::PortBusy
             }
             Err(error) => {
-                session.set_error(purpose, format!("history unavailable: {error}"));
-                let round_over = session.round_mut(purpose.group()).finish_one();
+                session.set_error(chart, format!("history unavailable: {error}"));
+                let round_over = session.round.finish_one();
                 if round_over {
                     self.rebuild(session_id);
                 }
@@ -906,10 +712,10 @@ impl HistoryService {
 
     fn build_view(&self, session: &SessionHistory) -> HistoryView {
         let grid = session.grid;
-        let at = if session.chart_round.at_utc_ns == 0 {
+        let at = if session.round.at_utc_ns == 0 {
             self.now_utc_ns()
         } else {
-            session.chart_round.at_utc_ns
+            session.round.at_utc_ns
         };
         let window = grid.window_at(at, self.shift_ns());
         let merges = grid.tier().step_ns() > ms_to_ns(u64::from(self.raw_interval_ms.max(1)));
@@ -924,7 +730,6 @@ impl HistoryService {
                 .iter()
                 .map(|chart| chart_view(chart, (grid, window), (session.active, merges)))
                 .collect(),
-            summaries: summaries_of(&session.stats, session.active),
             disk: match &session.disk {
                 None if self.settings.kept_on_disk => DiskHistory::On,
                 None | Some((false, _)) => DiskHistory::Off,
@@ -958,57 +763,26 @@ fn apply_charts(
             }
         }
         PickChange::Restart => {
-            session.restart(Group::Charts);
+            session.restart();
             session.charts = specs.into_iter().map(ChartState::new).collect();
-            session.begin_round(Group::Charts, at);
+            session.begin_round(at);
         }
     }
 }
 
-/// Applies the statistics series a pick chose.
-fn apply_stats(
-    session: &mut SessionHistory,
-    change: PickChange,
-    specs: Vec<HistoryChartSpec>,
-    at: (u64, i64),
-) {
-    match change {
-        PickChange::Unchanged => {}
-        PickChange::Redraw => {
-            for (stat, spec) in session.stats.iter_mut().zip(specs) {
-                stat.spec = spec;
-            }
-        }
-        PickChange::Restart => {
-            session.restart(Group::Stats);
-            session.stats = specs.into_iter().map(StatState::new).collect();
-            session.begin_round(Group::Stats, at);
-        }
-    }
-}
-
-/// The read of `purpose`: a chart's whole window (the history's sizes are
-/// its cache, D-99), or a statistics series' windows, at its round's time.
-fn request_of(session: &SessionHistory, purpose: Purpose, shift: i64) -> OverviewRequest {
-    match purpose {
-        Purpose::Bars(index) => {
-            let chart = &session.charts[index];
-            let at = session.chart_round.at_utc_ns;
-            let window = session.grid.window_at(at, shift);
-            OverviewRequest::Bars {
-                series: SeriesInEveryBoot::from(&chart.spec.key),
-                tier: session.grid.tier(),
-                from_utc_ns: window.0,
-                end_utc_ns: window.1,
-                at_utc_ns: at,
-                parts_of: chart.spec.parts_of.clone(),
-            }
-        }
-        Purpose::Windows(index) => OverviewRequest::Windows {
-            series: SeriesInEveryBoot::from(&session.stats[index].spec.key),
-            spans_ns: STAT_WINDOWS.iter().map(|window| window.span_ns()).collect(),
-            at_utc_ns: session.stat_round.at_utc_ns,
-        },
+/// The read of chart `index`: its whole window (the history's sizes are
+/// its cache, D-99) at its round's time.
+fn request_of(session: &SessionHistory, index: usize, shift: i64) -> OverviewRequest {
+    let chart = &session.charts[index];
+    let at = session.round.at_utc_ns;
+    let window = session.grid.window_at(at, shift);
+    OverviewRequest::Bars {
+        series: SeriesInEveryBoot::from(&chart.spec.key),
+        tier: session.grid.tier(),
+        from_utc_ns: window.0,
+        end_utc_ns: window.1,
+        at_utc_ns: at,
+        parts_of: chart.spec.parts_of.clone(),
     }
 }
 
@@ -1073,40 +847,6 @@ fn chart_view(
     }
 }
 
-/// The statistics: per series and window its mean, peak, time held and,
-/// for power, the energy over that time.
-fn summaries_of(stats: &[StatState], active: bool) -> Vec<HistoryWindowSummary> {
-    let mut summaries = Vec::new();
-    for stat in stats {
-        for (position, window) in STAT_WINDOWS.into_iter().enumerate() {
-            let bucket = stat
-                .windows
-                .as_ref()
-                .and_then(|windows| windows.get(position));
-            let covered_ns = bucket.map(|bucket| bucket.covered_ns);
-            summaries.push(HistoryWindowSummary {
-                kind: stat.spec.kind,
-                subject: stat.spec.subject.clone(),
-                window_label: window.label().to_owned(),
-                span_ns: window.span_ns(),
-                unit: unit_of(stat.spec.key.metric_id.as_str()),
-                mean: bucket.and_then(OverviewBucket::mean),
-                peak: bucket.and_then(OverviewBucket::peak),
-                covered_ns,
-                integral: stat
-                    .spec
-                    .kind
-                    .is_power()
-                    .then_some(bucket)
-                    .flatten()
-                    .map(|bucket| bucket.integral().unwrap_or(0.0)),
-                pending: active && bucket.is_none() && stat.error.is_none(),
-            });
-        }
-    }
-    summaries
-}
-
 fn empty_view() -> HistoryView {
     let grid = BarGrid::new(DEFAULT_BAR, MIN_DISPLAY_POINTS);
     HistoryView {
@@ -1116,7 +856,6 @@ fn empty_view() -> HistoryView {
         end_utc_ns: 0,
         utc_offset_s: 0,
         charts: Vec::new(),
-        summaries: Vec::new(),
         disk: DiskHistory::Off,
         error: None,
     }

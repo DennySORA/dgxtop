@@ -4,6 +4,7 @@
 mod common;
 mod cpu;
 mod disk;
+pub(crate) mod folds;
 mod gpu;
 mod history;
 mod host_status;
@@ -18,9 +19,10 @@ use thiserror::Error;
 
 pub use cpu::{CPU_MODULE_ID, CpuModule};
 pub use disk::DiskModule;
-pub use gpu::GpuModule;
+pub use gpu::{GPU_MODULE_ID, GpuModule};
 pub use history::HISTORY_MODULE_ID;
 pub use history::HistoryModule;
+pub(crate) use history::history_gpus;
 pub use memory::MEMORY_MODULE_ID;
 pub use memory::MemoryModule;
 pub use network::NetworkModule;

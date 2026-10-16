@@ -89,7 +89,8 @@ fn a_model_is_built_only_when_what_it_shows_changed() {
     );
 }
 
-/// The latest start first, and at most the rows a projection carries.
+/// The latest start first, every run listed: a projection takes the ones
+/// its session's filter keeps (D-113).
 #[test]
 fn rows_list_the_latest_start_first_within_the_bound() {
     let mut book = ProcessHistoryBook::new(boot_id("boot-test"));
@@ -97,7 +98,7 @@ fn rows_list_the_latest_start_first_within_the_bound() {
     observe(&mut writer, 1, vec![row(1, 100)]);
     let template = writer.run(&key(1, 100)).unwrap().info().clone();
     let extra = 3;
-    let runs = (0..MAX_RUN_ROWS + extra)
+    let runs = (0..MAX_LISTED_RUNS + extra)
         .map(|index| {
             let mut info = template.clone();
             let index = i64::try_from(index).unwrap();
@@ -121,16 +122,61 @@ fn rows_list_the_latest_start_first_within_the_bound() {
         },
     );
     let model = build(&mut ModelBuilder::default(), &book).unwrap();
-    assert_eq!(model.runs.len(), MAX_RUN_ROWS);
-    assert_eq!(model.more_runs, extra);
+    assert_eq!(model.runs.len(), MAX_LISTED_RUNS);
+    assert_eq!(model.more_runs, 0, "the book lists no more");
     let pids: Vec<i32> = model
         .runs
         .iter()
         .take(2)
         .map(|run| run.key.pid.get())
         .collect();
-    let last = i32::try_from(MAX_RUN_ROWS + extra).unwrap();
+    let last = i32::try_from(MAX_LISTED_RUNS + extra).unwrap();
     assert_eq!(pids, vec![last, last - 1], "the latest start first");
+}
+
+/// Running runs come first, however long ago they started; then the
+/// ended ones; each the latest start first (D-115).
+#[test]
+fn running_runs_come_first() {
+    let mut book = ProcessHistoryBook::new(boot_id("boot-test"));
+    let mut writer = ProcessHistoryBook::new(boot_id("boot-test"));
+    observe(&mut writer, 1, vec![row(1, 100)]);
+    let template = writer.run(&key(1, 100)).unwrap().info().clone();
+    // Ended runs that started after the running one.
+    let ended = (2..=3)
+        .map(|pid| {
+            let mut info = template.clone();
+            info.key = key(pid, 100);
+            info.started_utc_ns += pid * 1_000;
+            info.end = Some(RunEnd {
+                utc_ns: info.started_utc_ns + 1,
+                cause: EndCause::Exit(0),
+            });
+            info
+        })
+        .collect();
+    book.restore(
+        ProcessHistoryLoad {
+            runs: ended,
+            ..ProcessHistoryLoad::default()
+        },
+        Now {
+            boot_ns: 10 * SECOND,
+            utc_ns: 1_789_999_810_000_000_000,
+        },
+    );
+    observe(&mut book, 11, vec![row(1, 100), row(4, 900)]);
+    let model = build(&mut ModelBuilder::default(), &book).unwrap();
+    let order: Vec<(i32, bool)> = model
+        .runs
+        .iter()
+        .map(|run| (run.key.pid.get(), run.live))
+        .collect();
+    assert_eq!(
+        order,
+        vec![(4, true), (1, true), (3, false), (2, false)],
+        "running first, the latest start first within each"
+    );
 }
 
 /// The details of the latest runs asked for are kept, the latest last.

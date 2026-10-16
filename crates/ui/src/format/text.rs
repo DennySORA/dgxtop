@@ -1,4 +1,5 @@
-//! Unicode-width-aware fitting of untrusted text into terminal columns.
+//! Unicode-width-aware fitting of untrusted text into terminal columns, and
+//! counted nouns.
 
 use dgxtop_core::text::sanitize_display;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -57,9 +58,25 @@ pub fn pad_left(text: &str, width: usize) -> String {
     format!("{}{fitted}", " ".repeat(padding))
 }
 
+/// `count` `noun`s: `1 run`, `3 runs`.
+pub fn counted(count: usize, noun: &str) -> String {
+    if count == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{count} {noun}s")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_count_names_its_noun_in_the_singular_for_one() {
+        assert_eq!(counted(0, "run"), "0 runs");
+        assert_eq!(counted(1, "ended run"), "1 ended run");
+        assert_eq!(counted(256, "panel"), "256 panels");
+    }
 
     #[test]
     fn truncation_respects_display_width() {

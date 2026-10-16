@@ -23,11 +23,24 @@ const REQUEST_TTL: Duration = Duration::from_secs(60);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequestKind {
     ViewSession,
-    Prepare { target: ProcessKey },
-    Confirm { target: ProcessKey },
+    Prepare {
+        target: ProcessKey,
+    },
+    Confirm {
+        target: ProcessKey,
+    },
     Cancel,
-    Interval { interval_ms: u32 },
-    ModuleToggle { module_id: ModuleId, enabled: bool },
+    Interval {
+        interval_ms: u32,
+    },
+    ModuleToggle {
+        module_id: ModuleId,
+        enabled: bool,
+    },
+    /// Deleting this many runs from the Process History (D-108).
+    DeleteRuns,
+    /// A save of the folded panels (D-114); the controller says what fails.
+    Folds,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +99,22 @@ impl PendingRequests {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// Whether request `id` still waits for its result.
+    pub fn tracks(&self, id: u128) -> bool {
+        self.entries.iter().any(|entry| entry.id == id)
+    }
+
+    /// Whether a signal's prepare or confirmation still waits for its
+    /// result.
+    pub fn has_signal_pending(&self) -> bool {
+        self.entries.iter().any(|entry| {
+            matches!(
+                entry.kind,
+                RequestKind::Prepare { .. } | RequestKind::Confirm { .. }
+            )
+        })
+    }
 }
 
 /// Whether no further result is expected for the request.
@@ -94,6 +123,19 @@ pub const fn is_terminal(status: CommandStatus) -> bool {
         status,
         CommandStatus::Completed | CommandStatus::Rejected | CommandStatus::Unknown
     )
+}
+
+/// The deletion's result: the runs leave the list with the next model.
+/// A deletion's command failed; the controller tells the whole deletion's
+/// outcome once its last command is answered (D-108).
+fn delete_notice(result: &CommandResult) -> Option<(BannerLevel, String)> {
+    match result.status {
+        CommandStatus::Rejected | CommandStatus::Unknown => Some((
+            BannerLevel::Error,
+            format!("runs not deleted: {}", failure(result)),
+        )),
+        CommandStatus::Completed | CommandStatus::Accepted | CommandStatus::InProgress => None,
+    }
 }
 
 fn code_text(code: ResultCode) -> &'static str {
@@ -118,6 +160,8 @@ pub fn notice_for(
         Some(RequestKind::ModuleToggle { module_id, enabled }) => {
             module_notice(module_id, *enabled, result)
         }
+        Some(RequestKind::DeleteRuns) => delete_notice(result),
+        Some(RequestKind::Folds) => None,
     }
 }
 

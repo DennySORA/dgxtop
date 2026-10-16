@@ -115,3 +115,58 @@ fn the_shutdown_waits_for_the_process_history_flush() {
     let summary = harness.manager.summary().expect("finished");
     assert!(!summary.timed_out);
 }
+
+/// A deletion of runs (D-108) is handed to the process actor as it came;
+/// a busy actor and a Manager without a process history refuse it, and
+/// nothing is deleted.
+#[test]
+fn a_deletion_of_runs_is_handed_to_the_process_actor() {
+    let mut harness = harness();
+    harness.ports.process_inputs.take();
+    let runs = vec![target(9), target(10)];
+    let delete = harness
+        .submit(CommandBody::DeleteRuns { runs: runs.clone() })
+        .unwrap();
+    harness.settle();
+    let result = harness.result_for(delete);
+    assert_eq!(result.status, CommandStatus::Completed, "{result:?}");
+    let deleted: Vec<Vec<ProcessKey>> = harness
+        .ports
+        .process_inputs
+        .take()
+        .into_iter()
+        .filter_map(|input| match input {
+            ProcessHistoryInput::Delete(keys) => Some(keys),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deleted, vec![runs]);
+    harness.ports.process_inputs.set_busy(true);
+    let busy = harness
+        .submit(CommandBody::DeleteRuns {
+            runs: vec![target(9)],
+        })
+        .unwrap();
+    harness.settle();
+    let result = harness.result_for(busy);
+    assert_eq!(result.status, CommandStatus::Rejected);
+    assert_eq!(
+        result.code,
+        ResultCode::Error(ErrorCode::Busy),
+        "{result:?}"
+    );
+    let mut without = ready_harness(HarnessOptions::default());
+    let off = without
+        .submit(CommandBody::DeleteRuns {
+            runs: vec![target(9)],
+        })
+        .unwrap();
+    without.settle();
+    let result = without.result_for(off);
+    assert_eq!(result.status, CommandStatus::Rejected);
+    assert_eq!(
+        result.code,
+        ResultCode::Error(ErrorCode::Unavailable),
+        "{result:?}"
+    );
+}

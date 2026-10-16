@@ -1,20 +1,22 @@
-//! Rows and columns of the history view (D-50): the bar-size row, the panels
-//! in bands (two side by side from [`HISTORY_TWO_COLUMN_WIDTH`]), the time
-//! axis under them, then the GPUs' long-term table and the GPU processes'
-//! table (D-64). Every strip has the same height, so the bands read alike.
-//! The panels come first at one row a strip (the bands that do not fit are
-//! named in the bar-size row), then grow to three rows; then the long-term
-//! table takes whole GPUs and the process table as many processes as fit;
-//! then the strips grow further. The rows left over go to the bands in
-//! order, the CPU and the memory first, each strip up to twice the others'
-//! height, so no row stays blank.
+//! Rows and columns of a history page (D-50): the bar-size row, the panels
+//! in bands (two side by side from [`HISTORY_TWO_COLUMN_WIDTH`]) and the
+//! time axis under them. Every strip has the same height, so the bands read
+//! alike. The panels come first at one row a strip, then the strips grow.
+//! The rows left over go to the bands in order, the CPU and the memory
+//! first, each strip up to twice the others' height, so no row stays blank.
+//! Bands that do not fit wait below; the Overview History scrolls to them a
+//! band at a time (D-107), from the band `first`. A run's charts go on
+//! pages instead ([`paginate`], D-112), so every strip keeps its legend.
+
+use std::ops::Range;
 
 use dgxtop_core::view::{HISTORY_PANEL_GAP, HISTORY_TWO_COLUMN_WIDTH};
 
 /// Rows of the bar-size row and of the time axis.
-const FRAME_ROWS: u16 = 2;
-/// Strip height the panels reach before the table.
-const COMFORTABLE_STRIP_ROWS: u16 = 3;
+pub(super) const FRAME_ROWS: u16 = 2;
+/// Rows a strip needs for the three lines of its legend: the last value,
+/// the mean and the peak.
+const LEGIBLE_STRIP_ROWS: u16 = 3;
 /// Tallest strip.
 const MAX_STRIP_ROWS: u16 = 8;
 
@@ -31,15 +33,12 @@ pub(super) struct HistoryLayout {
     /// Rows of a strip, and the rows each band's strips add to it.
     pub(super) strip_rows: u16,
     band_extra: Vec<u16>,
-    /// GPUs of the long-term table shown, and the rows it takes with its
-    /// header.
-    pub(super) table_blocks: usize,
-    pub(super) table_rows: u16,
-    /// Rows of the process table with its header (none, or the header and
-    /// at least one process).
-    pub(super) process_rows: u16,
-    /// Panels without room.
-    pub(super) hidden_panels: usize,
+    /// The bands scrolled past and the bands without room under the ones
+    /// shown, and their panels.
+    pub(super) bands_above: usize,
+    pub(super) bands_below: usize,
+    pub(super) panels_above: usize,
+    pub(super) panels_below: usize,
 }
 
 impl HistoryLayout {
@@ -60,126 +59,188 @@ impl HistoryLayout {
     }
 }
 
-/// Lays out panels of `strips` strips each, a table of GPU blocks of
-/// `table_blocks` rows each and a process table of `process_rows` rows with
-/// its header in `width` × `height` (module docs).
-pub(super) fn plan(
-    width: u16,
-    height: u16,
-    strips: &[u16],
-    (table_blocks, process_rows): (&[u16], u16),
-) -> HistoryLayout {
-    let columns: u16 = if width >= HISTORY_TWO_COLUMN_WIDTH {
+/// Panels a band holds side by side in `width`: one or two.
+fn columns_of(width: u16) -> u16 {
+    if width >= HISTORY_TWO_COLUMN_WIDTH {
         2
     } else {
         1
-    };
+    }
+}
+
+/// The panels of `strips` strips each in pages (D-112), as their
+/// positions: all on one page when every strip has its legend's rows
+/// there; else as few pages as give every strip those rows, the first
+/// holding `first_rows` rows of bands and the others `rows`, the bands
+/// shared out so the pages fill alike. A band too tall for any page is
+/// alone on its own.
+pub(super) fn paginate(
+    width: u16,
+    (first_rows, rows): (u16, u16),
+    strips: &[u16],
+) -> Vec<Range<usize>> {
+    let columns = usize::from(columns_of(width));
+    let heights: Vec<u32> = strips
+        .chunks(columns)
+        .map(|band| {
+            let tallest = band.iter().map(|count| (*count).max(1)).max().unwrap_or(1);
+            1 + u32::from(tallest) * u32::from(LEGIBLE_STRIP_ROWS)
+        })
+        .collect();
+    let capacity = |page: usize| u32::from(if page == 0 { first_rows } else { rows }).max(1);
+    let pages = balanced_pages(&heights, capacity);
+    pages
+        .into_iter()
+        .map(|bands| bands.start * columns..(bands.end * columns).min(strips.len()))
+        .collect()
+}
+
+/// `heights` in as few consecutive pages as `capacity` allows (greedy),
+/// then cut again so the fullest page is as little full as can be.
+fn balanced_pages(heights: &[u32], capacity: impl Fn(usize) -> u32) -> Vec<Range<usize>> {
+    let total = heights.len();
+    if total == 0 {
+        return std::iter::once(0..0).collect();
+    }
+    let mut count = 1;
+    let mut used = 0;
+    for &height in heights {
+        if used > 0 && used + height > capacity(count - 1) {
+            count += 1;
+            used = 0;
+        }
+        used += height;
+    }
+    let count = count.min(total);
+    // fill[p][i]: the least "fullest page" (per mille of its capacity) of
+    // the first `i` bands on `p` pages; cut[p][i]: where page `p` starts.
+    let mut fill = vec![vec![u64::MAX; total + 1]; count + 1];
+    let mut cut = vec![vec![0usize; total + 1]; count + 1];
+    fill[0][0] = 0;
+    for page in 1..=count {
+        for end in page..=total {
+            for start in (page - 1)..end {
+                if fill[page - 1][start] == u64::MAX {
+                    continue;
+                }
+                let load: u32 = heights[start..end].iter().sum();
+                let share = u64::from(load) * 1000 / u64::from(capacity(page - 1));
+                let fullest = fill[page - 1][start].max(share);
+                if fullest < fill[page][end] {
+                    fill[page][end] = fullest;
+                    cut[page][end] = start;
+                }
+            }
+        }
+    }
+    let mut pages = Vec::with_capacity(count);
+    let mut end = total;
+    for page in (1..=count).rev() {
+        let start = cut[page][end];
+        pages.push(start..end);
+        end = start;
+    }
+    pages.reverse();
+    pages
+}
+
+/// Rows `bands` take, each its title and strips of `strip_rows` rows.
+fn rows_of(bands: &[u16], strip_rows: u16) -> u16 {
+    bands.iter().fold(0u16, |rows, strips| {
+        rows.saturating_add(1 + strips.saturating_mul(strip_rows))
+    })
+}
+
+/// Lays out panels of `strips` strips each in `width` × `height`, from
+/// the band `first` on (module docs). `first` stops at the band from which
+/// every band after it shows.
+pub(super) fn plan(width: u16, height: u16, strips: &[u16], first: usize) -> HistoryLayout {
+    plan_folded(width, height, (strips, 0), first)
+}
+
+/// [`plan`] when the first `folded` panels are folded (D-114): they hold
+/// no strips, only their title row, and sit in bands of their own, so the
+/// panels after them pair up as if they were not there.
+pub(super) fn plan_folded(
+    width: u16,
+    height: u16,
+    (strips, folded): (&[u16], usize),
+    first: usize,
+) -> HistoryLayout {
+    let columns = columns_of(width);
     let panel_width = if columns == 2 {
         (width - HISTORY_PANEL_GAP) / 2
     } else {
         width
     };
     let positions: Vec<usize> = (0..strips.len()).collect();
-    let all_bands: Vec<Vec<usize>> = positions
+    let folded = folded.min(positions.len());
+    let all_bands: Vec<Vec<usize>> = positions[..folded]
         .chunks(usize::from(columns))
+        .chain(positions[folded..].chunks(usize::from(columns)))
         .map(<[usize]>::to_vec)
         .collect();
     let all_strips: Vec<u16> = all_bands
         .iter()
         .map(|band| {
             band.iter()
-                .map(|&panel| strips[panel].max(1))
+                .map(|&panel| {
+                    if panel < folded {
+                        0
+                    } else {
+                        strips[panel].max(1)
+                    }
+                })
                 .max()
-                .unwrap_or(1)
+                .unwrap_or(0)
         })
         .collect();
     let body = height.saturating_sub(FRAME_ROWS);
-    let rows_at = |count: usize, strip_rows: u16| -> u16 {
-        all_strips[..count].iter().fold(0u16, |rows, strips| {
-            rows.saturating_add(1 + strips.saturating_mul(strip_rows))
-        })
+    // Bands from `from` on that fit at one row a strip.
+    let fitting = |from: usize| {
+        let mut count = 0;
+        while from + count < all_strips.len()
+            && rows_of(&all_strips[from..=from + count], 1) <= body
+        {
+            count += 1;
+        }
+        count
     };
-    let mut shown = all_bands.len();
-    while shown > 0 && rows_at(shown, 1) > body {
-        shown -= 1;
-    }
-    let grows = |strip_rows: u16, limit: u16, table_rows: u16| {
-        shown > 0
-            && strip_rows < limit
-            && rows_at(shown, strip_rows + 1).saturating_add(table_rows) <= body
-    };
+    let last_first = (0..all_bands.len())
+        .find(|&from| from + fitting(from) == all_bands.len())
+        .unwrap_or(0);
+    let first = first.min(last_first);
+    let shown = fitting(first);
+    let visible = &all_strips[first..first + shown];
     let mut strip_rows = 1;
-    while grows(strip_rows, COMFORTABLE_STRIP_ROWS, 0) {
+    while shown > 0 && strip_rows < MAX_STRIP_ROWS && rows_of(visible, strip_rows + 1) <= body {
         strip_rows += 1;
     }
-    let every_band = shown == all_bands.len() && shown > 0;
-    let (table_blocks, table_rows) = if every_band {
-        fit_table(
-            body.saturating_sub(rows_at(shown, strip_rows)),
-            table_blocks,
-        )
-    } else {
-        (0, 0)
-    };
-    let process_rows = if every_band {
-        fit_processes(
-            body.saturating_sub(rows_at(shown, strip_rows))
-                .saturating_sub(table_rows),
-            process_rows,
-        )
-    } else {
-        0
-    };
-    let tables = table_rows.saturating_add(process_rows);
-    while grows(strip_rows, MAX_STRIP_ROWS, tables) {
-        strip_rows += 1;
-    }
-    let mut left = body.saturating_sub(rows_at(shown, strip_rows).saturating_add(tables));
-    let band_extra: Vec<u16> = all_strips[..shown]
+    let mut left = body.saturating_sub(rows_of(visible, strip_rows));
+    let band_extra: Vec<u16> = visible
         .iter()
         .map(|strips| {
+            if *strips == 0 {
+                return 0;
+            }
             let extra = (left / strips).min(strip_rows);
             left -= extra * strips;
             extra
         })
         .collect();
+    let panels_of = |bands: &[Vec<usize>]| bands.iter().map(Vec::len).sum();
     HistoryLayout {
         columns,
         panel_width,
-        bands: all_bands[..shown].to_vec(),
-        band_strips: all_strips[..shown].to_vec(),
+        bands: all_bands[first..first + shown].to_vec(),
+        band_strips: visible.to_vec(),
         strip_rows,
         band_extra,
-        table_blocks,
-        table_rows,
-        process_rows,
-        hidden_panels: all_bands[shown..].iter().map(Vec::len).sum(),
+        bands_above: first,
+        bands_below: all_bands.len() - first - shown,
+        panels_above: panels_of(&all_bands[..first]),
+        panels_below: panels_of(&all_bands[first + shown..]),
     }
-}
-
-/// Rows of a process table of `wanted` rows with its header that fit
-/// `rows`: none unless the header and one process fit.
-fn fit_processes(rows: u16, wanted: u16) -> u16 {
-    if wanted < 2 || rows < 2 {
-        0
-    } else {
-        wanted.min(rows)
-    }
-}
-
-/// Whole GPU blocks of the table that fit `rows`, with the header.
-fn fit_table(rows: u16, blocks: &[u16]) -> (usize, u16) {
-    let mut taken = 0;
-    let mut used = 0u16;
-    for block in blocks {
-        let needed = block + u16::from(taken == 0);
-        if used + needed > rows {
-            break;
-        }
-        used += needed;
-        taken += 1;
-    }
-    (taken, used)
 }
 
 #[cfg(test)]
@@ -190,52 +251,67 @@ mod tests {
     /// disk and the network pairs.
     const PANELS: [u16; 8] = [1, 1, 2, 2, 2, 2, 2, 2];
 
+    /// A run's panels go on pages giving every strip its legend's three
+    /// rows (D-112): one page when they fit; else the fewest pages, the
+    /// bands shared out so the pages fill alike, the first page shorter
+    /// for the run's details above it.
     #[test]
-    fn a_short_terminal_keeps_whole_bands_in_order_and_names_the_rest() {
-        // 100×30: one panel a band, 26 rows inside: every band at one row a
-        // strip, and the table's first GPU in the two rows left.
-        let layout = plan(98, 26, &PANELS, (&[1, 1], 0));
-        assert_eq!(layout.columns, 1);
-        assert_eq!(layout.bands.len(), 8);
-        assert_eq!((layout.strip_rows, layout.table_blocks), (1, 1));
-        // 80×24: 20 rows inside; the disk and the network do not fit, so
-        // the table waits too; the CPU and the memory take a second row
-        // each, so no row stays blank.
-        let layout = plan(78, 20, &PANELS, (&[1, 1], 0));
-        assert_eq!(layout.bands.len(), 6);
-        assert_eq!((layout.hidden_panels, layout.table_blocks), (2, 0));
-        assert_eq!((layout.rows_of_strip(0), layout.rows_of_strip(1)), (2, 2));
-        let charts: u16 = (0..6).map(|band| layout.band_height(band)).sum();
-        assert_eq!(charts + 2, 20);
-        // Too short for any band.
-        let layout = plan(78, 3, &PANELS, (&[1], 0));
-        assert!(layout.bands.is_empty());
-        assert_eq!(layout.hidden_panels, 8);
-        assert_eq!(layout.rows_of_strip(0), 1);
-        // No panels at all.
-        assert!(plan(211, 37, &[], (&[1], 0)).bands.is_empty());
+    fn a_runs_panels_go_on_pages_that_fill_alike() {
+        // A run's panels: CPU, memory, GPU utilization and memory, tasks,
+        // disk and network, two a band on a wide terminal.
+        const RUN: [u16; 7] = [2, 3, 1, 1, 3, 2, 2];
+        // Bands: 3, 1, 3 and 2 strips: 10 + 4 + 10 + 7 rows legible.
+        let all = paginate(211, (31, 36), &RUN);
+        assert_eq!((all.len(), all[0].clone()), (1, 0..7), "31 rows: all fit");
+        let pages = paginate(211, (28, 33), &RUN);
+        assert_eq!(pages, vec![0..4, 4..7], "two pages of two bands each");
+        // One a band: seven bands, 7 + 10 + 4 + 4 + 10 + 7 + 7 rows.
+        let narrow = paginate(100, (28, 33), &RUN);
+        assert!(narrow.len() >= 2);
+        let flat: Vec<usize> = narrow.iter().flat_map(Clone::clone).collect();
+        assert_eq!(
+            flat,
+            (0..7).collect::<Vec<_>>(),
+            "every panel once, in order"
+        );
+        // A band taller than any page is alone on its own.
+        assert_eq!(paginate(100, (5, 5), &[1, 9, 1]), vec![0..1, 1..2, 2..3]);
+        let none = paginate(100, (10, 10), &[]);
+        assert_eq!((none.len(), none[0].clone()), (1, 0..0));
     }
 
-    /// The process table comes after the long-term table, before the
-    /// strips grow beyond three rows, with as many processes as fit; it
-    /// needs room for its header and one process.
     #[test]
-    fn the_process_table_follows_the_long_term_table() {
-        // 213×41 on a DGX: one GPU, so one strip in every GPU panel.
-        let panels = [1, 1, 1, 1, 1, 1, 2, 2];
-        let layout = plan(211, 37, &panels, (&[4], 4));
-        assert_eq!((layout.table_rows, layout.process_rows), (5, 4));
-        assert!(layout.strip_rows >= 3);
-        let charts: u16 = (0..layout.bands.len())
-            .map(|band| layout.band_height(band))
-            .sum();
-        assert_eq!(charts + 2 + 5 + 4, 37, "every row is used");
-        // Only the header and one process fit after the long-term table.
-        let tight = plan(98, 26, &PANELS, (&[1, 1], 5));
-        assert_eq!(tight.process_rows, 0, "no room once the strips have a row");
-        assert_eq!(fit_processes(1, 5), 0);
-        assert_eq!(fit_processes(3, 5), 3);
-        assert_eq!(fit_processes(9, 5), 5);
-        assert_eq!(fit_processes(9, 0), 0);
+    fn a_short_terminal_scrolls_a_band_at_a_time() {
+        // 100×30: one panel a band, 24 rows for the bands: all at one row
+        // a strip; the CPU and the memory take the two rows left.
+        let layout = plan(98, 26, &PANELS, 0);
+        assert_eq!((layout.columns, layout.bands.len()), (1, 8));
+        assert_eq!((layout.rows_of_strip(0), layout.rows_of_strip(2)), (2, 1));
+        // 80×24: 18 rows; the disk and the network wait below.
+        let layout = plan(78, 20, &PANELS, 0);
+        assert_eq!(layout.bands.len(), 6);
+        assert_eq!((layout.bands_above, layout.bands_below), (0, 2));
+        assert_eq!((layout.panels_above, layout.panels_below), (0, 2));
+        let rows: u16 = (0..6).map(|band| layout.band_height(band)).sum();
+        assert_eq!(rows + 2, 20, "every row is used");
+        // A band down: the CPU scrolls out, the disk in.
+        let layout = plan(78, 20, &PANELS, 1);
+        assert_eq!(layout.bands.first(), Some(&vec![1]));
+        assert_eq!((layout.panels_above, layout.panels_below), (1, 1));
+        // Scrolling stops once the network shows.
+        let last = plan(78, 20, &PANELS, 2);
+        assert_eq!((last.bands_above, last.bands_below), (2, 0));
+        assert_eq!((last.panels_above, last.panels_below), (2, 0));
+        // Two panels a band: bands and panels count apart.
+        let wide = plan(200, 9, &PANELS, 1);
+        assert_eq!(wide.columns, 2);
+        assert_eq!((wide.bands_above, wide.bands_below), (1, 1));
+        assert_eq!((wide.panels_above, wide.panels_below), (2, 2));
+        assert_eq!(plan(78, 20, &PANELS, 9), last);
+        // Too short for any band; no panels at all.
+        let layout = plan(78, 3, &PANELS, 0);
+        assert!(layout.bands.is_empty());
+        assert_eq!(layout.panels_below, 8);
+        assert!(plan(211, 37, &[], 0).bands.is_empty());
     }
 }

@@ -33,6 +33,9 @@ use crate::registry::{
 
 const MAX_CARD_ROWS: u16 = 3;
 
+/// Module id of the GPU panel and the GPU view.
+pub const GPU_MODULE_ID: &str = "gpu";
+
 pub struct GpuModule {
     manifest: DisplayModuleManifest,
 }
@@ -41,7 +44,7 @@ impl GpuModule {
     pub fn new() -> Result<Self, ModuleBuildError> {
         Ok(Self {
             manifest: build_manifest(ManifestSpec {
-                id: "gpu",
+                id: GPU_MODULE_ID,
                 title: "GPU devices",
                 min_columns: 36,
                 min_rows: 4,

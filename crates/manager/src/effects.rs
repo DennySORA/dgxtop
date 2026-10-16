@@ -15,6 +15,9 @@ pub(crate) struct Effects {
     pub(crate) gaps: Vec<GapRecord>,
     /// Every session needs a new projection.
     pub(crate) dirty_all: bool,
+    /// A process dgxtop signaled exited: the process table is read again
+    /// now, not at its next slot (D-109).
+    pub(crate) reread_processes: bool,
 }
 
 impl Effects {
@@ -24,5 +27,9 @@ impl Effects {
 
     pub(crate) fn mark_all_dirty(&mut self) {
         self.dirty_all = true;
+    }
+
+    pub(crate) fn reread_processes(&mut self) {
+        self.reread_processes = true;
     }
 }

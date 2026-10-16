@@ -12,12 +12,14 @@ use dgxtop_core::process_history::{RunBucket, RunInfo, RunMetric};
 use dgxtop_core::process_model::{ProcessHistoryModel, RunBars, RunDetail, RunRequest, RunRow};
 use dgxtop_core::tiers::BarSize;
 use dgxtop_core::view::{
-    HistoryPointView, ProcessHistoryView, RunChartView, RunDetailView, RunRowView, SessionState,
+    HistoryPointView, MAX_RUN_ROWS, ProcessHistoryView, RunChartView, RunDetailView, RunRowView,
+    SessionState,
 };
 
 use super::cpu::logical_cpu_count;
 use super::gpu_directory::GpuDirectory;
 use super::history_charts::{gpu_memory_scale, ram_total};
+use super::labels::TextNeedle;
 use super::plan::ViewportLayout;
 use super::reader::MetricReader;
 
@@ -32,6 +34,8 @@ pub(crate) struct RunHistoryInputs<'a> {
     pub(crate) utc_offset_s: i32,
     pub(crate) bar: BarSize,
     pub(crate) scales: &'a RunScales,
+    /// The session's filter: a run's name or PID holding it (D-113).
+    pub(crate) filter: &'a str,
 }
 
 /// The run `session` shows on a `viewport` terminal: the one its Process
@@ -105,9 +109,20 @@ impl RunScales {
 
 pub(crate) fn build_process_history_view(inputs: &RunHistoryInputs<'_>) -> ProcessHistoryView {
     let model = inputs.model;
+    let needle = TextNeedle::new(inputs.filter);
+    let kept: Vec<&RunRow> = model
+        .runs
+        .iter()
+        .filter(|row| needle.matches(&row.name) || needle.matches(&row.key.pid.to_string()))
+        .collect();
+    let more = kept.len().saturating_sub(MAX_RUN_ROWS);
     ProcessHistoryView {
-        runs: model.runs.iter().map(|row| row_view(row, model)).collect(),
-        more_runs: model.more_runs,
+        runs: kept
+            .into_iter()
+            .take(MAX_RUN_ROWS)
+            .map(|row| row_view(row, model))
+            .collect(),
+        more_runs: more + model.more_runs,
         opened: inputs
             .opened
             .and_then(|request| model.detail_for(request))

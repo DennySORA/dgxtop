@@ -1,19 +1,20 @@
 //! What the history view draws (D-50): panels in the overview's order, each
 //! a title over one strip per series, all on the window's time axis. The
 //! CPU and the memory (one strip each, against 100 % and the RAM total);
-//! the GPUs' utilization, memory in use, temperature and power (a strip per
-//! GPU, each against its own scale), the power panel also leading with the
-//! host's total and each CPU package's power once the CPU's is read
-//! (D-106); the disk's read and write and the interface's receive and
-//! transmit rates (two strips on one scale, the tallest column of the pair,
-//! so their heights compare).
+//! the GPUs' utilization, memory in use, temperature and power (each
+//! against its own scale), for one GPU at a time on a host of several
+//! (D-107), the power panel also leading with the host's total and each CPU
+//! package's power once the CPU's is read (D-106); the disk's read and
+//! write and the interface's receive and transmit rates (two strips on one
+//! scale, the tallest column of the pair, so their heights compare).
 
+use dgxtop_core::identity::EntityId;
 use dgxtop_core::metric::CanonicalUnit;
 use dgxtop_core::view::{
     HistoryChartKind, HistoryChartView, HistoryPart, HistoryPointView, HistoryView,
 };
 
-use super::stats::nanos_to_seconds;
+use super::nanos_to_seconds;
 use crate::format::{clean, format_value};
 
 /// How a strip colors its columns.
@@ -113,9 +114,20 @@ pub(super) struct Strip<'a> {
 pub(super) struct Panel<'a> {
     pub(super) title: String,
     pub(super) strips: Vec<Strip<'a>>,
+    /// The id that folds the panel away (`view::FOLDABLE_PANELS`, D-114);
+    /// none for a panel that stays.
+    pub(super) fold: Option<&'static str>,
 }
 
 impl Panel<'_> {
+    /// The panel, folded away by `fold`.
+    fn folding(self, fold: &'static str) -> Self {
+        Self {
+            fold: Some(fold),
+            ..self
+        }
+    }
+
     /// Whether the panel draws a device's rates, scaled to what they draw.
     pub(super) fn is_rate(&self) -> bool {
         self.strips
@@ -126,11 +138,23 @@ impl Panel<'_> {
 
 /// The GPU panels: their series and titles; the power panel's title
 /// while only the GPUs' power is read.
-const GPU_PANELS: [(HistoryChartKind, &str); 4] = [
-    (HistoryChartKind::GpuUtilization, "GPU utilization"),
-    (HistoryChartKind::GpuMemory, "GPU memory"),
-    (HistoryChartKind::GpuTemperature, "GPU temperature"),
-    (HistoryChartKind::GpuPower, "GPU power"),
+const GPU_PANELS: [(HistoryChartKind, &str, &str); 4] = [
+    (
+        HistoryChartKind::GpuUtilization,
+        "GPU utilization",
+        "history.gpu_utilization",
+    ),
+    (
+        HistoryChartKind::GpuMemory,
+        "GPU memory",
+        "history.gpu_memory",
+    ),
+    (
+        HistoryChartKind::GpuTemperature,
+        "GPU temperature",
+        "history.gpu_temperature",
+    ),
+    (HistoryChartKind::GpuPower, "GPU power", "history.power"),
 ];
 /// The power panel's title once the host's power leads it (D-106).
 const POWER_TITLE: &str = "Power";
@@ -138,14 +162,15 @@ const POWER_TITLE: &str = "Power";
 /// A rate of a pair: its series, label and paint.
 type Rate = (HistoryChartKind, &'static str, Paint);
 
-/// The rate panels: the pair each draws and the title.
-const RATE_PANELS: [([Rate; 2], &str); 2] = [
+/// The rate panels: the pair each draws, the title and the fold id.
+const RATE_PANELS: [([Rate; 2], &str, &str); 2] = [
     (
         [
             (HistoryChartKind::DiskRead, "read", Paint::Read),
             (HistoryChartKind::DiskWrite, "write", Paint::Write),
         ],
         "Disk",
+        "history.disk",
     ),
     (
         [
@@ -153,30 +178,67 @@ const RATE_PANELS: [([Rate; 2], &str); 2] = [
             (HistoryChartKind::NetworkTransmit, "tx", Paint::Transmit),
         ],
         "Network",
+        "history.network",
     ),
 ];
 
-/// The panels of `history`, in display order; a series the view does not
-/// carry has no strip, and a panel without strips is left out.
-pub(super) fn panels(history: &HistoryView) -> Vec<Panel<'_>> {
+/// The GPUs the history charts, in the order of their charts, each with
+/// its label (`GPU 0`).
+pub(crate) fn history_gpus(history: &HistoryView) -> Vec<(EntityId, String)> {
+    let mut gpus: Vec<(EntityId, String)> = Vec::new();
+    for chart in history.charts.iter().filter(|chart| is_gpu(chart.kind)) {
+        let entity = &chart.series.entity_id;
+        if !gpus.iter().any(|(known, _)| known == entity) {
+            gpus.push((entity.clone(), gpu_label(&chart.subject)));
+        }
+    }
+    gpus
+}
+
+/// The GPU the GPU panels show on a host of several (D-107): `picked`
+/// while the history charts it, else the first; `None` on a host of one,
+/// whose panels show it alone anyway.
+pub(crate) fn shown_gpu(history: &HistoryView, picked: Option<&EntityId>) -> Option<EntityId> {
+    let gpus = history_gpus(history);
+    if gpus.len() < 2 {
+        return None;
+    }
+    picked
+        .filter(|picked| gpus.iter().any(|(gpu, _)| gpu == *picked))
+        .cloned()
+        .or_else(|| gpus.into_iter().next().map(|(gpu, _)| gpu))
+}
+
+const fn is_gpu(kind: HistoryChartKind) -> bool {
+    matches!(
+        kind,
+        HistoryChartKind::GpuUtilization
+            | HistoryChartKind::GpuMemory
+            | HistoryChartKind::GpuTemperature
+            | HistoryChartKind::GpuPower
+    )
+}
+
+/// The panels of `history`, in display order, the GPU panels of `gpu`
+/// alone when one is given; a series the view does not carry has no
+/// strip, and a panel without strips is left out.
+pub(super) fn panels<'a>(history: &'a HistoryView, gpu: Option<&EntityId>) -> Vec<Panel<'a>> {
     let series = Series::of_chart;
     let first = |kind| history.charts.iter().find(|chart| chart.kind == kind);
     let mut panels = Vec::new();
     if let Some(cpu) = first(HistoryChartKind::CpuUtilization) {
-        panels.push(single(
-            "CPU utilization".to_owned(),
-            series(cpu),
-            cpu.scale_max,
-        ));
+        panels.push(
+            single("CPU utilization".to_owned(), series(cpu), cpu.scale_max).folding("history.cpu"),
+        );
     }
     if let Some(memory) = first(HistoryChartKind::MemoryUsed) {
         let title = memory.scale_max.map_or_else(
             || "Memory used".to_owned(),
             |total| format!("Memory used · {}", format_value(total, memory.unit)),
         );
-        panels.push(single(title, series(memory), memory.scale_max));
+        panels.push(single(title, series(memory), memory.scale_max).folding("history.memory"));
     }
-    for (kind, title) in GPU_PANELS {
+    for (kind, title, fold) in GPU_PANELS {
         let mut strips = if kind == HistoryChartKind::GpuPower {
             host_power_strips(history)
         } else {
@@ -192,17 +254,19 @@ pub(super) fn panels(history: &HistoryView) -> Vec<Panel<'_>> {
                 .charts
                 .iter()
                 .filter(|chart| chart.kind == kind)
+                .filter(|chart| gpu.is_none_or(|gpu| chart.series.entity_id == *gpu))
                 .map(|chart| level_strip(gpu_label(&chart.subject), chart)),
         );
         if !strips.is_empty() {
             panels.push(Panel {
                 title: title.to_owned(),
                 strips,
+                fold: Some(fold),
             });
         }
     }
-    for (pair, title) in RATE_PANELS {
-        if let Some(panel) = rate_panel(history, pair, title) {
+    for (pair, title, fold) in RATE_PANELS {
+        if let Some(panel) = rate_panel(history, pair, title).map(|panel| panel.folding(fold)) {
             panels.push(panel);
         }
     }
@@ -262,6 +326,7 @@ pub(super) fn single(title: String, series: Series<'_>, scale: Option<f64>) -> P
             scale,
             paint: Paint::Levels,
         }],
+        fold: None,
     }
 }
 
@@ -301,6 +366,7 @@ fn rate_panel<'a>(history: &'a HistoryView, pair: [Rate; 2], title: &str) -> Opt
             format!("{title} · {subject}")
         },
         strips,
+        fold: None,
     })
 }
 
@@ -328,7 +394,7 @@ mod tests {
     #[test]
     fn panels_follow_the_overview_with_a_strip_per_gpu() {
         let history = history_view();
-        let panels = panels(&history);
+        let panels = panels(&history, None);
         let strings = |labels: &[&str]| -> Vec<String> {
             labels.iter().map(|label| (*label).to_owned()).collect()
         };
@@ -371,13 +437,49 @@ mod tests {
         assert_eq!(gpu_label("nameless"), "nameless");
     }
 
+    /// On a host of several GPUs the GPU panels show one GPU (D-107): the
+    /// one picked while the history charts it, else the first; the other
+    /// panels stay as they are. A host of one GPU has nothing to pick.
+    #[test]
+    fn the_gpu_panels_show_the_gpu_picked() {
+        let history = history_view();
+        let gpus = history_gpus(&history);
+        assert_eq!(
+            gpus.iter()
+                .map(|(_, label)| label.as_str())
+                .collect::<Vec<_>>(),
+            ["GPU 0", "GPU 1"]
+        );
+        let (first, second) = (gpus[0].0.clone(), gpus[1].0.clone());
+        assert_eq!(shown_gpu(&history, None), Some(first.clone()));
+        assert_eq!(shown_gpu(&history, Some(&second)), Some(second.clone()));
+        let gone = EntityId::new("gpu:gone").unwrap();
+        assert_eq!(shown_gpu(&history, Some(&gone)), Some(first));
+        let picked = layout(&panels(&history, Some(&second)));
+        let all = layout(&panels(&history, None));
+        assert_eq!(picked.len(), all.len());
+        for ((title, labels), (_, every)) in picked.iter().zip(&all) {
+            if title.starts_with("GPU") {
+                assert_eq!(labels, &["GPU 1".to_owned()], "{title}");
+            } else {
+                assert_eq!(labels, every, "{title}");
+            }
+        }
+        let mut single = history.clone();
+        single
+            .charts
+            .retain(|chart| chart.series.entity_id != second);
+        assert_eq!(history_gpus(&single).len(), 1);
+        assert_eq!(shown_gpu(&single, Some(&second)), None);
+    }
+
     /// Once the CPU's power is read the power panel leads with the host's
     /// total and the CPU (D-106), each scaled to its peak, every strip with
     /// its energy; until then it is the GPUs' power panel.
     #[test]
     fn the_power_panel_leads_with_the_total_and_the_cpu_once_read() {
         let power_panel = |history: &HistoryView| -> (String, Vec<String>) {
-            let panels = panels(history);
+            let panels = panels(history, None);
             let panel = panels
                 .iter()
                 .find(|panel| panel.title.ends_with("power") || panel.title == "Power")
@@ -417,7 +519,7 @@ mod tests {
         assert_eq!(title, "Power");
         assert_eq!(labels[..2], ["total".to_owned(), "CPU".to_owned()]);
         assert_eq!(labels[2..], gpus[..]);
-        let panels = panels(&history);
+        let panels = panels(&history, None);
         let panel = panels.iter().find(|panel| panel.title == "Power").unwrap();
         assert_eq!(panel.strips[0].scale, Some(180.0), "scaled to its peak");
         // 90 W for an hour.
@@ -472,7 +574,7 @@ mod tests {
             .unwrap();
         power.scale_max = None;
         power.peak = Some(68.2);
-        let panels = panels(&history);
+        let panels = panels(&history, None);
         let strip = panels
             .iter()
             .find(|panel| panel.title == "GPU power")

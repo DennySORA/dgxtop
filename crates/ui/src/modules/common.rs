@@ -165,7 +165,7 @@ pub(crate) fn panel(
 /// ` (k action · …) `: each key bright in the accent color, its action in
 /// text color, the brackets and dots muted (D-70). `keys` is `key action`
 /// items joined by ` · `.
-fn key_spans(keys: &str, context: &DisplayContext) -> Vec<Span<'static>> {
+pub(crate) fn key_spans(keys: &str, context: &DisplayContext) -> Vec<Span<'static>> {
     let theme = &context.theme;
     let key_style = Style::new()
         .fg(theme.accent)
@@ -206,15 +206,30 @@ pub(crate) fn panel_with_keys(
             format!(" {title} "),
             context.theme.section_title_style(title),
         )));
-    let title_width = display_width(title) + 2;
-    let keys_width = display_width(keys) + 4;
-    let fits = usize::from(area.width) >= title_width + keys_width + 4;
-    if !keys.is_empty() && fits {
+    if !keys.is_empty() && keys_fit(area.width, title, keys) {
         block = block.title(Line::from(key_spans(keys, context)).right_aligned());
     }
     let inner = block.inner(area);
     frame.render_widget(block, area);
     inner
+}
+
+/// Whether `keys` fit at the right of the title of a panel `width` wide
+/// titled `title`.
+fn keys_fit(width: u16, title: &str, keys: &str) -> bool {
+    let title_width = display_width(title) + 2;
+    let keys_width = display_width(keys) + 4;
+    usize::from(width) >= title_width + keys_width + 4
+}
+
+/// The first of `choices` (the fullest first) that fits at the right of
+/// the title of a panel `width` wide titled `title`; none when none does.
+pub(crate) fn fitting_keys<'a>(width: u16, title: &str, choices: &[&'a str]) -> &'a str {
+    choices
+        .iter()
+        .copied()
+        .find(|keys| keys_fit(width, title, keys))
+        .unwrap_or("")
 }
 
 /// Wrapped message (used for "no data" and error explanations).
@@ -569,6 +584,10 @@ pub(crate) fn measuring_context(model: &ViewModel, slot: Slot) -> DisplayContext
         expanded: false,
         scroll: 0,
         tab: 0,
+        offset: 0,
+        marked: std::sync::Arc::default(),
+        picked: None,
+        folded: std::sync::Arc::default(),
     }
 }
 
@@ -949,9 +968,6 @@ fn position_columns(
 pub(crate) struct TableCell {
     pub text: String,
     pub style: Style,
-    /// Parts of `text` in a style of their own: the display column they
-    /// start at, their width and their style.
-    pub accents: Vec<(usize, usize, Style)>,
 }
 
 impl TableCell {
@@ -959,23 +975,6 @@ impl TableCell {
         Self {
             text: text.into(),
             style,
-            accents: Vec::new(),
-        }
-    }
-
-    /// A cell written in `style` whose `parts` follow one another, each
-    /// part in the style given with it.
-    pub fn of_parts(parts: Vec<(String, Style)>, style: Style) -> Self {
-        let mut text = String::new();
-        let mut accents = Vec::new();
-        for (part, part_style) in parts {
-            accents.push((display_width(&text), display_width(&part), part_style));
-            text.push_str(&part);
-        }
-        Self {
-            text,
-            style,
-            accents,
         }
     }
 }
@@ -1021,39 +1020,9 @@ pub(crate) fn draw_table_row(
     }
     for column in columns {
         if let Some(cell) = cells.get(column.spec) {
-            let patched = |style: Style| row_style.map_or(style, |row| style.patch(row));
-            draw_aligned(buffer, row, column, &cell.text, patched(cell.style));
-            draw_accents(buffer, row, column, cell, patched);
+            let style = row_style.map_or(cell.style, |row| cell.style.patch(row));
+            draw_aligned(buffer, row, column, &cell.text, style);
         }
-    }
-}
-
-/// Restyles the parts of `cell` that have a style of their own, when the
-/// whole text fits its column (a cut text keeps the cell's style).
-fn draw_accents(
-    buffer: &mut Buffer,
-    row: Rect,
-    column: &FittedColumn,
-    cell: &TableCell,
-    patched: impl Fn(Style) -> Style,
-) {
-    let text_width = display_width(&cell.text);
-    let x = row.x.saturating_add(column.x);
-    if cell.accents.is_empty() || text_width > usize::from(column.width) || x >= row.right() {
-        return;
-    }
-    let end = x.saturating_add(column.width).min(row.right());
-    let start = match column.align {
-        Align::Left => x,
-        Align::Right => end.saturating_sub(saturate_u16(text_width)),
-    };
-    for (offset, width, style) in &cell.accents {
-        let left = start.saturating_add(saturate_u16(*offset)).min(end);
-        let right = left.saturating_add(saturate_u16(*width)).min(end);
-        buffer.set_style(
-            Rect::new(left, row.y, right.saturating_sub(left), 1),
-            patched(*style),
-        );
     }
 }
 
@@ -1140,49 +1109,6 @@ mod tests {
             spans[1].style,
             theme.tone_style(crate::format::CellTone::Missing)
         );
-    }
-
-    /// The parts of a table cell keep their own styles where the text
-    /// lands in its column, unless the text had to be cut.
-    #[test]
-    fn a_table_cell_draws_its_parts_in_their_styles() {
-        let red = Style::new().fg(Color::Rgb(225, 70, 70));
-        let green = Style::new().fg(Color::Rgb(90, 200, 120));
-        let cell = TableCell::of_parts(
-            vec![
-                ("45°C".to_owned(), green),
-                (" / ".to_owned(), Style::new()),
-                ("99°C".to_owned(), red),
-            ],
-            Style::new(),
-        );
-        assert_eq!(cell.text, "45°C / 99°C");
-        let draw = |width: u16| {
-            let column = FittedColumn {
-                spec: 0,
-                x: 0,
-                width,
-                align: Align::Right,
-                separated: false,
-            };
-            render_area(16, 1, |frame, row| {
-                draw_table_row(
-                    frame.buffer_mut(),
-                    row,
-                    &[column],
-                    std::slice::from_ref(&cell),
-                    None,
-                );
-            })
-        };
-        let fitted = draw(14);
-        assert_eq!(row_text(&fitted, 0), "   45°C / 99°C  ");
-        assert_eq!(fitted[(3, 0)].fg, green.fg.unwrap());
-        assert_eq!(fitted[(6, 0)].fg, green.fg.unwrap());
-        assert_eq!(fitted[(10, 0)].fg, red.fg.unwrap());
-        assert_eq!(fitted[(13, 0)].fg, red.fg.unwrap());
-        let cut = draw(6);
-        assert!((0..6).all(|x| cut[(x, 0)].fg != red.fg.unwrap()));
     }
 
     #[test]

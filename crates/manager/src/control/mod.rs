@@ -19,7 +19,7 @@ use dgxtop_core::budget::{ByteLedger, QueueGate};
 use dgxtop_core::canonical::GapRecord;
 use dgxtop_core::clock::{TimeProvider, ms_to_ns};
 use dgxtop_core::commands::CommandResult;
-use dgxtop_core::identity::{BootId, HostId, SessionId};
+use dgxtop_core::identity::{AdapterId, BootId, HostId, SessionId};
 use dgxtop_core::naming::{self, adapters, groups};
 use dgxtop_core::ports::{LogLevel, Logger, TrendReader};
 use uuid::Uuid;
@@ -338,6 +338,21 @@ impl ControlCore {
         }
         if fx.dirty_all {
             self.sessions.mark_all_dirty();
+        }
+        if fx.reread_processes {
+            self.reread_processes();
+        }
+    }
+
+    /// Reads the groups the process table is built from once more, now
+    /// (D-109): the procfs processes and the GPUs' process lists.
+    fn reread_processes(&mut self) {
+        let now = self.clock.now_boot_ns();
+        for adapter in [adapters::PROCFS, adapters::NVML] {
+            if let Ok(adapter_id) = AdapterId::new(adapter) {
+                self.scheduler
+                    .request_early_read(&adapter_id, groups::PROCESS, now);
+            }
         }
     }
 

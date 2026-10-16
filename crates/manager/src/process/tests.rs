@@ -403,8 +403,11 @@ fn happy_path_sends_exactly_once_after_the_durable_intent() {
     let outcomes = bench.outcomes();
     assert_eq!(outcomes.last().unwrap().state, ActionState::SignalSent);
 
-    // Non-blocking exit observation every 250 ms.
-    bench.advance_ms(250);
+    // Non-blocking exit observation every 50 ms (D-109).
+    bench.advance_ms(49);
+    bench.tick();
+    assert!(bench.actions.take().is_empty(), "not yet");
+    bench.advance_ms(1);
     bench.tick();
     let ops = bench.actions.take();
     assert!(matches!(
@@ -414,17 +417,26 @@ fn happy_path_sends_exactly_once_after_the_durable_intent() {
             ..
         }
     ));
-    bench.action_completion(ActionCompletion::ExitObserved {
+    let running = bench.action_completion(ActionCompletion::ExitObserved {
         request_id: confirm_id,
         observation: ExitObservation::Running,
     });
-    bench.advance_ms(250);
+    assert!(
+        !running.dirty_all && !running.reread_processes,
+        "a process still running changes nothing shown"
+    );
+    bench.advance_ms(50);
     bench.tick();
     assert_eq!(bench.actions.take().len(), 1);
-    bench.action_completion(ActionCompletion::ExitObserved {
+    let exited = bench.action_completion(ActionCompletion::ExitObserved {
         request_id: confirm_id,
         observation: ExitObservation::ExitObserved,
     });
+    assert!(
+        exited.reread_processes,
+        "the table is read again so the process leaves it at once"
+    );
+    assert!(exited.dirty_all);
     assert_eq!(bench.state_of(prepare_id), ActionState::ExitObserved);
     assert!(matches!(
         bench.actions.take()[..],
@@ -1173,8 +1185,8 @@ fn exit_not_observed_within_ten_seconds_is_still_running() {
     });
     bench.actions.take();
     let mut polls = 0;
-    for _ in 0..50 {
-        bench.advance_ms(250);
+    for _ in 0..250 {
+        bench.advance_ms(50);
         bench.tick();
         for op in bench.actions.take() {
             if matches!(op, ActionOp::ObserveExit { .. }) {
@@ -1186,7 +1198,7 @@ fn exit_not_observed_within_ten_seconds_is_still_running() {
             }
         }
     }
-    assert!((35..=41).contains(&polls), "polls {polls}");
+    assert!((190..=201).contains(&polls), "polls {polls}");
     assert_eq!(bench.state_of(prepare_id), ActionState::StillRunning);
 }
 

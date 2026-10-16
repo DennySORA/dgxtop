@@ -32,6 +32,10 @@ use crate::viewer::{HitMap, RenderInput, Viewer};
 /// Input poll while a command result is awaited: results are looked for
 /// at the input cadence.
 pub const RESULT_POLL: Duration = Duration::from_millis(50);
+/// Input poll while a signal is on its way (D-109): its token and outcome
+/// are taken within a few milliseconds, as a kill is never something to
+/// wait for. Results do not wake the loop, so this bounds the delay.
+pub const SIGNAL_POLL: Duration = Duration::from_millis(5);
 /// Longest input poll once a new projection could be drawn. Projections
 /// and the Manager's shutdown request arrive without waking the loop, so
 /// this bounds how late they are seen.
@@ -486,7 +490,9 @@ impl TuiLoop {
             Decision::Draw => MIN_POLL,
             Decision::WaitUntil(due) => due.saturating_sub(now),
         };
-        let idle = if self.controller.awaits_results() {
+        let idle = if self.controller.awaits_signal() {
+            SIGNAL_POLL
+        } else if self.controller.awaits_results() {
             RESULT_POLL
         } else {
             let until_data = self.scheduler.next_data_draw(pressured).saturating_sub(now);

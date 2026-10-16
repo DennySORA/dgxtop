@@ -11,6 +11,9 @@ use super::text::clean;
 /// Keys of an active confirmation, shown right under the question.
 pub(crate) const CONFIRM_HINT: &str = "y / Enter send · n / Esc cancel";
 
+/// Keys of the Process History's deletion prompt (D-108).
+pub(crate) const CONFIRM_DELETE_HINT: &str = "y / Enter delete · n / Esc cancel";
+
 /// Width below which the confirmation uses its compact wording.
 pub(crate) const COMPACT_CONFIRMATION_WIDTH: u16 = 60;
 

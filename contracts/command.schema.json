@@ -424,6 +424,25 @@
                       "minimum": 1,
                       "maximum": 20
                     },
+                    "folded": {
+                      "type": "array",
+                      "uniqueItems": true,
+                      "maxItems": 10,
+                      "items": {
+                        "enum": [
+                          "disk",
+                          "network",
+                          "history.cpu",
+                          "history.memory",
+                          "history.gpu_utilization",
+                          "history.gpu_memory",
+                          "history.gpu_temperature",
+                          "history.power",
+                          "history.disk",
+                          "history.network"
+                        ]
+                      }
+                    },
                     "redline_threshold_percent": {
                       "type": "number",
                       "minimum": 0,
@@ -876,6 +895,93 @@
           "required": [
             "type",
             "confirmation_token"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "DeleteRuns"
+            },
+            "runs": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "host_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "boot_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "pid_namespace": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "pid": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "start_time_ticks": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,19})$"
+                  }
+                },
+                "required": [
+                  "host_id",
+                  "boot_id",
+                  "pid_namespace",
+                  "pid",
+                  "start_time_ticks"
+                ]
+              }
+            }
+          },
+          "required": [
+            "type",
+            "runs"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "SetFolded"
+            },
+            "panels": {
+              "type": "array",
+              "uniqueItems": true,
+              "maxItems": 10,
+              "items": {
+                "enum": [
+                  "disk",
+                  "network",
+                  "history.cpu",
+                  "history.memory",
+                  "history.gpu_utilization",
+                  "history.gpu_memory",
+                  "history.gpu_temperature",
+                  "history.power",
+                  "history.disk",
+                  "history.network"
+                ]
+              }
+            }
+          },
+          "required": [
+            "type",
+            "panels"
           ]
         },
         {

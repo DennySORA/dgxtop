@@ -133,7 +133,10 @@ impl WriteProgress {
 pub struct ProcessHistoryModel {
     /// Moves with every publish.
     pub revision: u64,
-    /// The runs, newest start first, at most `view::MAX_RUN_ROWS`.
+    /// The runs, the running ones first, each part the latest start first
+    /// (D-115), every one listed (at most
+    /// `process_history::MAX_LISTED_RUNS`); a session's projection takes
+    /// the ones its filter keeps, at most `view::MAX_RUN_ROWS` (D-113).
     pub runs: Vec<RunRow>,
     /// Runs listed beyond those.
     pub more_runs: usize,

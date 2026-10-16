@@ -4,12 +4,12 @@
 //! host's total power and each CPU package's power against their peaks
 //! (D-106), each GPU's utilization, memory in use, temperature and power
 //! against their scales ([`gpu_series`]), and the read/write and
-//! receive/transmit rates of one disk and one interface. The disk and the interface are the busiest
-//! when the view opens and stay while they report, so the charts never jump
-//! between devices. The statistics (D-48) summarize the same four GPU
-//! series over 1 h to 24 h. A memory chart names the GPUs whose tracked
-//! processes' parts it stacks (D-64): a GPU's memory its GPU, the RAM used
-//! the GPUs that share the RAM; the history joins them (D-99).
+//! receive/transmit rates of one disk and one interface. The disk and the
+//! interface are the busiest when the view opens and stay while they
+//! report, so the charts never jump between devices. A memory chart names
+//! the GPUs whose tracked processes' parts it stacks (D-64): a GPU's memory
+//! its GPU, the RAM used the GPUs that share the RAM; the history joins
+//! them (D-99).
 
 use std::collections::BTreeSet;
 
@@ -23,7 +23,7 @@ use super::gpu::gpu_name;
 use super::gpu_directory::{GpuDirectory, GpuIdentity};
 use super::network::ranked_interfaces;
 use super::reader::MetricReader;
-use crate::history::{ChartRequest, HistoryChartSpec, HistoryPicks, MAX_CHARTS, MAX_STAT_SERIES};
+use crate::history::{ChartRequest, HistoryChartSpec, HistoryPicks, MAX_CHARTS};
 
 /// CPU packages whose power is charted, the first ones by number: a host
 /// has one or two.
@@ -34,7 +34,7 @@ const CPU_POWER_CHARTS: usize = 2;
 const HOST_CHARTS: usize = 7 + CPU_POWER_CHARTS;
 const PERCENT_SCALE: f64 = 100.0;
 
-/// Statistics series of one GPU: utilization, memory, temperature, power.
+/// Series of one GPU: utilization, memory, temperature, power.
 const SERIES_PER_GPU: usize = 4;
 
 /// The series for a session's request.
@@ -47,7 +47,6 @@ pub(crate) fn history_charts(
     let reader = MetricReader::new(snapshot, catalog, now_boot_ns);
     HistoryPicks {
         charts: dashboard(&reader, catalog, request.shown),
-        stats: gpu_stats(&reader, catalog),
     }
 }
 
@@ -123,24 +122,6 @@ fn dashboard(
             HistoryChartKind::MemoryUsed => unified.clone(),
             _ => BTreeSet::new(),
         };
-    }
-    charts.specs
-}
-
-/// Each GPU's statistics series (D-48), the four of [`gpu_series`], for as
-/// many GPUs as [`MAX_STAT_SERIES`] allows.
-fn gpu_stats(reader: &MetricReader<'_>, catalog: &CatalogSnapshot) -> Vec<HistoryChartSpec> {
-    let directory = GpuDirectory::new(catalog, reader.index());
-    let mut charts = Charts {
-        reader,
-        specs: Vec::new(),
-    };
-    for gpu in directory
-        .gpus()
-        .iter()
-        .take(MAX_STAT_SERIES / SERIES_PER_GPU)
-    {
-        charts.add_gpu(gpu);
     }
     charts.specs
 }
@@ -473,7 +454,7 @@ mod tests {
             sample(ids::CPU_POWER_PACKAGE, "cpu.package.0", "package:0").f64(25.0),
         );
         let picked = pick(&fixture, &[]);
-        for spec in picked.charts.iter().chain(&picked.stats) {
+        for spec in &picked.charts {
             assert!(
                 is_overview_metric(spec.key.metric_id.as_str()),
                 "{}",
@@ -586,46 +567,5 @@ mod tests {
             1
         );
         assert!(charts.len() <= MAX_CHARTS);
-    }
-
-    #[test]
-    fn every_gpu_is_summarized_by_the_series_it_reports() {
-        let mut fixture = host();
-        fixture.add_entity(entity_record(
-            GPU_B,
-            EntityKind::Gpu,
-            "NVIDIA L4",
-            &[(attributes::NVML_INDEX, "1")],
-        ));
-        for (metric, value) in [
-            ("gpu.utilization.compute", 20.0),
-            ("gpu.memory.framebuffer.used", 1e9),
-            ("gpu.temperature", 41.0),
-            ("gpu.power.draw", 70.0),
-        ] {
-            fixture.add("gpu", sample(metric, GPU_B, "gpu").f64(value));
-        }
-        let stats = pick(&fixture, &[]).stats;
-        // GPU A reports utilization only; GPU B all four series.
-        assert_eq!(
-            kinds(&stats),
-            vec![
-                HistoryChartKind::GpuUtilization,
-                HistoryChartKind::GpuUtilization,
-                HistoryChartKind::GpuMemory,
-                HistoryChartKind::GpuTemperature,
-                HistoryChartKind::GpuPower,
-            ]
-        );
-        assert_eq!(stats[0].key.entity_id.as_str(), GPU_A);
-        assert_eq!(stats[0].subject, "GPU 0 · NVIDIA H100");
-        assert!(stats[1..].iter().all(
-            |spec| spec.key.entity_id.as_str() == GPU_B && spec.subject == "GPU 1 · NVIDIA L4"
-        ));
-        assert_eq!(
-            stats[2].key.metric_id.as_str(),
-            "gpu.memory.framebuffer.used"
-        );
-        assert_eq!(stats[1].scale_max, Some(100.0));
     }
 }

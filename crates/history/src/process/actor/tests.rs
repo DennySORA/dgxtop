@@ -385,3 +385,35 @@ fn a_failed_read_answer_ends_the_loading() {
     ));
     assert!(!rig.published.latest().detail_for(&request).unwrap().loading);
 }
+
+/// A deletion a session sent (D-108) leaves the published list at once;
+/// the run still running stays in it.
+#[test]
+fn a_deletion_leaves_the_published_list() {
+    let mut rig = rig();
+    table(&mut rig, 1, vec![row(9, GIB)]);
+    loaded(
+        &mut rig,
+        ProcessHistoryLoad {
+            runs: vec![ended_info(5), ended_info(6)],
+            ..ProcessHistoryLoad::default()
+        },
+    );
+    let listed = |rig: &Rig| -> Vec<i32> {
+        let mut pids: Vec<i32> = rig
+            .published
+            .latest()
+            .runs
+            .iter()
+            .map(|run| run.key.pid.get())
+            .collect();
+        pids.sort_unstable();
+        pids
+    };
+    assert_eq!(listed(&rig), vec![5, 6, 9]);
+    rig.actor.handle(ProcessHistoryInput::Delete(vec![
+        test_process_key(5),
+        test_process_key(9),
+    ]));
+    assert_eq!(listed(&rig), vec![6, 9]);
+}

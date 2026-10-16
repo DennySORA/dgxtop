@@ -1,11 +1,18 @@
 //! The Process History tab (D-76, D-77): every GPU process run kept (the
-//! latest 2000), the latest start first (`tab` 1), and one run's whole record
+//! latest 512), as the history orders them, the running ones first (D-115,
+//! `tab` 1), and one run's whole record
 //! (`tab` 2): what it ran and where, its parent, program and control group,
 //! when it started and ended and why, and its charts laid out like the
 //! Overview History's: panels of strips with their scale and legend, each
 //! column a bar of the size `w` steps through, on the local clock's axis.
 //! The context's scroll is the cursor; its `expanded` shows the whole
-//! command line.
+//! command line; its `marked` runs carry a mark, in the warning color, for
+//! the deletion (D-108). An opened run whose charts would squeeze their
+//! strips past their legends shows them on pages, its `offset` the page
+//! (D-112): the first under all the run's details, the others under its
+//! identity line, which says the page and what the next holds.
+
+use std::ops::Range;
 
 use dgxtop_core::metric::CanonicalUnit;
 use dgxtop_core::process_history::{RunInfo, RunMetric};
@@ -17,7 +24,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use super::axis::clock_ticks;
-use super::layout::plan;
+use super::layout::{FRAME_ROWS, paginate, plan};
 use super::panels::{Paint, Panel, Series, SeriesState, Strip, single};
 use super::strip::Window;
 use super::{Hidden, render_axes, render_bands};
@@ -30,9 +37,11 @@ use crate::modules::common::{
     draw_table_row, fit_columns, gap, message, separator,
 };
 use crate::num::saturate_u16;
-use crate::registry::DisplayContext;
+use crate::registry::{DisplayContext, DisplayModuleManifest, controls};
+use dgxtop_core::view::ViewModel;
 
 const SWATCH: &str = "■";
+const MARK: &str = "✓";
 const RUNNING: &str = "running";
 /// Command lines an expanded command takes at most.
 const MAX_COMMAND_LINES: usize = 8;
@@ -44,7 +53,13 @@ struct Column {
     priority: u8,
 }
 
-const COLUMNS: [Column; 12] = [
+/// The mark, then the run's chart color, then its record.
+const COLUMNS: [Column; 13] = [
+    Column {
+        title: "",
+        right: false,
+        priority: 255,
+    },
     Column {
         title: "",
         right: false,
@@ -128,18 +143,19 @@ fn cursor_index(view: &ProcessHistoryView, scroll: u16) -> Option<usize> {
 pub(super) fn render_runs(
     frame: &mut Frame<'_>,
     area: Rect,
-    view: &ProcessHistoryView,
+    (view, frame_of): (&ProcessHistoryView, (&DisplayModuleManifest, &ViewModel)),
     context: &DisplayContext,
     output: &mut Output,
 ) {
     let Some(run) = cursor_run(view, context.scroll) else {
-        message(
-            frame,
-            area,
-            "no GPU process was seen yet",
-            context.theme.muted_style(),
-        );
-        output.label("process history: no GPU process run");
+        let filter = clean(frame_of.1.session.filter.trim());
+        let text = if filter.is_empty() {
+            "no GPU process was seen yet".to_owned()
+        } else {
+            format!("no run's name or PID holds \"{filter}\" · / then Esc clears the filter")
+        };
+        message(frame, area, &text, context.theme.muted_style());
+        output.label(format!("process history: {text}"));
         return;
     };
     output.label(format!(
@@ -159,7 +175,94 @@ pub(super) fn render_runs(
         .opened
         .as_ref()
         .filter(|detail| detail.info.key == run.key);
-    render_detail(frame, area, (run, detail), view, context, output);
+    render_detail(
+        frame,
+        area,
+        (run, detail),
+        (view, frame_of),
+        context,
+        output,
+    );
+}
+
+/// Pages of the opened run's charts in `area` (D-112): one while it has
+/// none, or while they are read.
+pub(super) fn opened_run_pages(
+    view: &ProcessHistoryView,
+    area: Rect,
+    context: &DisplayContext,
+) -> usize {
+    let Some(run) = cursor_run(view, context.scroll) else {
+        return 1;
+    };
+    view.opened
+        .as_ref()
+        .filter(|detail| detail.info.key == run.key && !detail.loading)
+        .map_or(1, |detail| {
+            let lines = detail_lines(run, Some(detail), view.utc_offset_s, area.width, context);
+            run_layout(detail, lines.len(), area, context).pages.len()
+        })
+}
+
+/// The panels of an opened run and the page of them shown (D-112).
+struct RunLayout<'a> {
+    panels: Vec<Panel<'a>>,
+    /// Each page's panels, as positions.
+    pages: Vec<Range<usize>>,
+    page: usize,
+}
+
+impl RunLayout<'_> {
+    /// `page 1 of 2 · next: Tasks, Disk, Network · host`, then shorter
+    /// forms, as much as `room` holds; nothing on one page.
+    fn note(&self, room: usize) -> Option<String> {
+        if self.pages.len() < 2 {
+            return None;
+        }
+        let place = format!("page {} of {}", self.page + 1, self.pages.len());
+        let mut forms = Vec::new();
+        if let Some(next) = self.pages.get(self.page + 1) {
+            let titles: Vec<String> = self.panels[next.clone()]
+                .iter()
+                .map(|panel| clean(&panel.title))
+                .collect();
+            forms.push(format!("{place} · next: {}", titles.join(", ")));
+            forms.push(format!(
+                "{place} · next: {}",
+                crate::format::counted(next.len(), "panel")
+            ));
+        }
+        forms.push(place);
+        forms.push(format!("{}/{}", self.page + 1, self.pages.len()));
+        forms.into_iter().find(|form| display_width(form) <= room)
+    }
+}
+
+/// Pages `detail`'s panels for `area`, the first under `details` rows of
+/// the run's details, the others under its identity line.
+fn run_layout<'a>(
+    detail: &'a RunDetailView,
+    details: usize,
+    area: Rect,
+    context: &DisplayContext,
+) -> RunLayout<'a> {
+    let panels = run_panels(detail);
+    let strips: Vec<u16> = panels
+        .iter()
+        .map(|panel| saturate_u16(panel.strips.len()))
+        .collect();
+    let first_rows = area
+        .height
+        .saturating_sub(saturate_u16(details))
+        .saturating_sub(FRAME_ROWS);
+    let rows = area.height.saturating_sub(1 + FRAME_ROWS);
+    let pages = paginate(area.width, (first_rows, rows), &strips);
+    let page = usize::from(context.offset).min(pages.len() - 1);
+    RunLayout {
+        panels,
+        pages,
+        page,
+    }
 }
 
 fn render_list(
@@ -212,7 +315,7 @@ fn render_list(
         let Some(row) = cursor_rows.next_row() else {
             break;
         };
-        let style = (index == cursor).then(|| context.theme.selected_row_style());
+        let style = (index == cursor).then(|| cursor_style(&view.runs[index], context));
         draw_table_row(frame.buffer_mut(), row, &fitted, &cells, style);
     }
     if view.more_runs > 0
@@ -228,7 +331,18 @@ fn render_list(
         );
     }
     for run in &view.runs {
-        output.label(run_label(run, view.utc_offset_s));
+        let marked = context.marked.contains(&run.key);
+        output.label(run_label(run, view.utc_offset_s, marked));
+    }
+}
+
+/// The cursor's row: highlighted, a marked run still in the warning color.
+fn cursor_style(run: &RunRowView, context: &DisplayContext) -> Style {
+    let selected = context.theme.selected_row_style();
+    if context.marked.contains(&run.key) {
+        selected.fg(context.theme.warning)
+    } else {
+        selected
     }
 }
 
@@ -238,7 +352,11 @@ fn list_cells(
     context: &DisplayContext,
 ) -> Vec<TableCell> {
     let theme = &context.theme;
-    let (text, label) = if run.live {
+    let marked = context.marked.contains(&run.key);
+    let (text, label) = if marked {
+        let warning = Style::new().fg(theme.warning);
+        (warning, warning)
+    } else if run.live {
         (theme.text_style(), theme.label_style())
     } else {
         (theme.muted_style(), theme.muted_style())
@@ -258,6 +376,7 @@ fn list_cells(
         |slot| TableCell::new(SWATCH, Style::new().fg(theme.process_color(slot))),
     );
     vec![
+        TableCell::new(if marked { MARK } else { " " }, text),
         swatch,
         TableCell::new(
             format_local_short(run.started_utc_ns, view.utc_offset_s),
@@ -283,16 +402,17 @@ fn list_cells(
 }
 
 /// `process history run pid 42 acme_llm.train started 10-11 14:03 on GPU 0:
-/// ran 1h 06m, SIGKILL by dgxtop`.
-fn run_label(run: &RunRowView, offset_s: i32) -> String {
+/// ran 1h 06m, SIGKILL by dgxtop`, and `, marked` for a marked run.
+fn run_label(run: &RunRowView, offset_s: i32, marked: bool) -> String {
     format!(
-        "process history run pid {} {} started {} on {}: ran {}, {}",
+        "process history run pid {} {} started {} on {}: ran {}, {}{}",
         run.key.pid,
         clean(&run.name),
         format_local_short(run.started_utc_ns, offset_s),
         gpu_text(&run.gpus),
         runtime_text(run.runtime_ns),
-        status_text(run)
+        status_text(run),
+        if marked { ", marked" } else { "" }
     )
 }
 
@@ -300,17 +420,20 @@ fn render_detail(
     frame: &mut Frame<'_>,
     area: Rect,
     (run, detail): (&RunRowView, Option<&RunDetailView>),
-    view: &ProcessHistoryView,
+    (view, frame_of): (&ProcessHistoryView, (&DisplayModuleManifest, &ViewModel)),
     context: &DisplayContext,
     output: &mut Output,
 ) {
-    let mut rows = RowCursor::new(area);
-    for line in detail_lines(run, detail, view.utc_offset_s, area.width, context) {
-        let Some(row) = rows.next_row() else { return };
-        output.label(line_text(&line));
-        draw_line(frame.buffer_mut(), row, &line);
+    let lines = detail_lines(run, detail, view.utc_offset_s, area.width, context);
+    for line in &lines {
+        output.label(line_text(line));
     }
+    let mut rows = RowCursor::new(area);
     let Some(detail) = detail.filter(|detail| !detail.loading) else {
+        for line in &lines {
+            let Some(row) = rows.next_row() else { return };
+            draw_line(frame.buffer_mut(), row, line);
+        }
         if let Some(body) = rows.rest() {
             message(
                 frame,
@@ -321,8 +444,34 @@ fn render_detail(
         }
         return;
     };
+    let layout = run_layout(detail, lines.len(), area, context);
+    // The later pages keep the identity line, which says the page.
+    let shown = if layout.page == 0 { lines.len() } else { 1 };
+    for (index, line) in lines.iter().take(shown).enumerate() {
+        let Some(row) = rows.next_row() else { return };
+        let room = usize::from(row.width).saturating_sub(line.width() + 2 * gap(context).width());
+        let note = (index == 0).then(|| layout.note(room)).flatten();
+        draw_caption(frame.buffer_mut(), row, line, note.as_deref(), context);
+    }
     let Some(body) = rows.rest() else { return };
-    render_charts(frame, body, (detail, view), context, output);
+    render_charts(frame, body, (detail, view, &layout), context, output);
+    publish_pages(output, frame_of, body, &layout);
+}
+
+/// Tells the controller the pages before and after the one shown, on
+/// the charts' rows (D-112).
+fn publish_pages(
+    output: &mut Output,
+    (manifest, model): (&DisplayModuleManifest, &ViewModel),
+    body: Rect,
+    layout: &RunLayout<'_>,
+) {
+    for _ in 0..layout.page {
+        output.target(model, manifest, controls::PAGE_ABOVE, body);
+    }
+    for _ in layout.page + 1..layout.pages.len() {
+        output.target(model, manifest, controls::PAGE_BELOW, body);
+    }
 }
 
 /// The run's identity, times, folder, program, parent and command line.
@@ -481,20 +630,21 @@ fn take_width(text: &str, width: usize) -> usize {
 fn render_charts(
     frame: &mut Frame<'_>,
     area: Rect,
-    (detail, view): (&RunDetailView, &ProcessHistoryView),
+    (detail, view, pages): (&RunDetailView, &ProcessHistoryView, &RunLayout<'_>),
     context: &DisplayContext,
     output: &mut Output,
 ) {
-    let panels = run_panels(detail);
+    let range = pages.pages[pages.page].clone();
+    let panels = &pages.panels[range];
     let strips: Vec<u16> = panels
         .iter()
         .map(|panel| saturate_u16(panel.strips.len()))
         .collect();
-    let layout = plan(area.width, area.height, &strips, (&[], 0));
+    let layout = plan(area.width, area.height, &strips, 0);
     let mut rows = RowCursor::new(area);
     if let Some(row) = rows.next_row() {
         let hidden = Hidden {
-            panels: layout.hidden_panels,
+            below: layout.panels_below,
             ..Hidden::default()
         };
         render_bar_row(frame, row, (detail, view.bar), hidden, context);
@@ -510,8 +660,8 @@ fn render_charts(
     render_bands(
         frame,
         &mut rows,
-        (&layout, &panels),
-        window,
+        (&layout, panels),
+        (window, None),
         context,
         output,
     );
@@ -716,6 +866,7 @@ impl<'a> RunCharts<'a> {
         (!shown.is_empty()).then_some(Panel {
             title,
             strips: shown,
+            fold: None,
         })
     }
 

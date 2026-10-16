@@ -13,12 +13,9 @@ const HOUR: i64 = 60 * MINUTE;
 const COLUMNS: u16 = 86;
 const BARS: i64 = 60;
 
-/// A pick of `charts` and no statistics.
+/// A pick of `charts`.
 fn picks(charts: Vec<HistoryChartSpec>) -> HistoryPicks {
-    HistoryPicks {
-        charts,
-        stats: Vec::new(),
-    }
+    HistoryPicks { charts }
 }
 
 struct Bench {
@@ -145,20 +142,12 @@ impl Bench {
         i64::try_from(self.clock.now_utc_ns()).unwrap()
     }
 
-    /// The session on the history view with `charts` and the statistics of
-    /// `stats` picked.
-    fn open_with(&mut self, bar: &str, charts: &[HistoryChartSpec], stats: &[HistoryChartSpec]) {
+    /// The session on the history view with `charts` picked.
+    fn open(&mut self, bar: &str, charts: &[HistoryChartSpec]) {
         self.service
             .sync_session(&self.session, &state(ViewKind::History, bar), COLUMNS, NOW);
-        let picked = HistoryPicks {
-            charts: charts.to_vec(),
-            stats: stats.to_vec(),
-        };
+        let picked = picks(charts.to_vec());
         self.service.update_charts(1, move |_| picked.clone(), NOW);
-    }
-
-    fn open(&mut self, bar: &str, charts: &[HistoryChartSpec]) {
-        self.open_with(bar, charts, &[]);
     }
 
     fn answer(&mut self, job: &HistoryJob, answer: OverviewAnswer) -> Option<SessionId> {
@@ -335,91 +324,22 @@ fn a_memory_chart_carries_the_parts_the_history_joined() {
     assert_eq!(parts, vec![(2, vec![Some(6.0), None])]);
 }
 
-/// Each GPU series' statistics are one read for its four windows, merged
-/// by the history from aligned buckets; energy is the power's integral.
-/// They refresh once a minute and a bar size change keeps them.
+/// The history view reads its charts only (D-107): the GPUs' 1 h to 24 h
+/// statistics are gone, at the first round and at every refresh.
 #[test]
-fn statistics_are_one_read_per_series_for_four_windows() {
+fn the_history_view_reads_its_charts_only() {
     let mut bench = bench(8);
     let power = gpu_series(HistoryChartKind::GpuPower, "gpu.power.draw");
-    let util = gpu_series(HistoryChartKind::GpuUtilization, "gpu.utilization.compute");
-    bench.open_with("1m", &[cpu()], &[util, power]);
-    let jobs = bench.sent(NOW);
-    let (charts, stats): (Vec<HistoryJob>, Vec<HistoryJob>) = jobs
-        .into_iter()
-        .partition(|job| matches!(job.request, OverviewRequest::Bars { .. }));
-    assert_eq!((charts.len(), stats.len()), (1, 2), "charts first");
-    let OverviewRequest::Windows { spans_ns, .. } = &stats[1].request else {
-        panic!("windows expected");
-    };
-    let hour = HOUR.unsigned_abs();
-    assert_eq!(spans_ns, &vec![hour, 6 * hour, 12 * hour, 24 * hour]);
-    let window = |minutes: u64| bar(0, minutes, 200.0);
-    let windows = vec![window(60), window(300), window(300), window(300)];
-    bench.answer(&stats[0], OverviewAnswer::Windows(windows.clone()));
-    bench.answer(&stats[1], OverviewAnswer::Windows(windows));
-    let view = bench.service.view(&bench.session);
-    let power_rows: Vec<&HistoryWindowSummary> = view
-        .summaries
-        .iter()
-        .filter(|summary| summary.kind == HistoryChartKind::GpuPower)
-        .collect();
-    let labels: Vec<&str> = power_rows
-        .iter()
-        .map(|row| row.window_label.as_str())
-        .collect();
-    assert_eq!(labels, vec!["1h", "6h", "12h", "24h"]);
-    assert_eq!(power_rows[1].covered_ns, Some(300 * 60 * SECOND));
-    assert_eq!(power_rows[1].mean, Some(200.0));
-    assert_eq!(power_rows[1].peak, Some(205.0));
-    let joules = 200.0 * 300.0 * 60.0;
-    assert!((power_rows[1].integral.unwrap() - joules).abs() < 1e-6);
-    let spans: Vec<u64> = power_rows.iter().map(|row| row.span_ns).collect();
-    assert_eq!(
-        spans,
-        [1, 6, 12, 24].map(|hours| hours * 3_600 * SECOND),
-        "each window carries its length"
-    );
-    assert!(view.summaries.iter().all(|row| !row.pending));
-    let util_row = view
-        .summaries
-        .iter()
-        .find(|row| row.kind == HistoryChartKind::GpuUtilization)
-        .unwrap();
-    assert_eq!(util_row.integral, None, "energy only for power");
-    // A bar size change reads the charts again and keeps the statistics.
-    assert!(bench.service.sync_session(
-        &bench.session,
-        &state(ViewKind::History, "5m"),
-        COLUMNS,
-        NOW
-    ));
-    let jobs = bench.sent(NOW);
-    assert!(
+    bench.open("1m", &[cpu(), power]);
+    let charts_only = |jobs: &[HistoryJob]| {
         jobs.iter()
             .all(|job| matches!(job.request, OverviewRequest::Bars { .. }))
-    );
-    assert!(
-        bench
-            .service
-            .view(&bench.session)
-            .summaries
-            .iter()
-            .all(|row| row.mean.is_some())
-    );
-    // Once a minute.
-    assert!(
-        bench
-            .sent(NOW + 30 * SECOND)
-            .iter()
-            .all(|job| { !matches!(job.request, OverviewRequest::Windows { .. }) })
-    );
+    };
+    let first = bench.sent(NOW);
+    assert_eq!(first.len(), 2);
+    assert!(charts_only(&first));
     let refreshed = bench.sent(NOW + 61 * SECOND);
-    let reads = refreshed
-        .iter()
-        .filter(|job| matches!(job.request, OverviewRequest::Windows { .. }))
-        .count();
-    assert_eq!(reads, 2);
+    assert!(!refreshed.is_empty() && charts_only(&refreshed));
 }
 
 #[test]

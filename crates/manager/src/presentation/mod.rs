@@ -185,6 +185,7 @@ pub fn build_view_model_measured(context: &PresentationContext<'_>) -> (ViewMode
         modules: build_modules(context, &plan, &inputs),
         banners: banners::build_banners(context, &facts),
         enabled_modules: enabled_module_ids(context.enabled_modules),
+        folded: context.settings.effective.viewer.folded.clone(),
         permit: None,
     };
     let max_bytes = usize::try_from(context.settings.effective.runtime.max_projection_bytes)
@@ -272,6 +273,7 @@ fn build_modules(
                 utc_offset_s: context.facts.utc_offset_s,
                 bar: context.session.process_bar,
                 scales: &run_history::RunScales::read(reader, inputs.directory),
+                filter: &context.session.filter,
             },
         )));
     }

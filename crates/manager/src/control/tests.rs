@@ -20,6 +20,7 @@ use dgxtop_core::commands::{CommandBody, CommandResult, CommandStatus, SortKey, 
 use dgxtop_core::config::Config;
 use dgxtop_core::errors::{ErrorCode, ResultCode};
 use dgxtop_core::identity::{Pid, PidNamespace, ProcessKey};
+use dgxtop_core::naming::groups;
 use dgxtop_core::observation::{
     BatchStatus, IPC_PROTOCOL_VERSION, Observation, ObservationBatch, PAGE_CONTINUES, ReadPlan,
     split_page,
@@ -754,6 +755,98 @@ fn at10_full_action_path_through_commands_sends_once() {
     assert_eq!(result.action_state, Some(ActionState::SignalSent));
 }
 
+/// Once a process dgxtop killed is seen exiting, the process table is read
+/// again at once, outside its slot, so the process leaves the list without
+/// waiting for the next sampling (D-109).
+#[test]
+fn an_observed_exit_reads_the_process_table_at_once() {
+    let mut harness = ready_harness(HarnessOptions::default());
+    with_process_table(&harness, &[4242]);
+    let key = target(4242);
+    harness
+        .submit(navigation(ViewKind::Overview, Some(key.clone()), ""))
+        .unwrap();
+    harness.settle();
+    let prepare = harness
+        .submit(CommandBody::PrepareSignal {
+            target: key.clone(),
+            signal: Signal::Sigkill,
+        })
+        .unwrap();
+    harness.settle();
+    harness.ports.actions.take();
+    harness.control(ControlCompletion::Action(ActionCompletion::Prepared {
+        request_id: prepare,
+        result: Ok(prepared_for(&key)),
+    }));
+    harness.settle();
+    let token = harness
+        .result_for(prepare)
+        .confirmation_token
+        .clone()
+        .unwrap();
+    harness.ports.audit.take();
+    let confirm = harness
+        .submit(CommandBody::ConfirmSignal {
+            confirmation_token: token,
+        })
+        .unwrap();
+    harness.settle();
+    let intent = harness
+        .ports
+        .audit
+        .take()
+        .into_iter()
+        .find_map(|op| match op {
+            AuditOp::AppendIntent(intent) => Some(intent),
+            _ => None,
+        })
+        .unwrap();
+    harness.control(ControlCompletion::Audit(AuditCompletion::IntentDurable {
+        request_id: intent.request_id,
+        intent_id: intent.intent_id,
+        result: Ok(DurableReceipt {
+            request_id: intent.request_id,
+            intent_id: intent.intent_id,
+            committed_boot_ns: harness.now_ns(),
+        }),
+    }));
+    harness.settle();
+    harness.control(ControlCompletion::Action(ActionCompletion::Sent {
+        request_id: confirm,
+        intent_id: intent.intent_id,
+        outcome: SignalOutcome::Sent,
+        sent_boot_ns: harness.now_ns(),
+    }));
+    harness.settle();
+    // Right after the slot's own read of the processes.
+    let plan = next_read_of(&mut harness, groups::PROCESS);
+    let now = harness.now_ns();
+    harness.ingest(batch_reply(&plan, Vec::new(), false, now));
+    harness.settle();
+    harness.ports.adapters.take();
+    harness.control(ControlCompletion::Action(ActionCompletion::ExitObserved {
+        request_id: confirm,
+        observation: dgxtop_core::action::ExitObservation::ExitObserved,
+    }));
+    harness.settle();
+    let reads: Vec<String> = harness
+        .ports
+        .adapters
+        .take()
+        .into_iter()
+        .filter_map(|job| match job {
+            AdapterJob::Read(plan) => Some(group_of(&plan)),
+            AdapterJob::Discover(_) => None,
+        })
+        .collect();
+    assert_eq!(
+        reads,
+        vec![groups::PROCESS.to_owned()],
+        "at the same instant"
+    );
+}
+
 #[test]
 fn at13_absent_or_unselected_targets_are_rejected_and_never_retargeted() {
     let mut harness = ready_harness(HarnessOptions::default());
@@ -1050,3 +1143,40 @@ fn invalid_setups_and_session_limits_are_rejected() {
 }
 
 mod process_history;
+
+/// A fold save (D-114) goes to the configuration without an expected
+/// revision, and once durable every projection carries the folds: what a
+/// frontend shows from its first frame after a restart.
+#[test]
+fn saved_folds_reach_every_projection() {
+    let mut harness = ready_harness(HarnessOptions::default());
+    let request = harness
+        .submit(CommandBody::SetFolded {
+            panels: vec!["network".into(), "disk".into()],
+        })
+        .unwrap();
+    harness.settle();
+    let jobs = harness.ports.config.take();
+    let Some(ConfigJob::Persist { candidate, .. }) = jobs.first() else {
+        panic!("{jobs:?}");
+    };
+    assert_eq!(candidate.viewer.folded, ["disk", "network"]);
+    harness.control(ControlCompletion::Config {
+        request_id: request,
+        result: Ok(PersistReceipt {
+            revision: 2,
+            sha256: "0".repeat(64),
+            path: "/x".into(),
+            file_bytes: 1,
+        }),
+    });
+    harness.settle();
+    assert!(harness.result_for(request).code.is_ok());
+    harness
+        .submit(navigation(ViewKind::Overview, None, ""))
+        .unwrap();
+    harness.ports.clock.advance_ms(100);
+    harness.settle();
+    let projection = harness.session.take_projection().expect("a projection");
+    assert_eq!(projection.folded, ["disk", "network"]);
+}

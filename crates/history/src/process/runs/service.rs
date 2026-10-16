@@ -190,6 +190,12 @@ impl ProcessHistoryService {
         self.book.note_signal(key, signal, now);
     }
 
+    /// A session deleted `keys` (D-108): the ended runs among them leave
+    /// the book now and the long-term store with the next journal.
+    pub(crate) fn delete(&mut self, keys: &[ProcessKey]) {
+        self.book.delete_ended(keys);
+    }
+
     /// Reads the buckets of `key` from the long-term store when they are
     /// not in memory (a run opened in the Process History tab).
     pub(crate) fn open(&mut self, key: &ProcessKey) {
@@ -870,5 +876,32 @@ mod tests {
 
     fn key_of(pid: i64) -> ProcessKey {
         dgxtop_core::testing::test_process_key(pid)
+    }
+
+    /// A session's deletion (D-108): the ended runs asked for leave the
+    /// list at once and the store with the next journal; the live run
+    /// stays.
+    #[test]
+    fn a_deletion_reaches_the_store_with_the_next_journal() {
+        let mut rig = rig();
+        rig.service.start(now(0));
+        rig.store.take();
+        rig.service.on_completion(
+            ProcessHistoryCompletion::Loaded(Ok(ProcessHistoryLoad {
+                runs: vec![ended_run(1, 1), ended_run(2, 2)],
+                ..ProcessHistoryLoad::default()
+            })),
+            now(3),
+        );
+        observe(&mut rig, 4);
+        rig.service.delete(&[key_of(1), key_of(9)]);
+        assert!(rig.service.book().run(&key_of(1)).is_none());
+        assert!(rig.service.book().run(&key_of(2)).is_some());
+        assert!(
+            rig.service.book().run(&key_of(9)).is_some(),
+            "the live run stays"
+        );
+        rig.service.flush(now(5));
+        assert_eq!(forgotten(&rig), vec![vec![1]]);
     }
 }

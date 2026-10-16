@@ -26,6 +26,17 @@ pub struct ProcessHistoryHandles {
     pub runs: Arc<dyn ProcessHistoryReader>,
 }
 
+/// What became of a deletion handed to the process actor (D-108).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Deletion {
+    /// The actor took it: the ended runs among the keys leave its list.
+    Sent,
+    /// Its queue is full; nothing was deleted.
+    Busy,
+    /// There is no process history to delete from.
+    Off,
+}
+
 /// The Manager's link to the process actor (module docs).
 pub(crate) struct ProcessHistoryLink {
     inputs: Option<Box<dyn Dispatch<ProcessHistoryInput>>>,
@@ -115,6 +126,17 @@ impl ProcessHistoryLink {
         if due {
             self.send(ProcessHistoryInput::Show(request.clone()));
             self.asked.insert(session.clone(), (request, now_ns));
+        }
+    }
+
+    /// A session deletes `runs` (D-108); the actor drops the ended ones.
+    pub(crate) fn delete(&self, runs: Vec<ProcessKey>) -> Deletion {
+        let Some(inputs) = &self.inputs else {
+            return Deletion::Off;
+        };
+        match inputs.try_dispatch(ProcessHistoryInput::Delete(runs)) {
+            Ok(()) => Deletion::Sent,
+            Err(_) => Deletion::Busy,
         }
     }
 

@@ -29,6 +29,7 @@ use dgxtop_core::errors::{ErrorCode, ErrorDetail};
 use dgxtop_core::identity::ModuleId;
 use dgxtop_core::ports::{ConfigJob, Dispatch, DispatchError, PersistError};
 use dgxtop_core::text::sanitize_message;
+use dgxtop_core::view::FOLDABLE_PANELS;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -52,17 +53,23 @@ pub(crate) enum ConfigRequest {
         enabled: bool,
         expected_revision: u32,
     },
+    /// The panels folded away (D-114): applied on the saved revision,
+    /// whatever it is, since only the frontends' layout reads them.
+    Folds { panels: Vec<String> },
 }
 
 impl ConfigRequest {
-    fn expected_revision(&self) -> u32 {
+    /// The revision the request was made against; none for one applied on
+    /// whatever is saved.
+    fn expected_revision(&self) -> Option<u32> {
         match self {
             Self::SetInterval {
                 expected_revision, ..
             }
             | Self::SetModule {
                 expected_revision, ..
-            } => *expected_revision,
+            } => Some(*expected_revision),
+            Self::Folds { .. } => None,
         }
     }
 }
@@ -236,8 +243,9 @@ impl ConfigurationService {
                 "a configuration change is still being persisted",
             ));
         }
-        let expected = request.expected_revision();
-        if expected != self.saved.revision {
+        if let Some(expected) = request.expected_revision()
+            && expected != self.saved.revision
+        {
             let mut result = reject(
                 ErrorCode::Conflict,
                 &format!(
@@ -266,6 +274,16 @@ impl ConfigurationService {
                 let candidate = with_module(&self.saved, module_id.as_str(), enabled);
                 let verb = if enabled { "enable" } else { "disable" };
                 (candidate, format!("{verb} module {module_id}"))
+            }
+            ConfigRequest::Folds { panels } => {
+                let mut candidate = self.saved.clone();
+                candidate.viewer.folded = folded_in_order(&panels);
+                let description = if panels.is_empty() {
+                    "unfold every panel".to_owned()
+                } else {
+                    format!("fold {}", candidate.viewer.folded.join(", "))
+                };
+                (candidate, description)
             }
         };
         if let Err(issues) = candidate.validate() {
@@ -550,6 +568,16 @@ fn pin_restart_only(effective: &mut Config, running: &Config) {
     store.process_history_enabled = running.store.process_history_enabled;
 }
 
+/// `panels` in the order of [`FOLDABLE_PANELS`], so the saved list does
+/// not change with the order folds were made in.
+fn folded_in_order(panels: &[String]) -> Vec<String> {
+    FOLDABLE_PANELS
+        .iter()
+        .filter(|panel| panels.iter().any(|folded| folded == *panel))
+        .map(|panel| (*panel).to_owned())
+        .collect()
+}
+
 fn with_module(saved: &Config, module: &str, enabled: bool) -> Config {
     let mut candidate = saved.clone();
     let modules = &mut candidate.viewer.enabled_modules;
@@ -763,6 +791,53 @@ mod tests {
             ResultCode::from(ErrorCode::ValidationFailed)
         );
         assert!(bench.port.is_empty());
+    }
+
+    /// Folds are saved on whatever revision is saved, in the canonical
+    /// order (D-114); the same set again changes nothing, and a change
+    /// still being persisted keeps another busy.
+    #[test]
+    fn folds_are_saved_on_the_saved_revision() {
+        let mut bench = bench();
+        let id = Uuid::new_v4();
+        let fold = |panels: &[&str]| ConfigRequest::Folds {
+            panels: panels.iter().map(|panel| (*panel).to_owned()).collect(),
+        };
+        let decision =
+            bench
+                .service
+                .submit(id, fold(&["history.network", "disk"]), &catalog(), NOW);
+        assert_eq!(decision, ConfigDecision::Pending);
+        let jobs = bench.port.take();
+        let ConfigJob::Persist {
+            expected_revision,
+            candidate,
+            ..
+        } = &jobs[0];
+        assert_eq!(*expected_revision, 1);
+        assert_eq!(candidate.viewer.folded, ["disk", "history.network"]);
+        let busy = bench
+            .service
+            .submit(Uuid::new_v4(), fold(&[]), &catalog(), NOW);
+        assert_eq!(rejected_code(&busy), ResultCode::from(ErrorCode::Busy));
+        let PersistOutcome::Applied(_) = bench.service.on_persist_result(id, receipt(2)) else {
+            panic!("applied expected");
+        };
+        assert_eq!(
+            bench.service.effective().viewer.folded,
+            ["disk", "history.network"]
+        );
+        let again = bench.service.submit(
+            Uuid::new_v4(),
+            fold(&["disk", "history.network"]),
+            &catalog(),
+            NOW,
+        );
+        let ConfigDecision::Reply(result) = again else {
+            panic!("an immediate reply");
+        };
+        assert!(result.code.is_ok(), "{result:?}");
+        assert!(bench.port.is_empty(), "nothing to save");
     }
 
     #[test]

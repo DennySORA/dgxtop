@@ -22,8 +22,8 @@ pub use output::{
     OUTPUT_BUFFER_CAPACITY,
 };
 pub use runner::{
-    LONGEST_IDLE_POLL, MAX_EXIT_WAIT, MAX_IDLE_POLL, MIN_POLL, RESULT_POLL, SLOW_FRAME, TuiExit,
-    TuiExitReason, TuiLoop, TuiOptions,
+    LONGEST_IDLE_POLL, MAX_EXIT_WAIT, MAX_IDLE_POLL, MIN_POLL, RESULT_POLL, SIGNAL_POLL,
+    SLOW_FRAME, TuiExit, TuiExitReason, TuiLoop, TuiOptions,
 };
 pub use scheduler::{AGE_TICK, INPUT_REDRAW_INTERVAL};
 pub use setup::{install_panic_hook, restore_terminal, run_tui};
