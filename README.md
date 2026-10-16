@@ -32,7 +32,7 @@ memory, disks and network still work. WSL 1, musl, macOS and Windows are not sup
 
 The installer picks the build for your CPU, checks it against the release's `SHA256SUMS` and
 installs it to `~/.local/bin`. The previous version is kept, and `./install.sh --rollback` brings
-it back. For a specific release, append `-s -- --version v2.2.0` to `bash`.
+it back. For a specific release, append `-s -- --version v2.3.0` to `bash`.
 
 Or build from source with Rust 1.92.0 (pinned by `rust-toolchain.toml`):
 
