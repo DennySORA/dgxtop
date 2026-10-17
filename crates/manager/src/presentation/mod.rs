@@ -275,6 +275,7 @@ fn build_modules(
                 utc_offset_s: context.facts.utc_offset_s,
                 bar: context.session.process_bar,
                 scales: &run_history::RunScales::read(reader, inputs.directory),
+                gpu_names: &run_history::gpu_names(inputs.directory),
                 filter: &context.session.filter,
             },
         )));

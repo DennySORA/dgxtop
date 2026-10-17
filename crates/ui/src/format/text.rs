@@ -76,6 +76,39 @@ fn leading(characters: impl Iterator<Item = char>, budget: usize) -> Vec<char> {
         .collect()
 }
 
+/// `RTX 5080` of `NVIDIA GeForce RTX 5080`, `GB10` of `NVIDIA GB10`: a GPU's
+/// model without the maker's and the product line's words, so a narrow
+/// place still tells two GPUs apart (D-122).
+pub fn short_gpu_model(name: &str) -> &str {
+    let name = name.trim();
+    let name = name.strip_prefix("NVIDIA ").unwrap_or(name);
+    name.strip_prefix("GeForce ").unwrap_or(name).trim()
+}
+
+/// `GPU 0 · RTX 5080`: a GPU's label with its short model; the label alone
+/// when the model is unknown.
+pub fn gpu_with_model(label: &str, name: &str) -> String {
+    match short_gpu_model(name) {
+        "" => label.to_owned(),
+        model => format!("{label} · {model}"),
+    }
+}
+
+/// Most digits of a GPU's number in its label: an NVML index, never the
+/// eight characters of a UUID that label a GPU without one.
+const MAX_GPU_NUMBER_DIGITS: usize = 3;
+
+/// `3` of `GPU 3`: the number of the GPU a label names, which picks its
+/// color (D-123); `None` for a GPU labelled by its UUID (`GPU 1a2b3c4d`).
+pub fn gpu_number(label: &str) -> Option<u32> {
+    let number = label.trim().strip_prefix("GPU ")?;
+    let digits = 1..=MAX_GPU_NUMBER_DIGITS;
+    if !digits.contains(&number.len()) || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    number.parse().ok()
+}
+
 /// Left-aligned, truncated and space-padded to exactly `width` columns.
 pub fn pad_right(text: &str, width: usize) -> String {
     let fitted = truncate_to_width(text, width);
@@ -132,6 +165,38 @@ mod tests {
         assert_eq!(truncate_middle("溫度溫度溫度", 6), "溫…度");
         assert_eq!(truncate_middle("abc", 1), "…");
         assert_eq!(truncate_middle("abc", 0), "");
+    }
+
+    /// A GPU reads by its label and short model, so `GPU 0` and `GPU 1`
+    /// tell which card each is (D-122).
+    #[test]
+    fn a_gpu_reads_by_label_and_model() {
+        assert_eq!(short_gpu_model("NVIDIA GeForce RTX 5080"), "RTX 5080");
+        assert_eq!(short_gpu_model("NVIDIA GB10"), "GB10");
+        assert_eq!(short_gpu_model("NVIDIA H100 80GB HBM3"), "H100 80GB HBM3");
+        assert_eq!(
+            short_gpu_model("Tesla V100-SXM2-16GB"),
+            "Tesla V100-SXM2-16GB"
+        );
+        assert_eq!(
+            gpu_with_model("GPU 1", "NVIDIA GeForce RTX 3060"),
+            "GPU 1 · RTX 3060"
+        );
+        assert_eq!(gpu_with_model("GPU 1", ""), "GPU 1");
+    }
+
+    /// A GPU's number is read from its label alone (D-123); a GPU labelled
+    /// by its UUID has none, even one whose UUID starts with digits.
+    #[test]
+    fn a_gpu_label_names_its_number() {
+        assert_eq!(gpu_number("GPU 0"), Some(0));
+        assert_eq!(gpu_number(" GPU 12 "), Some(12));
+        assert_eq!(gpu_number("GPU 1a2b3c4d"), None);
+        assert_eq!(gpu_number("GPU 12345678"), None);
+        assert_eq!(gpu_number("GPU "), None);
+        assert_eq!(gpu_number("GPU -1"), None);
+        assert_eq!(gpu_number("CPU 0"), None);
+        assert_eq!(gpu_number(""), None);
     }
 
     #[test]

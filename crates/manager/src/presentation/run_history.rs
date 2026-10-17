@@ -19,7 +19,7 @@ use dgxtop_core::view::{
 use super::cpu::logical_cpu_count;
 use super::gpu_directory::GpuDirectory;
 use super::history_charts::{gpu_memory_scale, ram_total};
-use super::labels::TextNeedle;
+use super::labels::{TextNeedle, label_text};
 use super::plan::ViewportLayout;
 use super::reader::MetricReader;
 
@@ -34,8 +34,24 @@ pub(crate) struct RunHistoryInputs<'a> {
     pub(crate) utc_offset_s: i32,
     pub(crate) bar: BarSize,
     pub(crate) scales: &'a RunScales,
+    /// Each GPU's model now by its label ([`gpu_names`]).
+    pub(crate) gpu_names: &'a BTreeMap<String, String>,
     /// The session's filter: a run's name or PID holding it (D-113).
     pub(crate) filter: &'a str,
+}
+
+/// Each GPU's model now (`NVIDIA GeForce RTX 5080`) by its label (`GPU 0`),
+/// the label a run names its GPUs by (D-122); a GPU the catalog names no
+/// model of is left out.
+pub(crate) fn gpu_names(directory: &GpuDirectory<'_>) -> BTreeMap<String, String> {
+    directory
+        .gpus()
+        .iter()
+        .filter_map(|gpu| {
+            let name = label_text(&gpu.record?.display_name);
+            (!name.is_empty()).then(|| (gpu.label.clone(), name))
+        })
+        .collect()
 }
 
 /// The run `session` shows on a `viewport` terminal: the one its Process
@@ -136,7 +152,7 @@ pub(crate) fn build_process_history_view(inputs: &RunHistoryInputs<'_>) -> Proce
         runs: kept
             .into_iter()
             .take(MAX_RUN_ROWS)
-            .map(|row| row_view(row, model))
+            .map(|row| row_view(row, model, inputs.gpu_names))
             .collect(),
         more_runs: more + model.more_runs,
         opened: inputs
@@ -150,7 +166,11 @@ pub(crate) fn build_process_history_view(inputs: &RunHistoryInputs<'_>) -> Proce
     }
 }
 
-fn row_view(row: &RunRow, model: &ProcessHistoryModel) -> RunRowView {
+fn row_view(
+    row: &RunRow,
+    model: &ProcessHistoryModel,
+    names: &BTreeMap<String, String>,
+) -> RunRowView {
     let whole = &row.whole;
     RunRowView {
         key: row.key.clone(),
@@ -160,6 +180,11 @@ fn row_view(row: &RunRow, model: &ProcessHistoryModel) -> RunRowView {
         live: row.live,
         end: row.end,
         gpus: row.gpus.clone(),
+        gpu_names: row
+            .gpus
+            .iter()
+            .map(|label| names.get(label).cloned().unwrap_or_default())
+            .collect(),
         peak_gpu_memory: whole.value(RunMetric::GpuMemory).peak(),
         mean_gpu_utilization: whole.value(RunMetric::GpuUtilization).mean(),
         mean_cpu: whole.value(RunMetric::Cpu).mean(),

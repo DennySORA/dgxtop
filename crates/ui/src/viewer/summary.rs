@@ -3,7 +3,7 @@
 //! the minimal tier and the context line/sidebar of detail views.
 
 use dgxtop_core::commands::ViewKind;
-use dgxtop_core::view::{MetricCell, ViewModel};
+use dgxtop_core::view::{GpuCard, MetricCell, ViewModel};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
@@ -26,6 +26,14 @@ fn temperature(cell: &MetricCell, palette: &ThemePalette) -> Span<'static> {
 
 fn label(text: impl Into<String>, palette: &ThemePalette) -> Span<'static> {
     Span::styled(text.into(), palette.title_style())
+}
+
+/// `GPU 0 ` in its GPU's color (D-123).
+fn gpu_label(card: &GpuCard, palette: &ThemePalette) -> Span<'static> {
+    Span::styled(
+        format!("{} ", clean(&card.label)),
+        palette.gpu_style(&card.label, palette.title_style()),
+    )
 }
 
 fn sep(text: &'static str, palette: &ThemePalette) -> Span<'static> {
@@ -103,7 +111,7 @@ fn gpu_lines(model: &ViewModel, palette: &ThemePalette, narrow: bool) -> Vec<Lin
         .take(MAX_GPU_LINES)
         .flat_map(|card| {
             let head = vec![
-                label(format!("{} ", clean(&card.label)), palette),
+                gpu_label(card, palette),
                 value(&card.utilization, palette),
                 sep(" · ", palette),
                 temperature(&card.temperature, palette),
@@ -267,7 +275,7 @@ pub fn summary_one_line(model: &ViewModel, palette: &ThemePalette) -> Line<'stat
     if let Some(gpu) = model.modules.gpu.as_deref() {
         for card in gpu.cards.iter().take(MAX_GPU_LINES) {
             spans.push(sep(" │ ", palette));
-            spans.push(label(format!("{} ", clean(&card.label)), palette));
+            spans.push(gpu_label(card, palette));
             spans.push(value(&card.utilization, palette));
         }
     }
@@ -328,12 +336,24 @@ mod tests {
             .collect()
     }
 
-    /// The summary writes temperatures in their level colors too (D-104).
+    /// The summary writes temperatures in their level colors too (D-104)
+    /// and names each GPU in its own color (D-123), in both forms.
     #[test]
-    fn temperatures_take_their_level_colors() {
+    fn temperatures_take_their_level_colors_and_gpus_their_own() {
         let model = test_fixtures::view_model(ViewKind::Overview, 1);
         let palette = ThemePalette::default();
         let lines = summary_lines(&model, &palette, 120);
+        let one_line = summary_one_line(&model, &palette);
+        for number in [0, 1] {
+            let label = format!("GPU {number} ");
+            for spans in [
+                lines.iter().flat_map(|line| line.spans.iter()).collect(),
+                one_line.spans.iter().collect::<Vec<_>>(),
+            ] {
+                let span = spans.iter().find(|span| span.content == label).unwrap();
+                assert_eq!(span.style.fg, Some(palette.gpu_color(number)));
+            }
+        }
         for celsius in [68.0, 71.0] {
             let text = format!("{celsius:.0}°C");
             let span = lines

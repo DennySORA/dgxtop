@@ -1105,7 +1105,7 @@ fn up_and_down_pick_the_gpu_the_overview_history_shows() {
     let gpus: Vec<EntityId> =
         crate::modules::history_gpus(harness.model.modules.history.as_deref().unwrap())
             .into_iter()
-            .map(|(gpu, _)| gpu)
+            .map(|gpu| gpu.entity_id)
             .collect();
     assert_eq!(gpus.len(), 2);
     let picked = |harness: &Harness| {

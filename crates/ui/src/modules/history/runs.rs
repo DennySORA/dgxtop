@@ -35,7 +35,7 @@ use super::strip::Window;
 use super::{render_axes, render_bands};
 use crate::format::{
     NOT_AVAILABLE, clean, counted, display_width, format_local_short, format_span_seconds,
-    format_value,
+    format_value, gpu_number, gpu_with_model,
 };
 use crate::modules::common::{
     ColumnSpec, DividerForm, Output, RowCursor, TableCell, draw_caption, draw_divider, draw_line,
@@ -199,8 +199,12 @@ struct RunLayout<'a> {
 impl<'a> RunLayout<'a> {
     /// Pages `detail`'s panels for the charts' rows `body`, under the
     /// divider: its bands, then the time axis.
-    fn new(detail: &'a RunDetailView, body: Rect, context: &DisplayContext) -> Self {
-        let panels = run_panels(detail);
+    fn new(
+        (run, detail): (&'a RunRowView, &'a RunDetailView),
+        body: Rect,
+        context: &DisplayContext,
+    ) -> Self {
+        let panels = run_panels(run, detail);
         let strips: Vec<u16> = panels
             .iter()
             .map(|panel| saturate_u16(panel.strips.len()))
@@ -343,9 +347,10 @@ fn list_cells(
         }
         _ => text,
     };
+    // Kept on the cursor's row, as in the process table (D-64).
     let swatch = run.slot.map_or_else(
         || TableCell::new(" ", text),
-        |slot| TableCell::new(SWATCH, Style::new().fg(theme.process_color(slot))),
+        |slot| TableCell::colored(SWATCH, theme.process_color(slot)),
     );
     vec![
         TableCell::new(if marked { MARK } else { " " }, text),
@@ -356,7 +361,7 @@ fn list_cells(
         ),
         TableCell::new(run.key.pid.to_string(), label),
         TableCell::new(clean(&run.name), text),
-        TableCell::new(gpu_text(&run.gpus), label),
+        gpu_cell(run, marked, label, context),
         TableCell::new(runtime_text(run.runtime_ns), text),
         TableCell::new(bytes_text(run.peak_gpu_memory), text),
         TableCell::new(bytes_text(run.peak_memory), text),
@@ -373,6 +378,20 @@ fn list_cells(
     ]
 }
 
+/// The GPUs a run used, each in its color (D-123); a marked run keeps the
+/// warning color all along its row.
+fn gpu_cell(run: &RunRowView, marked: bool, style: Style, context: &DisplayContext) -> TableCell {
+    let parts = gpu_parts(&run.gpus, &run.gpu_names)
+        .into_iter()
+        .map(|(text, gpu)| {
+            let color = gpu
+                .filter(|_| !marked)
+                .and_then(|gpu| context.theme.gpu_label_color(gpu));
+            (text, color)
+        });
+    TableCell::of_parts(parts, style)
+}
+
 /// `process history run pid 42 acme_llm.train started 10-11 14:03 on GPU 0:
 /// ran 1h 06m, SIGKILL by dgxtop`, and `, marked` for a marked run.
 fn run_label(run: &RunRowView, offset_s: i32, marked: bool) -> String {
@@ -381,7 +400,7 @@ fn run_label(run: &RunRowView, offset_s: i32, marked: bool) -> String {
         run.key.pid,
         clean(&run.name),
         format_local_short(run.started_utc_ns, offset_s),
-        gpu_text(&run.gpus),
+        gpu_text(&run.gpus, &run.gpu_names),
         runtime_text(run.runtime_ns),
         status_text(run),
         if marked { ", marked" } else { "" }
@@ -423,7 +442,7 @@ fn render_detail(
     let body = rows
         .rest()
         .unwrap_or(Rect::new(area.x, area.bottom(), area.width, 0));
-    let pages = RunLayout::new(detail, body, context);
+    let pages = RunLayout::new((run, detail), body, context);
     let shown = pages.shown();
     let strips: Vec<u16> = shown
         .iter()
@@ -574,8 +593,8 @@ type Member = (RunMetric, &'static str, Paint);
 /// stand empty for another user's run. A strip without a sample gives way
 /// to the others of its panel; a panel keeps its first strip so it says it
 /// has none.
-fn run_panels(detail: &RunDetailView) -> Vec<Panel<'_>> {
-    let charts = RunCharts { detail };
+fn run_panels<'a>(run: &'a RunRowView, detail: &'a RunDetailView) -> Vec<Panel<'a>> {
+    let charts = RunCharts { run, detail };
     [
         charts.panel(
             charts.titled("CPU", RunMetric::Cpu),
@@ -622,8 +641,10 @@ fn run_panels(detail: &RunDetailView) -> Vec<Panel<'_>> {
     .collect()
 }
 
-/// The opened run's charts as strips and panels.
+/// The opened run's charts as strips and panels; its row names its GPUs'
+/// models.
 struct RunCharts<'a> {
+    run: &'a RunRowView,
     detail: &'a RunDetailView,
 }
 
@@ -673,11 +694,16 @@ impl<'a> RunCharts<'a> {
             Paint::Count => positive(chart.peak),
             Paint::Read | Paint::Write | Paint::Receive | Paint::Transmit => None,
         };
+        // A GPU's figures are in its color (D-123).
+        let gpu = metric
+            .gpu_slot()
+            .and_then(|(slot, _)| self.detail.info.gpus.get(slot).cloned());
         Some(Strip {
             label,
             series: self.series(chart),
             scale,
             paint,
+            gpu,
         })
     }
 
@@ -737,7 +763,37 @@ impl<'a> RunCharts<'a> {
                 ],
             );
         }
-        self.labelled_panel("GPU".to_owned(), members)
+        self.labelled_panel(String::new(), members)
+            .map(|panel| panel.titled_by(self.gpu_title()))
+    }
+
+    /// `GPU 0 · RTX 5080, GPU 1 · RTX 3060` in parts: the GPUs the panel
+    /// keeps apart with their models, so `util 0` tells which card it is
+    /// (D-122), each with its label, whose color it takes (D-123), and how
+    /// many more the sums hold.
+    fn gpu_title(&self) -> Vec<(String, Option<String>)> {
+        let shown = &self.detail.info.gpus[..self.detail.info.gpus.len().min(RUN_GPU_SLOTS)];
+        let run = self.run;
+        let names: Vec<String> = shown
+            .iter()
+            .map(|label| {
+                run.gpus
+                    .iter()
+                    .position(|gpu| gpu == label)
+                    .and_then(|at| run.gpu_names.get(at))
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect();
+        let mut parts: Vec<(String, Option<String>)> = gpu_parts(shown, &names)
+            .into_iter()
+            .map(|(text, gpu)| (text, gpu.map(str::to_owned)))
+            .collect();
+        let more = self.detail.info.gpus.len() - shown.len();
+        if more > 0 {
+            parts.push((format!(" +{more}"), None));
+        }
+        parts
     }
 
     fn labelled_panel(
@@ -759,6 +815,7 @@ impl<'a> RunCharts<'a> {
         }
         (!shown.is_empty()).then_some(Panel {
             title,
+            title_parts: Vec::new(),
             strips: shown,
             fold: None,
         })
@@ -770,12 +827,11 @@ impl<'a> RunCharts<'a> {
 /// labelled without its number (no NVML index) by its letter in the run,
 /// `util a`, never a number it does not have.
 fn gpu_strip_label(stem: &str, label: &str, slot: usize) -> String {
-    let mark = label
-        .strip_prefix("GPU ")
-        .filter(|number| number.len() <= 2 && number.bytes().all(|byte| byte.is_ascii_digit()))
+    let mark = gpu_number(label)
+        .filter(|number| *number < 100)
         .map_or_else(
             || char::from(b'a'.saturating_add(u8::try_from(slot).unwrap_or(u8::MAX))).to_string(),
-            str::to_owned,
+            |number| number.to_string(),
         );
     let spaced = format!("{stem} {mark}");
     if display_width(&spaced) < usize::from(HISTORY_GUTTER_COLUMNS) {
@@ -815,15 +871,36 @@ fn percent_text(value: Option<f64>) -> String {
     )
 }
 
-/// `GPU 0, GPU 1`.
-pub(super) fn gpu_text(gpus: &[String]) -> String {
+/// `GPU 0 · RTX 5080, GPU 1 · RTX 3060`: each GPU with its model now, so a
+/// label tells which card it is (D-122).
+pub(super) fn gpu_text(gpus: &[String], names: &[String]) -> String {
+    gpu_parts(gpus, names)
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect()
+}
+
+/// [`gpu_text`] in parts, each GPU's with the label whose color it takes
+/// (D-123).
+pub(super) fn gpu_parts<'a>(
+    gpus: &'a [String],
+    names: &[String],
+) -> Vec<(String, Option<&'a str>)> {
     if gpus.is_empty() {
-        return NOT_AVAILABLE.to_owned();
+        return vec![(NOT_AVAILABLE.to_owned(), None)];
     }
-    gpus.iter()
-        .map(|gpu| clean(gpu))
-        .collect::<Vec<_>>()
-        .join(", ")
+    let mut parts = Vec::new();
+    for (index, gpu) in gpus.iter().enumerate() {
+        if index > 0 {
+            parts.push((", ".to_owned(), None));
+        }
+        let name = names.get(index).map_or("", String::as_str);
+        parts.push((
+            gpu_with_model(&clean(gpu), &clean(name)),
+            Some(gpu.as_str()),
+        ));
+    }
+    parts
 }
 
 pub(super) fn status_text(run: &RunRowView) -> String {

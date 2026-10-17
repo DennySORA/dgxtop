@@ -8,7 +8,7 @@ use dgxtop_core::view::{
 };
 use ratatui::style::{Color, Modifier, Style};
 
-use crate::format::{CellTone, cell_tone};
+use crate::format::{CellTone, cell_tone, gpu_number};
 
 /// Steps of the level colors from an empty to a full gauge (D-104): each
 /// whole percent of a fill has a color of its own.
@@ -37,6 +37,27 @@ const PROCESS_COLORS: [Color; PROCESS_COLOR_SLOTS] = [
     Color::Rgb(0x8a, 0x3c, 0xe1),
     Color::Rgb(0x75, 0x73, 0x07),
     Color::Rgb(0xbc, 0x77, 0xbc),
+];
+
+/// Colors of the GPUs by their number (D-123), the same in every theme and
+/// wherever a GPU is named: sky blue, pink, yellow, aqua, violet, green,
+/// salmon, teal; a ninth GPU takes the first again. Validated as text on
+/// each theme's backgrounds: the first two, the most common pair, stay
+/// apart by OKLab ΔE ≥ 27.5 (≥ 10.9 under protanopia and deuteranopia),
+/// the first four by ≥ 19.0 (10.9), all eight by ≥ 12.9 (3.1, so the GPU's
+/// number always goes beside its color); each is at least ΔE 10.7 from the
+/// level colors (the first four 16.1), so a label never reads as how full
+/// a bar is, 12.1 from the grays of text and 8.8 from the process colors
+/// (the first four 10.5), and holds 4.5:1 contrast.
+const GPU_COLORS: [Color; 8] = [
+    Color::Rgb(0x00, 0xb8, 0xf8),
+    Color::Rgb(0xf8, 0x78, 0xc0),
+    Color::Rgb(0xf8, 0xf8, 0x28),
+    Color::Rgb(0x68, 0xf8, 0xf8),
+    Color::Rgb(0xb8, 0x80, 0xf8),
+    Color::Rgb(0x8c, 0xfc, 0x98),
+    Color::Rgb(0xf8, 0xa8, 0xa0),
+    Color::Rgb(0x00, 0xb0, 0xa0),
 ];
 
 /// Title colors of the resources (D-74), bright and the same in every
@@ -314,6 +335,24 @@ impl ThemePalette {
             .get(usize::from(slot))
             .copied()
             .unwrap_or_else(|| self.other_processes_color())
+    }
+
+    /// Color of GPU `number`, its NVML index (D-123).
+    pub fn gpu_color(&self, number: u32) -> Color {
+        let slot = usize::try_from(number).unwrap_or(usize::MAX) % GPU_COLORS.len();
+        GPU_COLORS[slot]
+    }
+
+    /// Color of the GPU labelled `label` (`GPU 0`); none for a GPU labelled
+    /// by its UUID, which has no number.
+    pub fn gpu_label_color(&self, label: &str) -> Option<Color> {
+        gpu_number(label).map(|number| self.gpu_color(number))
+    }
+
+    /// `style` in the color of the GPU labelled `label`, when it has one.
+    pub fn gpu_style(&self, label: &str, style: Style) -> Style {
+        self.gpu_label_color(label)
+            .map_or(style, |color| style.fg(color))
     }
 
     /// GPU processes without a color of their own.
@@ -656,6 +695,88 @@ mod tests {
                     ![palette.gauge_low, palette.gauge_mid, palette.gauge_high].contains(&color)
                 );
             }
+        }
+    }
+
+    /// WCAG contrast of two colors.
+    fn contrast(first: Color, second: Color) -> f64 {
+        let luminance = |color: Color| {
+            let [r, g, b] = rgb(color).map(|channel| {
+                let value = f64::from(channel) / 255.0;
+                if value <= 0.040_45 {
+                    value / 12.92
+                } else {
+                    ((value + 0.055) / 1.055).powf(2.4)
+                }
+            });
+            0.2126 * r + 0.7152 * g + 0.0722 * b
+        };
+        let (first, second) = (luminance(first), luminance(second));
+        (first.max(second) + 0.05) / (first.min(second) + 0.05)
+    }
+
+    /// OKLab ΔE of two colors, in hundredths.
+    fn delta_e(first: Color, second: Color) -> f64 {
+        let (first, second) = (oklab(rgb(first)), oklab(rgb(second)));
+        100.0
+            * first
+                .iter()
+                .zip(second)
+                .map(|(x, y)| (x - y).powi(2))
+                .sum::<f64>()
+                .sqrt()
+    }
+
+    /// D-123: a GPU keeps one color in every theme, picked by its number
+    /// and taken again by a ninth GPU; the colors stay apart, the first
+    /// ones the most, and never read as a level, a gray or a process; a
+    /// GPU labelled by its UUID keeps the style it is given.
+    #[test]
+    fn gpu_colors_are_fixed_apart_and_never_a_level() {
+        let pairs = |count: usize| {
+            (0..count).flat_map(move |first| (first + 1..count).map(move |second| (first, second)))
+        };
+        let nearest = |count: usize| {
+            pairs(count)
+                .map(|(first, second)| delta_e(GPU_COLORS[first], GPU_COLORS[second]))
+                .fold(f64::INFINITY, f64::min)
+        };
+        assert!(nearest(2) >= 25.0);
+        assert!(nearest(4) >= 18.0);
+        assert!(nearest(GPU_COLORS.len()) >= 12.0);
+        for theme in THEMES {
+            let palette = ThemePalette::for_theme(theme);
+            let colors: Vec<Color> = (0..8).map(|number| palette.gpu_color(number)).collect();
+            assert_eq!(colors, GPU_COLORS.to_vec());
+            assert_eq!(palette.gpu_color(9), palette.gpu_color(1));
+            assert_eq!(palette.gpu_color(u32::MAX), GPU_COLORS[7]);
+            for (number, color) in colors.into_iter().enumerate() {
+                let levels = (0..=100).map(|step| palette.level_color(f64::from(step) / 100.0));
+                let level = levels
+                    .map(|level| delta_e(color, level))
+                    .fold(f64::INFINITY, f64::min);
+                assert!(
+                    level >= if number < 4 { 16.0 } else { 10.0 },
+                    "GPU {number}"
+                );
+                for gray in [palette.text, palette.text_dim] {
+                    assert!(delta_e(color, gray) >= 12.0, "GPU {number}");
+                }
+                for process in PROCESS_COLORS {
+                    assert!(delta_e(color, process) >= 8.5, "GPU {number}");
+                }
+                for background in [
+                    palette.bar_background,
+                    palette.highlight_background,
+                    Color::Rgb(0, 0, 0),
+                ] {
+                    assert!(contrast(color, background) >= 4.5, "GPU {number}");
+                }
+            }
+            let style = palette.label_style();
+            assert_eq!(palette.gpu_style("GPU 1", style).fg, Some(GPU_COLORS[1]));
+            assert_eq!(palette.gpu_style("GPU 1a2b3c4d", style), style);
+            assert_eq!(palette.gpu_label_color("GPU 10"), Some(GPU_COLORS[2]));
         }
     }
 

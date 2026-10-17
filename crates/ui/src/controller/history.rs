@@ -38,7 +38,7 @@ impl Controller {
         };
         let ids: Vec<EntityId> = history_gpus(history)
             .into_iter()
-            .map(|(gpu, _)| gpu)
+            .map(|gpu| gpu.entity_id)
             .collect();
         if ids.len() < 2 {
             return;

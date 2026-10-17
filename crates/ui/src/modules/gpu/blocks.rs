@@ -719,15 +719,18 @@ impl CardInfo<'_> {
         rows
     }
 
-    /// `GPU 1 · host bridge (PHB) · no P2P`.
+    /// `GPU 1 · host bridge (PHB) · no P2P`, the peer in its GPU's color
+    /// (D-123); the selector above names each GPU's model (D-122).
     fn peer(&self, peer: &GpuPeer) -> Value {
         let path = peer.link.map_or_else(
             || "path unknown".to_owned(),
             |link: GpuLink| format!("{} ({})", link.label(), link.code()),
         );
         let access = peer.access.map_or("P2P unknown", PeerAccess::label);
+        let theme = &self.context.theme;
+        let style = theme.text_style().fg(theme.gpu_color(peer.index));
         vec![
-            self.text(format!("GPU {}", peer.index)),
+            Span::styled(format!("GPU {}", peer.index), style),
             self.muted(" · "),
             self.text(path),
             self.muted(" · "),
@@ -877,6 +880,16 @@ mod tests {
             block(&shown, "Topology"),
             "Topology: NUMA node 0, CPU affinity 0-31, peers GPU 1 · host bridge (PHB) · no P2P"
         );
+        // The peer is in its GPU's color (D-123).
+        let context = display_context();
+        let peer = blocks(&card, None, &context)
+            .into_iter()
+            .flat_map(|block| block.rows)
+            .flat_map(|row| row.cells)
+            .flatten()
+            .find(|span| span.content == "GPU 1")
+            .unwrap();
+        assert_eq!(peer.style.fg, Some(context.theme.gpu_color(1)));
         let details = card.details.as_deref_mut().unwrap();
         // A lower enforced limit shows the requested one beside it.
         details.power_limit_requested = ok(300.0, CanonicalUnit::Watts);

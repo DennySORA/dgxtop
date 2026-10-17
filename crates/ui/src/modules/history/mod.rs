@@ -38,7 +38,7 @@ use ratatui::text::{Line, Span};
 
 use self::axis::{Tick, clock_ticks, render_axis};
 use self::layout::{AXIS_ROWS, BAR_ROWS, HistoryLayout, plan_folded};
-use self::panels::{Panel, Strip, panels, shown_gpu};
+use self::panels::{HistoryGpu, Panel, Strip, panels, shown_gpu};
 use self::runs::render_runs;
 use self::strip::{Window, plot_width, render_strip, strip_text, tallest_column};
 use super::ModuleBuildError;
@@ -263,25 +263,25 @@ fn render_history(
 
 /// The GPUs of the bar-size row's picker and the one shown (D-107).
 struct GpuPicker<'a> {
-    gpus: Vec<(EntityId, String)>,
+    gpus: Vec<HistoryGpu>,
     shown: Option<&'a EntityId>,
 }
 
 impl GpuPicker<'_> {
-    /// `[GPU 0]  GPU 1 `: each GPU's chip, the shown one marked; none on a
-    /// host of one GPU.
+    /// `[GPU 0 · RTX 5080]  GPU 1 · RTX 3060 `: each GPU's chip, in the
+    /// order of `gpus`, the shown one marked; none on a host of one GPU.
     fn chips(&self) -> Vec<(String, bool)> {
         if self.gpus.len() < 2 {
             return Vec::new();
         }
         self.gpus
             .iter()
-            .map(|(gpu, label)| {
-                let picked = self.shown == Some(gpu);
+            .map(|gpu| {
+                let picked = self.shown == Some(&gpu.entity_id);
                 let text = if picked {
-                    format!("[{label}]")
+                    format!("[{}]", gpu.chip)
                 } else {
-                    format!(" {label} ")
+                    format!(" {} ", gpu.chip)
                 };
                 (text, picked)
             })
@@ -307,7 +307,7 @@ fn publish_picker(
     picker: &GpuPicker<'_>,
 ) {
     let mut x = picker_x(row, context);
-    for ((text, _), (gpu, _)) in picker.chips().iter().zip(&picker.gpus) {
+    for ((text, _), gpu) in picker.chips().iter().zip(&picker.gpus) {
         let width = saturate_u16(display_width(text));
         if x.saturating_add(width) > row.right() {
             break;
@@ -317,7 +317,7 @@ fn publish_picker(
             manifest,
             controls::HISTORY_GPU,
             Rect::new(x, row.y, width, 1),
-            gpu.clone(),
+            gpu.entity_id.clone(),
         );
         x = x.saturating_add(width);
     }
@@ -380,7 +380,7 @@ fn render_panel(
         draw_line(
             frame.buffer_mut(),
             row,
-            &title_rule((&panel.title, panel.fold), error, row.width, context),
+            &title_rule(panel, error, row.width, context),
         );
     }
     let alone = panel.strips.len() == 1;
@@ -415,13 +415,13 @@ fn strip_shares(rows: u16, strips: usize) -> Vec<u16> {
 /// the panel's edge and the key folding the panel away (D-114), left out
 /// when the row has no room for it.
 fn title_rule(
-    (title, fold): (&str, Option<&str>),
+    panel: &Panel<'_>,
     error: Option<&str>,
     width: u16,
     context: &DisplayContext,
 ) -> Line<'static> {
     let theme = &context.theme;
-    let mut spans = vec![Span::styled(clean(title), theme.section_title_style(title))];
+    let mut spans = title_spans(panel, context);
     if let Some(error) = error {
         spans.push(gap(context));
         spans.push(Span::styled(
@@ -429,7 +429,7 @@ fn title_rule(
             theme.tone_style(CellTone::Conflict),
         ));
     }
-    let keys = fold.map(fold_keys).filter(|keys| !keys.is_empty());
+    let keys = panel.fold.map(fold_keys).filter(|keys| !keys.is_empty());
     let mut tail = keys.map_or_else(Vec::new, |keys| key_spans(&keys, context));
     let used: usize = spans.iter().chain(&tail).map(Span::width).sum();
     if used + 4 > usize::from(width) {
@@ -441,6 +441,26 @@ fn title_rule(
     spans.push(Span::styled("─".repeat(rule), theme.border_style(false)));
     spans.extend(tail);
     Line::from(spans)
+}
+
+/// The panel's title in its resource's color (D-74), each GPU it names in
+/// that GPU's (D-123).
+fn title_spans(panel: &Panel<'_>, context: &DisplayContext) -> Vec<Span<'static>> {
+    let theme = &context.theme;
+    let style = theme.section_title_style(&panel.title);
+    if panel.title_parts.is_empty() {
+        return vec![Span::styled(clean(&panel.title), style)];
+    }
+    panel
+        .title_parts
+        .iter()
+        .map(|(text, gpu)| {
+            let style = gpu
+                .as_deref()
+                .map_or(style, |gpu| theme.gpu_style(gpu, style));
+            Span::styled(clean(text), style)
+        })
+        .collect()
 }
 
 /// Whether the user folded `panel` (D-114).
@@ -543,12 +563,14 @@ fn render_bar_size_row(
     if !chips.is_empty() {
         spans.push(gap(context));
         spans.push(gap(context));
-        for (text, picked) in chips {
+        for ((text, picked), gpu) in chips.into_iter().zip(&picker.gpus) {
             let style = if picked {
                 theme.selected_row_style()
             } else {
                 theme.label_style()
             };
+            // Each GPU in its color (D-123).
+            let style = theme.gpu_style(&gpu.label, style);
             spans.push(Span::styled(text, style));
         }
     }
@@ -677,6 +699,84 @@ mod tests {
         terminal
     }
 
+    /// The text colors of `needle`'s first character wherever it shows.
+    fn colors_of(buffer: &ratatui::buffer::Buffer, needle: &str) -> Vec<ratatui::style::Color> {
+        let area = buffer.area;
+        let mut colors = Vec::new();
+        for y in area.top()..area.bottom() {
+            let row: String = (area.left()..area.right())
+                .map(|x| buffer[(x, y)].symbol())
+                .collect();
+            for (at, _) in row.match_indices(needle) {
+                let x = u16::try_from(row[..at].chars().count()).unwrap();
+                colors.push(buffer[(area.x + x, y)].fg);
+            }
+        }
+        colors
+    }
+
+    /// Each GPU the History names is in its color (D-123): the picker's
+    /// chips, the runs' GPUs in the list, an opened run's identity line,
+    /// its GPU panel's title and the labels of its GPU strips; a run marked
+    /// for deletion keeps its GPUs in the warning color.
+    #[test]
+    fn the_history_names_each_gpu_in_its_color() {
+        let draw_runs = |context: &DisplayContext, runs: dgxtop_core::view::ProcessHistoryView| {
+            let mut model =
+                crate::test_fixtures::view_model(dgxtop_core::commands::ViewKind::History, 1);
+            model.modules.history = Some(std::sync::Arc::new(history_view()));
+            model.modules.process_history = Some(std::sync::Arc::new(runs));
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(213, 70)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let module = HistoryModule::new().unwrap();
+                    module.render(context, &model, frame.area(), frame);
+                })
+                .unwrap();
+            terminal.backend().buffer().clone()
+        };
+        let draw = |context: &DisplayContext| {
+            draw_runs(context, crate::test_fixtures::process_history_view())
+        };
+        let mut context = crate::test_fixtures::display_context();
+        let theme = context.theme;
+        let (first, second) = (theme.gpu_color(0), theme.gpu_color(1));
+        let overview = draw(&context);
+        assert_eq!(colors_of(&overview, "[GPU 0 · GB10]"), vec![first]);
+        assert_eq!(colors_of(&overview, " GPU 1 · GB10 "), vec![second]);
+        context.tab = 1;
+        let list = draw(&context);
+        // The ended run on GPU 0, the training on GPU 0 and GPU 1.
+        assert_eq!(colors_of(&list, "GPU 0 · GB10"), vec![first, first]);
+        assert_eq!(colors_of(&list, "GPU 1 · GB10"), vec![second]);
+        let training = crate::test_fixtures::process_history_view().runs[1]
+            .key
+            .clone();
+        context.marked = std::sync::Arc::new([training].into());
+        let marked = draw(&context);
+        assert_eq!(
+            colors_of(&marked, "GPU 0 · GB10, GPU 1 · GB10"),
+            vec![theme.warning]
+        );
+        assert_eq!(colors_of(&marked, "GPU 1 · GB10"), vec![theme.warning]);
+        context.marked = std::sync::Arc::default();
+        context.tab = 2;
+        let page = draw(&context);
+        // The identity line and the GPU panel's title.
+        assert_eq!(colors_of(&page, "GPU 0 · GB10"), vec![first, first]);
+        for label in ["util 0", "mem 0"] {
+            assert_eq!(colors_of(&page, label), vec![first], "{label}");
+        }
+        // The run under the cursor keeps its process's swatch color too, as
+        // in the process table (D-64).
+        let mut runs = crate::test_fixtures::process_history_view();
+        runs.opened = None;
+        (context.tab, context.scroll) = (1, 1);
+        let cursor = draw_runs(&context, runs);
+        assert_eq!(colors_of(&cursor, "■"), vec![theme.process_color(0)]);
+    }
+
     /// On a tall terminal each strip's legend has its last value, mean and
     /// peak, and the bars take the Overview History's level colors (D-77):
     /// the run's busiest minutes red against their scale.
@@ -754,7 +854,7 @@ mod tests {
         );
         assert!(list[training].contains("running"), "{}", list[training]);
         assert!(
-            list[training].contains("GPU 0, GPU 1"),
+            list[training].contains("GPU 0 · GB10, GPU 1 · GB10"),
             "{}",
             list[training]
         );
@@ -848,7 +948,7 @@ mod tests {
         assert!(divider.starts_with('├') && divider.ends_with('┤'), "{text}");
         assert!(
             divider.ends_with(
-                "─ page 1 of 2 · next: GPU, Tasks, Disk, Network · host (j/k/↑/↓ page) ┤"
+                "─ page 1 of 2 · next: GPU 0 · GB10, Tasks, Disk, Network · host (j/k/↑/↓ page) ┤"
             ),
             "{text}"
         );
@@ -881,7 +981,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("│GPU ─")
+            text.contains("│GPU 0 · GB10 ─")
                 && text.contains("Tasks ─")
                 && text.contains("Network · host ─"),
             "{text}"
@@ -962,8 +1062,14 @@ mod tests {
     fn a_runs_gpu_panel_shows_each_gpu_it_used() {
         use dgxtop_core::process_history::{GpuFigure, RunMetric};
         let mut view = crate::test_fixtures::process_history_view();
+        let gpus = vec!["GPU 1".to_owned(), "GPU 0".to_owned()];
+        view.runs[0].gpus.clone_from(&gpus);
+        view.runs[0].gpu_names = vec![
+            "NVIDIA GeForce RTX 3060".to_owned(),
+            "NVIDIA GeForce RTX 5080".to_owned(),
+        ];
         let detail = view.opened.as_mut().unwrap();
-        detail.info.gpus = vec!["GPU 1".to_owned(), "GPU 0".to_owned()];
+        detail.info.gpus = gpus;
         let recorded = detail
             .charts
             .iter()
@@ -987,7 +1093,10 @@ mod tests {
             })
             .collect();
         assert!(places.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
-        assert!(text.contains("│GPU ─"), "{text}");
+        assert!(
+            text.contains("│GPU 1 · RTX 3060, GPU 0 · RTX 5080 ─"),
+            "{text}"
+        );
         assert!(
             !text.contains("util 0┤"),
             "GPU 0 sampled no process: {text}"
@@ -1181,7 +1290,7 @@ mod tests {
         let history = history_view();
         let gpus = history_gpus(&history);
         let mut context = crate::test_fixtures::display_context();
-        context.picked = Some(gpus[1].0.clone());
+        context.picked = Some(gpus[1].entity_id.clone());
         context.offset = 1;
         let mut model =
             crate::test_fixtures::view_model(dgxtop_core::commands::ViewKind::History, 1);
@@ -1206,7 +1315,7 @@ mod tests {
             .collect();
         let text = rows.join("\n");
         assert!(rows[0].contains("↑/↓ GPU"), "{text}");
-        assert!(rows[1].contains(" GPU 0 [GPU 1]"), "{text}");
+        assert!(rows[1].contains(" GPU 0 · GB10 [GPU 1 · GB10]"), "{text}");
         assert!(!rows[1].contains("panel"), "{text}");
         // Its panels scroll: a divider says what is above and below (D-116).
         assert!(rows[2].starts_with('├') && rows[2].ends_with('┤'), "{text}");
@@ -1292,7 +1401,9 @@ mod tests {
         assert!(detail[0].contains("y copy"), "{text}");
         assert!(detail[0].contains("h/l/←/→ bar"), "{text}");
         assert!(
-            text.contains("ComfyUI/main │ PID 42 │ uid 1000 │ nice 0 │ GPU 0 │ SIGKILL by dgxtop"),
+            text.contains(
+                "ComfyUI/main │ PID 42 │ uid 1000 │ nice 0 │ GPU 0 · GB10 │ SIGKILL by dgxtop"
+            ),
             "{text}"
         );
         for entry in [
@@ -1315,7 +1426,7 @@ mod tests {
         for title in [
             "CPU · 20 CPUs",
             "Memory · 128 GiB",
-            "GPU ─",
+            "GPU 0 · GB10 ─",
             "Tasks",
             "Disk",
             "Network · host",

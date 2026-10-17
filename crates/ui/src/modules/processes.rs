@@ -44,8 +44,8 @@ const PROCESS_KEY_FORMS: [&str; 3] = [
 ];
 /// A tracked process's color, before its name (D-64).
 const COLOR_SWATCH: &str = "■";
-/// Position of the swatch column in [`COLUMNS`].
-const SWATCH_COLUMN: usize = 9;
+/// What a GPU column says of a process the GPU filter leaves no GPU of.
+const NO_GPU: &str = "none";
 
 /// The GPU first (D-66), then identity, type and CPU use, GPU use, the
 /// memory on the CPU side and the name. Minimum widths fit one GPU's
@@ -183,9 +183,6 @@ impl DisplayModule for ProcessesModule {
                 context.theme.muted_style().patch(row)
             });
             draw_column_separators(frame.buffer_mut(), rect, &columns, separator);
-            if selected {
-                keep_swatch_color(frame, rect, &columns, &cells[SWATCH_COLUMN]);
-            }
             let control = if selected {
                 controls::PROCESS_ROW_SELECTED
             } else {
@@ -297,8 +294,9 @@ fn title_text(view: &ProcessesView) -> String {
     let mut title = "GPU Processes".to_owned();
     let arrow = if view.ascending { "▲" } else { "▼" };
     title.push_str(&format!(" · sort {} {arrow}", view.sort.label()));
+    // The filter's label is the GPU's own (`GPU 0`).
     if let Some((_, label)) = &view.gpu_filter {
-        title.push_str(&format!(" · GPU {}", clean(label)));
+        title.push_str(&format!(" · {}", clean(label)));
     }
     if !view.filter.is_empty() {
         title.push_str(&format!(" · filter \"{}\"", clean(&view.filter)));
@@ -310,7 +308,7 @@ fn empty_text(view: &ProcessesView) -> String {
     if !view.filter.is_empty() {
         format!("no processes match filter \"{}\"", clean(&view.filter))
     } else if let Some((_, label)) = &view.gpu_filter {
-        format!("no processes on GPU {}", clean(label))
+        format!("no processes on {}", clean(label))
     } else {
         "no process is using a GPU".to_owned()
     }
@@ -328,7 +326,7 @@ fn joined<'a>(
     text: impl Fn(&'a ProcessGpuView) -> String,
 ) -> String {
     if entries.is_empty() {
-        return "none".to_owned();
+        return NO_GPU.to_owned();
     }
     entries
         .iter()
@@ -391,10 +389,7 @@ fn row_cells(
     };
     [
         TableCell::new(marker, palette.title_style()),
-        TableCell::new(
-            joined(&gpus, |gpu| short_gpu_label(&gpu.gpu_label)),
-            palette.secondary_style(),
-        ),
+        gpu_cell(&gpus, context),
         TableCell::new(row.key.pid.to_string(), palette.label_style()),
         TableCell::new(clean(&row.user), palette.label_style()),
         numeric(joined(&gpus, |gpu| usage_code(gpu.usage).to_owned())),
@@ -409,34 +404,31 @@ fn row_cells(
     ]
 }
 
-/// `■` in the process's color when it is tracked, else nothing.
-fn swatch_cell(row: &ProcessRowView, context: &DisplayContext) -> TableCell {
-    match row.color_slot {
-        Some(slot) => TableCell::new(
-            COLOR_SWATCH,
-            ratatui::style::Style::new().fg(context.theme.process_color(slot)),
-        ),
-        None => TableCell::new("", context.theme.text_style()),
+/// `0,1`: the number of each GPU the process uses, in the GPU's color
+/// (D-123), the commas in gray, which no GPU's color is near; `none`
+/// without one.
+fn gpu_cell(gpus: &[&ProcessGpuView], context: &DisplayContext) -> TableCell {
+    let palette = &context.theme;
+    if gpus.is_empty() {
+        return TableCell::new(NO_GPU, palette.label_style());
     }
+    let parts = gpus.iter().enumerate().flat_map(|(position, gpu)| {
+        let separator = (position > 0).then(|| (",".to_owned(), None));
+        let number = (
+            short_gpu_label(&gpu.gpu_label),
+            palette.gpu_label_color(&gpu.gpu_label),
+        );
+        separator.into_iter().chain([number])
+    });
+    TableCell::of_parts(parts, palette.label_style())
 }
 
-/// The selected row's style recolors its cells; the swatch keeps the color
-/// it names.
-fn keep_swatch_color(
-    frame: &mut Frame<'_>,
-    row: Rect,
-    columns: &[FittedColumn],
-    swatch: &TableCell,
-) {
-    let (Some(column), Some(color)) = (
-        columns.iter().find(|column| column.spec == SWATCH_COLUMN),
-        swatch.style.fg,
-    ) else {
-        return;
-    };
-    let x = row.x.saturating_add(column.x);
-    if x < row.right() && !swatch.text.is_empty() {
-        frame.buffer_mut()[(x, row.y)].set_fg(color);
+/// `■` in the process's color when it is tracked, kept on the selected
+/// row, else nothing.
+fn swatch_cell(row: &ProcessRowView, context: &DisplayContext) -> TableCell {
+    match row.color_slot {
+        Some(slot) => TableCell::colored(COLOR_SWATCH, context.theme.process_color(slot)),
+        None => TableCell::new("", context.theme.text_style()),
     }
 }
 
@@ -532,7 +524,11 @@ fn draw_scrollbar(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modules::common::Tint;
     use crate::test_fixtures;
+
+    /// Position of the swatch column in [`COLUMNS`].
+    const SWATCH_COLUMN: usize = 9;
 
     #[test]
     fn status_reports_absolute_rows_and_missing_reasons() {
@@ -573,6 +569,10 @@ mod tests {
         let first_gpu = multi.gpus[0].gpu_entity_id.clone();
         assert_eq!(gpu_entries(multi, Some(&first_gpu)).len(), 1);
         assert_eq!(joined(&[], |_| String::new()), "none");
+        // The filter's label is the GPU's own, `GPU 0`.
+        let mut empty = test_fixtures::processes_view(0, 0, 0);
+        empty.gpu_filter = Some((first_gpu, "GPU 0".to_owned()));
+        assert_eq!(empty_text(&empty), "no processes on GPU 0");
     }
 
     /// A tracked process's name follows a swatch in its color, also on the
@@ -609,6 +609,35 @@ mod tests {
             .expect("the selected row draws its swatch");
         assert_eq!(buffer[(swatch, 3)].fg, context.theme.process_color(1));
         assert_eq!(buffer[(swatch, 3)].bg, context.theme.highlight_background);
+    }
+
+    /// Each GPU a process uses reads in its color (D-123), which the row's
+    /// style does not repaint; the commas between them keep the column's.
+    #[test]
+    fn each_gpu_a_process_uses_reads_in_its_color() {
+        let context = test_fixtures::display_context();
+        let view = test_fixtures::processes_view(3, 0, 3);
+        let cells = row_cells(&view.rows[0], true, None, &context);
+        let theme = &context.theme;
+        assert_eq!(cells[1].text, "0,1");
+        assert_eq!(cells[1].style, theme.label_style());
+        assert_eq!(
+            cells[1].tints,
+            vec![
+                Tint {
+                    columns: 0..1,
+                    color: theme.gpu_color(0)
+                },
+                Tint {
+                    columns: 2..3,
+                    color: theme.gpu_color(1)
+                },
+            ]
+        );
+        let first = view.rows[0].gpus[0].gpu_entity_id.clone();
+        let filtered = row_cells(&view.rows[0], false, Some(&first), &context);
+        assert_eq!(filtered[1].text, "0");
+        assert_eq!(filtered[1].tints.len(), 1);
     }
 
     /// The GPU leads (D-66), CPU% follows the type, the host memory is

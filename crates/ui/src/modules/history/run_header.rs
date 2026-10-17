@@ -14,7 +14,7 @@ use dgxtop_core::view::{RunDetailView, RunRowView};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use super::runs::{gpu_text, runtime_text, status_style, status_text};
+use super::runs::{gpu_parts, runtime_text, status_style, status_text};
 use crate::format::{
     NOT_AVAILABLE, clean, display_width, format_local_datetime, pad_right, truncate_middle,
     truncate_to_width,
@@ -53,7 +53,7 @@ pub(super) fn header_lines(
     lines
 }
 
-/// `■ python │ PID 4242 │ uid 1000 │ nice 0 │ GPU 0 │ running`; the user
+/// `■ python │ PID 4242 │ uid 1000 │ nice 0 │ GPU 0 · GB10 │ running`; the user
 /// and the niceness left out while unread.
 fn identity_line(
     run: &RunRowView,
@@ -82,7 +82,16 @@ fn identity_line(
         spans.push(Span::styled(value, theme.text_style()));
     }
     spans.push(separator(context));
-    spans.push(Span::styled(gpu_text(&run.gpus), theme.label_style()));
+    // Each GPU in its color (D-123).
+    spans.extend(
+        gpu_parts(&run.gpus, &run.gpu_names)
+            .into_iter()
+            .map(|(text, gpu)| {
+                let style = theme.label_style();
+                let style = gpu.map_or(style, |gpu| theme.gpu_style(gpu, style));
+                Span::styled(text, style)
+            }),
+    );
     spans.push(separator(context));
     spans.push(Span::styled(status_text(run), status_style(run, context)));
     Line::from(spans)
@@ -344,7 +353,7 @@ mod tests {
         let text = header.join("\n");
         assert_eq!(
             header[0],
-            "  ComfyUI/main │ PID 42 │ uid 1000 │ nice 0 │ GPU 0 │ SIGKILL by dgxtop"
+            "  ComfyUI/main │ PID 42 │ uid 1000 │ nice 0 │ GPU 0 · GB10 │ SIGKILL by dgxtop"
         );
         assert_eq!(header.len(), 5, "identity and four rows: {text}");
         let started = &header[1];

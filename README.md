@@ -139,7 +139,8 @@ Every GPU process as a run, the running ones always on top, then the newest firs
 how long it ran, its peak GPU memory and RAM, and how it ended. `Enter` opens a run: its details
 stay put at the top (when it started and ended, how long it ran, its parent, working folder,
 program, control group and command line, which `e` shows whole and `y` copies) above its charts;
-the GPU panel shows each GPU the run used: its utilization there (`util 0`, or the GPU's own, `dev 0`,
+the GPU panel, titled with each GPU's model (`GPU 0 · RTX 5080`), shows each GPU the run used: its
+utilization there (`util 0`, or the GPU's own, `dev 0`,
 where the driver gives none per process, as on the GB10) and its memory there (`mem 0`); past four
 GPUs, the rest are in the sums (`util Σ`, `mem Σ`). `dev` is every process on that GPU together, so
 while two jobs share it, both runs show their sum; the list's start and run times tell which ran at
@@ -158,7 +159,10 @@ one, after a confirmation; a run still running is kept.
 ## Capabilities
 
 - **Several GPUs per machine.** Tested on a DGX Spark (GB10) and on a workstation with an RTX 5080
-  and an RTX 3060.
+  and an RTX 3060. Each GPU has its model beside its number (`GPU 0 · RTX 5080`) and a color of its
+  own, the same in every view. The numbers are the driver's, as `nvidia-smi` shows them; CUDA counts
+  the fastest GPU first unless `CUDA_DEVICE_ORDER=PCI_BUS_ID` is set, so a job's `cuda:0` may be
+  another card than `GPU 0`.
 - **History that lasts.** History is saved on disk and survives restarts and reboots, with no age
   limit: each bar size keeps its latest 300 bars, so 1-minute bars cover the last 5 hours and
   24-hour bars about 10 months. Process History lists the latest 512 runs. dgxtop records while it

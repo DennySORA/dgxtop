@@ -644,6 +644,10 @@ pub struct RunRowView {
     pub live: bool,
     pub end: Option<RunEnd>,
     pub gpus: Vec<String>,
+    /// Each of `gpus`' model now (`NVIDIA GeForce RTX 5080`), in their
+    /// order, so a label tells which card it is (D-122); empty where no GPU
+    /// of that label is known now.
+    pub gpu_names: Vec<String>,
     pub peak_gpu_memory: Option<f64>,
     pub mean_gpu_utilization: Option<f64>,
     pub mean_cpu: Option<f64>,

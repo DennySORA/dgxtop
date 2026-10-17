@@ -15,7 +15,7 @@ use dgxtop_core::view::{
 };
 
 use super::nanos_to_seconds;
-use crate::format::{clean, format_value};
+use crate::format::{clean, format_value, gpu_with_model};
 
 /// How a strip colors its columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,12 +107,19 @@ pub(super) struct Strip<'a> {
     /// is drawn ([`Panel::is_rate`]).
     pub(super) scale: Option<f64>,
     pub(super) paint: Paint,
+    /// The GPU the strip is of (`GPU 0`), whose color its label takes
+    /// (D-123); none for a strip of no single GPU.
+    pub(super) gpu: Option<String>,
 }
 
 /// A titled group of strips.
 #[derive(Debug, Clone)]
 pub(super) struct Panel<'a> {
     pub(super) title: String,
+    /// The title in parts when it names GPUs (`GPU 0 · RTX 5080`, `, `,
+    /// `GPU 1 · RTX 3060`), each GPU's with the label whose color it takes
+    /// (D-123); empty for a title naming none.
+    pub(super) title_parts: Vec<(String, Option<String>)>,
     pub(super) strips: Vec<Strip<'a>>,
     /// The id that folds the panel away (`view::FOLDABLE_PANELS`, D-114);
     /// none for a panel that stays.
@@ -120,6 +127,15 @@ pub(super) struct Panel<'a> {
 }
 
 impl Panel<'_> {
+    /// The panel titled by `parts`, which name GPUs (D-123).
+    pub(super) fn titled_by(self, parts: Vec<(String, Option<String>)>) -> Self {
+        Self {
+            title: parts.iter().map(|(text, _)| text.as_str()).collect(),
+            title_parts: parts,
+            ..self
+        }
+    }
+
     /// The panel, folded away by `fold`.
     fn folding(self, fold: &'static str) -> Self {
         Self {
@@ -182,17 +198,40 @@ const RATE_PANELS: [([Rate; 2], &str, &str); 2] = [
     ),
 ];
 
-/// The GPUs the history charts, in the order of their charts, each with
-/// its label (`GPU 0`).
-pub(crate) fn history_gpus(history: &HistoryView) -> Vec<(EntityId, String)> {
-    let mut gpus: Vec<(EntityId, String)> = Vec::new();
+/// A GPU the history charts (D-107).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HistoryGpu {
+    pub(crate) entity_id: EntityId,
+    /// `GPU 0`, whose color its chip takes (D-123).
+    pub(crate) label: String,
+    /// `GPU 0 · RTX 5080`: the picker's chip, its label and short model
+    /// (D-122).
+    pub(crate) chip: String,
+}
+
+/// The GPUs the history charts, in the order of their charts.
+pub(crate) fn history_gpus(history: &HistoryView) -> Vec<HistoryGpu> {
+    let mut gpus: Vec<HistoryGpu> = Vec::new();
     for chart in history.charts.iter().filter(|chart| is_gpu(chart.kind)) {
-        let entity = &chart.series.entity_id;
-        if !gpus.iter().any(|(known, _)| known == entity) {
-            gpus.push((entity.clone(), gpu_label(&chart.subject)));
+        let entity_id = &chart.series.entity_id;
+        if !gpus.iter().any(|known| known.entity_id == *entity_id) {
+            gpus.push(HistoryGpu {
+                entity_id: entity_id.clone(),
+                label: gpu_label(&chart.subject),
+                chip: gpu_with_name(&chart.subject),
+            });
         }
     }
     gpus
+}
+
+/// `GPU 0 · RTX 5080` of a chart's subject `GPU 0 · NVIDIA GeForce RTX 5080`.
+fn gpu_with_name(subject: &str) -> String {
+    let subject = clean(subject);
+    match subject.split_once(" · ") {
+        Some((label, name)) => gpu_with_model(label, name),
+        None => subject,
+    }
 }
 
 /// The GPU the GPU panels show on a host of several (D-107): `picked`
@@ -204,9 +243,9 @@ pub(crate) fn shown_gpu(history: &HistoryView, picked: Option<&EntityId>) -> Opt
         return None;
     }
     picked
-        .filter(|picked| gpus.iter().any(|(gpu, _)| gpu == *picked))
+        .filter(|picked| gpus.iter().any(|gpu| gpu.entity_id == **picked))
         .cloned()
-        .or_else(|| gpus.into_iter().next().map(|(gpu, _)| gpu))
+        .or_else(|| gpus.into_iter().next().map(|gpu| gpu.entity_id))
 }
 
 const fn is_gpu(kind: HistoryChartKind) -> bool {
@@ -255,11 +294,12 @@ pub(super) fn panels<'a>(history: &'a HistoryView, gpu: Option<&EntityId>) -> Ve
                 .iter()
                 .filter(|chart| chart.kind == kind)
                 .filter(|chart| gpu.is_none_or(|gpu| chart.series.entity_id == *gpu))
-                .map(|chart| level_strip(gpu_label(&chart.subject), chart)),
+                .map(gpu_strip),
         );
         if !strips.is_empty() {
             panels.push(Panel {
                 title: title.to_owned(),
+                title_parts: Vec::new(),
                 strips,
                 fold: Some(fold),
             });
@@ -280,6 +320,16 @@ fn level_strip(label: String, chart: &HistoryChartView) -> Strip<'_> {
         series: Series::of_chart(chart),
         scale: scale_or_peak(chart),
         paint: Paint::Levels,
+        gpu: None,
+    }
+}
+
+/// A GPU's strip, labeled by its GPU and in that GPU's color (D-123).
+fn gpu_strip(chart: &HistoryChartView) -> Strip<'_> {
+    let label = gpu_label(&chart.subject);
+    Strip {
+        gpu: Some(label.clone()),
+        ..level_strip(label, chart)
     }
 }
 
@@ -320,11 +370,13 @@ fn scale_or_peak(chart: &HistoryChartView) -> Option<f64> {
 pub(super) fn single(title: String, series: Series<'_>, scale: Option<f64>) -> Panel<'_> {
     Panel {
         title,
+        title_parts: Vec::new(),
         strips: vec![Strip {
             label: String::new(),
             series,
             scale,
             paint: Paint::Levels,
+            gpu: None,
         }],
         fold: None,
     }
@@ -356,6 +408,7 @@ fn rate_panel<'a>(history: &'a HistoryView, pair: [Rate; 2], title: &str) -> Opt
             series: Series::of_chart(chart),
             scale: None,
             paint: *paint,
+            gpu: None,
         })
         .collect();
     let subject = charts.first().map(|(chart, _, _)| clean(&chart.subject))?;
@@ -365,6 +418,7 @@ fn rate_panel<'a>(history: &'a HistoryView, pair: [Rate; 2], title: &str) -> Opt
         } else {
             format!("{title} · {subject}")
         },
+        title_parts: Vec::new(),
         strips,
         fold: None,
     })
@@ -445,12 +499,11 @@ mod tests {
         let history = history_view();
         let gpus = history_gpus(&history);
         assert_eq!(
-            gpus.iter()
-                .map(|(_, label)| label.as_str())
-                .collect::<Vec<_>>(),
-            ["GPU 0", "GPU 1"]
+            gpus.iter().map(|gpu| gpu.chip.as_str()).collect::<Vec<_>>(),
+            ["GPU 0 · GB10", "GPU 1 · GB10"]
         );
-        let (first, second) = (gpus[0].0.clone(), gpus[1].0.clone());
+        assert_eq!(gpus[1].label, "GPU 1");
+        let (first, second) = (gpus[0].entity_id.clone(), gpus[1].entity_id.clone());
         assert_eq!(shown_gpu(&history, None), Some(first.clone()));
         assert_eq!(shown_gpu(&history, Some(&second)), Some(second.clone()));
         let gone = EntityId::new("gpu:gone").unwrap();
@@ -475,7 +528,8 @@ mod tests {
 
     /// Once the CPU's power is read the power panel leads with the host's
     /// total and the CPU (D-106), each scaled to its peak, every strip with
-    /// its energy; until then it is the GPUs' power panel.
+    /// its energy; until then it is the GPUs' power panel. The GPUs' strips
+    /// are in their colors.
     #[test]
     fn the_power_panel_leads_with_the_total_and_the_cpu_once_read() {
         let power_panel = |history: &HistoryView| -> (String, Vec<String>) {
@@ -521,6 +575,13 @@ mod tests {
         assert_eq!(labels[2..], gpus[..]);
         let panels = panels(&history, None);
         let panel = panels.iter().find(|panel| panel.title == "Power").unwrap();
+        // Only a GPU's strip takes a GPU's color (D-123).
+        let colored: Vec<Option<&str>> = panel
+            .strips
+            .iter()
+            .map(|strip| strip.gpu.as_deref())
+            .collect();
+        assert_eq!(colored, [None, None, Some("GPU 0"), Some("GPU 1")]);
         assert_eq!(panel.strips[0].scale, Some(180.0), "scaled to its peak");
         // 90 W for an hour.
         let energy = panel.strips[0].series.energy.unwrap();

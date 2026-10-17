@@ -98,7 +98,7 @@ fn render_gutter(
         let (text, style) = match (alone, row) {
             (true, 0) => (scale.clone(), theme.label_style()),
             (true, row) if row == last => ("0".to_owned(), theme.label_style()),
-            (false, 0) => (strip.label.clone(), theme.title_style()),
+            (false, 0) => (strip.label.clone(), strip_label_style(strip, context)),
             (false, 1) => (scale.clone(), theme.muted_style()),
             _ => (String::new(), theme.muted_style()),
         };
@@ -118,6 +118,15 @@ fn render_gutter(
             &line,
         );
     }
+}
+
+/// A strip's label: bold, in its GPU's color when it is a GPU's (D-123).
+fn strip_label_style(strip: &Strip<'_>, context: &DisplayContext) -> Style {
+    let theme = &context.theme;
+    strip.gpu.as_deref().map_or_else(
+        || theme.title_style(),
+        |gpu| theme.gpu_style(gpu, theme.title_style()),
+    )
 }
 
 /// The columns of the window, then the dotted base where none was recorded.

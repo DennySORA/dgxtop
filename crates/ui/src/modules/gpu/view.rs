@@ -20,9 +20,10 @@ use ratatui::text::{Line, Span};
 use super::blocks::{Block, block_text, blocks};
 use super::columns::{Arrangement, arrange, render_columns};
 use super::readings::{render_bar, status_readings};
-use crate::format::{clean, display_width};
+use crate::format::{clean, display_width, gpu_with_model};
 use crate::modules::common::{
-    Output, RowCursor, draw_divider, draw_line, fitting_keys, page_divider_forms, panel_with_keys,
+    Output, RowCursor, draw_divider, draw_line, fitting_keys, page_divider_forms,
+    styled_panel_with_keys,
 };
 use crate::num::saturate_u16;
 use crate::registry::{DisplayContext, DisplayModuleManifest, controls};
@@ -48,7 +49,10 @@ pub(super) fn render_gpu_view(
     let title = format!("{} · {}", clean(&selected.label), clean(&selected.name));
     // The keys turning pages are on the divider (D-116).
     let keys = fitting_keys(area.width, &title, SWITCH_KEYS);
-    let inner = panel_with_keys(frame, area, &title, keys, context);
+    // The GPU's name in its color (D-123).
+    let theme = &context.theme;
+    let style = theme.gpu_style(&selected.label, theme.section_title_style(&title));
+    let inner = styled_panel_with_keys(frame, area, (&title, style), keys, context);
     let mut rows = RowCursor::new(inner);
     let Some(selector) = rows.next_row() else {
         return;
@@ -274,12 +278,19 @@ fn selector_width(gpu: &GpuView) -> usize {
     let labels: usize = gpu
         .cards
         .iter()
-        .map(|card| display_width(&clean(&card.label)) + 3)
+        .map(|card| display_width(&chip(card)) + 3)
         .sum();
     labels + display_width(HIDDEN_GAP)
 }
 
-/// `[GPU 0]  GPU 1`, then what the panel could not show.
+/// `GPU 0 · RTX 5080`: a card's label and short model, so the selector
+/// tells which card each is (D-122).
+fn chip(card: &GpuCard) -> String {
+    gpu_with_model(&clean(&card.label), &clean(&card.name))
+}
+
+/// `[GPU 0 · RTX 5080]  GPU 1 · RTX 3060`, each in its GPU's color (D-123),
+/// then what the panel could not show.
 fn render_selector(
     frame: &mut Frame<'_>,
     row: Rect,
@@ -293,9 +304,9 @@ fn render_selector(
     for card in &gpu.cards {
         let is_selected = card.entity_id == selected.entity_id;
         let text = if is_selected {
-            format!("[{}]", clean(&card.label))
+            format!("[{}]", chip(card))
         } else {
-            format!(" {} ", clean(&card.label))
+            format!(" {} ", chip(card))
         };
         let width = saturate_u16(display_width(&text));
         if x.saturating_add(width) > row.right() {
@@ -306,6 +317,7 @@ fn render_selector(
         } else {
             context.theme.label_style()
         };
+        let style = context.theme.gpu_style(&card.label, style);
         frame.buffer_mut().set_string(x, row.y, &text, style);
         output.entity_target(
             model,
@@ -476,6 +488,38 @@ mod tests {
             "{}",
             roomy.join("\n")
         );
+    }
+
+    /// The title names the GPU in its color, and each GPU's chip is in its
+    /// own (D-123), the selected one also highlighted and bold.
+    #[test]
+    fn the_selector_draws_each_gpu_in_its_color() {
+        use crate::registry::DisplayModule;
+        let mut context = crate::test_fixtures::display_context();
+        context.slot = crate::registry::Slot::Detail;
+        let model = crate::test_fixtures::view_model(dgxtop_core::commands::ViewKind::GpuDetail, 1);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(137, 38)).unwrap();
+        terminal
+            .draw(|frame| {
+                let module = crate::modules::gpu::GpuModule::new().unwrap();
+                module.render(&context, &model, frame.area(), frame);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let theme = &context.theme;
+        let title: String = (0..137).map(|x| buffer[(x, 0)].symbol()).collect();
+        assert!(title.starts_with("╭ GPU 0 · NVIDIA GB10 "), "{title}");
+        assert_eq!(buffer[(2, 0)].fg, theme.gpu_color(0));
+        let row: String = (0..137).map(|x| buffer[(x, 1)].symbol()).collect();
+        for (number, chip) in [(0, "[GPU 0 · GB10]"), (1, " GPU 1 · GB10 ")] {
+            let at = row.find(chip).unwrap_or_else(|| panic!("{chip} in {row}"));
+            let x = u16::try_from(row[..at].chars().count()).unwrap() + 1;
+            assert_eq!(buffer[(x, 1)].fg, theme.gpu_color(number), "{chip}");
+        }
+        let selected = &buffer[(2, 1)];
+        assert_eq!(selected.bg, theme.highlight_background);
+        assert!(selected.modifier.contains(ratatui::style::Modifier::BOLD));
     }
 
     #[test]

@@ -14,6 +14,7 @@ use dgxtop_core::view::{
 };
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use self::facts::reported;
@@ -323,7 +324,7 @@ impl ReadingWidths {
 /// (D-66).
 fn overview_headline(card: &GpuCard, context: &DisplayContext) -> Line<'static> {
     let mut spans = vec![
-        Span::styled(clean(&card.label), context.theme.title_style()),
+        Span::styled(clean(&card.label), gpu_label_style(card, context)),
         separator(context),
         Span::styled(clean(&card.name), context.theme.text_style()),
         separator(context),
@@ -429,9 +430,15 @@ fn render_card(frame: &mut Frame<'_>, area: Rect, card: &GpuCard, context: &Disp
     }
 }
 
+/// A card's label in its GPU's color (D-123), bold like a title.
+fn gpu_label_style(card: &GpuCard, context: &DisplayContext) -> Style {
+    let theme = &context.theme;
+    theme.gpu_style(&card.label, theme.title_style())
+}
+
 fn card_headline(card: &GpuCard, context: &DisplayContext) -> Line<'static> {
     let mut spans = vec![
-        Span::styled(clean(&card.label), context.theme.title_style()),
+        Span::styled(clean(&card.label), gpu_label_style(card, context)),
         separator(context),
         Span::styled(clean(&card.name), context.theme.text_style()),
         separator(context),
@@ -477,6 +484,7 @@ mod tests {
     use crate::test_fixtures::{display_context, gpu_view, missing, ok};
     use dgxtop_core::metric::CanonicalUnit;
     use dgxtop_core::view::CellState;
+    use ratatui::style::Modifier;
 
     fn text(line: &Line<'_>) -> String {
         line.spans
@@ -485,15 +493,28 @@ mod tests {
             .collect()
     }
 
-    /// Both headlines write the temperature in the level color of its
-    /// share of 100 °C (D-104).
+    /// Both headlines name the GPU in its own color, bold (D-123), and
+    /// write the temperature in the level color of its share of 100 °C
+    /// (D-104).
     #[test]
-    fn headlines_color_the_temperature_by_its_level() {
+    fn headlines_color_the_gpu_and_the_temperature() {
         let context = display_context();
-        let card = gpu_view().cards.remove(0);
+        let cards = gpu_view().cards;
+        for (number, card) in (0..).zip(&cards) {
+            for headline in [
+                overview_headline(card, &context),
+                card_headline(card, &context),
+            ] {
+                let label = &headline.spans[0];
+                assert_eq!(label.content, format!("GPU {number}"));
+                assert_eq!(label.style.fg, Some(context.theme.gpu_color(number)));
+                assert!(label.style.add_modifier.contains(Modifier::BOLD));
+            }
+        }
+        let card = &cards[0];
         for headline in [
-            overview_headline(&card, &context),
-            card_headline(&card, &context),
+            overview_headline(card, &context),
+            card_headline(card, &context),
         ] {
             let temperature = headline
                 .spans

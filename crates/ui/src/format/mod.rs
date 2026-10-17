@@ -23,7 +23,8 @@ pub use cell::{
 };
 pub use clock::{format_local_clock, format_local_date, format_local_datetime, format_local_short};
 pub use text::{
-    clean, counted, display_width, pad_left, pad_right, truncate_middle, truncate_to_width,
+    clean, counted, display_width, gpu_number, gpu_with_model, pad_left, pad_right,
+    short_gpu_model, truncate_middle, truncate_to_width,
 };
 pub use units::{
     NOT_AVAILABLE, fixed, format_bytes, format_compact_count, format_duration_ms, format_energy,

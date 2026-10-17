@@ -126,6 +126,7 @@ fn filtered(
         utc_offset_s: 3_600,
         bar: BarSize::Auto,
         scales: &scales(),
+        gpu_names: &BTreeMap::from([("GPU 0".to_owned(), "NVIDIA GeForce RTX 5080".to_owned())]),
         filter,
     })
 }
@@ -174,6 +175,8 @@ fn rows_take_the_published_order_figures_and_colors() {
     let first = &view.runs[1];
     assert!(first.live && first.end.is_none());
     assert_eq!(first.gpus, vec!["GPU 0".to_owned()]);
+    // Its GPU's model now, so the label tells which card it is (D-122).
+    assert_eq!(first.gpu_names, vec!["NVIDIA GeForce RTX 5080".to_owned()]);
     assert_eq!(first.peak_gpu_memory, Some(4.0 * GIB));
     assert_eq!(first.peak_memory, Some(3.0 * GIB));
     assert_eq!(first.peak_children, None, "no probe, no descendants");
@@ -185,6 +188,19 @@ fn rows_take_the_published_order_figures_and_colors() {
     assert!(view.kept_on_disk);
     assert_eq!(view.utc_offset_s, 3_600);
     assert_eq!((view.bar, view.cpu_scale), (BarSize::Auto, Some(2_000.0)));
+}
+
+/// A run's GPU no longer present, or one the catalog names no model of,
+/// gives an empty name: the label stands alone (D-122).
+#[test]
+fn a_gpu_without_a_model_now_gives_an_empty_name() {
+    let mut model = model();
+    model.runs[0].gpus = vec!["GPU 0".to_owned(), "GPU 7".to_owned()];
+    let view = view(&model, None);
+    assert_eq!(
+        view.runs[0].gpu_names,
+        vec!["NVIDIA GeForce RTX 5080".to_owned(), String::new()]
+    );
 }
 
 /// An opened run charts every metric as bars against the host's scales.

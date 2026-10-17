@@ -1,6 +1,8 @@
 //! Rendering helpers shared by the built-in modules: panels, row cursors,
 //! evidence-preserving cell spans, gauges and a width-fitting table.
 
+use std::ops::Range;
+
 use dgxtop_core::identity::{EntityId, ModuleId, ProcessKey};
 use dgxtop_core::metric::CanonicalUnit;
 use dgxtop_core::view::{CellState, MetricCell, ViewModel};
@@ -14,7 +16,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 use super::ModuleBuildError;
 use crate::format::{
     CellDetail, cell_tone, describe_cell, display_width, format_value, pad_left, pad_right,
-    state_label_for_width, value_text,
+    state_label_for_width, truncate_to_width, value_text,
 };
 use crate::num::saturate_u16;
 use crate::registry::{
@@ -198,14 +200,24 @@ pub(crate) fn panel_with_keys(
     keys: &str,
     context: &DisplayContext,
 ) -> Rect {
+    let style = context.theme.section_title_style(title);
+    styled_panel_with_keys(frame, area, (title, style), keys, context)
+}
+
+/// [`panel_with_keys`] with its title in `style`: a GPU's in its color
+/// (D-123).
+pub(crate) fn styled_panel_with_keys(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    (title, style): (&str, Style),
+    keys: &str,
+    context: &DisplayContext,
+) -> Rect {
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(context.theme.border_style(false))
-        .title(Line::from(Span::styled(
-            format!(" {title} "),
-            context.theme.section_title_style(title),
-        )));
+        .title(Line::from(Span::styled(format!(" {title} "), style)));
     if !keys.is_empty() && keys_fit(area.width, title, keys) {
         block = block.title(Line::from(key_spans(keys, context)).right_aligned());
     }
@@ -1076,6 +1088,18 @@ fn position_columns(
 pub(crate) struct TableCell {
     pub text: String,
     pub style: Style,
+    /// Parts of `text` in a color of their own, which they keep on a
+    /// highlighted row: each GPU the cell names in its color (D-123), a
+    /// process's swatch in the process's.
+    pub tints: Vec<Tint>,
+}
+
+/// Columns of a cell's text, counted from its start, in a color of their
+/// own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Tint {
+    pub columns: Range<usize>,
+    pub color: Color,
 }
 
 impl TableCell {
@@ -1083,7 +1107,33 @@ impl TableCell {
         Self {
             text: text.into(),
             style,
+            tints: Vec::new(),
         }
+    }
+
+    /// `text` all in `color`, which a highlighted row keeps: a process's
+    /// swatch.
+    pub fn colored(text: impl Into<String>, color: Color) -> Self {
+        Self::of_parts([(text.into(), Some(color))], Style::new().fg(color))
+    }
+
+    /// A cell of `parts` in a row, each in its own color, else in `style`.
+    pub fn of_parts(
+        parts: impl IntoIterator<Item = (String, Option<Color>)>,
+        style: Style,
+    ) -> Self {
+        let mut cell = Self::new(String::new(), style);
+        for (part, color) in parts {
+            let start = display_width(&cell.text);
+            cell.text.push_str(&part);
+            if let Some(color) = color {
+                cell.tints.push(Tint {
+                    columns: start..display_width(&cell.text),
+                    color,
+                });
+            }
+        }
+        cell
     }
 }
 
@@ -1130,6 +1180,38 @@ pub(crate) fn draw_table_row(
         if let Some(cell) = cells.get(column.spec) {
             let style = row_style.map_or(cell.style, |row| cell.style.patch(row));
             draw_aligned(buffer, row, column, &cell.text, style);
+            draw_tints(buffer, row, column, cell);
+        }
+    }
+}
+
+/// Recolors the parts of `cell` its tints name where `column` shows them;
+/// what the column's width cuts off is not shown, so not tinted either.
+fn draw_tints(buffer: &mut Buffer, row: Rect, column: &FittedColumn, cell: &TableCell) {
+    let x = row.x.saturating_add(column.x);
+    if cell.tints.is_empty() || x >= row.right() || row.height == 0 {
+        return;
+    }
+    let width = usize::from(column.width.min(row.right() - x));
+    let fitted = truncate_to_width(&cell.text, width);
+    let fitted_width = display_width(&fitted);
+    // A cut text ends with the ellipsis, which no part owns.
+    let shown = if fitted == cell.text {
+        fitted_width
+    } else {
+        fitted_width.saturating_sub(1)
+    };
+    let start = match column.align {
+        Align::Left => 0,
+        Align::Right => width.saturating_sub(fitted_width),
+    };
+    for tint in &cell.tints {
+        for offset in tint.columns.start..tint.columns.end.min(shown) {
+            let at = x.saturating_add(saturate_u16(start + offset));
+            // Like the text, what lies past the buffer is not drawn.
+            if let Some(drawn) = buffer.cell_mut((at, row.y)) {
+                drawn.set_fg(tint.color);
+            }
         }
     }
 }
@@ -1328,6 +1410,59 @@ mod tests {
             draw_column_separators(frame.buffer_mut(), area, &columns, Style::new());
         });
         assert_eq!(row_text(&buffer, 0), "  ab │ cde │ f      ");
+    }
+
+    /// A cell's tinted parts keep their colors where its column shows them,
+    /// right- or left-aligned and on a highlighted row; what the column
+    /// cuts off and the ellipsis keep the cell's style, and a row narrower
+    /// than its columns or reaching past the buffer draws what fits (D-123).
+    #[test]
+    fn tinted_parts_keep_their_colors_where_they_show() {
+        let (blue, pink) = (Color::Rgb(0, 0, 255), Color::Rgb(255, 0, 255));
+        let gray = Style::new().fg(Color::Gray);
+        let gpus = TableCell::of_parts(
+            [
+                ("0".to_owned(), Some(blue)),
+                (",".to_owned(), None),
+                ("1".to_owned(), Some(pink)),
+            ],
+            gray,
+        );
+        assert_eq!(gpus.text, "0,1");
+        let cut = TableCell::of_parts(
+            [("ab".to_owned(), Some(blue)), ("cd".to_owned(), Some(pink))],
+            gray,
+        );
+        let specs = [
+            ColumnSpec::right("GPU", 5, 90),
+            ColumnSpec::left("x", 3, 80),
+        ];
+        let columns = fit_columns(&specs, 9);
+        let highlight = Style::new().fg(Color::White).bg(Color::DarkGray);
+        let cells = [gpus, cut];
+        let buffer = render_area(9, 4, |frame, _| {
+            let buffer = frame.buffer_mut();
+            draw_table_row(buffer, Rect::new(0, 0, 9, 1), &columns, &cells, None);
+            let row = Rect::new(0, 1, 9, 1);
+            draw_table_row(buffer, row, &columns, &cells, Some(highlight));
+            draw_table_row(buffer, Rect::new(0, 2, 4, 1), &columns, &cells, None);
+            draw_table_row(buffer, Rect::new(6, 3, 9, 1), &columns, &cells, None);
+        });
+        assert_eq!(row_text(&buffer, 0), "  0,1 ab…");
+        let colors =
+            |y: u16, at: &[u16]| -> Vec<Color> { at.iter().map(|x| buffer[(*x, y)].fg).collect() };
+        let (gray, white) = (Color::Gray, Color::White);
+        let shown = [2, 3, 4, 6, 7, 8];
+        assert_eq!(colors(0, &shown), vec![blue, gray, pink, blue, blue, gray]);
+        assert_eq!(
+            colors(1, &shown),
+            vec![blue, white, pink, blue, blue, white]
+        );
+        assert_eq!(buffer[(2, 1)].bg, Color::DarkGray);
+        assert_eq!(row_text(&buffer, 2), " 0,1     ");
+        assert_eq!(colors(2, &[1, 2, 3]), vec![blue, gray, pink]);
+        assert_eq!(row_text(&buffer, 3), "        0");
+        assert_eq!(colors(3, &[8]), vec![blue]);
     }
 
     /// A panel's keys: each key bright in the accent color, its action in

@@ -332,11 +332,13 @@ fn processes_window_shows_scroll_position_filters_and_truncation() {
     processes.selected_index = Some(399);
     processes.truncated = true;
     processes.filter = "work".into();
-    processes.gpu_filter = Some((test_fixtures::entity("gpu:GPU-0"), "GPU0".into()));
+    // The Manager labels the GPU filtered by as every GPU, `GPU 0`.
+    processes.gpu_filter = Some((test_fixtures::entity("gpu:GPU-0"), "GPU 0".into()));
     model.modules.processes = Some(Arc::new(processes));
     let rendered = render(&model, (100, 50));
     assert!(rendered.contains("filter \"work\""), "{}", rendered.text());
-    assert!(rendered.contains("GPU GPU0"), "{}", rendered.text());
+    assert!(rendered.contains(" · GPU 0 · "), "{}", rendered.text());
+    assert!(!rendered.contains("GPU GPU"), "{}", rendered.text());
     assert!(rendered.contains("of 412"), "{}", rendered.text());
     assert!(rendered.contains("truncated"), "{}", rendered.text());
     assert!(
@@ -387,7 +389,7 @@ fn the_overview_history_fits_a_213_by_41_terminal() {
         panel_row(&rendered, title);
     }
     assert!(
-        text.contains("[GPU 0]") && text.contains(" GPU 1 "),
+        text.contains("[GPU 0 · GB10]") && text.contains(" GPU 1 · GB10 "),
         "{text}"
     );
     assert!(!text.contains("below") && !text.contains("above"), "{text}");
