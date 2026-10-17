@@ -91,6 +91,7 @@ static SPEC: CollectorSpec = CollectorSpec {
     id: naming::collectors::DISK,
     accepts,
     retains,
+    leaves: context::leaves_none,
 };
 
 /// Block device and filesystem collector.

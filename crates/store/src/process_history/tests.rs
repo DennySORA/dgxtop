@@ -444,24 +444,32 @@ fn the_short_term_file_is_replaced_atomically_and_read_back() {
     assert!(store.load(&startup()).unwrap().recent.is_none());
 }
 
+/// A bucket packs 12 bytes a metric, through its last metric with a
+/// sample, so a run on one GPU leaves the other GPUs' figures out (D-120).
+/// A bucket packed before metrics were added reads with them empty; one of
+/// more metrics than this version knows does not read (its load fails, and
+/// nothing is deleted).
 #[test]
 fn buckets_pack_twelve_bytes_a_metric_and_back() {
     let mut full = bucket(MINUTE, 10.0);
     full.add(RunMetric::OpenFiles, Some(12.0));
     let packed = database::pack(&full);
-    assert_eq!(packed.len(), 12 * RUN_METRICS);
+    assert_eq!(packed.len(), 12 * (RunMetric::OpenFiles.index() + 1));
     let back = database::unpack(MINUTE, &packed).unwrap();
     assert_eq!(back.value(RunMetric::Cpu).mean(), Some(20.0));
     assert_eq!(back.value(RunMetric::Cpu).peak(), Some(30.0));
     assert_eq!(back.value(RunMetric::Memory).count, 0);
     assert_eq!(back.value(RunMetric::OpenFiles).peak(), Some(12.0));
+    assert_eq!(back.value(RunMetric::Gpu0Memory).count, 0, "read empty");
+    full.add(RunMetric::Gpu1Device, Some(40.0));
+    let with_gpus = database::pack(&full);
+    assert_eq!(with_gpus.len(), 12 * (RunMetric::Gpu1Device.index() + 1));
+    let back = database::unpack(MINUTE, &with_gpus).unwrap();
+    assert_eq!(back.value(RunMetric::Gpu1Device).mean(), Some(40.0));
     assert!(database::unpack(0, &packed[..95]).is_none());
     assert!(database::unpack(0, &[]).is_none());
-    // Only this format's layout is read: a file of another format is
-    // recreated, never upgraded (D-85).
-    assert!(database::unpack(MINUTE, &packed[..96]).is_none());
-    let mut longer = packed.clone();
-    longer.extend([0; 12]);
+    let mut longer = with_gpus.clone();
+    longer.resize(12 * (RUN_METRICS + 1), 0);
     assert!(database::unpack(MINUTE, &longer).is_none());
 }
 
@@ -674,16 +682,27 @@ fn an_undecodable_bucket_fails_the_load() {
             ..ProcessHistoryJournal::default()
         })
         .unwrap();
+    // One metric more than this version knows: a newer version's bucket.
+    let newer = 12 * (RUN_METRICS + 1);
     store
         .connection()
         .unwrap()
-        .execute("UPDATE process_buckets SET aggregates = zeroblob(96)", [])
+        .execute(
+            &format!("UPDATE process_buckets SET aggregates = zeroblob({newer})"),
+            [],
+        )
         .unwrap();
     let error = store.load(&startup()).unwrap_err();
     assert!(matches!(error, InfraError::Database(_)), "{error:?}");
-    assert!(error.to_string().contains("96 bytes"), "{error}");
+    assert!(
+        error.to_string().contains(&format!("{newer} bytes")),
+        "{error}"
+    );
     let error = store.read_run(&key(1), &every_size()).unwrap_err();
-    assert!(error.to_string().contains("96 bytes"), "{error}");
+    assert!(
+        error.to_string().contains(&format!("{newer} bytes")),
+        "{error}"
+    );
     store
         .append(&ProcessHistoryJournal {
             runs: vec![run(1, now, None)],

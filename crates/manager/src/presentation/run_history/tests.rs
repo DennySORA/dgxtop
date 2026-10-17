@@ -219,6 +219,15 @@ fn an_opened_run_charts_each_metric_as_bars() {
     assert_eq!(scale(RunMetric::GpuMemory), Some(120.0 * GIB));
     assert_eq!(scale(RunMetric::Memory), Some(128.0 * GIB));
     assert_eq!(scale(RunMetric::DiskRead), None, "a rate scales to itself");
+    // Each GPU's own (D-120): 100 % of it and its own memory; a place the
+    // run has no GPU in has no memory scale.
+    assert_eq!(scale(RunMetric::Gpu0Utilization), Some(100.0));
+    assert_eq!(scale(RunMetric::Gpu0Device), Some(100.0));
+    assert_eq!(scale(RunMetric::Gpu0Memory), Some(120.0 * GIB));
+    assert_eq!(scale(RunMetric::Gpu1Memory), None);
+    let unit = |metric: RunMetric| opened.charts[metric.index()].unit;
+    assert_eq!(unit(RunMetric::Gpu0Device), CanonicalUnit::Percent);
+    assert_eq!(unit(RunMetric::Gpu3Memory), CanonicalUnit::Bytes);
     let threads = &opened.charts[RunMetric::Threads.index()];
     assert_eq!(threads.unit, CanonicalUnit::Count);
     assert!(threads.points.is_empty(), "no probe, no threads");

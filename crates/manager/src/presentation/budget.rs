@@ -12,8 +12,11 @@ use super::history::downsample;
 /// Facts from the builders that trimming must preserve.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BudgetHints {
-    /// Rows the viewer shows; the selected process is always among them.
+    /// Rows the viewer shows, the table standing alone (`z`, D-121); the
+    /// selected process is always among them.
     pub(crate) visible_process_rows: usize,
+    /// Rows the table shows beside the Overview's other panels.
+    pub(crate) beside_process_rows: usize,
 }
 
 /// Room kept for the reduction banner itself.
@@ -27,12 +30,15 @@ const MINIMAL_CORES: usize = 16;
 
 type TrimStep = fn(&mut ModuleViews, &BudgetHints) -> bool;
 
-/// Ordered from least to most information loss.
-const TRIM_STEPS: [TrimStep; 10] = [
-    halve_trends,
-    halve_trends,
+/// Ordered from least to most information loss: the process rows first,
+/// which only the table standing alone shows (D-121).
+const TRIM_STEPS: [TrimStep; 12] = [
     drop_process_overscan,
+    narrow_process_window,
+    halve_trends,
+    halve_trends,
     halve_history,
+    halve_run_charts,
     shorten_lists,
     |modules, _| limit_cores(modules, REDUCED_CORES),
     clear_trends,
@@ -153,6 +159,33 @@ fn drop_process_overscan(modules: &mut ModuleViews, hints: &BudgetHints) -> bool
     )
 }
 
+/// Narrows the window to the rows the table shows beside the Overview's
+/// other panels, around the selected process: only the table standing
+/// alone (`z`, D-121) shows fewer.
+fn narrow_process_window(modules: &mut ModuleViews, hints: &BudgetHints) -> bool {
+    let Some(processes) = modules.processes.as_mut() else {
+        return false;
+    };
+    let keep = hints.beside_process_rows.max(1);
+    if processes.rows.len() <= keep {
+        return false;
+    }
+    let processes = Arc::make_mut(processes);
+    let selected = processes
+        .selected_index
+        .and_then(|index| index.checked_sub(processes.window_start))
+        .map(|offset| usize::try_from(offset).unwrap_or(usize::MAX));
+    let start = selected
+        .map_or(0, |at| at.saturating_sub(keep / 2))
+        .min(processes.rows.len() - keep);
+    processes.rows.drain(..start);
+    processes.rows.truncate(keep);
+    processes.window_start = processes
+        .window_start
+        .saturating_add(u32::try_from(start).unwrap_or(u32::MAX));
+    true
+}
+
 /// Halves the points of every history chart above the floor.
 fn halve_history(modules: &mut ModuleViews, _: &BudgetHints) -> bool {
     let Some(history) = modules.history.as_mut() else {
@@ -179,6 +212,35 @@ fn halve_history(modules: &mut ModuleViews, _: &BudgetHints) -> bool {
                 part.means = halve_cells(&part.means);
                 changed = true;
             }
+        }
+    }
+    changed
+}
+
+/// Halves the points of the opened run's charts above the floor: a run on
+/// four GPUs draws 26 (D-120).
+fn halve_run_charts(modules: &mut ModuleViews, _: &BudgetHints) -> bool {
+    let Some(history) = modules.process_history.as_mut() else {
+        return false;
+    };
+    let long = |opened: &dgxtop_core::view::RunDetailView| {
+        opened
+            .charts
+            .iter()
+            .any(|chart| chart.points.len() > MIN_HISTORY_POINTS)
+    };
+    if !history.opened.as_ref().is_some_and(long) {
+        return false;
+    }
+    let Some(opened) = Arc::make_mut(history).opened.as_mut() else {
+        return false;
+    };
+    let mut changed = false;
+    for chart in &mut opened.charts {
+        let length = chart.points.len();
+        if length > MIN_HISTORY_POINTS {
+            chart.points = downsample(&chart.points, length / 2);
+            changed |= chart.points.len() < length;
         }
     }
     changed
@@ -279,11 +341,154 @@ mod tests {
         assert_eq!(halve_cells(&[Some(1.0), None]), vec![Some(1.0)]);
     }
 
+    /// The opened run's charts halve above the floor (D-120), once they are
+    /// long.
+    #[test]
+    fn an_opened_runs_charts_halve() {
+        use dgxtop_core::metric::CanonicalUnit;
+        use dgxtop_core::process_history::{RunDetails, RunInfo, RunMetric};
+        use dgxtop_core::tiers::BarSize;
+        use dgxtop_core::view::{
+            HistoryPointView, ProcessHistoryView, RunChartView, RunDetailView,
+        };
+        let point = |minute: u64| HistoryPointView {
+            start_utc_ns: minute * 60_000_000_000,
+            end_utc_ns: (minute + 1) * 60_000_000_000,
+            mean: Some(1.0),
+            min: None,
+            max: Some(1.0),
+        };
+        let charts = RunMetric::ALL
+            .iter()
+            .map(|metric| RunChartView {
+                metric: *metric,
+                unit: CanonicalUnit::Percent,
+                scale_max: None,
+                points: (0..100).map(point).collect(),
+                mean: None,
+                peak: None,
+                latest: None,
+            })
+            .collect();
+        let mut modules = ModuleViews {
+            process_history: Some(Arc::new(ProcessHistoryView {
+                runs: Vec::new(),
+                more_runs: 0,
+                opened: Some(RunDetailView {
+                    info: RunInfo {
+                        key: dgxtop_core::testing::test_process_key(1),
+                        name: "train".to_owned(),
+                        command: String::new(),
+                        cwd: String::new(),
+                        uid: None,
+                        gpus: Vec::new(),
+                        details: RunDetails::default(),
+                        started_utc_ns: 0,
+                        last_seen_utc_ns: 0,
+                        end: None,
+                    },
+                    live: true,
+                    slot: None,
+                    bar: BarSize::OneMinute,
+                    window_start_utc_ns: 0,
+                    window_end_utc_ns: 100 * 60_000_000_000,
+                    charts,
+                    loading: false,
+                }),
+                kept_on_disk: true,
+                utc_offset_s: 0,
+                bar: BarSize::Auto,
+                cpu_scale: None,
+            })),
+            ..ModuleViews::default()
+        };
+        let hints = BudgetHints {
+            visible_process_rows: 10,
+            beside_process_rows: 4,
+        };
+        let lengths = |modules: &ModuleViews| -> Vec<usize> {
+            let opened = modules
+                .process_history
+                .as_ref()
+                .unwrap()
+                .opened
+                .as_ref()
+                .unwrap();
+            opened
+                .charts
+                .iter()
+                .map(|chart| chart.points.len())
+                .collect()
+        };
+        assert!(halve_run_charts(&mut modules, &hints));
+        assert!(lengths(&modules).iter().all(|length| *length == 50));
+        assert!(halve_run_charts(&mut modules, &hints));
+        assert!(halve_run_charts(&mut modules, &hints));
+        assert!(
+            lengths(&modules)
+                .iter()
+                .all(|length| *length <= MIN_HISTORY_POINTS)
+        );
+        assert!(!halve_run_charts(&mut modules, &hints), "at the floor");
+    }
+
+    /// Narrowing keeps the rows the table shows beside the Overview's other
+    /// panels around the selected process, and where they start (D-121).
+    #[test]
+    fn a_narrowed_process_window_keeps_the_selection() {
+        use dgxtop_core::commands::SortKey;
+        use dgxtop_core::testing::test_process_key;
+        use dgxtop_core::view::{ProcessRowView, ProcessesView};
+        let row = |pid: i64| ProcessRowView {
+            key: test_process_key(pid),
+            name: format!("p{pid}"),
+            user: "u".to_owned(),
+            state: None,
+            cpu_percent: None,
+            rss_bytes: None,
+            missing_reason: None,
+            gpus: Vec::new(),
+            color_slot: None,
+        };
+        let mut modules = ModuleViews {
+            processes: Some(Arc::new(ProcessesView {
+                rows: (100..140).map(row).collect(),
+                window_start: 100,
+                total_rows: 300,
+                truncated: false,
+                sort: SortKey::Pid,
+                ascending: true,
+                filter: String::new(),
+                gpu_filter: None,
+                gpu_choices: Vec::new(),
+                selected: Some(test_process_key(130)),
+                selected_index: Some(130),
+                selected_missing: None,
+            })),
+            ..ModuleViews::default()
+        };
+        let hints = BudgetHints {
+            visible_process_rows: 40,
+            beside_process_rows: 6,
+        };
+        assert!(narrow_process_window(&mut modules, &hints));
+        let processes = modules.processes.as_ref().unwrap();
+        assert_eq!(processes.window_start, 127);
+        let pids: Vec<i64> = processes
+            .rows
+            .iter()
+            .map(|row| i64::from(row.key.pid.get()))
+            .collect();
+        assert_eq!(pids, vec![127, 128, 129, 130, 131, 132]);
+        assert!(!narrow_process_window(&mut modules, &hints), "once");
+    }
+
     #[test]
     fn steps_report_whether_they_changed_anything() {
         let mut modules = ModuleViews::default();
         let hints = BudgetHints {
             visible_process_rows: 10,
+            beside_process_rows: 4,
         };
         for step in TRIM_STEPS {
             assert!(!step(&mut modules, &hints));

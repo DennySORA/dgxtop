@@ -101,14 +101,19 @@ Every GPU with its utilization and memory, the CPU, memory, busiest disks and ne
 and the GPU processes in their colors. `c` expands the CPU into per-core bars and sensors. `i` / `n`
 fold the disk I/O and network panels to one row so the processes get the rest, and `o` unfolds them
 (a click on a folded row does too); each foldable panel names its key on its title, and folded
-panels stay folded after a restart.
+panels stay folded after a restart. `z` shows the GPU processes alone on the whole Overview for a
+moment, to look through them and act on them; `z` again, `Esc` or another view brings the rest back.
 
 <img src="docs/images/screenshots/workstation-overview.png" alt="dgxtop Overview on a workstation with an RTX 5080 at 97 % and an RTX 3060, the disk and network tables, and four GPU processes, each with its color" width="100%">
 
 ### GPU
 
-One GPU at a time: four live bars, then everything the driver reports. `←` / `→` (`h` / `l`)
-switch between GPUs; sections that do not fit go on pages, which `↑` / `↓` turn.
+One GPU at a time: four live bars that stay put, then everything the driver reports. A GPU that
+reports no power limit, such as the GB10, draws its power bar against the highest draw the history
+kept on disk recorded in the last 30 days, and shows the draw alone until that record reaches
+before today. `←` / `→`
+(`h` / `l`) switch between GPUs; sections that do not fit go on pages under a line that names the
+page and its keys, and `↑` / `↓` turn them.
 
 <img src="docs/images/screenshots/dgx-spark-gpu.png" alt="GPU view of the DGX Spark's GB10: state, clocks, unified memory, PCIe, NVLink-C2C, thermal thresholds, power and energy, CUDA 13.0, driver and Linux kernel, device, PCI and firmware, topology" width="100%">
 
@@ -120,7 +125,8 @@ switch between GPUs; sections that do not fit go on pages, which `↑` / `↓` t
 
 The machine's resources as bars of 1 minute to 24 hours (`←` / `→`, or `w` / `W`), with now,
 average and maximum on every chart. With several GPUs, `↑` / `↓` pick the GPU the GPU charts show;
-when the charts do not all fit, `PgUp` / `PgDn` scroll them. To give the charts you watch more room,
+when the charts do not all fit, a line under the bar sizes says how many are above and below, and
+`PgUp` / `PgDn` scroll them. To give the charts you watch more room,
 fold the others to their title row, first on the page, with the key each panel names on its title: `c` CPU, `m` memory, `u` GPU
 utilization, `v` GPU memory, `t` temperature, `p` power, `i` disk, `n` network; `o` unfolds them all,
 and folds stay after a restart.
@@ -130,9 +136,16 @@ and folds stay after a restart.
 ### Process History
 
 Every GPU process as a run, the running ones always on top, then the newest first: when it started,
-how long it ran, its peak GPU memory and RAM, and how it ended. `Enter` opens a run with its command line (`e` shows all of it, `y` copies
-it), working folder and charts; when its charts do not fit at a legible height they go on pages,
-which `PgDn` / `PgUp` turn. `/` filters the runs by name or PID. `g` / `G` go to the top / the end of
+how long it ran, its peak GPU memory and RAM, and how it ended. `Enter` opens a run: its details
+stay put at the top (when it started and ended, how long it ran, its parent, working folder,
+program, control group and command line, which `e` shows whole and `y` copies) above its charts;
+the GPU panel shows each GPU the run used: its utilization there (`util 0`, or the GPU's own, `dev 0`,
+where the driver gives none per process, as on the GB10) and its memory there (`mem 0`); past four
+GPUs, the rest are in the sums (`util Σ`, `mem Σ`). `dev` is every process on that GPU together, so
+while two jobs share it, both runs show their sum; the list's start and run times tell which ran at
+once. When the
+charts do not fit at a legible height they go on pages under a line that names the page, and
+`↑` / `↓` turn them. `/` filters the runs by name or PID. `g` / `G` go to the top / the end of
 the list. `Space` marks a run, `a` marks every ended run, and `d` deletes the marked runs, or the selected
 one, after a confirmation; a run still running is kept.
 
@@ -252,7 +265,8 @@ use root's configuration and history. Process termination (`K` / `F9`) is disabl
 `--config` and `--state-dir` take absolute paths for the configuration file and the state
 directory. Command-line values override saved settings only for the current run.
 
-Each panel names its own keys at the right of its title; the footer keeps the global ones. On a
+Each panel names its own keys at the right of its title, and a view with pages names the keys
+turning them on the line above the pages; the footer keeps the global ones. On a
 keyboard without arrow keys, `h` / `j` / `k` / `l` stand in for `←` / `↓` / `↑` / `→`, `Ctrl-U` /
 `Ctrl-D` for `PgUp` / `PgDn`, and `<` / `>` for `Home` / `End`.
 
@@ -266,15 +280,16 @@ keyboard without arrow keys, `h` / `j` / `k` / `l` stand in for `←` / `↓` / 
 | `c` | Show or hide the CPU sensors and per-core bars (or click the CPU panel) |
 | `i` / `n`, `o` | Fold the Overview's disk I/O / network panel to one row, or unfold every panel (kept after a restart) |
 | `[` / `]` | Scroll the GPU processes of the memory panel |
+| `z` | Show the GPU processes alone on the whole Overview, or everything again (`Esc` too) |
 | `s` / `r` | Next sort column / reverse order |
 | `g` | Cycle the GPU filter (all GPUs → each GPU) |
 | `/` | Filter processes, or Process History's runs, by name or PID (`Enter` applies, `Esc` clears; `Ctrl-B`/`Ctrl-F`/`Ctrl-A`/`Ctrl-E` move the cursor) |
 | `K` / `F9` | Stop the selected process with SIGTERM / SIGKILL (asks for confirmation; `y` typed before the question shows counts) |
 | `y`/`Enter`, `n`/`Esc` | Confirm / cancel a pending process action or deletion |
 | `h`/`l`, `←`/`→` | Previous / next GPU in the GPU view; previous / next bar size in the history views (also `W` / `w`) |
-| `k`/`j`, `↑`/`↓` | Previous / next page of sections in the GPU view; previous / next GPU in the Overview History's GPU charts |
+| `k`/`j`, `↑`/`↓` | Previous / next page in the GPU view and of an opened run's charts; previous / next run in the Process History list; previous / next GPU in the Overview History's GPU charts |
 | `PgUp`/`PgDn`, `Ctrl-U`/`Ctrl-D` | Previous / next page in the GPU view and of an opened run's charts; scroll the Overview History's charts when they do not all fit |
-| `g`/`Home`/`<`, `G`/`End`/`>` | Top / end of the Process History list; first / last charts in Overview History; first / last page in the GPU view |
+| `g`/`Home`/`<`, `G`/`End`/`>` | Top / end of the Process History list; first / last page of an opened run's charts and in the GPU view; first / last charts in Overview History |
 | `c`/`m`/`u`/`v`/`t`/`p`/`i`/`n`, `o` | Fold an Overview History panel to its title row (CPU, memory, GPU utilization, GPU memory, temperature, power, disk, network), or unfold them all (kept after a restart) |
 | `Enter` | Open or close the selected run in Process History |
 | `e` / `y` | Show the whole command line of the opened run / copy it (OSC 52) |

@@ -348,7 +348,8 @@ fn live_value(
         | Channel::FramebufferTotal
         | Channel::FramebufferReserved
         | Channel::ProcessMemory
-        | Channel::ProcessUtilization => Err(BackendError::Other("NOT_A_LIVE_CHANNEL".to_owned())),
+        | Channel::ProcessUtilization
+        | Channel::ProcessMemoryTotal => Err(BackendError::Other("NOT_A_LIVE_CHANNEL".to_owned())),
     }
 }
 

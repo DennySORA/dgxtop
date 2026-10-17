@@ -182,7 +182,7 @@ fn overview_follows_the_reference_layout_and_keeps_every_module_visible_when_wid
         "10.0 GiB / 64.0 GiB",
         "CPU ▸ Grace ARM Neoverse-V2",
         "(c/click cores)",
-        "(j/k/↑/↓ select · s sort · r reverse · g GPU filter · / filter · K terminate · F9 kill)",
+        "(j/k/↑/↓ select · s sort · r reverse · g GPU filter · / filter · K terminate · F9 kill · z zoom)",
         "(i fold)",
         "(n fold)",
         "45.3%",
@@ -448,11 +448,22 @@ fn history_says_when_it_loads_fails_is_partly_recorded_or_has_no_series() {
         unavailable.text()
     );
     history.error = None;
-    // A short terminal: the bar names the panels below, which PgDn
-    // scrolls to (D-107); nothing claims there is no data.
+    // A short terminal: a divider under the bar names the panels below
+    // and the keys scrolling to them (D-107, D-116); nothing claims there
+    // is no data.
     model.modules.history = Some(Arc::new(history.clone()));
     let short = render(&model, (100, 10));
-    assert!(short.contains("PgDn/^D 7 panels below"), "{}", short.text());
+    let divider = short.row_with("7 panels below").expect("a divider");
+    assert!(
+        divider.starts_with('├') && divider.ends_with('┤'),
+        "{}",
+        short.text()
+    );
+    assert!(
+        divider.ends_with("─ 7 panels below (PgUp/PgDn/^U/^D scroll) ┤"),
+        "{}",
+        short.text()
+    );
     assert!(!short.contains("no series"), "{}", short.text());
     history.charts.clear();
     model.modules.history = Some(Arc::new(history));
@@ -787,6 +798,54 @@ fn folded_panels_keep_a_row_and_give_the_others_the_rest() {
         let row = &folded.rows[row_index(&folded, title)];
         assert!(row.contains(keys), "{title}: {row}");
     }
+}
+
+/// `z` shows the GPU processes alone on the Overview (D-121): the table
+/// takes every row under the header, its title naming `z back`; the other
+/// panels wait.
+#[test]
+fn the_expanded_process_table_takes_the_whole_overview() {
+    let model = model(ViewKind::Overview);
+    let size = (213, 41);
+    let normal = render(&model, size);
+    let zoomed = render_with(
+        &Viewer::builtin(),
+        Some(&model),
+        &expanded(crate::modules::PROCESSES_MODULE_ID),
+        size,
+    );
+    let text = zoomed.text();
+    let panels = |rendered: &Rendered| rendered.rows.iter().filter(|row| row.contains('╭')).count();
+    assert!(
+        normal.contains("z zoom)") && panels(&normal) > 1,
+        "{}",
+        normal.text()
+    );
+    assert!(text.contains("z back)"), "{text}");
+    assert_eq!(panels(&zoomed), 1, "the other panels wait: {text}");
+    // The table's rows: from its title to its bottom border.
+    let height = |rendered: &Rendered| {
+        let title = row_index(rendered, "GPU Processes");
+        rendered.rows[title..]
+            .iter()
+            .position(|row| row.starts_with('╰'))
+            .unwrap()
+    };
+    assert!(height(&zoomed) > height(&normal), "{text}");
+    let title = row_index(&zoomed, "GPU Processes");
+    assert_eq!(title, 1, "right under the header: {text}");
+    assert_eq!(
+        height(&zoomed),
+        usize::from(size.1) - 3,
+        "to the footer: {text}"
+    );
+    // A narrow panel still names `z`, with fewer of the others.
+    let narrow = render(&model, (100, 30));
+    assert!(
+        narrow.contains("(j/k select · K terminate · z zoom)"),
+        "{}",
+        narrow.text()
+    );
 }
 
 /// A GPU view too short for its sections shows them in pages (D-110): the

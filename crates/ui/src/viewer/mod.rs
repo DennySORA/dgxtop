@@ -26,6 +26,7 @@ pub use isolation::in_isolated_render;
 pub use layout::{MIN_COLUMNS, MIN_ROWS, SizeTier, size_tier};
 pub use ui_state::{ModeView, Notice, UiState};
 
+use crate::modules::PROCESSES_MODULE_ID;
 use crate::num::saturate_u16;
 use crate::registry::{
     DisplayContext, DisplayModuleManifest, ModuleRegistry, OverviewCell, Slot, detail_module_id,
@@ -283,11 +284,20 @@ impl Viewer {
     }
 
     fn overview_candidates(&self, model: &ViewModel, ui: &UiState) -> Vec<Candidate> {
+        // The process table expanded takes the whole Overview (`z`, D-121).
+        let zoomed = self.registry.iter().any(|module| {
+            module.manifest().module_id.as_str() == PROCESSES_MODULE_ID
+                && module_enabled(model, module.manifest())
+                && is_expanded(ui, module.manifest())
+        });
         self.registry
             .iter()
             .enumerate()
             .filter(|(_, module)| module.manifest().has_slot(Slot::Overview))
             .filter(|(_, module)| module_enabled(model, module.manifest()))
+            .filter(|(_, module)| {
+                !zoomed || module.manifest().module_id.as_str() == PROCESSES_MODULE_ID
+            })
             .map(|(index, module)| {
                 // A folded module keeps one row and gives the others the
                 // rest (D-114).

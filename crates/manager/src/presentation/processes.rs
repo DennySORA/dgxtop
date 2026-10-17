@@ -22,22 +22,37 @@ pub const PROCESS_OVERSCAN_ROWS: usize = 8;
 const MAX_LINKS_PER_ROW: usize = 16;
 const UNKNOWN_USER: &str = "unknown";
 const UNNAMED_PROCESS: &str = "?";
-/// Overview rows around the process table in the reference grid, with the
-/// charts under their bars (D-38, D-43): header and footer, the CPU/memory
-/// row (8 with load and tasks on the sensor line; a narrow panel needs one
-/// more, which the overscan absorbs), the disk/network row (9) and the
-/// table's border, column header and status line (4).
-const OVERVIEW_RESERVED_ROWS: u16 = 2 + 8 + 9 + 4;
+/// Overview rows around the process table standing alone (`z`, D-121):
+/// the header and footer, and the table's border, column header and status
+/// line.
+const ALONE_RESERVED_ROWS: u16 = 2 + 4;
+
+/// Process rows the Overview can show: as many as the table holds standing
+/// alone on the whole Overview (`z`, D-121), a moment the Manager is not
+/// told of; beside the other panels the viewer draws the rows around the
+/// selection it has room for. The overscan absorbs small differences from
+/// the viewer's real layout.
+pub(crate) fn visible_process_rows(viewport_rows: u16) -> usize {
+    usize::from(viewport_rows.saturating_sub(ALONE_RESERVED_ROWS).max(1))
+}
+
+/// Overview rows around the process table beside the other panels in the
+/// reference grid, with the charts under their bars (D-38, D-43): header
+/// and footer, the CPU/memory row (8 with load and tasks on the sensor
+/// line; a narrow panel needs one more, which the overscan absorbs), the
+/// disk/network row (9) and the table's border, column header and status
+/// line (4).
+const BESIDE_RESERVED_ROWS: u16 = 2 + 8 + 9 + 4;
 /// Border of the overview GPU panel.
 const GPU_PANEL_BORDER_ROWS: u16 = 2;
 
-/// Process rows the Overview can show, estimated from the viewport
-/// and the overview grid: the table takes the rows the other rows and the
-/// GPU panel of `gpu_count` GPUs leave. The overscan absorbs small
-/// differences from the viewer's real layout.
-pub(crate) fn visible_process_rows(viewport_rows: u16, gpu_count: usize) -> usize {
+/// Process rows the table shows beside the Overview's other panels,
+/// estimated from the viewport and the overview grid: the rows the other
+/// rows and the GPU panel of `gpu_count` GPUs leave. A tight byte budget
+/// narrows the window to these; the table standing alone then shows fewer.
+pub(crate) fn beside_process_rows(viewport_rows: u16, gpu_count: usize) -> usize {
     let rows = viewport_rows
-        .saturating_sub(OVERVIEW_RESERVED_ROWS)
+        .saturating_sub(BESIDE_RESERVED_ROWS)
         .saturating_sub(gpu_panel_rows(gpu_count));
     usize::from(rows.max(1))
 }

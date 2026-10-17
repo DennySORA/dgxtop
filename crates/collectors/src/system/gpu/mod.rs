@@ -39,6 +39,7 @@ static SPEC: CollectorSpec = CollectorSpec {
     id: naming::collectors::GPU,
     accepts,
     retains,
+    leaves: context::leaves_none,
 };
 
 /// Canonical GPU metrics published straight through arbitration.
@@ -162,12 +163,29 @@ fn publish_allocation(
     key: &MetricKey,
     group: Option<&GpuProcesses<'_>>,
 ) {
+    // The GPU's newest list decides (D-119): the adapter's reading of a
+    // list that named none, or of one it could not read, against the
+    // processes the newest list named. Offering both would let the
+    // selection hold the older one while it is still fresh.
+    let direct_cycle = session
+        .records(key)
+        .iter()
+        .filter(|record| reads_the_lists(session, record.observation))
+        .map(|record| record.observation.cycle_id)
+        .max();
+    let group = group.filter(|group| direct_cycle.is_none_or(|cycle| group.cycle >= cycle));
     let sum = group
         .map(|group| sum_allocations(session, group))
         .unwrap_or_default();
     let note = sum.note();
     let synthetic = sum.observation(key);
     let mut candidates = session.candidates(key);
+    if let Some(group) = group {
+        candidates.retain(|candidate| {
+            !reads_the_lists(session, candidate.observation)
+                || candidate.observation.cycle_id >= group.cycle
+        });
+    }
     candidates.extend(
         synthetic
             .as_ref()
@@ -189,6 +207,15 @@ fn publish_allocation(
     }
     let notes = note.into_iter().map(str::to_owned).collect();
     session.arbitrate_and_publish(key, candidates, notes);
+}
+
+/// Whether `observation` is the adapter's reading of the GPU's process
+/// lists, from their group, whose read cycle the lists' own compare with;
+/// another group's (a replay's fast group) is offered as before.
+fn reads_the_lists(session: &Session<'_>, observation: &Observation) -> bool {
+    session
+        .source_descriptor(&observation.provenance.source_id)
+        .is_some_and(|descriptor| descriptor.read_group.as_str() == naming::groups::PROCESS)
 }
 
 /// Known per-process allocations of one GPU snapshot.

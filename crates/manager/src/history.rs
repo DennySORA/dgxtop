@@ -15,10 +15,12 @@
 //!   chart, the tracked processes' parts (D-64, D-99). The service keeps
 //!   only the latest answer of each read and shapes the view; a round's
 //!   view is built once, when its last answer arrives.
-//! * Only sessions currently on the history view read. A bar size, chart or
-//!   column change bumps the charts' generation, cancels the running reads
-//!   and makes their late answers stale. The GPUs' 1 h to 24 h statistics of
-//!   D-48 are gone (D-107): the charts and their bar sizes show the same. At most `queues.history_requests` reads run at once, each with
+//! * Only sessions currently on the history view read, and those on the
+//!   GPU view (D-118): the last [`POWER_PEAK_DAYS`] days of power of each
+//!   GPU that reports no power limit, whose peak scales its power bar. A
+//!   view, bar size, chart or column change bumps the charts' generation,
+//!   cancels the running reads and makes their late answers stale. The
+//!   GPUs' 1 h to 24 h statistics of D-48 are gone (D-107): the charts and their bar sizes show the same. At most `queues.history_requests` reads run at once, each with
 //!   deadline `now + runtime.history_deadline_ms`. Refreshed at the bar size (5 s to 60 s), three times slower while
 //!   throttled.
 
@@ -58,6 +60,9 @@ pub(crate) const MIN_DISPLAY_POINTS: u32 = 60;
 pub(crate) const MAX_CHARTS: usize = 41;
 /// Bar size of the charts when the session gives none.
 const DEFAULT_BAR: BarSize = BarSize::OneMinute;
+/// Days of power the GPU view reads, a bar each (D-118); the history keeps
+/// 300 bars of each size whatever the archive's retention (D-82).
+const POWER_PEAK_DAYS: u32 = 30;
 
 /// What a session's charts draw (D-78, D-82): `columns` bars of `bar` on
 /// the local clock, the last one being filled now.
@@ -124,6 +129,9 @@ pub(crate) struct HistoryPicks {
 /// What the presentation picks a session's series from.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ChartRequest<'a> {
+    /// The view the session is on: the history view's charts, or the GPU
+    /// view's power (D-118).
+    pub(crate) view: ViewKind,
     /// The charts the session shows now, so a pick can keep a device.
     pub(crate) shown: &'a [HistoryChartSpec],
 }
@@ -239,6 +247,8 @@ fn pick_change(current: &[&HistoryChartSpec], picked: &[HistoryChartSpec]) -> Pi
 #[derive(Debug)]
 struct SessionHistory {
     active: bool,
+    /// The view the charts were picked for.
+    picked_for: ViewKind,
     grid: BarGrid,
     /// Snapshot revision the series were last picked from.
     charts_revision: Option<u64>,
@@ -340,6 +350,7 @@ impl HistoryService {
     pub(crate) fn open_session(&mut self, session_id: &SessionId) {
         let mut session = SessionHistory {
             active: false,
+            picked_for: ViewKind::History,
             grid: BarGrid::new(DEFAULT_BAR, MIN_DISPLAY_POINTS),
             charts_revision: None,
             charts: Vec::new(),
@@ -381,8 +392,8 @@ impl HistoryService {
     }
 
     /// Applies a session's view state; returns whether its history view
-    /// changed. Opening the view picks its series afresh; a bar size change
-    /// redraws the charts.
+    /// changed. Opening a view that reads picks its series afresh; a bar
+    /// size change redraws the charts.
     pub(crate) fn sync_session(
         &mut self,
         session_id: &SessionId,
@@ -394,7 +405,7 @@ impl HistoryService {
         let Some(session) = self.sessions.get(session_id) else {
             return false;
         };
-        let opening = !session.active;
+        let opening = !session.active || session.picked_for != state.view;
         let changed = match wanted {
             None => session.active,
             Some(grid) => opening || session.grid != grid,
@@ -414,6 +425,7 @@ impl HistoryService {
             return true;
         };
         session.grid = grid;
+        session.picked_for = state.view;
         if opening {
             // Pick the series afresh: the busiest disk and interface are
             // those of the moment the view opens.
@@ -463,7 +475,10 @@ impl HistoryService {
                 .iter()
                 .map(|chart| chart.spec.clone())
                 .collect();
-            let mut picked = pick(&ChartRequest { shown: &shown });
+            let mut picked = pick(&ChartRequest {
+                view: session.picked_for,
+                shown: &shown,
+            });
             picked.charts.truncate(MAX_CHARTS);
             let change = pick_change(
                 &session
@@ -547,16 +562,19 @@ impl HistoryService {
         refreshes.chain(deadlines).min()
     }
 
-    /// The bars a session on the history view wants; other views read no
-    /// history (the GPU view shows live data, D-48).
+    /// The bars a session wants: on the history view a bar of its size for
+    /// each column of a plot; on the GPU view a day for each of the days of
+    /// power it reads (D-118). Other views read no history.
     fn wanted(&self, state: &SessionState, columns: u16) -> Option<BarGrid> {
-        if state.view != ViewKind::History {
-            return None;
+        match state.view {
+            ViewKind::History => {
+                let upper = self.settings.max_points.clamp(1, MAX_HISTORY_POINTS);
+                let columns = u32::from(history_plot_columns(columns)).clamp(1, upper);
+                Some(BarGrid::new(state.overview_bar, columns))
+            }
+            ViewKind::GpuDetail => Some(BarGrid::new(BarSize::OneDay, POWER_PEAK_DAYS)),
+            _ => None,
         }
-        let upper = self.settings.max_points.clamp(1, MAX_HISTORY_POINTS);
-        // A bar for each column of the plot.
-        let columns = u32::from(history_plot_columns(columns)).clamp(1, upper);
-        Some(BarGrid::new(state.overview_bar, columns))
     }
 
     fn cancel_queries(&mut self, session_id: &SessionId) {

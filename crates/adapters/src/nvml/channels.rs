@@ -70,6 +70,10 @@ pub enum Channel {
     FramebufferReserved,
     ProcessMemory,
     ProcessUtilization,
+    /// What the GPU's processes hold together, read only when its process
+    /// lists, both read, name none: 0 bytes. Otherwise the collector sums
+    /// the listed processes (D-119).
+    ProcessMemoryTotal,
     PerformanceState,
     ThrottleReasons,
     /// Current PCIe link generation or width.
@@ -188,6 +192,7 @@ impl Channel {
             Self::FramebufferReserved,
             Self::ProcessMemory,
             Self::ProcessUtilization,
+            Self::ProcessMemoryTotal,
         ]);
         channels
     }
@@ -223,6 +228,7 @@ impl Channel {
             Self::FramebufferReserved => "memory.framebuffer.reserved".to_owned(),
             Self::ProcessMemory => "process.memory_allocated".to_owned(),
             Self::ProcessUtilization => "process.utilization".to_owned(),
+            Self::ProcessMemoryTotal => "memory.process_allocated".to_owned(),
             Self::PerformanceState => "performance_state".to_owned(),
             Self::ThrottleReasons => "throttle_reasons".to_owned(),
             Self::PcieLink(link) => format!("pcie.link.{}", link.name()),
@@ -255,6 +261,10 @@ impl Channel {
                 | HealthValue::EncoderFps
                 | HealthValue::EncoderLatency,
             ) => "encoder.stats".to_owned(),
+            // Read from the GPU's process lists, the compute list first.
+            Self::ProcessMemory | Self::ProcessMemoryTotal => {
+                super::processes::COMPUTE_LIST_KEY.to_owned()
+            }
             other => other.name(),
         }
     }
@@ -289,6 +299,7 @@ impl Channel {
             Self::FramebufferReserved => ids::GPU_MEMORY_FB_RESERVED,
             Self::ProcessMemory => ids::PROCESS_GPU_MEMORY,
             Self::ProcessUtilization => ids::PROCESS_GPU_UTILIZATION,
+            Self::ProcessMemoryTotal => ids::GPU_MEMORY_PROCESS_ALLOCATED,
             Self::PerformanceState => ids::GPU_PERFORMANCE_STATE,
             Self::ThrottleReasons => ids::GPU_THROTTLE_REASONS,
             Self::PcieLink(PcieLink::Generation) => ids::GPU_PCIE_LINK_GENERATION,
@@ -351,6 +362,7 @@ impl Channel {
             | Self::FramebufferTotal
             | Self::FramebufferReserved
             | Self::ProcessMemory
+            | Self::ProcessMemoryTotal
             | Self::Static(StaticFact::Bar1Total)
             | Self::Health(HealthValue::Bar1Used) => native::BYTES,
             Self::Health(HealthValue::EncoderFps) => native::COUNT_PER_SECOND,
@@ -403,7 +415,9 @@ impl Channel {
             | Self::FramebufferReserved
             | Self::Static(_)
             | Self::Health(_) => ChannelGroup::SlowHealth,
-            Self::ProcessMemory | Self::ProcessUtilization => ChannelGroup::Process,
+            Self::ProcessMemory | Self::ProcessUtilization | Self::ProcessMemoryTotal => {
+                ChannelGroup::Process
+            }
             _ => ChannelGroup::Fast,
         }
     }

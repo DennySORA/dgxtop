@@ -169,7 +169,7 @@ impl Controller {
         let batches = delete_run_batches(sink.session_id(), runs, MIN_COMMAND_BYTES);
         self.deletion = Some(RunDeletion::new(batches));
         self.send_next_deletion(context, sink);
-        if self.history_page() == 2 {
+        if self.history_page() == crate::views::RUN_PAGE {
             self.set_history_page(crate::views::PROCESS_LIST_PAGE);
         }
         self.bump();

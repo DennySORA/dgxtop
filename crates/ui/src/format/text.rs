@@ -44,6 +44,38 @@ pub fn truncate_to_width(text: &str, max_width: usize) -> String {
     output
 }
 
+/// Cuts `text` to at most `max_width` columns by taking out its middle, so
+/// a path keeps where it starts and the file it ends in: `/home/u/…/bin/
+/// python3`. The end keeps the larger half.
+pub fn truncate_middle(text: &str, max_width: usize) -> String {
+    if display_width(text) <= max_width {
+        return text.to_owned();
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    let budget = max_width - 1;
+    let head_budget = budget / 2;
+    let head = leading(text.chars(), head_budget);
+    let mut tail = leading(text.chars().rev(), budget - head_budget);
+    tail.reverse();
+    let mut output: String = head.into_iter().collect();
+    output.push(ELLIPSIS);
+    output.extend(tail);
+    output
+}
+
+/// The first of `characters` that fit `budget` columns.
+fn leading(characters: impl Iterator<Item = char>, budget: usize) -> Vec<char> {
+    let mut used = 0usize;
+    characters
+        .take_while(|character| {
+            used += character.width().unwrap_or(0);
+            used <= budget
+        })
+        .collect()
+}
+
 /// Left-aligned, truncated and space-padded to exactly `width` columns.
 pub fn pad_right(text: &str, width: usize) -> String {
     let fitted = truncate_to_width(text, width);
@@ -86,6 +118,20 @@ mod tests {
         assert_eq!(display_width(&truncate_to_width("溫度溫度", 4)), 3);
         assert_eq!(truncate_to_width("abc", 0), "");
         assert_eq!(truncate_to_width("abc", 1), "…");
+    }
+
+    /// A path cut to fit keeps its start and, with the larger half, the
+    /// file it ends in.
+    #[test]
+    fn a_middle_cut_keeps_both_ends() {
+        let path = "/home/user/projects/app/bin/python3";
+        assert_eq!(truncate_middle(path, 40), path);
+        let cut = truncate_middle(path, 20);
+        assert_eq!(cut, "/home/use…in/python3");
+        assert_eq!(display_width(&cut), 20);
+        assert_eq!(truncate_middle("溫度溫度溫度", 6), "溫…度");
+        assert_eq!(truncate_middle("abc", 1), "…");
+        assert_eq!(truncate_middle("abc", 0), "");
     }
 
     #[test]

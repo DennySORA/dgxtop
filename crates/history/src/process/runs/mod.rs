@@ -27,11 +27,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use dgxtop_compression::{RunSample, RunSeries, whole_series};
 use dgxtop_core::action::Signal;
-use dgxtop_core::canonical::{ProcessRow, ProcessTable};
+use dgxtop_core::canonical::{ProcessGpuLink, ProcessRow, ProcessTable};
 use dgxtop_core::identity::{BootId, EntityId, ProcessKey};
 use dgxtop_core::ports::ProbeDeriver;
 use dgxtop_core::process_history::{
-    EndCause, MAX_LISTED_RUNS, MAX_LIVE_RUNS, ProcessHistoryJournal, ProcessHistoryLoad,
+    EndCause, GpuFigure, MAX_LISTED_RUNS, MAX_LIVE_RUNS, ProcessHistoryJournal, ProcessHistoryLoad,
     RUN_METRICS, RecentHistory, RecentRun, RunBucket, RunBucketRow, RunEnd, RunInfo, RunMetric,
     StoreUsage,
 };
@@ -71,6 +71,8 @@ pub(crate) struct SampleInputs<'a> {
     /// time it was first seen.
     pub(crate) clk_tck: Option<u64>,
     pub(crate) gpu_labels: &'a BTreeMap<EntityId, String>,
+    /// Each of those GPUs' own utilization now, every process's (D-120).
+    pub(crate) gpu_utilization: &'a BTreeMap<EntityId, f64>,
     /// What the host receives and sends, bytes per second.
     pub(crate) host_network: [Option<f64>; 2],
 }
@@ -756,15 +758,11 @@ fn sample_run(
         info.uid = row.uid;
         run.changed = true;
     }
+    // In the order it first used them: each keeps its place (D-120).
     for link in &row.gpu {
-        let label = inputs
-            .gpu_labels
-            .get(&link.gpu_entity_id)
-            .cloned()
-            .unwrap_or_else(|| link.gpu_entity_id.to_string());
+        let label = gpu_label(link, inputs);
         if !info.gpus.contains(&label) {
             info.gpus.push(label);
-            info.gpus.sort();
             run.changed = true;
         }
     }
@@ -795,7 +793,50 @@ fn sample_run(
     }
     sample[RunMetric::Swap.index()] = probed.swap;
     sample[RunMetric::OpenFiles.index()] = probed.open_files;
+    gpu_figures(&mut sample, &run.info.gpus, row, inputs);
     run.add(utc_ns, &sample)
+}
+
+/// The label of the GPU of `link` (`GPU 0`), else its entity.
+fn gpu_label(link: &ProcessGpuLink, inputs: &SampleInputs<'_>) -> String {
+    inputs
+        .gpu_labels
+        .get(&link.gpu_entity_id)
+        .cloned()
+        .unwrap_or_else(|| link.gpu_entity_id.to_string())
+}
+
+/// Each GPU's own figures in the place the run's `gpus` give it (D-120):
+/// the run's utilization and memory there and the GPU's own utilization.
+fn gpu_figures(
+    sample: &mut RunSample,
+    gpus: &[String],
+    row: &ProcessRow,
+    inputs: &SampleInputs<'_>,
+) {
+    for link in &row.gpu {
+        let label = gpu_label(link, inputs);
+        let Some(slot) = gpus.iter().position(|known| *known == label) else {
+            continue;
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let figures = [
+            (GpuFigure::Utilization, link.utilization_percent),
+            (
+                GpuFigure::Memory,
+                link.memory_bytes.map(|bytes| bytes as f64),
+            ),
+            (
+                GpuFigure::Device,
+                inputs.gpu_utilization.get(&link.gpu_entity_id).copied(),
+            ),
+        ];
+        for (figure, value) in figures {
+            if let Some(metric) = RunMetric::of_gpu(slot, figure) {
+                sample[metric.index()] = value;
+            }
+        }
+    }
 }
 
 /// The sum of the values present; `None` when none is.

@@ -51,10 +51,17 @@ fn retains(route: &Route<'_>, _metric: &MetricDescriptor) -> bool {
     route.is(adapters::NVML, groups::PROCESS)
 }
 
+/// The GPU's own reading of its process memory, which NVML's process group
+/// carries for the GPU collector (D-119).
+fn leaves(metric: &MetricDescriptor) -> bool {
+    metric.id == ids::GPU_MEMORY_PROCESS_ALLOCATED
+}
+
 static SPEC: CollectorSpec = CollectorSpec {
     id: naming::collectors::PROCESS,
     accepts,
     retains,
+    leaves,
 };
 
 /// Process table collector.

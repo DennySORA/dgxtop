@@ -54,6 +54,42 @@ pub enum RunMetric {
     Swap,
     /// Its open file descriptors (readable for one's own processes only).
     OpenFiles,
+    /// Its utilization of the first GPU it used (`RunInfo::gpus[0]`),
+    /// percent of that GPU (D-120).
+    Gpu0Utilization,
+    /// The memory it held on that GPU, bytes.
+    Gpu0Memory,
+    /// That GPU's own utilization while it ran, every process's: what the
+    /// run page shows where the driver samples no process (GB10).
+    Gpu0Device,
+    /// The same of the second GPU it used.
+    Gpu1Utilization,
+    Gpu1Memory,
+    Gpu1Device,
+    /// The same of the third.
+    Gpu2Utilization,
+    Gpu2Memory,
+    Gpu2Device,
+    /// The same of the fourth.
+    Gpu3Utilization,
+    Gpu3Memory,
+    Gpu3Device,
+}
+
+/// What a run's figures of one of its GPUs are (D-120), in the order of
+/// each GPU's metrics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum GpuFigure {
+    /// Its utilization of the GPU.
+    Utilization,
+    /// The memory it held on the GPU.
+    Memory,
+    /// The GPU's own utilization, every process's.
+    Device,
+}
+
+impl GpuFigure {
+    pub const ALL: [Self; 3] = [Self::Utilization, Self::Memory, Self::Device];
 }
 
 impl RunMetric {
@@ -72,10 +108,41 @@ impl RunMetric {
         Self::ChildrenMemory,
         Self::Swap,
         Self::OpenFiles,
+        Self::Gpu0Utilization,
+        Self::Gpu0Memory,
+        Self::Gpu0Device,
+        Self::Gpu1Utilization,
+        Self::Gpu1Memory,
+        Self::Gpu1Device,
+        Self::Gpu2Utilization,
+        Self::Gpu2Memory,
+        Self::Gpu2Device,
+        Self::Gpu3Utilization,
+        Self::Gpu3Memory,
+        Self::Gpu3Device,
     ];
 
     pub const fn index(self) -> usize {
         self as usize
+    }
+
+    /// The `figure` of the run's GPU in `slot`, its place in
+    /// [`RunInfo::gpus`]; `None` past the GPUs kept apart.
+    pub const fn of_gpu(slot: usize, figure: GpuFigure) -> Option<Self> {
+        if slot >= RUN_GPU_SLOTS {
+            return None;
+        }
+        Some(Self::ALL[SHARED_METRICS + slot * GpuFigure::ALL.len() + figure as usize])
+    }
+
+    /// The slot and figure of the run's GPU this metric is of; `None` for
+    /// a metric of the whole run.
+    pub const fn gpu_slot(self) -> Option<(usize, GpuFigure)> {
+        let Some(offset) = self.index().checked_sub(SHARED_METRICS) else {
+            return None;
+        };
+        let figures = GpuFigure::ALL.len();
+        Some((offset / figures, GpuFigure::ALL[offset % figures]))
     }
 
     /// Stable column stem in the database.
@@ -95,14 +162,31 @@ impl RunMetric {
             Self::ChildrenMemory => "children_memory",
             Self::Swap => "swap",
             Self::OpenFiles => "open_files",
+            Self::Gpu0Utilization => "gpu0_util",
+            Self::Gpu0Memory => "gpu0_memory",
+            Self::Gpu0Device => "gpu0_device",
+            Self::Gpu1Utilization => "gpu1_util",
+            Self::Gpu1Memory => "gpu1_memory",
+            Self::Gpu1Device => "gpu1_device",
+            Self::Gpu2Utilization => "gpu2_util",
+            Self::Gpu2Memory => "gpu2_memory",
+            Self::Gpu2Device => "gpu2_device",
+            Self::Gpu3Utilization => "gpu3_util",
+            Self::Gpu3Memory => "gpu3_memory",
+            Self::Gpu3Device => "gpu3_device",
         }
     }
 }
 
+/// GPUs whose figures a run keeps apart, in the order it used them
+/// (D-120); its sums cover every GPU.
+pub const RUN_GPU_SLOTS: usize = 4;
+/// The metrics before the GPUs' own.
+const SHARED_METRICS: usize = 14;
 /// Metrics a bucket holds. Stored buckets keep them in [`RunMetric::ALL`]
 /// order, so a bucket written before a metric was added reads with that
 /// metric empty.
-pub const RUN_METRICS: usize = 14;
+pub const RUN_METRICS: usize = SHARED_METRICS + GpuFigure::ALL.len() * RUN_GPU_SLOTS;
 
 /// The mean and peak of the samples a bucket merged. Single precision
 /// keeps a bucket small (seven digits are plenty for a chart), so a long
@@ -168,8 +252,27 @@ impl Aggregate {
 pub struct RunBucket {
     /// UTC start of the bucket, aligned to its tier's step.
     pub start_utc_ns: i64,
-    #[serde(deserialize_with = "values_of_any_version")]
+    #[serde(
+        serialize_with = "values_through_the_last_used",
+        deserialize_with = "values_of_any_version"
+    )]
     pub values: [Aggregate; RUN_METRICS],
+}
+
+/// The values through the last metric with a sample, as the database packs
+/// them (D-120): the metrics after it read back empty.
+fn values_through_the_last_used<S>(
+    values: &[Aggregate; RUN_METRICS],
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let used = values
+        .iter()
+        .rposition(|value| value.count > 0)
+        .map_or(0, |last| last + 1);
+    values[..used].serialize(serializer)
 }
 
 /// The values of a bucket saved by any version: metrics it did not know
@@ -299,7 +402,9 @@ pub struct RunInfo {
     /// The working folder; empty when unread.
     pub cwd: String,
     pub uid: Option<u32>,
-    /// The GPUs it used, as labelled when it used them (`GPU 0`).
+    /// The GPUs it used, as labelled when it used them (`GPU 0`), in the
+    /// order it first used them: the order of its figures of each GPU
+    /// (D-120), so a GPU used later never moves them.
     pub gpus: Vec<String>,
     /// What the probe read of it once, beside its command (D-77).
     pub details: RunDetails,
@@ -430,6 +535,38 @@ pub struct ProcessHistoryLoad {
 mod tests {
     use super::*;
 
+    /// Each GPU a run keeps apart has its utilization, memory and the
+    /// GPU's own utilization, after the shared metrics, in slot order
+    /// (D-120).
+    #[test]
+    fn each_gpu_slot_has_its_three_figures() {
+        assert_eq!(
+            RunMetric::of_gpu(0, GpuFigure::Utilization),
+            Some(RunMetric::Gpu0Utilization)
+        );
+        assert_eq!(
+            RunMetric::of_gpu(1, GpuFigure::Memory),
+            Some(RunMetric::Gpu1Memory)
+        );
+        assert_eq!(
+            RunMetric::of_gpu(3, GpuFigure::Device),
+            Some(RunMetric::Gpu3Device)
+        );
+        assert_eq!(RunMetric::of_gpu(RUN_GPU_SLOTS, GpuFigure::Memory), None);
+        assert_eq!(RunMetric::Gpu3Device.index(), RUN_METRICS - 1);
+        for (index, metric) in RunMetric::ALL.iter().enumerate() {
+            assert_eq!(metric.index(), index, "{metric:?}");
+            if let Some((slot, figure)) = metric.gpu_slot() {
+                assert_eq!(RunMetric::of_gpu(slot, figure), Some(*metric));
+            }
+        }
+        assert_eq!(RunMetric::OpenFiles.gpu_slot(), None);
+        assert_eq!(
+            RunMetric::Gpu2Memory.gpu_slot(),
+            Some((2, GpuFigure::Memory))
+        );
+    }
+
     #[test]
     fn aggregates_merge_means_and_peaks() {
         let mut one = Aggregate::default();
@@ -473,6 +610,25 @@ mod tests {
         });
         let bucket: RunBucket = serde_json::from_value(newer).unwrap();
         assert_eq!(bucket.value(RunMetric::OpenFiles).count, 1);
+    }
+
+    /// A bucket writes its values through its last metric with a sample,
+    /// as the database packs them (D-120): the short-term file of a run on
+    /// one GPU leaves the other GPUs' figures out, and reads back the same.
+    #[test]
+    fn buckets_write_their_values_through_the_last_used() {
+        let mut bucket = RunBucket::new(60);
+        bucket.add(RunMetric::Cpu, Some(5.0));
+        bucket.add(RunMetric::Gpu0Memory, Some(1024.0));
+        let written = serde_json::to_value(bucket).unwrap();
+        assert_eq!(
+            written["values"].as_array().unwrap().len(),
+            RunMetric::Gpu0Memory.index() + 1
+        );
+        let back: RunBucket = serde_json::from_value(written).unwrap();
+        assert_eq!(back, bucket);
+        let empty = serde_json::to_value(RunBucket::new(0)).unwrap();
+        assert!(empty["values"].as_array().unwrap().is_empty());
     }
 
     #[test]

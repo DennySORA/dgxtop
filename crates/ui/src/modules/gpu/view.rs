@@ -2,11 +2,13 @@
 //! four live bars, utilization, memory, temperature and power
 //! ([`readings`](super::readings)); the GPU's live and deep information in
 //! blocks of rows ([`blocks`](super::blocks)) laid out in columns
-//! ([`columns`](super::columns)). A blank row parts the bars from the
-//! blocks when every block fits with it. Blocks a short panel cannot show
-//! at once go on further pages, which `↑`/`↓` turn (D-110): the page
-//! scrolled to is the context's `offset`, the selector row says which page
-//! shows and what the next holds; the view has no notes (D-52).
+//! ([`columns`](super::columns)). The selector and the bars stay put; a
+//! divider joined to the panel's borders parts them from the blocks when
+//! every block fits under it (D-116). Blocks a short panel cannot show at
+//! once go on further pages under the divider, which `↑`/`↓` turn (D-110):
+//! the page scrolled to is the context's `offset`, and the divider says at
+//! its right which page shows, what the next holds and the keys turning
+//! pages; the view has no notes (D-52).
 
 use std::ops::Range;
 
@@ -18,8 +20,10 @@ use ratatui::text::{Line, Span};
 use super::blocks::{Block, block_text, blocks};
 use super::columns::{Arrangement, arrange, render_columns};
 use super::readings::{render_bar, status_readings};
-use crate::format::{clean, counted, display_width};
-use crate::modules::common::{Output, RowCursor, draw_line, fitting_keys, panel_with_keys};
+use crate::format::{clean, display_width};
+use crate::modules::common::{
+    Output, RowCursor, draw_divider, draw_line, fitting_keys, page_divider_forms, panel_with_keys,
+};
 use crate::num::saturate_u16;
 use crate::registry::{DisplayContext, DisplayModuleManifest, controls};
 
@@ -42,12 +46,8 @@ pub(super) fn render_gpu_view(
     let pages = paginate(&blocks, (inner.width, body_rows));
     let page = usize::from(context.offset).min(pages.count() - 1);
     let title = format!("{} · {}", clean(&selected.label), clean(&selected.name));
-    let keys = if pages.count() > 1 {
-        PAGE_KEYS
-    } else {
-        SWITCH_KEYS
-    };
-    let keys = fitting_keys(area.width, &title, keys);
+    // The keys turning pages are on the divider (D-116).
+    let keys = fitting_keys(area.width, &title, SWITCH_KEYS);
     let inner = panel_with_keys(frame, area, &title, keys, context);
     let mut rows = RowCursor::new(inner);
     let Some(selector) = rows.next_row() else {
@@ -67,20 +67,24 @@ pub(super) fn render_gpu_view(
         .rest()
         .unwrap_or(Rect::new(inner.x, inner.bottom(), inner.width, 0));
     let plan = pages.plan(page, &blocks, (body.width, body.height));
-    let hint = pages.note(page, &blocks, &plan, selector_room(selector, gpu));
+    let hidden = pages.hidden_note(&blocks, &plan, selector_room(selector, gpu));
     render_selector(
         frame,
         selector,
         (manifest, model),
         (gpu, selected),
-        hint.as_deref(),
+        hidden.as_deref(),
         context,
         output,
     );
     publish_pages(output, (manifest, model), body, (page, pages.count()));
     let mut cursor = RowCursor::new(body);
-    if plan.separator {
-        cursor.next_row();
+    if plan.divider
+        && let Some(row) = cursor.next_row()
+    {
+        let next = pages.titles(page + 1, &blocks);
+        let forms = page_divider_forms((page, pages.count()), &next, "section");
+        draw_divider(frame.buffer_mut(), row, &forms, context);
     }
     let shown = &blocks[plan.range.clone()];
     let block_height = plan.arrangement.height(shown).min(cursor.remaining());
@@ -120,33 +124,36 @@ struct BlockPlan {
     range: Range<usize>,
     /// Their places; `hidden` counts the blocks of the page left out.
     arrangement: Arrangement,
-    /// A blank row between the bars and the blocks.
-    separator: bool,
+    /// The divider between the bars and the blocks (D-116).
+    divider: bool,
 }
 
-/// Every block under a blank row when they fit with it, else the blocks
+/// Every block under the divider when they fit with it, else the blocks
 /// that fit without it.
 fn plan_blocks(blocks: &[Block], (width, height): (u16, u16)) -> BlockPlan {
     if height > 0 {
-        let arrangement = arrange(blocks, width, height - 1);
+        let arrangement = arrange(blocks, width, height - DIVIDER_ROWS);
         if arrangement.hidden == 0 {
             return BlockPlan {
                 range: 0..blocks.len(),
                 arrangement,
-                separator: true,
+                divider: true,
             };
         }
     }
     BlockPlan {
         range: 0..blocks.len(),
         arrangement: arrange(blocks, width, height),
-        separator: false,
+        divider: false,
     }
 }
 
+/// Rows of the divider over the blocks.
+const DIVIDER_ROWS: u16 = 1;
+
 /// The blocks in pages (module docs): all on one page when they fit or
-/// when no row is left for them, else pages each starting where the one
-/// before stopped.
+/// when no row is left for the divider and a block, else pages under the
+/// divider, each starting where the one before stopped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Pages {
     /// The first block of each page.
@@ -165,14 +172,16 @@ impl Pages {
         start..end
     }
 
-    /// How `page` fills `width` × `height`: a block taller than the rows
-    /// is alone on its page and cut at the bottom.
+    /// How `page` fills `width` × `height`: on several pages the blocks of
+    /// the page under the divider, a block taller than the rows alone on
+    /// its page and cut at the bottom.
     fn plan(&self, page: usize, blocks: &[Block], (width, height): (u16, u16)) -> BlockPlan {
         if self.count() == 1 {
             return plan_blocks(blocks, (width, height));
         }
         let range = self.range(page, blocks.len());
-        let mut arrangement = arrange(&blocks[range.clone()], width, height);
+        let rows = height.saturating_sub(DIVIDER_ROWS);
+        let mut arrangement = arrange(&blocks[range.clone()], width, rows);
         if arrangement.columns.is_empty() {
             arrangement = Arrangement {
                 columns: std::iter::once(0..range.len()).collect(),
@@ -184,54 +193,44 @@ impl Pages {
         BlockPlan {
             range,
             arrangement,
-            separator: false,
+            divider: true,
         }
     }
 
-    /// The selector row's note, as much as `width` holds: which page shows
-    /// and what the next holds; on one page, the blocks with no row left.
-    fn note(
-        &self,
-        page: usize,
-        blocks: &[Block],
-        plan: &BlockPlan,
-        width: usize,
-    ) -> Option<String> {
-        if self.count() == 1 {
-            let hidden = &blocks[blocks.len() - plan.arrangement.hidden..];
-            let titles: Vec<&str> = hidden.iter().map(|block| block.title).collect();
-            return hidden_blocks(&titles, width);
+    /// The titles of `page`'s blocks; none past the last page.
+    fn titles(&self, page: usize, blocks: &[Block]) -> Vec<String> {
+        if page >= self.count() {
+            return Vec::new();
         }
-        let place = format!("page {} of {}", page + 1, self.count());
-        let next = self.range(page + 1, blocks.len());
-        let mut forms = Vec::new();
-        if page + 1 < self.count() {
-            let titles: Vec<&str> = blocks[next.clone()]
-                .iter()
-                .map(|block| block.title)
-                .collect();
-            forms.push(format!("{place} · next: {}", titles.join(", ")));
-            forms.push(format!(
-                "{place} · next: {}",
-                counted(next.len(), "section")
-            ));
+        blocks[self.range(page, blocks.len())]
+            .iter()
+            .map(|block| block.title.to_owned())
+            .collect()
+    }
+
+    /// The selector row's note, as much as `width` holds: on one page the
+    /// blocks with no row left (D-110); the divider says the rest.
+    fn hidden_note(&self, blocks: &[Block], plan: &BlockPlan, width: usize) -> Option<String> {
+        if self.count() > 1 {
+            return None;
         }
-        forms.push(place);
-        forms.push(format!("{}/{}", page + 1, self.count()));
-        forms.into_iter().find(|form| display_width(form) <= width)
+        let hidden = &blocks[blocks.len() - plan.arrangement.hidden..];
+        let titles: Vec<&str> = hidden.iter().map(|block| block.title).collect();
+        hidden_blocks(&titles, width)
     }
 }
 
 /// Splits `blocks` into pages of `width` × `height` (see [`Pages`]).
 fn paginate(blocks: &[Block], (width, height): (u16, u16)) -> Pages {
-    if height == 0 || plan_blocks(blocks, (width, height)).arrangement.hidden == 0 {
+    if height <= DIVIDER_ROWS || plan_blocks(blocks, (width, height)).arrangement.hidden == 0 {
         return Pages { starts: vec![0] };
     }
+    let rows = height - DIVIDER_ROWS;
     let mut starts = vec![0];
     let mut start = 0;
     loop {
         let rest = &blocks[start..];
-        let shown = rest.len() - arrange(rest, width, height).hidden;
+        let shown = rest.len() - arrange(rest, width, rows).hidden;
         start += shown.max(1);
         if start >= blocks.len() {
             return Pages { starts };
@@ -259,14 +258,9 @@ fn hidden_blocks(titles: &[&str], width: usize) -> Option<String> {
 
 /// The keys acting on the view, at the right of its title (D-70), the
 /// fullest that fits first: the letters stand in for the arrows on a
-/// keyboard without them (D-111).
+/// keyboard without them (D-111). The divider names the keys turning pages
+/// (D-116).
 const SWITCH_KEYS: &[&str] = &["h/l/←/→ switch GPU", "h/l switch GPU"];
-/// The same when its sections take several pages (D-110).
-const PAGE_KEYS: &[&str] = &[
-    "j/k/↑/↓ page · h/l/←/→ switch GPU",
-    "j/k page · h/l switch GPU",
-    "j/k page · h/l GPU",
-];
 /// Between the hint and what the panel leaves out.
 const HIDDEN_GAP: &str = "   ";
 
@@ -360,10 +354,10 @@ mod tests {
     const GPU_BLOCKS: [usize; 12] = [5, 4, 5, 9, 6, 6, 7, 5, 6, 8, 7, 4];
 
     #[test]
-    fn a_short_panel_shows_the_blocks_that_fit_without_a_separator() {
+    fn a_short_panel_shows_the_blocks_that_fit_without_a_divider() {
         // 80×24: 14 rows under the bars; one column.
         let plan = plan_blocks(&blocks(&GPU_BLOCKS), (78, 14));
-        assert!(!plan.separator);
+        assert!(!plan.divider);
         assert_eq!(
             (
                 plan.arrangement.columns.len(),
@@ -374,55 +368,41 @@ mod tests {
         assert_eq!(plan.arrangement.hidden, 9);
         // No rows at all never underflows.
         let plan = plan_blocks(&blocks(&[2]), (78, 0));
-        assert!(!plan.separator);
+        assert!(!plan.divider);
         assert_eq!(plan.arrangement.hidden, 1);
     }
 
-    /// Sections that do not fit go on pages (D-110): each page holds what
-    /// fits from where the one before stopped, every section once, in
-    /// order; the selector row says which page shows and what the next
-    /// holds, as much as fits.
+    /// Sections that do not fit go on pages (D-110) under the divider
+    /// (D-116): each page holds what fits from where the one before
+    /// stopped, every section once, in order; the divider names the next
+    /// page's sections, the selector row nothing.
     #[test]
     fn sections_too_many_for_the_panel_go_on_pages() {
         let all = blocks(&GPU_BLOCKS);
-        // 80×24: 14 rows under the bars, one column.
+        // 80×24: 14 rows under the bars, the divider and 13 rows a page,
+        // one column.
         let pages = paginate(&all, (78, 14));
         assert!(pages.count() > 1);
         let mut covered = Vec::new();
         for page in 0..pages.count() {
             let plan = pages.plan(page, &all, (78, 14));
-            assert!(!plan.separator);
+            assert!(plan.divider, "page {page} under the divider");
             assert_eq!(plan.arrangement.hidden, 0, "page {page} fits");
-            assert!(plan.arrangement.height(&all[plan.range.clone()]) <= 14);
+            assert!(plan.arrangement.height(&all[plan.range.clone()]) <= 13);
             covered.extend(plan.range);
         }
         assert_eq!(covered, (0..all.len()).collect::<Vec<_>>());
-        let first = pages.plan(0, &all, (78, 14));
         let next = pages.range(1, all.len()).len();
-        let place = format!("page 1 of {}", pages.count());
-        let named = format!("{place} · next: {}", vec!["Block"; next].join(", "));
-        let note = |width| pages.note(0, &all, &first, width).unwrap();
-        assert_eq!(note(200), named);
-        let numbered = format!("{place} · next: {}", counted(next, "section"));
-        if display_width(&numbered) < display_width(&named) {
-            assert_eq!(note(display_width(&numbered)), numbered);
-        }
-        assert_eq!(note(display_width(&place)), place);
-        assert_eq!(note(3), format!("1/{}", pages.count()));
-        let last = pages.count() - 1;
-        let plan = pages.plan(last, &all, (78, 14));
-        assert_eq!(
-            pages.note(last, &all, &plan, 200).unwrap(),
-            format!("page {} of {}", pages.count(), pages.count())
-        );
-        // Every section fits: one page, under a blank row.
+        assert_eq!(pages.titles(1, &all), vec!["Block"; next]);
+        assert!(pages.titles(pages.count(), &all).is_empty());
+        let first = pages.plan(0, &all, (78, 14));
+        assert_eq!(pages.hidden_note(&all, &first, 200), None);
+        // Every section fits: one page, under the divider.
         let roomy = paginate(&all, (200, 40));
         assert_eq!(roomy.count(), 1);
-        assert!(roomy.plan(0, &all, (200, 40)).separator);
-        assert_eq!(
-            roomy.note(0, &all, &roomy.plan(0, &all, (200, 40)), 200),
-            None
-        );
+        let plan = roomy.plan(0, &all, (200, 40));
+        assert!(plan.divider);
+        assert_eq!(roomy.hidden_note(&all, &plan, 200), None);
         // A section taller than the rows is alone on its page, cut.
         let tall = blocks(&[3, 30, 3]);
         let pages = paginate(&tall, (78, 10));
@@ -431,14 +411,70 @@ mod tests {
         assert_eq!(plan.range, 1..2);
         assert_eq!(plan.arrangement.columns.len(), 1);
         assert_eq!(plan.arrangement.columns[0], 0..1);
-        // No row for any section: one page naming them.
-        let none = paginate(&all, (78, 0));
+        // No row for the divider and a section: one page, and the selector
+        // row names them.
+        let none = paginate(&all, (78, 1));
         assert_eq!(none.count(), 1);
-        let plan = none.plan(0, &all, (78, 0));
+        let plan = none.plan(0, &all, (78, 1));
         assert!(
-            none.note(0, &all, &plan, 40)
+            none.hidden_note(&all, &plan, 40)
                 .unwrap()
                 .starts_with("+12 sections")
+        );
+    }
+
+    /// The selector and the bars stay put over the divider joined to the
+    /// panel's borders (D-116), which says the page, what the next holds
+    /// and the keys turning pages; the title keeps the keys switching the
+    /// GPU. Every section on one page leaves a bare divider.
+    #[test]
+    fn the_divider_names_the_pages_under_the_fixed_bars() {
+        use crate::registry::DisplayModule;
+        let draw = |offset: u16, (width, height): (u16, u16)| -> Vec<String> {
+            let mut context = crate::test_fixtures::display_context();
+            context.slot = crate::registry::Slot::Detail;
+            context.offset = offset;
+            let model =
+                crate::test_fixtures::view_model(dgxtop_core::commands::ViewKind::GpuDetail, 1);
+            let module = crate::modules::gpu::GpuModule::new().unwrap();
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    module.render(&context, &model, frame.area(), frame);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..height)
+                .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+                .collect()
+        };
+        // The title, the selector and four bars, then the divider.
+        const DIVIDER: usize = 6;
+        let first = draw(0, (137, 38));
+        let text = first.join("\n");
+        assert!(first[0].contains("(h/l/←/→ switch GPU)"), "{text}");
+        assert!(
+            !first[0].contains("page") && !first[1].contains("page"),
+            "{text}"
+        );
+        let divider = &first[DIVIDER];
+        assert!(divider.starts_with('├'), "{text}");
+        assert!(divider.contains("─ page 1 of 2 · next: "), "{text}");
+        assert!(divider.ends_with(" (j/k/↑/↓ page) ┤"), "{text}");
+        let second = draw(1, (137, 38));
+        assert_eq!(second[..DIVIDER], first[..DIVIDER], "the bars stay put");
+        assert!(
+            second[DIVIDER].ends_with("─ page 2 of 2 (j/k/↑/↓ page) ┤"),
+            "{}",
+            second.join("\n")
+        );
+        let roomy = draw(0, (213, 60));
+        assert!(
+            roomy[DIVIDER].starts_with("├─")
+                && roomy[DIVIDER].trim_matches(['├', '─', '┤']).is_empty(),
+            "{}",
+            roomy.join("\n")
         );
     }
 

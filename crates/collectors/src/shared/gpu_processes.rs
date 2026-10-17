@@ -45,6 +45,8 @@ pub(crate) struct GpuProcesses<'a> {
     pub gpu_entity: EntityId,
     /// Any record of the snapshot (host and boot of derived keys).
     pub reference_key: &'a MetricKey,
+    /// The read cycle of the newest list, which `by_pid` holds.
+    pub cycle: u64,
     pub by_pid: BTreeMap<i32, PidRecords<'a>>,
     /// A record of this GPU was delivered by the plan.
     pub has_new: bool,
@@ -93,6 +95,7 @@ fn group_valid<'a>(
         let group = groups.entry(gpu.clone()).or_insert_with(|| GpuProcesses {
             gpu_entity: gpu.clone(),
             reference_key: record.key(),
+            cycle: newest_cycle.get(&gpu).copied().unwrap_or(0),
             by_pid: BTreeMap::new(),
             has_new: false,
             expiring: false,

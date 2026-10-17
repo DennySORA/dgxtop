@@ -13,9 +13,11 @@ use uuid::Uuid;
 
 use crate::fs::{FileSystemOps, ReadLimitedError};
 
-/// What the file may hold: the live runs' 5 s buckets and filling buckets
-/// come to about 70 KB a run as JSON.
-const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
+/// What the file may hold: the live runs' 5 s buckets and filling buckets,
+/// each bucket written through its last metric with a sample (D-120), come
+/// to about 100 KB a run on one GPU and 150 KB a run on four as JSON, so
+/// the 64 live runs on four GPUs each fit.
+const MAX_FILE_BYTES: u64 = 12 * 1024 * 1024;
 
 pub(super) fn write(
     fs: &dyn FileSystemOps,

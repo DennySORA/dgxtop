@@ -7,7 +7,8 @@ use dgxtop_core::metric::{CanonicalUnit, Scalar, ids, native};
 use dgxtop_core::naming::{attributes, entity};
 use dgxtop_core::observation::EntityRecord;
 use dgxtop_core::view::{
-    CellState, GpuCard, GpuDetails, GpuView, HostState, HostStatus, LabeledCell, MetricCell,
+    CellState, DiskHistory, GpuCard, GpuDetails, GpuView, HistoryChartKind, HistoryView, HostState,
+    HostStatus, LabeledCell, MetricCell,
 };
 
 use super::gpu_derived::{memory_bandwidth, pcie_bandwidth};
@@ -138,6 +139,26 @@ pub(crate) fn build_gpu_view(
     }
 }
 
+/// Gives the card of each GPU whose power the history read for the GPU
+/// view, one without a power limit, the highest draw recorded (D-118); the
+/// last answer stands while a refresh fails. Only a record reaching before
+/// today counts: a history kept in memory starts with dgxtop, and a bar of
+/// today alone holds the minutes since a first start, or since this one
+/// before the history's days are read; after a restart while idle its peak
+/// would be the idle draw.
+pub(crate) fn add_recorded_power(view: &mut GpuView, history: &HistoryView) {
+    let kept = matches!(history.disk, DiskHistory::On);
+    for card in &mut view.cards {
+        card.recorded_power_peak = history
+            .charts
+            .iter()
+            .filter(|chart| kept && chart.kind == HistoryChartKind::GpuPower)
+            .find(|chart| chart.series.entity_id == card.entity_id)
+            .filter(|chart| chart.points.len() > 1)
+            .and_then(|chart| chart.peak);
+    }
+}
+
 fn build_card(
     reader: &MetricReader<'_>,
     gpu: &GpuIdentity<'_>,
@@ -219,6 +240,7 @@ fn build_card(
             },
             widths.memory_temperature_and_power,
         ),
+        recorded_power_peak: None,
     }
 }
 
@@ -407,7 +429,7 @@ mod tests {
     use dgxtop_core::observation::EntityKind;
     use dgxtop_core::quality::SampleKind;
     use dgxtop_core::testing::metric_key;
-    use dgxtop_core::view::CellState;
+    use dgxtop_core::view::{CellState, HistoryChartView, HistoryPointView};
 
     const GPU_A: &str = "gpu:GPU-aaaa1111";
     const GPU_B: &str = "gpu:GPU-bbbb2222";
@@ -444,6 +466,63 @@ mod tests {
             environment,
             widths(),
         )
+    }
+
+    /// The GPU view gives each card whose power the history read the
+    /// highest draw recorded (D-118), the last answer standing while a
+    /// refresh fails. A record of today's bar alone (a first start, or this
+    /// one before the history's days are read) gives none, and so does a
+    /// history kept in memory only, which restarts with dgxtop.
+    #[test]
+    fn cards_carry_the_power_the_history_recorded() {
+        let mut view = build(&two_gpus(), None, enabled());
+        const DAY: u64 = 86_400 * 1_000_000_000;
+        let day = |index: u64| HistoryPointView {
+            start_utc_ns: index * DAY,
+            end_utc_ns: (index + 1) * DAY,
+            mean: Some(10.0),
+            min: None,
+            max: Some(20.0),
+        };
+        let chart = |entity: &str, days: u64, error: Option<&str>| HistoryChartView {
+            kind: HistoryChartKind::GpuPower,
+            subject: String::new(),
+            series: metric_key(entity, ids::GPU_POWER_DRAW, "gpu"),
+            unit: CanonicalUnit::Watts,
+            scale_max: None,
+            points: (0..days).map(day).collect(),
+            mean: None,
+            peak: Some(80.0),
+            covered_ns: None,
+            display_downsampled: false,
+            pending: false,
+            error: error.map(str::to_owned),
+            parts: Vec::new(),
+        };
+        let history = |charts: Vec<HistoryChartView>, disk: DiskHistory| HistoryView {
+            window_label: "24h".to_owned(),
+            requested_span_ns: 0,
+            start_utc_ns: 0,
+            end_utc_ns: 0,
+            utc_offset_s: 0,
+            charts,
+            disk,
+            error: None,
+        };
+        let peaks = |view: &GpuView| -> Vec<Option<f64>> {
+            view.cards
+                .iter()
+                .map(|card| card.recorded_power_peak)
+                .collect()
+        };
+        let read = vec![
+            chart(GPU_A, 3, Some("history read timed out")),
+            chart(GPU_B, 1, None),
+        ];
+        add_recorded_power(&mut view, &history(read.clone(), DiskHistory::On));
+        assert_eq!(peaks(&view), vec![Some(80.0), None]);
+        add_recorded_power(&mut view, &history(read, DiskHistory::Off));
+        assert_eq!(peaks(&view), vec![None, None]);
     }
 
     fn two_gpus() -> Fixture {

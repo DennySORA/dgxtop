@@ -11,7 +11,8 @@ use dgxtop_core::naming::attributes;
 use dgxtop_core::observation::EntityKind;
 use dgxtop_core::testing::metric_key;
 use dgxtop_core::view::{
-    BannerLevel, CellState, ConfirmationView, HistoryPointView, HistoryView, ViewModel,
+    BannerLevel, CellState, ConfirmationView, DiskHistory, HistoryChartKind, HistoryPointView,
+    HistoryView, ViewModel,
 };
 
 use super::testkit::{
@@ -308,7 +309,7 @@ fn reference_load_projection_stays_under_one_mebibyte() {
     let processes = model.modules.processes.as_ref().unwrap();
     assert_eq!(processes.total_rows, 256);
     // Only the estimated window plus overscan is copied, never all rows.
-    let window = super::processes::visible_process_rows(50, 8);
+    let window = super::processes::visible_process_rows(50);
     assert!(processes.rows.len() <= window + PROCESS_OVERSCAN_ROWS);
     assert!(processes.rows.len() < 256);
 }
@@ -323,13 +324,28 @@ fn the_process_table_copies_only_the_window() {
     fixture.session.selected_process = Some(process_key(256, 1000));
     let model = build_view_model_measured(&fixture.context()).0;
     let processes = model.modules.processes.as_ref().unwrap();
-    let visible = super::processes::visible_process_rows(30, 4);
+    let visible = super::processes::visible_process_rows(30);
     assert!(processes.rows.len() <= visible + PROCESS_OVERSCAN_ROWS);
     assert_eq!(processes.selected_index, Some(255));
     assert_eq!(processes.rows.last().unwrap().key, process_key(256, 1000));
     assert_eq!(processes.rows[0].gpus[1].gpu_label, "GPU 1");
     let table_bytes = serde_json::to_vec(processes.as_ref()).unwrap().len();
     assert!(table_bytes < 64 * 1024, "{table_bytes}");
+}
+
+/// The window holds as many rows as the table standing alone on the
+/// Overview shows (`z`, D-121): at the owner's 213×41 with two GPUs, all
+/// 35 rows under its header, though beside the other panels it shows few.
+#[test]
+fn the_window_fills_the_table_standing_alone() {
+    let mut fixture = reference_fixture(4, 256);
+    fixture.session.view = ViewKind::Overview;
+    fixture.session.sort = SortKey::Pid;
+    fixture.session.ascending = true;
+    fixture.viewport = (213, 41);
+    let model = build_view_model_measured(&fixture.context()).0;
+    let processes = model.modules.processes.as_ref().unwrap();
+    assert!(processes.rows.len() >= 41 - 6, "{}", processes.rows.len());
 }
 
 /// The bound replaces writing the JSON only where that changes nothing: a
@@ -406,6 +422,46 @@ fn small_budget_is_respected_and_announced() {
     let gpu = model.modules.gpu.as_ref().unwrap();
     assert_eq!(gpu.cards.len(), 8);
     assert!(model.modules.cpu.as_ref().unwrap().cores.len() < 256);
+}
+
+/// On the GPU view a GPU without a power limit carries the highest draw
+/// the history recorded (D-118); the overview's cards carry none.
+#[test]
+fn the_gpu_view_carries_the_power_the_history_recorded() {
+    let gpu = gpu_entity(0);
+    let mut fixture = Fixture::new();
+    fixture.add_entity(entity_record(
+        &gpu,
+        EntityKind::Gpu,
+        "NVIDIA GB10",
+        &[(attributes::NVML_INDEX, "0")],
+    ));
+    fixture.add("gpu", sample("gpu.power.draw", &gpu, "gpu").f64(12.4));
+    // Two days recorded: the record reaches before today.
+    let day = |index: u64| HistoryPointView {
+        start_utc_ns: index * 86_400_000_000_000,
+        end_utc_ns: (index + 1) * 86_400_000_000_000,
+        mean: Some(10.0),
+        min: None,
+        max: Some(80.0),
+    };
+    let mut power = history_chart(vec![day(0), day(1)]);
+    power.kind = HistoryChartKind::GpuPower;
+    power.series = metric_key(&gpu, "gpu.power.draw", "gpu");
+    power.peak = Some(80.0);
+    fixture.history = Arc::new(HistoryView {
+        charts: vec![power],
+        disk: DiskHistory::On,
+        ..(*fixture.history).clone()
+    });
+    let mut recorded = Vec::new();
+    for view in [ViewKind::GpuDetail, ViewKind::Overview] {
+        fixture.session.view = view;
+        let model = build_view_model_measured(&fixture.context()).0;
+        let cards = &model.modules.gpu.as_ref().unwrap().cards;
+        recorded.push(cards[0].recorded_power_peak);
+    }
+    assert_eq!(recorded, vec![Some(80.0), None]);
 }
 
 /// The HistoryService asks one bar per plot column (D-50), so the

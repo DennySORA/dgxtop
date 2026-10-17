@@ -42,6 +42,7 @@ static SPEC: CollectorSpec = CollectorSpec {
     id: naming::collectors::NETWORK,
     accepts,
     retains,
+    leaves: context::leaves_none,
 };
 
 /// Network interface collector.

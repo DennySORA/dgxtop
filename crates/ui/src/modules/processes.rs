@@ -30,15 +30,18 @@ use crate::registry::{
     controls,
 };
 
-const SELECTION_MARKER: &str = "▶";
-/// The keys acting on this table, at the right of its title (D-70).
-const PROCESS_KEYS: &str =
-    "j/k/↑/↓ select · s sort · r reverse · g GPU filter · / filter · K terminate · F9 kill";
-/// The shortest of them.
-const SHORT_PROCESS_KEYS: &str = "j/k select · s sort · / filter · K terminate · F9 kill";
+/// Its id; expanded, it takes the whole Overview (`z`, D-121).
+pub const PROCESSES_MODULE_ID: &str = "processes";
 
-/// The keys at the right of the title, the fullest that fits first.
-const PROCESS_KEY_FORMS: &[&str] = &[PROCESS_KEYS, SHORT_PROCESS_KEYS];
+const SELECTION_MARKER: &str = "▶";
+/// The keys acting on this table, at the right of its title (D-70), the
+/// fullest that fits first; then `z`, which shows it alone on the Overview
+/// or everything again (D-121).
+const PROCESS_KEY_FORMS: [&str; 3] = [
+    "j/k/↑/↓ select · s sort · r reverse · g GPU filter · / filter · K terminate · F9 kill",
+    "j/k select · s sort · / filter · K terminate · F9 kill",
+    "j/k select · K terminate",
+];
 /// A tracked process's color, before its name (D-64).
 const COLOR_SWATCH: &str = "■";
 /// Position of the swatch column in [`COLUMNS`].
@@ -69,7 +72,7 @@ impl ProcessesModule {
     pub fn new() -> Result<Self, ModuleBuildError> {
         Ok(Self {
             manifest: build_manifest(ManifestSpec {
-                id: "processes",
+                id: PROCESSES_MODULE_ID,
                 title: "Processes (GPU first)",
                 min_columns: 40,
                 min_rows: 5,
@@ -121,7 +124,10 @@ impl DisplayModule for ProcessesModule {
             return output.finish();
         };
         let title = title_text(view);
-        let keys = fitting_keys(area.width, &title, PROCESS_KEY_FORMS);
+        let zoom = if context.expanded { "z back" } else { "z zoom" };
+        let forms = PROCESS_KEY_FORMS.map(|keys| format!("{keys} · {zoom}"));
+        let forms: Vec<&str> = forms.iter().map(String::as_str).collect();
+        let keys = fitting_keys(area.width, &title, &forms);
         let inner = panel_with_keys(frame, area, &title, keys, context);
         output.label(format!(
             "processes: {} rows, sort {} {}",

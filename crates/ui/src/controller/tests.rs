@@ -505,7 +505,8 @@ fn history_process_pages_navigate_and_select_the_run() {
 }
 
 /// A run that starts later moves the selected one down the list: the
-/// cursor stays on the selected run, so Enter opens it (D-77).
+/// cursor stays on the selected run, so Enter opens it (D-77) and `k` goes
+/// up from it.
 #[test]
 fn the_cursor_follows_the_selected_run_when_the_list_moves() {
     let mut harness = Harness::new(ViewKind::History);
@@ -517,6 +518,12 @@ fn the_cursor_follows_the_selected_run_when_the_list_moves() {
     let mut newer = runs.runs[1].clone();
     newer.key.pid = dgxtop_core::identity::Pid::new(77).unwrap();
     runs.runs.insert(0, newer);
+    harness.keys(&[code(KeyCode::Enter)]);
+    assert_eq!(
+        harness.last_session().2,
+        Some(training),
+        "Enter opens the selected run"
+    );
     harness.keys(&[code(KeyCode::Enter), key('k')]);
     assert_eq!(
         harness.last_session().2.unwrap().pid.get(),
@@ -559,6 +566,53 @@ fn w_steps_the_window_or_an_opened_runs_bar_size() {
         "",
         "the filter carries no bar (D-80)"
     );
+}
+
+/// `z` shows the GPU processes alone on the Overview for a moment (D-121):
+/// `z` again, `Esc` or another view brings everything back. Elsewhere `z`
+/// does nothing, and it sends nothing.
+#[test]
+fn z_shows_the_processes_alone_until_z_esc_or_another_view() {
+    let mut harness = Harness::new(ViewKind::Overview);
+    let processes = ModuleId::new(crate::modules::PROCESSES_MODULE_ID).unwrap();
+    let zoomed = |harness: &Harness| {
+        harness
+            .controller
+            .ui_state(harness.now)
+            .expanded
+            .contains(&processes)
+    };
+    harness.keys(&[key('z')]);
+    assert!(zoomed(&harness));
+    assert!(harness.submitted().is_empty(), "{:?}", harness.submitted());
+    harness.keys(&[key('z')]);
+    assert!(!zoomed(&harness), "z again");
+    harness.keys(&[key('z'), code(KeyCode::Esc)]);
+    assert!(!zoomed(&harness), "Esc");
+    // `Esc` dismisses a notice first, so the table stays alone.
+    harness.keys(&[key('z')]);
+    harness
+        .controller
+        .notify(BannerLevel::Info, "SIGTERM sent", harness.now);
+    harness.keys(&[code(KeyCode::Esc)]);
+    assert!(zoomed(&harness), "the notice went first");
+    harness.keys(&[code(KeyCode::Esc)]);
+    assert!(!zoomed(&harness), "then the panels came back");
+    // A key of another panel shows the panels first, then acts.
+    let cpu = ModuleId::new(crate::modules::CPU_MODULE_ID).unwrap();
+    harness.keys(&[key('z'), key('c')]);
+    let state = harness.controller.ui_state(harness.now);
+    assert!(!zoomed(&harness) && state.expanded.contains(&cpu));
+    harness.keys(&[key('c')]);
+    harness.keys(&[key('z'), key('2')]);
+    assert!(!zoomed(&harness), "another view");
+    // `z` before the GPU view's projection came: gone once it comes.
+    harness.keys(&[key('z')]);
+    assert!(zoomed(&harness));
+    harness.project(crate::test_fixtures::view_model(ViewKind::GpuDetail, 2));
+    assert!(!zoomed(&harness), "the GPU view came");
+    harness.keys(&[key('z')]);
+    assert!(!zoomed(&harness), "the GPU view has no z");
 }
 
 /// In an opened run `e` shows the whole command line and `y` queues it for
@@ -1152,8 +1206,9 @@ fn the_overview_history_scrolls_from_the_bands_the_frame_showed() {
     );
 }
 
-/// g/Home and G/End on the Process History: the newest and the oldest
-/// run, from an opened run too, which goes back to the list (D-108).
+/// g/Home and G/End on the Process History's list: the newest and the
+/// oldest run (D-108); on an opened run they turn to its first and last
+/// page and leave the run open (D-116).
 #[test]
 fn the_process_history_goes_to_its_first_and_last_run() {
     let mut harness = Harness::new(ViewKind::History);
@@ -1172,8 +1227,11 @@ fn the_process_history_goes_to_its_first_and_last_run() {
     assert_eq!(harness.last_session().2.unwrap().pid.get(), 42);
     harness.keys(&[code(KeyCode::End), code(KeyCode::Enter)]);
     assert_eq!(state(&harness), (2, 1));
+    page_frame(&mut harness, history_module(), (1, 1));
     harness.keys(&[code(KeyCode::Home)]);
-    assert_eq!(state(&harness), (1, 0), "back to the top of the list");
+    assert_eq!(state(&harness), (2, 1), "the run stays open");
+    assert_eq!(history_offset(&harness), 0, "at its first page");
+    assert_eq!(harness.last_session().2.unwrap().pid.get(), 41);
 }
 
 /// Space marks the run under the cursor and goes to the next; `a` marks
@@ -1689,34 +1747,64 @@ fn readline_keys_move_the_filter_cursor() {
     assert_eq!(buffer, "xabczyw");
 }
 
-/// On an opened run PgDn/PgUp (Ctrl-D/Ctrl-U) turn its pages, counted from
-/// the pages the frame showed (D-112); another run, closing the run or the
-/// Overview History starts from the first page again.
+/// On an opened run ↑/↓ (j/k), PgDn/PgUp (Ctrl-D/Ctrl-U) and g/G turn its
+/// pages, counted from the pages the frame showed, and no key switches to
+/// another run (D-112, D-116). Closing the run or the Overview History
+/// starts from the first page again, and so does the next run opened.
 #[test]
-fn an_opened_run_turns_its_pages_and_starts_each_run_at_the_first() {
+fn an_opened_run_turns_its_pages_and_never_switches_the_run() {
     let mut harness = Harness::new(ViewKind::History);
+    let tab = |harness: &Harness| {
+        harness
+            .controller
+            .ui_state(harness.now)
+            .tabs
+            .get(&history_module())
+            .copied()
+    };
     harness.keys(&[key('4'), code(KeyCode::Enter)]);
-    page_frame(&mut harness, history_module(), (0, 1));
-    harness.keys(&[code(KeyCode::PageDown)]);
+    let opened = harness.last_session().2;
+    page_frame(&mut harness, history_module(), (0, 2));
+    harness.keys(&[code(KeyCode::Down)]);
     assert_eq!(history_offset(&harness), 1);
-    page_frame(&mut harness, history_module(), (1, 0));
-    harness.keys(&[ctrl('d')]);
-    assert_eq!(history_offset(&harness), 1, "the last page shows");
-    harness.keys(&[ctrl('u')]);
-    assert_eq!(history_offset(&harness), 0);
-    page_frame(&mut harness, history_module(), (0, 1));
-    harness.keys(&[code(KeyCode::PageDown)]);
-    assert_eq!(history_offset(&harness), 1);
+    page_frame(&mut harness, history_module(), (1, 1));
     harness.keys(&[key('j')]);
+    assert_eq!(history_offset(&harness), 2);
+    page_frame(&mut harness, history_module(), (2, 0));
+    harness.keys(&[code(KeyCode::Down)]);
+    assert_eq!(history_offset(&harness), 2, "the last page shows");
+    harness.keys(&[code(KeyCode::Up)]);
+    assert_eq!(history_offset(&harness), 1);
+    page_frame(&mut harness, history_module(), (1, 1));
+    harness.keys(&[key('k')]);
+    assert_eq!(history_offset(&harness), 0);
+    page_frame(&mut harness, history_module(), (0, 2));
+    harness.keys(&[shift('G')]);
+    assert_eq!(history_offset(&harness), 2, "G: the last page");
+    page_frame(&mut harness, history_module(), (2, 0));
+    harness.keys(&[key('g')]);
+    assert_eq!(history_offset(&harness), 0, "g: the first page");
+    page_frame(&mut harness, history_module(), (0, 2));
+    harness.keys(&[ctrl('d')]);
+    assert_eq!(history_offset(&harness), 1);
+    page_frame(&mut harness, history_module(), (1, 1));
+    harness.keys(&[code(KeyCode::PageUp)]);
+    assert_eq!(history_offset(&harness), 0);
+    assert_eq!(harness.last_session().2, opened, "the run stays selected");
+    assert_eq!(tab(&harness), Some(crate::views::RUN_PAGE), "and open");
+    // Back on the list and into the next run: its first page.
+    page_frame(&mut harness, history_module(), (0, 1));
+    harness.keys(&[code(KeyCode::PageDown)]);
+    assert_eq!(history_offset(&harness), 1);
+    harness.keys(&[code(KeyCode::Enter), key('j'), code(KeyCode::Enter)]);
     assert_eq!(
         history_offset(&harness),
         0,
         "the next run starts at its first page"
     );
+    assert_ne!(harness.last_session().2, opened);
     page_frame(&mut harness, history_module(), (0, 1));
-    harness.keys(&[code(KeyCode::PageDown), code(KeyCode::Enter)]);
-    assert_eq!(history_offset(&harness), 0, "back on the list");
-    harness.keys(&[code(KeyCode::Enter), code(KeyCode::PageDown), key('3')]);
+    harness.keys(&[code(KeyCode::PageDown), key('3')]);
     assert_eq!(
         history_offset(&harness),
         0,

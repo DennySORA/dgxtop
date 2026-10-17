@@ -159,12 +159,13 @@ pub fn build_view_model_measured(context: &PresentationContext<'_>) -> (ViewMode
     let reader = MetricReader::new(context.snapshot, context.catalog, context.now_boot_ns)
         .with_trends(context.trends);
     let directory = GpuDirectory::new(context.catalog, reader.index());
+    let visible_process_rows = processes::visible_process_rows(layout.rows);
     let gpu_count = if plan.shows(plan::GPU) {
         directory.gpus().len()
     } else {
         0
     };
-    let visible_process_rows = processes::visible_process_rows(layout.rows, gpu_count);
+    let beside_process_rows = processes::beside_process_rows(layout.rows, gpu_count);
     let inputs = ModuleInputs {
         reader: &reader,
         directory: &directory,
@@ -195,6 +196,7 @@ pub fn build_view_model_measured(context: &PresentationContext<'_>) -> (ViewMode
         max_bytes,
         &BudgetHints {
             visible_process_rows,
+            beside_process_rows,
         },
     );
     (model, size)
@@ -297,7 +299,8 @@ fn build_modules(
 
 /// Overview shows every card as a summary with the utilization chart it
 /// draws; the GPU view gives the selected card full-width trends of every
-/// charted series and copies no trends for the others.
+/// charted series and copies no trends for the others, and each card the
+/// power the history recorded where it scales the power bar (D-118).
 fn build_gpu(context: &PresentationContext<'_>, inputs: &ModuleInputs<'_>) -> GpuView {
     let widths = if context.session.view == ViewKind::GpuDetail {
         GpuTrendWidths {
@@ -322,13 +325,17 @@ fn build_gpu(context: &PresentationContext<'_>, inputs: &ModuleInputs<'_>) -> Gp
             .find(|host| host.adapter_id == adapters::NVML),
         gpu_enabled: context.settings.effective.sampling.gpu_enabled,
     };
-    gpu::build_gpu_view(
+    let mut view = gpu::build_gpu_view(
         inputs.reader,
         inputs.directory,
         context.session.selected_entity_id.as_ref(),
         environment,
         widths,
-    )
+    );
+    if context.session.view == ViewKind::GpuDetail {
+        gpu::add_recorded_power(&mut view, &context.history);
+    }
+    view
 }
 
 /// The enabled built-in modules; a retired id a saved file still enables

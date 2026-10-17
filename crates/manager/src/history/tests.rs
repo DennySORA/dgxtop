@@ -342,6 +342,56 @@ fn the_history_view_reads_its_charts_only() {
     assert!(!refreshed.is_empty() && charts_only(&refreshed));
 }
 
+/// The GPU view reads the last 30 days of power, a day a bar, of the GPUs
+/// its pick gives, those without a power limit (D-118), and again each
+/// minute; the history view then picks its charts afresh.
+#[test]
+fn the_gpu_view_reads_the_days_its_power_bars_scale_to() {
+    let mut bench = bench(4);
+    let on = |view| state(view, "1m");
+    assert!(
+        bench
+            .service
+            .sync_session(&bench.session, &on(ViewKind::GpuDetail), COLUMNS, NOW)
+    );
+    let power = gpu_series(HistoryChartKind::GpuPower, "gpu.power.draw");
+    bench.service.update_charts(
+        1,
+        |request| {
+            assert_eq!(request.view, ViewKind::GpuDetail);
+            picks(vec![power.clone()])
+        },
+        NOW,
+    );
+    let jobs = bench.sent(NOW);
+    assert_eq!(jobs.len(), 1);
+    let (tier, from, end, _) = bars_request(&jobs[0]);
+    assert_eq!((tier, end - from), (Tier::OneDay, 30 * 24 * HOUR));
+    let days = vec![bar(from, 60, 40.0), bar(from + 24 * HOUR, 60, 80.0)];
+    assert!(bench.answer(&jobs[0], bars_answer(from, days)).is_some());
+    let view = bench.service.view(&bench.session);
+    assert_eq!(view.charts[0].peak, Some(85.0), "the days' highest draw");
+    assert!(bench.sent(NOW + 30 * SECOND).is_empty());
+    assert_eq!(bench.sent(NOW + 61 * SECOND).len(), 1, "a minute later");
+    assert!(
+        bench
+            .service
+            .sync_session(&bench.session, &on(ViewKind::History), COLUMNS, NOW)
+    );
+    assert!(bench.service.wants_charts(1), "picked again for the view");
+    bench.service.update_charts(
+        1,
+        |request| {
+            assert_eq!(request.view, ViewKind::History);
+            assert!(request.shown.is_empty());
+            picks(vec![cpu()])
+        },
+        NOW,
+    );
+    let history = bench.sent(NOW + 62 * SECOND);
+    assert_eq!(bars_request(&history[0]).0, Tier::OneMinute);
+}
+
 #[test]
 fn a_new_series_restarts_the_reads_and_a_new_scale_only_redraws() {
     let mut bench = bench(4);

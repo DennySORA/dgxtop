@@ -64,14 +64,31 @@ fn process_memory(
     }
 }
 
-/// Per-GPU process sources are catalogued without a fixed key.
+/// The NVML adapter's reading of a GPU whose process lists name no process
+/// (D-119): its processes hold 0 bytes.
+fn no_processes(uuid: &str, at: u64, cycle: u64) -> Observation {
+    reading(
+        &gpu_key(uuid, ids::GPU_MEMORY_PROCESS_ALLOCATED),
+        "nvml",
+        &format!("nvml:{uuid}:memory.process_allocated"),
+        at,
+    )
+    .unit(native::BYTES)
+    .quality(Quality::Usable)
+    .cycle(cycle)
+    .u64(0)
+    .build()
+}
+
+/// Per-GPU process sources are catalogued without a fixed key; the reading
+/// of a GPU without processes with the GPU's key.
 fn nvml_catalog() -> dgxtop_core::canonical::CatalogSnapshot {
     let names: Vec<String> = [GPU_A, GPU_B]
         .iter()
         .map(|uuid| format!("nvml:{uuid}:process.memory_allocated"))
         .collect();
     let placeholder = gpu_key(GPU_A, ids::PROCESS_GPU_MEMORY);
-    let specs: Vec<SourceSpec<'_>> = names
+    let mut specs: Vec<SourceSpec<'_>> = names
         .iter()
         .map(|name| {
             let mut spec = SourceSpec::new(name, "nvml", &placeholder, "process");
@@ -80,6 +97,21 @@ fn nvml_catalog() -> dgxtop_core::canonical::CatalogSnapshot {
             spec
         })
         .collect();
+    let totals: Vec<(String, MetricKey)> = [GPU_A, GPU_B]
+        .iter()
+        .map(|uuid| {
+            (
+                format!("nvml:{uuid}:memory.process_allocated"),
+                gpu_key(uuid, ids::GPU_MEMORY_PROCESS_ALLOCATED),
+            )
+        })
+        .collect();
+    specs.extend(totals.iter().map(|(name, key)| {
+        let mut spec = SourceSpec::new(name, "nvml", key, "process");
+        spec.rank = 2;
+        spec.native_unit = native::BYTES;
+        spec
+    }));
     catalog(&specs, Vec::new())
 }
 
@@ -573,4 +605,339 @@ fn exited_processes_from_an_older_list_are_not_summed() {
     );
     let value = value_of(&second, &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED)).unwrap();
     assert_eq!(value.value.and_then(|value| value.as_u64()), Some(450));
+}
+
+/// The newest list decides (D-119): once the last process exits, the list
+/// that names none reads 0 at once, though the older list's records are
+/// still fresh, never the exited process's memory or unavailable.
+#[test]
+fn a_list_that_names_no_process_reads_zero_at_once() {
+    let collector = GpuCollector::new().unwrap();
+    let busy = collect(
+        &collector,
+        &PlanBuilder::new("gpu")
+            .catalog(nvml_catalog())
+            .at(SECOND + 1)
+            .batch(
+                "nvml",
+                "process",
+                vec![process_memory(
+                    GPU_A,
+                    10,
+                    reasons::GPU_USAGE_COMPUTE,
+                    Some(400),
+                    SECOND,
+                    1,
+                )],
+            )
+            .build(),
+    );
+    let held = |batch: &CollectionBatch| {
+        let value = value_of(batch, &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED)).unwrap();
+        (
+            value.selection_state,
+            value.value.and_then(|value| value.as_u64()),
+        )
+    };
+    assert_eq!(held(&busy), (SelectionState::Selected, Some(400)));
+    let idle = collect(
+        &collector,
+        &PlanBuilder::new("gpu")
+            .catalog(nvml_catalog())
+            .after(&busy)
+            .cycle(2)
+            .at(2 * SECOND + 1)
+            .batch("nvml", "process", vec![no_processes(GPU_A, 2 * SECOND, 2)])
+            .build(),
+    );
+    assert_eq!(held(&idle), (SelectionState::Selected, Some(0)));
+}
+
+/// A process started after a list that named none shows its memory at
+/// once, not the empty list's 0 (D-119).
+#[test]
+fn a_process_listed_after_an_empty_list_is_summed_at_once() {
+    let collector = GpuCollector::new().unwrap();
+    let idle = collect(
+        &collector,
+        &PlanBuilder::new("gpu")
+            .catalog(nvml_catalog())
+            .at(SECOND + 1)
+            .batch("nvml", "process", vec![no_processes(GPU_A, SECOND, 1)])
+            .build(),
+    );
+    let held = |batch: &CollectionBatch| {
+        value_of(batch, &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED))
+            .unwrap()
+            .value
+            .and_then(|value| value.as_u64())
+    };
+    assert_eq!(held(&idle), Some(0));
+    let busy = collect(
+        &collector,
+        &PlanBuilder::new("gpu")
+            .catalog(nvml_catalog())
+            .after(&idle)
+            .cycle(2)
+            .at(2 * SECOND + 1)
+            .batch(
+                "nvml",
+                "process",
+                vec![process_memory(
+                    GPU_A,
+                    10,
+                    reasons::GPU_USAGE_COMPUTE,
+                    Some(400),
+                    2 * SECOND,
+                    2,
+                )],
+            )
+            .build(),
+    );
+    assert_eq!(held(&busy), Some(400));
+}
+
+/// The newest list decides at every change, not only the first (D-119):
+/// busy, idle, busy and idle a second apart read each list's value at once,
+/// though the older list's records are still fresh.
+#[test]
+fn every_change_of_the_list_reads_at_once() {
+    let collector = GpuCollector::new().unwrap();
+    let held = |batch: &CollectionBatch| {
+        let value = value_of(batch, &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED)).unwrap();
+        (
+            value.selection_state,
+            value.value.and_then(|value| value.as_u64()),
+        )
+    };
+    let lists: [Option<u64>; 5] = [Some(400), None, Some(300), None, Some(200)];
+    let mut previous: Option<CollectionBatch> = None;
+    for (index, list) in lists.into_iter().enumerate() {
+        let cycle = u64::try_from(index).unwrap() + 1;
+        let at = cycle * SECOND;
+        let records = match list {
+            Some(bytes) => vec![process_memory(
+                GPU_A,
+                10 + i32::try_from(index).unwrap(),
+                reasons::GPU_USAGE_COMPUTE,
+                Some(bytes),
+                at,
+                cycle,
+            )],
+            None => vec![no_processes(GPU_A, at, cycle)],
+        };
+        let mut plan = PlanBuilder::new("gpu")
+            .catalog(nvml_catalog())
+            .cycle(cycle)
+            .at(at + 1);
+        if let Some(previous) = &previous {
+            plan = plan.after(previous);
+        }
+        let batch = collect(&collector, &plan.batch("nvml", "process", records).build());
+        assert_eq!(
+            held(&batch),
+            (SelectionState::Selected, Some(list.unwrap_or(0))),
+            "list {cycle}"
+        );
+        previous = Some(batch);
+    }
+}
+
+/// A process whose allocation is unknown, listed right after a list that
+/// named none, leaves the GPU's memory unknown at once, never the empty
+/// list's 0 (D-119).
+#[test]
+fn an_unknown_allocation_after_an_empty_list_is_unknown_at_once() {
+    let collector = GpuCollector::new().unwrap();
+    let idle = collect(
+        &collector,
+        &PlanBuilder::new("gpu")
+            .catalog(nvml_catalog())
+            .at(SECOND + 1)
+            .batch("nvml", "process", vec![no_processes(GPU_A, SECOND, 1)])
+            .build(),
+    );
+    let unknown = collect(
+        &collector,
+        &PlanBuilder::new("gpu")
+            .catalog(nvml_catalog())
+            .after(&idle)
+            .cycle(2)
+            .at(2 * SECOND + 1)
+            .batch(
+                "nvml",
+                "process",
+                vec![process_memory(
+                    GPU_A,
+                    12,
+                    reasons::GPU_USAGE_COMPUTE,
+                    None,
+                    2 * SECOND,
+                    2,
+                )],
+            )
+            .build(),
+    );
+    let value = value_of(&unknown, &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED)).unwrap();
+    assert_eq!(value.value, None, "{value:?}");
+    assert_eq!(value.selection_state, SelectionState::Unavailable);
+}
+
+/// A list the adapter could not read, right after one that named none,
+/// leaves the GPU's memory unknown at once (D-119).
+#[test]
+fn a_failed_list_after_an_empty_list_is_unknown_at_once() {
+    let collector = GpuCollector::new().unwrap();
+    let idle = collect(
+        &collector,
+        &PlanBuilder::new("gpu")
+            .catalog(nvml_catalog())
+            .at(SECOND + 1)
+            .batch("nvml", "process", vec![no_processes(GPU_A, SECOND, 1)])
+            .build(),
+    );
+    let failed = reading(
+        &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED),
+        "nvml",
+        &format!("nvml:{GPU_A}:memory.process_allocated"),
+        2 * SECOND,
+    )
+    .unit(native::BYTES)
+    .cycle(2)
+    .failed(ReadStatus::Error)
+    .build();
+    let unread = collect(
+        &collector,
+        &PlanBuilder::new("gpu")
+            .catalog(nvml_catalog())
+            .after(&idle)
+            .cycle(2)
+            .at(2 * SECOND + 1)
+            .batch("nvml", "process", vec![failed])
+            .build(),
+    );
+    let value = value_of(&unread, &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED)).unwrap();
+    assert_eq!(value.value, None, "{value:?}");
+}
+
+/// A list that failed beside processes the other list names, in one read
+/// cycle, offers both: the sum, flagged degraded. The selection it leaves
+/// holds no value at the next changes (D-119).
+#[test]
+fn a_failed_list_beside_listed_processes_holds_nothing_after() {
+    let collector = GpuCollector::new().unwrap();
+    let held = |batch: &CollectionBatch| {
+        let value = value_of(batch, &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED)).unwrap();
+        (
+            value.selection_state,
+            value.value.and_then(|value| value.as_u64()),
+        )
+    };
+    let failed = reading(
+        &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED),
+        "nvml",
+        &format!("nvml:{GPU_A}:memory.process_allocated"),
+        SECOND,
+    )
+    .unit(native::BYTES)
+    .cycle(1)
+    .failed(ReadStatus::Error)
+    .build();
+    let both = collect(
+        &collector,
+        &PlanBuilder::new("gpu")
+            .catalog(nvml_catalog())
+            .cycle(1)
+            .at(SECOND + 1)
+            .batch(
+                "nvml",
+                "process",
+                vec![
+                    failed,
+                    process_memory(GPU_A, 10, reasons::GPU_USAGE_COMPUTE, Some(400), SECOND, 1),
+                ],
+            )
+            .build(),
+    );
+    assert_eq!(held(&both).1, Some(400));
+    let idle = collect(
+        &collector,
+        &PlanBuilder::new("gpu")
+            .catalog(nvml_catalog())
+            .after(&both)
+            .cycle(2)
+            .at(2 * SECOND + 1)
+            .batch("nvml", "process", vec![no_processes(GPU_A, 2 * SECOND, 2)])
+            .build(),
+    );
+    assert_eq!(held(&idle), (SelectionState::Selected, Some(0)));
+    let busy = collect(
+        &collector,
+        &PlanBuilder::new("gpu")
+            .catalog(nvml_catalog())
+            .after(&idle)
+            .cycle(3)
+            .at(3 * SECOND + 1)
+            .batch(
+                "nvml",
+                "process",
+                vec![process_memory(
+                    GPU_A,
+                    11,
+                    reasons::GPU_USAGE_COMPUTE,
+                    Some(300),
+                    3 * SECOND,
+                    3,
+                )],
+            )
+            .build(),
+    );
+    assert_eq!(held(&busy), (SelectionState::Selected, Some(300)));
+}
+
+/// The newest list rule compares the reading of the GPU's lists only: a
+/// reading of another group, as a replay's fast group carries, is offered
+/// beside the sum as before, never instead of it.
+#[test]
+fn a_reading_of_another_group_never_hides_the_sum() {
+    let collector = GpuCollector::new().unwrap();
+    let elsewhere = reading(
+        &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED),
+        "nvml",
+        &format!("nvml:{GPU_A}:replay.process_allocated"),
+        2 * SECOND,
+    )
+    .unit(native::BYTES)
+    .cycle(2)
+    .u64(123)
+    .build();
+    let batch = collect(
+        &collector,
+        &PlanBuilder::new("gpu")
+            .catalog(nvml_catalog())
+            .cycle(2)
+            .at(2 * SECOND + 1)
+            .batch("nvml", "fast", vec![elsewhere])
+            .batch(
+                "nvml",
+                "process",
+                vec![process_memory(
+                    GPU_A,
+                    10,
+                    reasons::GPU_USAGE_COMPUTE,
+                    Some(400),
+                    SECOND,
+                    1,
+                )],
+            )
+            .build(),
+    );
+    let value = value_of(&batch, &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED)).unwrap();
+    assert!(
+        value
+            .candidate_source_ids
+            .iter()
+            .any(|source| source.as_str() == format!("nvml:{GPU_A}:process.memory_allocated")),
+        "{value:?}"
+    );
 }

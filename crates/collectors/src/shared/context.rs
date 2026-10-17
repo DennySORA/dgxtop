@@ -41,6 +41,15 @@ pub(crate) struct CollectorSpec {
     pub accepts: fn(&MetricDescriptor) -> bool,
     /// Whether the latest record of a source is retained across jobs.
     pub retains: fn(&Route<'_>, &MetricDescriptor) -> bool,
+    /// Metrics of consumed batches another collector interprets, left out
+    /// without a failure.
+    pub leaves: fn(&MetricDescriptor) -> bool,
+}
+
+/// [`CollectorSpec::leaves`] of a collector that leaves no metric to
+/// another.
+pub(crate) fn leaves_none(_metric: &MetricDescriptor) -> bool {
+    false
 }
 
 /// Where a batch came from. Replay groups (`<live adapter>.<group>`) are
@@ -254,6 +263,7 @@ impl<'a> Session<'a> {
                 &format!("unknown metric id {metric_id}"),
                 Subject::source(&observation.provenance.source_id),
             ),
+            Some(descriptor) if (self.spec.leaves)(descriptor) => {}
             Some(descriptor) if !(self.spec.accepts)(descriptor) => self.failure(
                 reasons::METRIC_NOT_HANDLED,
                 &format!(

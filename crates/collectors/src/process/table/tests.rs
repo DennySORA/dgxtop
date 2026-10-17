@@ -923,3 +923,32 @@ fn an_invalid_gpu_process_entity_is_reported() {
             .any(|failure| failure.code == reasons::INVALID_ENTITY)
     );
 }
+
+/// The GPU's reading of its process memory that NVML's process group also
+/// carries (D-119) is the GPU collector's: the process collector leaves it
+/// out without a failure.
+#[test]
+fn the_gpus_process_memory_is_left_to_the_gpu_collector() {
+    let collector = ProcessCollector::new().unwrap();
+    let total = reading(
+        &metric_key("gpu:GPU-a", ids::GPU_MEMORY_PROCESS_ALLOCATED, "gpu"),
+        "nvml",
+        "nvml:GPU-a:memory.process_allocated",
+        SECOND,
+    )
+    .unit(native::BYTES)
+    .u64(0)
+    .build();
+    let batch = collect(
+        &collector,
+        &plan(Vec::new(), vec![total], SECOND + 1).build(),
+    );
+    assert!(
+        batch
+            .failures
+            .iter()
+            .all(|failure| failure.code != reasons::METRIC_NOT_HANDLED),
+        "{:?}",
+        batch.failures
+    );
+}

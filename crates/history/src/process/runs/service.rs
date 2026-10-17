@@ -543,6 +543,7 @@ mod tests {
                 now: now(second),
                 clk_tck: Some(100),
                 gpu_labels: &labels,
+                gpu_utilization: &std::collections::BTreeMap::new(),
                 host_network: [None, None],
             },
         );

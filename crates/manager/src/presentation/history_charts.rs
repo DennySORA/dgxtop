@@ -9,11 +9,14 @@
 //! report, so the charts never jump between devices. A memory chart names
 //! the GPUs whose tracked processes' parts it stacks (D-64): a GPU's memory
 //! its GPU, the RAM used the GPUs that share the RAM; the history joins
-//! them (D-99).
+//! them (D-99). On the GPU view the HistoryService reads only the power of
+//! each GPU that reports no power limit, whose recorded peak scales its
+//! power bar (D-118).
 
 use std::collections::BTreeSet;
 
 use dgxtop_core::canonical::{CatalogSnapshot, ImmutableSnapshot};
+use dgxtop_core::commands::ViewKind;
 use dgxtop_core::metric::ids;
 use dgxtop_core::naming::entity;
 use dgxtop_core::view::{HistoryChartKind, TEMPERATURE_SCALE_C};
@@ -37,7 +40,8 @@ const PERCENT_SCALE: f64 = 100.0;
 /// Series of one GPU: utilization, memory, temperature, power.
 const SERIES_PER_GPU: usize = 4;
 
-/// The series for a session's request.
+/// The series for a session's request: the history view's charts, or the
+/// GPU view's power.
 pub(crate) fn history_charts(
     snapshot: &ImmutableSnapshot,
     catalog: &CatalogSnapshot,
@@ -45,9 +49,41 @@ pub(crate) fn history_charts(
     request: &ChartRequest<'_>,
 ) -> HistoryPicks {
     let reader = MetricReader::new(snapshot, catalog, now_boot_ns);
-    HistoryPicks {
-        charts: dashboard(&reader, catalog, request.shown),
+    let charts = match request.view {
+        ViewKind::GpuDetail => unlimited_power(&reader, catalog),
+        _ => dashboard(&reader, catalog, request.shown),
+    };
+    HistoryPicks { charts }
+}
+
+/// The power of each GPU that reports no power limit (GB10), whose highest
+/// draw recorded scales its power bar on the GPU view (D-118).
+fn unlimited_power(reader: &MetricReader<'_>, catalog: &CatalogSnapshot) -> Vec<HistoryChartSpec> {
+    let mut charts = Charts {
+        reader,
+        specs: Vec::new(),
+    };
+    let directory = GpuDirectory::new(catalog, reader.index());
+    for gpu in directory.gpus().iter().take(MAX_CHARTS) {
+        let entity_id = gpu.entity_id.as_str();
+        let limit = reader
+            .cell(ids::GPU_POWER_LIMIT, entity_id, entity::SCOPE_GPU)
+            .value_f64();
+        if limit.is_none() {
+            charts.add(
+                HistoryChartKind::GpuPower,
+                &gpu_subject(gpu),
+                (ids::GPU_POWER_DRAW, entity_id, entity::SCOPE_GPU),
+                None,
+            );
+        }
     }
+    charts.specs
+}
+
+/// `GPU 0 · NVIDIA GB10`: what a GPU's charts are of.
+fn gpu_subject(gpu: &GpuIdentity<'_>) -> String {
+    format!("{} · {}", gpu.label, gpu_name(gpu.record))
 }
 
 /// The history view's charts, keeping the disk and interface `previous`
@@ -233,7 +269,7 @@ impl Charts<'_, '_> {
 
     /// Adds the series of `gpu` it reports ([`gpu_series`]).
     fn add_gpu(&mut self, gpu: &GpuIdentity<'_>) {
-        let subject = format!("{} · {}", gpu.label, gpu_name(gpu.record));
+        let subject = gpu_subject(gpu);
         for (kind, metric, scale_max) in gpu_series(self.reader, gpu) {
             self.add(
                 kind,
@@ -311,7 +347,10 @@ mod tests {
             &fixture.snapshot,
             &fixture.catalog,
             NOW,
-            &ChartRequest { shown },
+            &ChartRequest {
+                view: ViewKind::History,
+                shown,
+            },
         )
     }
 
@@ -384,6 +423,33 @@ mod tests {
             charts[4].key.metric_id.as_str(),
             "disk.write.bytes_per_second"
         );
+    }
+
+    /// On the GPU view the history reads only the power of each GPU that
+    /// reports no power limit (D-118), whose recorded peak scales its bar.
+    #[test]
+    fn the_gpu_view_picks_the_power_of_gpus_without_a_limit() {
+        let mut fixture = host();
+        fixture.add("gpu", sample("gpu.power.draw", GPU_A, "gpu").f64(300.0));
+        fixture.add("gpu", sample("gpu.power.limit", GPU_A, "gpu").f64(700.0));
+        fixture.add_entity(entity_record(
+            GPU_B,
+            EntityKind::Gpu,
+            "NVIDIA GB10",
+            &[(attributes::NVML_INDEX, "1")],
+        ));
+        fixture.add("gpu", sample("gpu.power.draw", GPU_B, "gpu").f64(12.4));
+        fixture.add("gpu", sample("gpu.power.limit", GPU_B, "gpu").unavailable());
+        let request = ChartRequest {
+            view: ViewKind::GpuDetail,
+            shown: &[],
+        };
+        let power = history_charts(&fixture.snapshot, &fixture.catalog, NOW, &request).charts;
+        assert_eq!(kinds(&power), vec![HistoryChartKind::GpuPower], "{power:?}");
+        assert_eq!(power[0].key.entity_id.as_str(), GPU_B);
+        assert_eq!(power[0].key.metric_id.as_str(), ids::GPU_POWER_DRAW);
+        assert_eq!(power[0].subject, "GPU 1 · NVIDIA GB10");
+        assert_eq!(power[0].scale_max, None);
     }
 
     /// A memory chart names the GPUs whose processes' parts it stacks

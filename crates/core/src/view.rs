@@ -282,6 +282,11 @@ pub struct GpuCard {
     /// Used framebuffer bytes, or on a unified-memory GPU the RAM its
     /// processes hold (the VRAM chart, D-40).
     pub memory_trend: Trend,
+    /// The highest power draw the Overview History recorded over the last
+    /// days, for a GPU without a power limit on the GPU view, whose power
+    /// bar it scales (D-118); `None` elsewhere and until the history
+    /// answers.
+    pub recorded_power_peak: Option<f64>,
 }
 
 /// What the GPU view shows of one GPU beyond its card (D-48): its

@@ -1,6 +1,7 @@
-//! Scrolling a module's page (D-107, D-110). The module draws its page
-//! from the unit scrolled to (`DisplayContext.offset`: a band of the
-//! Overview History, a page of the GPU view's sections) and publishes a
+//! Scrolling a module's page (D-107, D-110, D-116). The module draws its
+//! page from the unit scrolled to (`DisplayContext.offset`: a band of the
+//! Overview History, a page of the GPU view's sections or of an opened
+//! run's charts) and publishes a
 //! [`controls::PAGE_ABOVE`] target for each unit above what it showed and a
 //! [`controls::PAGE_BELOW`] target for each unit below. The controller
 //! counts them, so it scrolls from what the frame showed: never past the
@@ -8,6 +9,7 @@
 
 use dgxtop_core::identity::ModuleId;
 
+use super::keymap::KeyAction;
 use super::navigation::Movement;
 use super::{Controller, ControllerContext};
 use crate::num::saturate_u16;
@@ -30,6 +32,17 @@ impl PageStep {
             Movement::Down(_) => Self::Down,
             Movement::First => Self::First,
             Movement::Last => Self::Last,
+        }
+    }
+
+    /// The page step of a history view's `↑`/`↓` or `g`/`G` key.
+    pub(super) const fn of_history_key(action: KeyAction) -> Option<Self> {
+        match action {
+            KeyAction::HistoryUp => Some(Self::Up),
+            KeyAction::HistoryDown => Some(Self::Down),
+            KeyAction::HistoryFirst => Some(Self::First),
+            KeyAction::HistoryLast => Some(Self::Last),
+            _ => None,
         }
     }
 }

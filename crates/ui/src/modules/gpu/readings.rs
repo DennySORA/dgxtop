@@ -2,8 +2,9 @@
 //! now and the value right after it: utilization against 100 %, the memory
 //! in use (`VRAM` against the framebuffer, or on a unified-memory GPU `RAM`,
 //! what its processes hold, against the system RAM), the temperature on a
-//! fixed 0–100 °C scale and the power against the enforced limit. The
-//! overview shows the first two, the utilization's history under its
+//! fixed 0–100 °C scale and the power against the enforced limit, or on a
+//! GPU without one against the highest draw the history recorded (D-118).
+//! The overview shows the first two, the utilization's history under its
 //! gauge; the GPU view shows all four, live only. The memory bar shows what
 //! each tracked process holds in its color (D-64), the rest of the memory
 //! in use in the color of the bar's level.
@@ -116,7 +117,10 @@ fn temperature(card: &GpuCard) -> GpuReading<'_> {
 }
 
 /// Power against the enforced limit; without one (GB10), against the
-/// highest draw seen, which the value prints (D-41).
+/// highest draw the history recorded over the last days, or drawn since,
+/// which the value prints (D-118). The few minutes the card's trend holds
+/// would make any steady draw its own peak. Without a record the bar has
+/// no scale to guess.
 fn power(card: &GpuCard) -> GpuReading<'_> {
     if has_value(&card.power_limit) {
         return GpuReading {
@@ -127,15 +131,16 @@ fn power(card: &GpuCard) -> GpuReading<'_> {
             max: card.power_limit.value_f64(),
         };
     }
-    let peak = card
-        .power_trend
-        .points
-        .iter()
-        .flatten()
-        .copied()
-        .chain(card.power_draw.value_f64())
-        .filter(|value| value.is_finite())
-        .reduce(f64::max);
+    let peak = card.recorded_power_peak.map(|recorded| {
+        card.power_trend
+            .points
+            .iter()
+            .flatten()
+            .copied()
+            .chain(card.power_draw.value_f64())
+            .filter(|value| value.is_finite())
+            .fold(recorded, f64::max)
+    });
     let value = match peak {
         Some(peak) => format!(
             "{} · peak {}",
@@ -318,28 +323,36 @@ mod tests {
     }
 
     /// GB10 reports no power limit: the bar is scaled to the highest draw
-    /// it has seen, which it prints, like the disk and network rates (D-41).
+    /// the history recorded over the last days (D-118), which it prints, so
+    /// a GPU idle for minutes reads low; without a record the bar has no
+    /// scale and the draw stands alone.
     #[test]
-    fn power_without_a_limit_is_scaled_to_its_peak() {
+    fn power_without_a_limit_is_scaled_to_its_recorded_peak() {
         let mut card = gpu_view().cards.remove(1);
         card.power_limit = missing(CanonicalUnit::Watts, CellState::Unsupported);
-        card.power_draw = crate::test_fixtures::ok(60.0, CanonicalUnit::Watts);
-        card.power_trend.points = vec![Some(40.0), None, Some(80.0), Some(60.0)];
-        let readings = status_readings(&card);
-        let power = readings
-            .iter()
-            .find(|reading| reading.label == "pwr")
-            .unwrap();
-        assert_eq!(power.ratio(), Some(0.75));
-        assert!(power.value.ends_with("peak 80.0 W"), "{}", power.value);
-        assert!(!power.value.contains('/'), "{}", power.value);
-        // The value now is part of the peak before the chart has it.
-        card.power_trend.points.clear();
-        let readings = status_readings(&card);
-        let power = readings
-            .iter()
-            .find(|reading| reading.label == "pwr")
-            .unwrap();
-        assert_eq!(power.ratio(), Some(1.0));
+        // Idle in P0 for minutes: the last four peak at 13.0 W.
+        card.power_draw = crate::test_fixtures::ok(12.4, CanonicalUnit::Watts);
+        card.power_trend.points = vec![Some(12.8), None, Some(13.0), Some(12.4)];
+        card.recorded_power_peak = Some(80.0);
+        let power = |card: &GpuCard| {
+            let power = status_readings(card)
+                .into_iter()
+                .find(|reading| reading.label == "pwr")
+                .unwrap();
+            (power.ratio(), power.value)
+        };
+        let (ratio, value) = power(&card);
+        assert_eq!(ratio, Some(12.4 / 80.0), "idle reads low: {value}");
+        assert_eq!(value, "12.4 W · peak 80.0 W");
+        // A draw above the record, whose minute is not recorded yet, is the
+        // peak.
+        card.power_draw = crate::test_fixtures::ok(95.0, CanonicalUnit::Watts);
+        let (ratio, value) = power(&card);
+        assert_eq!(ratio, Some(1.0));
+        assert_eq!(value, "95.0 W · peak 95.0 W");
+        // Without a record: no scale, so no gauge, and the draw alone.
+        card.power_draw = crate::test_fixtures::ok(12.4, CanonicalUnit::Watts);
+        card.recorded_power_peak = None;
+        assert_eq!(power(&card), (None, "12.4 W".to_owned()));
     }
 }

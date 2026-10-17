@@ -76,7 +76,10 @@ impl SchemaKind {
     /// `PRAGMA application_id`, apart from the app version and the DDL's
     /// `user_version`. Bump it whenever what the file holds changes meaning
     /// (tables, columns, packing, units): a file of any other format, or of
-    /// none, is deleted and created afresh at the next start.
+    /// none, is deleted and created afresh at the next start. Metrics
+    /// appended to a process bucket keep its format (D-120): a bucket of
+    /// fewer reads with them empty, so the update keeps the history, while
+    /// an older version reads the longer buckets as another format.
     pub const fn format_version(self) -> u16 {
         match self {
             Self::Audit | Self::History | Self::ProcessHistory => 1,

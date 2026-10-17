@@ -153,6 +153,7 @@ impl ProcessHistory {
                 now,
                 clk_tck: context.clk_tck,
                 gpu_labels: &context.gpu_labels,
+                gpu_utilization: &context.gpu_utilization,
                 host_network: context.host_network,
             },
         );

@@ -55,13 +55,23 @@ fn table(second: u64, rows: Vec<ProcessRow>) -> ProcessTable {
 
 /// Observes `rows` at `second`, with 100 ticks per second.
 fn observe(book: &mut ProcessHistoryBook, second: u64, rows: Vec<ProcessRow>) {
-    let labels = labels();
+    observe_on(book, second, rows, (&labels(), &BTreeMap::new()));
+}
+
+/// [`observe`] with the GPUs' `labels` and own `utilization`.
+fn observe_on(
+    book: &mut ProcessHistoryBook,
+    second: u64,
+    rows: Vec<ProcessRow>,
+    (labels, utilization): (&BTreeMap<EntityId, String>, &BTreeMap<EntityId, f64>),
+) {
     book.observe(
         &table(second, rows),
         &SampleInputs {
             now: now(second),
             clk_tck: Some(100),
-            gpu_labels: &labels,
+            gpu_labels: labels,
+            gpu_utilization: utilization,
             host_network: [Some(1000.0), Some(500.0)],
         },
     );
@@ -128,6 +138,58 @@ fn gpu_processes_become_runs_with_their_start_time() {
     let journal = book.take_journal();
     assert_eq!(journal.runs.len(), 1, "a new run is journaled");
     assert!(book.take_journal().is_empty(), "once");
+}
+
+/// A run keeps each GPU it uses apart, in the order it first used them
+/// (D-120): its utilization and memory there, and the GPU's own
+/// utilization, which stands in where the driver samples no process. A
+/// GPU used later takes the next place and moves none; the sums still
+/// cover every GPU.
+#[test]
+fn each_gpu_of_a_run_keeps_its_own_figures() {
+    use dgxtop_core::process_history::GpuFigure;
+    const GPU_B: &str = "gpu:GPU-bbbb";
+    let gpu = |id: &str| EntityId::new(id).unwrap();
+    let labels = BTreeMap::from([
+        (gpu(GPU_A), "GPU 0".to_owned()),
+        (gpu(GPU_B), "GPU 1".to_owned()),
+    ]);
+    let utilization = BTreeMap::from([(gpu(GPU_A), 90.0), (gpu(GPU_B), 30.0)]);
+    let mut book = book();
+    let mut first = gpu_process(9, "train", &[(GPU_B, Some(2 * GIB))]);
+    first.gpu[0].utilization_percent = Some(25.0);
+    observe_on(&mut book, 1, vec![first], (&labels, &utilization));
+    // Then on GPU 0 too, whose driver samples no process.
+    let mut both = gpu_process(
+        9,
+        "train",
+        &[(GPU_A, Some(4 * GIB)), (GPU_B, Some(2 * GIB))],
+    );
+    both.gpu[1].utilization_percent = Some(25.0);
+    observe_on(&mut book, 2, vec![both], (&labels, &utilization));
+    let run = book.run(&key(9)).unwrap();
+    assert_eq!(
+        run.info().gpus,
+        vec!["GPU 1".to_owned(), "GPU 0".to_owned()]
+    );
+    let whole = run.whole();
+    let figure = |slot, figure| {
+        let metric = RunMetric::of_gpu(slot, figure).unwrap();
+        whole.value(metric).mean()
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let gib = |count: u64| (count * GIB) as f64;
+    assert_eq!(figure(0, GpuFigure::Utilization), Some(25.0));
+    assert_eq!(figure(0, GpuFigure::Memory), Some(gib(2)));
+    assert_eq!(figure(0, GpuFigure::Device), Some(30.0));
+    assert_eq!(
+        figure(1, GpuFigure::Utilization),
+        None,
+        "no sample on GPU 0"
+    );
+    assert_eq!(figure(1, GpuFigure::Memory), Some(gib(4)));
+    assert_eq!(figure(1, GpuFigure::Device), Some(90.0));
+    assert_eq!(whole.value(RunMetric::GpuMemory).peak(), Some(gib(6)));
 }
 
 #[test]
@@ -398,11 +460,12 @@ fn lost_runs_end_after_the_grace_unless_the_table_was_cut() {
     observe(&mut book, 1, vec![row(1, 10.0, Some(GIB))]);
     let mut cut = table(30, Vec::new());
     cut.truncated = true;
-    let labels = labels();
+    let (labels, utilization) = (labels(), BTreeMap::new());
     let inputs = |second| SampleInputs {
         now: now(second),
         clk_tck: Some(100),
         gpu_labels: &labels,
+        gpu_utilization: &utilization,
         host_network: [None, None],
     };
     book.observe(&cut, &inputs(30));
@@ -604,6 +667,7 @@ fn a_restored_run_listed_in_cut_tables_keeps_running() {
                 now: now(second),
                 clk_tck: Some(100),
                 gpu_labels: &labels,
+                gpu_utilization: &BTreeMap::new(),
                 host_network: [None, None],
             },
         );
@@ -636,6 +700,7 @@ fn a_probe_ends_a_run_even_when_tables_are_cut() {
             now: now(1),
             clk_tck: Some(100),
             gpu_labels: &labels,
+            gpu_utilization: &BTreeMap::new(),
             host_network: [None, None],
         },
     );

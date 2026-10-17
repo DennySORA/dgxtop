@@ -103,6 +103,22 @@ impl RunScales {
             | RunMetric::Threads
             | RunMetric::Children
             | RunMetric::OpenFiles => None,
+            // One GPU's (D-120): 100 % of it, its own memory.
+            RunMetric::Gpu0Utilization
+            | RunMetric::Gpu1Utilization
+            | RunMetric::Gpu2Utilization
+            | RunMetric::Gpu3Utilization
+            | RunMetric::Gpu0Device
+            | RunMetric::Gpu1Device
+            | RunMetric::Gpu2Device
+            | RunMetric::Gpu3Device => Some(PERCENT_SCALE),
+            RunMetric::Gpu0Memory
+            | RunMetric::Gpu1Memory
+            | RunMetric::Gpu2Memory
+            | RunMetric::Gpu3Memory => {
+                let (slot, _) = metric.gpu_slot()?;
+                self.gpu_memory.get(info.gpus.get(slot)?).copied().flatten()
+            }
         }
     }
 }
@@ -205,12 +221,25 @@ fn utc(utc_ns: i64) -> u64 {
 
 const fn unit_of(metric: RunMetric) -> CanonicalUnit {
     match metric {
-        RunMetric::Cpu | RunMetric::GpuUtilization | RunMetric::ChildrenCpu => {
-            CanonicalUnit::Percent
-        }
-        RunMetric::Memory | RunMetric::GpuMemory | RunMetric::ChildrenMemory | RunMetric::Swap => {
-            CanonicalUnit::Bytes
-        }
+        RunMetric::Cpu
+        | RunMetric::GpuUtilization
+        | RunMetric::ChildrenCpu
+        | RunMetric::Gpu0Utilization
+        | RunMetric::Gpu1Utilization
+        | RunMetric::Gpu2Utilization
+        | RunMetric::Gpu3Utilization
+        | RunMetric::Gpu0Device
+        | RunMetric::Gpu1Device
+        | RunMetric::Gpu2Device
+        | RunMetric::Gpu3Device => CanonicalUnit::Percent,
+        RunMetric::Memory
+        | RunMetric::GpuMemory
+        | RunMetric::ChildrenMemory
+        | RunMetric::Swap
+        | RunMetric::Gpu0Memory
+        | RunMetric::Gpu1Memory
+        | RunMetric::Gpu2Memory
+        | RunMetric::Gpu3Memory => CanonicalUnit::Bytes,
         RunMetric::DiskRead
         | RunMetric::DiskWrite
         | RunMetric::HostNetworkReceive

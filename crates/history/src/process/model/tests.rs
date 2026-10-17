@@ -31,6 +31,7 @@ fn observe(book: &mut ProcessHistoryBook, second: u64, rows: Vec<ProcessRow>) {
             },
             clk_tck: Some(100),
             gpu_labels: &labels,
+            gpu_utilization: &BTreeMap::new(),
             host_network: [Some(10.0), None],
         },
     );

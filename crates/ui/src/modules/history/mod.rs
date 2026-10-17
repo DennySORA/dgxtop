@@ -3,9 +3,11 @@
 //!
 //! - the bar-size row: the bar sizes `←`/`→` (and `w`/`W`) step through
 //!   (D-78), on a host of several GPUs the GPU the GPU panels show, `↑`/`↓`
-//!   (D-107), how much of the charts' span is recorded (history starts with
-//!   dgxtop) and the panels above or below the ones shown, which
-//!   `PgUp`/`PgDn` scroll to;
+//!   (D-107), and how much of the charts' span is recorded (history starts
+//!   with dgxtop);
+//! - while the panels do not all fit, a divider joined to the panel's
+//!   borders (D-116) that says at its right the panels above and below the
+//!   ones shown and the keys scrolling to them, `PgUp`/`PgDn`;
 //! - the panels ([`panels`]) in bands, two side by side on a wide terminal:
 //!   the CPU and the memory, the GPU's utilization and memory, its
 //!   temperature and power, the disk and the network. Each panel is a title
@@ -21,6 +23,7 @@
 mod axis;
 mod layout;
 mod panels;
+mod run_header;
 mod runs;
 mod strip;
 
@@ -34,14 +37,14 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 
 use self::axis::{Tick, clock_ticks, render_axis};
-use self::layout::{HistoryLayout, plan_folded};
+use self::layout::{AXIS_ROWS, BAR_ROWS, HistoryLayout, plan_folded};
 use self::panels::{Panel, Strip, panels, shown_gpu};
-use self::runs::{opened_run_pages, render_runs};
+use self::runs::render_runs;
 use self::strip::{Window, plot_width, render_strip, strip_text, tallest_column};
 use super::ModuleBuildError;
 use super::common::{
-    ManifestSpec, Output, RowCursor, build_manifest, draw_caption, draw_line, fitting_keys, gap,
-    key_spans, message, no_data, panel_with_keys,
+    DividerForm, ManifestSpec, Output, RowCursor, build_manifest, draw_caption, draw_divider,
+    draw_line, fitting_keys, gap, key_spans, message, no_data, panel_with_keys,
 };
 use super::folds::{fold_keys, render_folded};
 use crate::format::{CellTone, clean, counted, display_width, format_span_ns};
@@ -94,16 +97,6 @@ impl DisplayModule for HistoryModule {
             .history
             .as_deref()
             .is_some_and(|history| history_gpus(history).len() > 1);
-        // An opened run's charts on pages name the keys turning them.
-        let run_paged = context.tab > 1
-            && model
-                .modules
-                .process_history
-                .as_deref()
-                .is_some_and(|runs| {
-                    let inner = ratatui::widgets::Block::bordered().inner(area);
-                    opened_run_pages(runs, inner, context) > 1
-                });
         // The runs' filter shows in the list's title (D-113).
         let filter = clean(model.session.filter.trim());
         let list_title = if filter.is_empty() {
@@ -115,7 +108,7 @@ impl DisplayModule for HistoryModule {
             0 if several_gpus => ("Overview History", BAR_SIZE_AND_GPU_KEYS),
             0 => ("Overview History", BAR_SIZE_KEYS),
             1 => (&list_title, PROCESS_LIST_KEYS),
-            _ if run_paged => ("Process History · run", PROCESS_DETAIL_PAGE_KEYS),
+            // The keys turning a run's pages are on its divider (D-116).
             _ => ("Process History · run", PROCESS_DETAIL_KEYS),
         };
         let keys = fitting_keys(area.width, title, keys);
@@ -164,8 +157,9 @@ impl DisplayModule for HistoryModule {
     }
 }
 
-/// The bar-size row, the panels from the band scrolled to, and the axis
-/// (module docs); the GPU panels of `gpu` alone when one is given.
+/// The bar-size row, a divider while the panels scroll, the panels from
+/// the band scrolled to, and the axis (module docs); the GPU panels of
+/// `gpu` alone when one is given.
 fn render_history(
     frame: &mut Frame<'_>,
     inner: Rect,
@@ -185,24 +179,23 @@ fn render_history(
         .iter()
         .map(|panel| saturate_u16(panel.strips.len()))
         .collect();
-    let layout = plan_folded(
-        inner.width,
-        inner.height,
-        (&strips, folded_count),
-        usize::from(context.offset),
-    );
+    let band_rows = inner.height.saturating_sub(BAR_ROWS + AXIS_ROWS);
+    let first = usize::from(context.offset);
+    let mut layout = plan_folded(inner.width, band_rows, (&strips, folded_count), first);
+    // Panels that do not all fit scroll under a divider (D-116), which
+    // takes a row from them.
+    let scrolls = layout.bands_above + layout.bands_below > 0;
+    if scrolls {
+        let band_rows = band_rows.saturating_sub(1);
+        layout = plan_folded(inner.width, band_rows, (&strips, folded_count), first);
+    }
     let mut rows = RowCursor::new(inner);
     if let Some(row) = rows.next_row() {
-        let hidden = Hidden {
-            above: layout.panels_above,
-            below: layout.panels_below,
-            scrolls: true,
-        };
         let picker = GpuPicker {
             gpus: history_gpus(history),
             shown: gpu,
         };
-        render_bar_size_row(frame, row, (history, &picker), hidden, context);
+        render_bar_size_row(frame, row, (history, &picker), context);
         publish_picker(output, (manifest, model), (row, context), &picker);
     }
     output.label(format!(
@@ -230,6 +223,10 @@ fn render_history(
             );
         }
         return;
+    }
+    if scrolls && let Some(row) = rows.next_row() {
+        let forms = scroll_forms(layout.panels_above, layout.panels_below);
+        draw_divider(frame.buffer_mut(), row, &forms, context);
     }
     let window = Window {
         start_ns: history.start_utc_ns,
@@ -467,45 +464,31 @@ fn render_axes(
     }
 }
 
-/// The panels the view could not show: above the ones shown (scrolled
-/// past) and below them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct Hidden {
-    above: usize,
-    below: usize,
-    /// The page scrolls to them (the Overview History, D-107); else they
-    /// wait for a taller terminal (a run's charts).
-    scrolls: bool,
-}
+/// The keys scrolling the Overview History's panels (D-107; `^U`/`^D`
+/// stand in for PgUp/PgDn, D-111), the fullest first.
+const SCROLL_KEYS: [&str; 2] = ["PgUp/PgDn/^U/^D scroll", "^U/^D scroll"];
 
-impl Hidden {
-    /// What did not fit, with the keys reaching it (`^U`/`^D` stand in
-    /// for PgUp/PgDn, D-111), longest first: `PgUp/^U 1 panel above ·
-    /// PgDn/^D 2 panels below`, then `^U 1 · ^D 2 panels`, so both
-    /// directions stay told; or `+2 panels on a taller terminal`.
-    fn notes(self) -> Vec<String> {
-        let panels = |count: usize| counted(count, "panel");
-        match (self.scrolls, self.above, self.below) {
-            (true, 0, 0) | (false, _, 0) => Vec::new(),
-            (true, above, 0) => vec![
-                format!("PgUp/^U {} above", panels(above)),
-                format!("^U {} above", panels(above)),
-            ],
-            (true, 0, below) => vec![
-                format!("PgDn/^D {} below", panels(below)),
-                format!("^D {} below", panels(below)),
-            ],
-            (true, above, below) => vec![
-                format!(
-                    "PgUp/^U {} above · PgDn/^D {} below",
-                    panels(above),
-                    panels(below)
-                ),
-                format!("^U {above} · ^D {}", panels(below)),
-            ],
-            (false, _, below) => vec![format!("+{} on a taller terminal", panels(below))],
-        }
-    }
+/// What the Overview History's divider says while its panels scroll
+/// (D-116): the panels above and below the ones shown, both ways told even
+/// in the short form, with the keys scrolling to them; nothing while every
+/// panel shows.
+fn scroll_forms(above: usize, below: usize) -> Vec<DividerForm> {
+    let panels = |count: usize| counted(count, "panel");
+    let (long, short) = match (above, below) {
+        (0, 0) => return Vec::new(),
+        (above, 0) => (format!("{} above", panels(above)), format!("{above} above")),
+        (0, below) => (format!("{} below", panels(below)), format!("{below} below")),
+        (above, below) => (
+            format!("{} above · {} below", panels(above), panels(below)),
+            format!("{above} above · {below} below"),
+        ),
+    };
+    vec![
+        (long.clone(), SCROLL_KEYS[0]),
+        (long, SCROLL_KEYS[1]),
+        (short.clone(), SCROLL_KEYS[1]),
+        (short, ""),
+    ]
 }
 
 /// The keys acting on the view, at the right of its title (D-70), the
@@ -527,29 +510,21 @@ const PROCESS_LIST_KEYS: &[&str] = &[
     "Space mark · d delete · / filter · Enter open",
     "Space mark · d delete · Enter open",
 ];
-/// The same when the run's charts take several pages (D-112).
-const PROCESS_DETAIL_PAGE_KEYS: &[&str] = &[
-    "PgDn/PgUp/^D/^U page · h/l/←/→ bar · Enter back · j/k/↑/↓ next · e command · y copy · d delete",
-    "^D/^U page · h/l bar · Enter back · j/k next · e command · y copy · d delete",
-    "^D/^U page · h/l bar · Enter back · y copy · d delete",
-    "^D/^U page · Enter back",
-];
+/// An opened run's: the keys turning its pages are on its divider (D-116).
 const PROCESS_DETAIL_KEYS: &[&str] = &[
-    "h/l/←/→ bar · Enter back · j/k/↑/↓ next · e command · y copy · d delete",
-    "h/l bar · Enter back · j/k next · e command · y copy · d delete",
+    "h/l/←/→ bar · Enter back · e command · y copy · d delete",
     "h/l bar · Enter back · e command · y copy · d delete",
     "h/l bar · Enter back · y copy · d delete",
     "Enter back · d delete",
 ];
 
 /// ` 1m  5m  10m … 24h ` with the current size marked, the GPU picker on
-/// a host of several, then at the right what did not fit and how much of
-/// the charts' span is recorded, as much as fits.
+/// a host of several, then at the right how much of the charts' span is
+/// recorded, as much as fits.
 fn render_bar_size_row(
     frame: &mut Frame<'_>,
     row: Rect,
     (history, picker): (&HistoryView, &GpuPicker<'_>),
-    hidden: Hidden,
     context: &DisplayContext,
 ) {
     let theme = &context.theme;
@@ -579,7 +554,7 @@ fn render_bar_size_row(
     }
     let left = Line::from(spans);
     let room = usize::from(row.width).saturating_sub(left.width() + 2 * gap(context).width());
-    let note = bar_notes(hidden, recorded_note(history), why_partly(&history.disk))
+    let note = bar_notes(recorded_note(history), why_partly(&history.disk))
         .into_iter()
         .find(|note| display_width(note) <= room);
     draw_caption(frame.buffer_mut(), row, &left, note.as_deref(), context);
@@ -596,29 +571,12 @@ fn why_partly(disk: &DiskHistory) -> &'static str {
     }
 }
 
-/// The bar-size row's notes in the order tried: each form of what did not
-/// fit (fullest first) with how much of the window is recorded and why,
-/// then with the record alone, then alone.
-fn bar_notes(hidden: Hidden, recorded: Option<String>, why: &str) -> Vec<String> {
-    let why = recorded
-        .as_ref()
-        .map(|recorded| format!("{recorded} · {why}"));
-    let records = [why, recorded, None];
-    let mut forms: Vec<Option<String>> = hidden.notes().into_iter().map(Some).collect();
-    if forms.is_empty() {
-        forms.push(None);
-    }
-    let mut notes: Vec<String> = Vec::new();
-    for form in &forms {
-        for record in &records {
-            let parts: Vec<String> = form.iter().chain(record.iter()).cloned().collect();
-            let note = parts.join(" · ");
-            if !parts.is_empty() && !notes.contains(&note) {
-                notes.push(note);
-            }
-        }
-    }
-    notes
+/// The bar-size row's notes in the order tried: how much of the window is
+/// recorded and why, then the record alone; none while all of it is.
+fn bar_notes(recorded: Option<String>, why: &str) -> Vec<String> {
+    recorded.map_or_else(Vec::new, |recorded| {
+        vec![format!("{recorded} · {why}"), recorded]
+    })
 }
 
 /// `recorded 1h 12m of 6h` while the window is only partly recorded.
@@ -741,11 +699,18 @@ mod tests {
         );
         let gpu = rows
             .iter()
-            .position(|row| row.contains("GPU utilization"))
+            .position(|row| row.contains("│util 0┤"))
             .unwrap();
-        // The whole six-row strip: below 50 % is green only at its foot (D-87).
+        // The whole strip down to the memory's: below 50 % is green only at
+        // its foot (D-87).
+        let foot = gpu
+            + rows[gpu..]
+                .iter()
+                .position(|row| row.contains("│ mem 0┤"))
+                .unwrap()
+            - 1;
         let theme = crate::test_fixtures::display_context().theme;
-        let strip_rows = u16::try_from(gpu + 1).unwrap()..u16::try_from(gpu + 7).unwrap();
+        let strip_rows = u16::try_from(gpu).unwrap()..=u16::try_from(foot).unwrap();
         let colors: Vec<ratatui::style::Color> = strip_rows
             .flat_map(|y| (0..width / 2).map(move |x| (x, y)))
             .map(|cell| buffer[cell].fg)
@@ -818,15 +783,22 @@ mod tests {
 
     /// Renders the opened run's page `offset` at `width` × `height`: its
     /// rows and what the frame published.
-    fn run_page(offset: u16, (width, height): (u16, u16)) -> (Vec<String>, RenderOutput) {
+    fn run_page(offset: u16, size: (u16, u16)) -> (Vec<String>, RenderOutput) {
+        run_page_of(&crate::test_fixtures::process_history_view(), offset, size)
+    }
+
+    /// [`run_page`] of `view`'s opened run.
+    fn run_page_of(
+        view: &dgxtop_core::view::ProcessHistoryView,
+        offset: u16,
+        (width, height): (u16, u16),
+    ) -> (Vec<String>, RenderOutput) {
         let mut context = crate::test_fixtures::display_context();
         context.tab = 2;
         context.offset = offset;
         let mut model =
             crate::test_fixtures::view_model(dgxtop_core::commands::ViewKind::History, 1);
-        model.modules.process_history = Some(std::sync::Arc::new(
-            crate::test_fixtures::process_history_view(),
-        ));
+        model.modules.process_history = Some(std::sync::Arc::new(view.clone()));
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
         let mut output = None;
@@ -848,12 +820,13 @@ mod tests {
     }
 
     /// An opened run whose charts would squeeze their strips past their
-    /// legends shows them on pages (D-112): the first under the run's
-    /// details, the next under its identity line, which says the page and
-    /// what the next holds; the title names the keys and the frame tells
-    /// the controller the pages around. A tall panel keeps one page.
+    /// legends shows them on pages (D-112) under its fixed top (D-116): the
+    /// same header and bar sizes on every page, then a divider joined to
+    /// the panel's borders that says the page, what the next holds and the
+    /// keys turning pages; the frame tells the controller the pages
+    /// around. A tall panel keeps one page under a bare divider.
     #[test]
-    fn a_runs_charts_go_on_pages_with_their_legends() {
+    fn a_runs_charts_go_on_pages_under_its_fixed_top() {
         let count = |output: &RenderOutput, control| {
             output
                 .hit_targets
@@ -861,21 +834,32 @@ mod tests {
                 .filter(|target| target.control_id == control)
                 .count()
         };
-        let (first, output) = run_page(0, (213, 37));
+        // The title, the identity line, four rows of details, the bar
+        // sizes, then the divider.
+        const DIVIDER: usize = 7;
+        let (first, output) = run_page(0, (213, 34));
         let text = first.join("\n");
-        assert!(first[0].contains("^D/^U page"), "{text}");
         assert!(
-            first[1].contains("page 1 of 2 · next: Tasks, Disk, Network"),
+            !first[0].contains("page"),
+            "the divider names the pages: {text}"
+        );
+        assert!(first[DIVIDER - 1].contains(" auto "), "{text}");
+        let divider = &first[DIVIDER];
+        assert!(divider.starts_with('├') && divider.ends_with('┤'), "{text}");
+        assert!(
+            divider.ends_with(
+                "─ page 1 of 2 · next: GPU, Tasks, Disk, Network · host (j/k/↑/↓ page) ┤"
+            ),
             "{text}"
         );
-        assert!(text.contains("folder /home/u/code/ComfyUI"), "{text}");
+        assert!(text.contains("folder   /home/u/code/ComfyUI"), "{text}");
         assert!(
-            text.contains("GPU utilization") && !text.contains("Tasks ─"),
+            text.contains("Memory · 128 GiB ─") && !text.contains("Tasks ─"),
             "{text}"
         );
         assert_eq!(
             text.matches("last ").count(),
-            7,
+            5,
             "every strip shows its last value: {text}"
         );
         assert_eq!(
@@ -885,18 +869,21 @@ mod tests {
             ),
             (0, 1)
         );
-        let (second, output) = run_page(1, (213, 37));
+        let (second, output) = run_page(1, (213, 34));
         let text = second.join("\n");
+        assert_eq!(
+            second[..DIVIDER],
+            first[..DIVIDER],
+            "the top stays put: {text}"
+        );
         assert!(
-            second[1].contains("PID 42") && second[1].contains("page 2 of 2"),
+            second[DIVIDER].ends_with("─ page 2 of 2 (j/k/↑/↓ page) ┤"),
             "{text}"
         );
         assert!(
-            !text.contains("folder "),
-            "the details stay on the first page: {text}"
-        );
-        assert!(
-            text.contains("Tasks ─") && text.contains("Network · host ─"),
+            text.contains("│GPU ─")
+                && text.contains("Tasks ─")
+                && text.contains("Network · host ─"),
             "{text}"
         );
         assert_eq!(
@@ -906,16 +893,171 @@ mod tests {
             ),
             (1, 0)
         );
-        let (past, _) = run_page(9, (213, 37));
+        let (past, _) = run_page(9, (213, 34));
         assert_eq!(past, second, "the last page at most");
         let (tall, output) = run_page(0, (213, 60));
         let text = tall.join("\n");
         assert!(!text.contains("page 1 of"), "{text}");
         assert!(
-            !tall[0].contains("page ·") && !tall[0].contains("^D/^U"),
+            tall[DIVIDER].starts_with("├───") && tall[DIVIDER].ends_with("───┤"),
+            "a bare divider: {text}"
+        );
+        assert!(
+            tall[DIVIDER].trim_matches(['├', '─', '┤']).is_empty(),
             "{text}"
         );
         assert_eq!(count(&output, controls::PAGE_BELOW), 0);
+    }
+
+    /// Two panels a band, a run's panels pair up to the last on every page
+    /// (D-117): no band leaves the right half of the panel empty. At the
+    /// owner's 213×41 (a panel 213×39) they all fit one page.
+    #[test]
+    fn a_runs_panels_pair_up_on_every_page() {
+        let view = crate::test_fixtures::process_history_view();
+        for size in [(213, 39), (213, 37), (213, 30), (213, 60), (160, 37)] {
+            for (index, page) in run_pages_of(&view, size).iter().enumerate() {
+                assert_bands_pair(page, size.0, &format!("{size:?} page {}", index + 1));
+            }
+        }
+        let fitting = run_pages_of(&view, (213, 39));
+        assert_eq!(fitting.len(), 1, "{}", fitting[0].join("\n"));
+    }
+
+    /// A run whose open files dgxtop cannot read, another user's (D-77),
+    /// lets that strip go from its Tasks panel: no chart stands without
+    /// data, and the panels still pair up (D-117).
+    #[test]
+    fn a_run_without_open_files_shows_no_empty_chart() {
+        let mut view = crate::test_fixtures::process_history_view();
+        let detail = view.opened.as_mut().unwrap();
+        let files = detail
+            .charts
+            .iter_mut()
+            .find(|chart| chart.metric == dgxtop_core::process_history::RunMetric::OpenFiles)
+            .unwrap();
+        files.points.clear();
+        (files.latest, files.mean, files.peak) = (None, None, None);
+        for size in [(213, 39), (160, 37), (120, 30)] {
+            for (index, page) in run_pages_of(&view, size).iter().enumerate() {
+                let place = format!("{size:?} page {}", index + 1);
+                let text = page.join("\n");
+                assert!(
+                    !text.contains("last n/a"),
+                    "{place}: an empty chart: {text}"
+                );
+                assert!(!text.contains("files┤"), "{place}: {text}");
+                if size.0 >= 152 {
+                    assert_bands_pair(page, size.0, &place);
+                }
+            }
+        }
+    }
+
+    /// The GPU panel shows each GPU the run used, in the order it first
+    /// used them (D-120): its utilization there, else the GPU's own (`dev`)
+    /// where the driver sampled no process (GB10), then its memory there.
+    /// A run recorded before the GPUs were kept apart shows the sums.
+    #[test]
+    fn a_runs_gpu_panel_shows_each_gpu_it_used() {
+        use dgxtop_core::process_history::{GpuFigure, RunMetric};
+        let mut view = crate::test_fixtures::process_history_view();
+        let detail = view.opened.as_mut().unwrap();
+        detail.info.gpus = vec!["GPU 1".to_owned(), "GPU 0".to_owned()];
+        let recorded = detail
+            .charts
+            .iter()
+            .find(|chart| chart.metric == RunMetric::Gpu0Memory)
+            .unwrap()
+            .points
+            .clone();
+        for chart in &mut detail.charts {
+            match chart.metric.gpu_slot() {
+                Some((1, GpuFigure::Utilization)) => chart.points.clear(),
+                Some((1, _)) => chart.points.clone_from(&recorded),
+                _ => {}
+            }
+        }
+        let text = run_page_of(&view, 0, (213, 60)).0.join("\n");
+        let places: Vec<usize> = ["│util 1┤", "│ mem 1┤", "│ dev 0┤", "│ mem 0┤"]
+            .iter()
+            .map(|label| {
+                text.find(label)
+                    .unwrap_or_else(|| panic!("no {label}: {text}"))
+            })
+            .collect();
+        assert!(places.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
+        assert!(text.contains("│GPU ─"), "{text}");
+        assert!(
+            !text.contains("util 0┤"),
+            "GPU 0 sampled no process: {text}"
+        );
+        let mut older = crate::test_fixtures::process_history_view();
+        for chart in &mut older.opened.as_mut().unwrap().charts {
+            if chart.metric.gpu_slot().is_some() {
+                chart.points.clear();
+            }
+        }
+        let text = run_page_of(&older, 0, (213, 60)).0.join("\n");
+        assert!(text.contains("│GPU · 120 GiB ─"), "{text}");
+        assert!(
+            text.contains("│  util┤") && text.contains("│memory┤"),
+            "{text}"
+        );
+        // A run on more than four GPUs adds the sums over all of them.
+        let mut wide = crate::test_fixtures::process_history_view();
+        let detail = wide.opened.as_mut().unwrap();
+        detail.info.gpus = (0..6).map(|gpu| format!("GPU {gpu}")).collect();
+        for chart in &mut detail.charts {
+            if chart.metric.gpu_slot().is_some() {
+                chart.points.clone_from(&recorded);
+            }
+        }
+        let text = run_page_of(&wide, 0, (213, 90)).0.join("\n");
+        let places: Vec<usize> = ["│ mem 3┤", "│util Σ┤", "│ mem Σ┤"]
+            .iter()
+            .map(|label| {
+                text.find(label)
+                    .unwrap_or_else(|| panic!("no {label}: {text}"))
+            })
+            .collect();
+        assert!(places.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
+    }
+
+    /// Every page of `view`'s opened run at `size`.
+    fn run_pages_of(
+        view: &dgxtop_core::view::ProcessHistoryView,
+        size: (u16, u16),
+    ) -> Vec<Vec<String>> {
+        let below = run_page_of(view, 0, size)
+            .1
+            .hit_targets
+            .iter()
+            .filter(|target| target.control_id == controls::PAGE_BELOW)
+            .count();
+        (0..=below)
+            .map(|page| run_page_of(view, u16::try_from(page).unwrap(), size).0)
+            .collect()
+    }
+
+    /// Panics unless every band of a two-column `page`, `width` wide,
+    /// holds a panel at the right too.
+    fn assert_bands_pair(page: &[String], width: u16, place: &str) {
+        let panel = (width - 2 - dgxtop_core::view::HISTORY_PANEL_GAP) / 2;
+        let right = usize::from(1 + panel + dgxtop_core::view::HISTORY_PANEL_GAP);
+        let text = page.join("\n");
+        let rows: Vec<Vec<char>> = page.iter().map(|row| row.chars().collect()).collect();
+        // A band's title row: a title and its rule at the left.
+        let titles = rows.iter().filter(|row| {
+            let left: String = row[1..right].iter().collect();
+            left.starts_with(char::is_alphanumeric) && left.contains(" ─")
+        });
+        for row in titles {
+            assert!(
+                row[right].is_alphanumeric(),
+                "{place}: a band of one panel: {text}"
+            );
+        }
     }
 
     /// The marked runs carry a mark and the warning color, and their labels
@@ -1008,34 +1150,26 @@ mod tests {
         for (width, keys) in [
             (
                 120,
-                "h/l/←/→ bar · Enter back · j/k/↑/↓ next · e command · y copy · d delete",
+                "h/l/←/→ bar · Enter back · e command · y copy · d delete",
             ),
-            (
-                100,
-                "h/l bar · Enter back · j/k next · e command · y copy · d delete",
-            ),
-            (90, "h/l bar · Enter back · e command · y copy · d delete"),
-            (80, "h/l bar · Enter back · y copy · d delete"),
+            (85, "h/l bar · Enter back · e command · y copy · d delete"),
+            (75, "h/l bar · Enter back · y copy · d delete"),
             (60, "Enter back · d delete"),
         ] {
             let row = title_row(2, width);
             assert!(row.contains(keys), "{width}: {row}");
         }
-        // Its charts on pages: the keys turning them come first (D-112).
+        assert!(!title_row(2, 50).contains("delete"), "no room for any");
+        // Its charts on pages: the divider names the keys turning them, the
+        // title the same keys as on one page; no key switches the run
+        // (D-116).
         let (paged, _) = run_page(0, (213, 37));
         assert!(
-            paged[0].contains(
-                "PgDn/PgUp/^D/^U page · h/l/←/→ bar · Enter back · j/k/↑/↓ next · e command · y copy · d delete"
-            ),
+            paged[0].contains("(h/l/←/→ bar · Enter back · e command · y copy · d delete)"),
             "{}",
             paged[0]
         );
-        let (narrow, _) = run_page(0, (60, 37));
-        assert!(
-            narrow[0].contains("^D/^U page · Enter back"),
-            "{}",
-            narrow[0]
-        );
+        assert!(!paged[0].contains("next") && !paged[0].contains("page"));
     }
 
     /// The Overview History of a host of two GPUs: the bar-size row's
@@ -1073,7 +1207,14 @@ mod tests {
         let text = rows.join("\n");
         assert!(rows[0].contains("↑/↓ GPU"), "{text}");
         assert!(rows[1].contains(" GPU 0 [GPU 1]"), "{text}");
-        assert!(rows[1].contains("^U 1 · ^D 2 panels"), "{text}");
+        assert!(!rows[1].contains("panel"), "{text}");
+        // Its panels scroll: a divider says what is above and below (D-116).
+        assert!(rows[2].starts_with('├') && rows[2].ends_with('┤'), "{text}");
+        assert!(rows[2].contains("─ 1 panel above · "), "{text}");
+        assert!(
+            rows[2].ends_with(" below (PgUp/PgDn/^U/^D scroll) ┤"),
+            "{text}"
+        );
         assert!(!text.contains("CPU utilization"), "scrolled past: {text}");
         let output = output.unwrap();
         let count = |control: &str| {
@@ -1149,29 +1290,24 @@ mod tests {
         let text = detail.join("\n");
         assert!(detail[0].contains("Process History · run"), "{text}");
         assert!(detail[0].contains("y copy"), "{text}");
-        assert!(detail[0].contains("h/l bar"), "{text}");
+        assert!(detail[0].contains("h/l/←/→ bar"), "{text}");
         assert!(
-            text.contains("PID 42 │ ComfyUI/main │ GPU 0 │ SIGKILL by dgxtop"),
+            text.contains("ComfyUI/main │ PID 42 │ uid 1000 │ nice 0 │ GPU 0 │ SIGKILL by dgxtop"),
             "{text}"
         );
-        assert!(text.contains("started 2026-10-04 09:00:00"), "{text}");
-        assert!(text.contains("ended 2026-10-04 09:30:00"), "{text}");
-        assert!(text.contains("ran 30m"), "{text}");
-        assert!(text.contains("folder /home/u/code/ComfyUI"), "{text}");
-        assert!(text.contains("program /venv/bin/python3.12"), "{text}");
-        assert!(
-            text.contains("parent 7 bash │ nice 0 │ cgroup /user.slice/"),
-            "{text}"
-        );
-        let command_rows = detail
-            .iter()
-            .filter(|line| line.contains("--preview"))
-            .count()
-            + detail
-                .iter()
-                .filter(|line| line.trim_start().starts_with("command"))
-                .count();
-        assert!(command_rows >= 1, "{text}");
+        for entry in [
+            "started  2026-10-04 09:00:00",
+            "ended    2026-10-04 09:30:00",
+            "runtime  30m",
+            "parent   7 bash",
+            "folder   /home/u/code/ComfyUI",
+            "program  /venv/bin/python3.12",
+            "cgroup   /user.slice/user-1000.slice/session-3.scope",
+            "command  /venv/bin/python main.py --listen",
+        ] {
+            assert!(text.contains(entry), "missing {entry}: {text}");
+        }
+        assert!(!text.contains("--preview-method"), "one line: {text}");
         // Its charts, page by page (D-112).
         let pages: String = (0..4)
             .map(|offset| run_page(offset, (120, 30)).0.join("\n"))
@@ -1179,8 +1315,7 @@ mod tests {
         for title in [
             "CPU · 20 CPUs",
             "Memory · 128 GiB",
-            "GPU utilization",
-            "GPU memory · 120 GiB",
+            "GPU ─",
             "Tasks",
             "Disk",
             "Network · host",
@@ -1230,42 +1365,26 @@ mod tests {
 
     const SECOND: u64 = 1_000_000_000;
 
-    /// The panels left out, in the longest form first: the Overview
-    /// History says both ways it scrolls even in its short form (D-107); a
-    /// run's charts wait for a taller terminal.
+    /// While the Overview History's panels scroll its divider says what is
+    /// above and below the ones shown, both ways even in its short form,
+    /// with the keys scrolling (D-107, D-116); nothing while all show.
     #[test]
-    fn the_hidden_panels_are_told_both_ways() {
-        let scrolled = |above, below| {
-            Hidden {
-                above,
-                below,
-                scrolls: true,
-            }
-            .notes()
-        };
-        assert!(scrolled(0, 0).is_empty());
+    fn the_scroll_divider_tells_both_ways() {
+        assert!(scroll_forms(0, 0).is_empty());
+        let below = |text: &str, keys| (text.to_owned(), keys);
         assert_eq!(
-            scrolled(0, 1),
-            ["PgDn/^D 1 panel below", "^D 1 panel below"]
-        );
-        assert_eq!(
-            scrolled(2, 0),
-            ["PgUp/^U 2 panels above", "^U 2 panels above"]
-        );
-        assert_eq!(
-            scrolled(1, 2),
+            scroll_forms(0, 1),
             [
-                "PgUp/^U 1 panel above · PgDn/^D 2 panels below",
-                "^U 1 · ^D 2 panels"
+                below("1 panel below", "PgUp/PgDn/^U/^D scroll"),
+                below("1 panel below", "^U/^D scroll"),
+                below("1 below", "^U/^D scroll"),
+                below("1 below", ""),
             ]
         );
-        let waiting = Hidden {
-            above: 0,
-            below: 3,
-            scrolls: false,
-        };
-        assert_eq!(waiting.notes(), ["+3 panels on a taller terminal"]);
-        assert!(Hidden::default().notes().is_empty());
+        assert_eq!(scroll_forms(2, 0)[0].0, "2 panels above");
+        let both = scroll_forms(1, 2);
+        assert_eq!(both[0].0, "1 panel above · 2 panels below");
+        assert_eq!(both[3].0, "1 above · 2 below");
     }
 
     #[test]
@@ -1279,8 +1398,12 @@ mod tests {
         );
         let recorded = Some("recorded 5h 12m of 24h".to_owned());
         assert_eq!(
-            bar_notes(Hidden::default(), recorded, why_partly(&DiskHistory::On))[0],
-            "recorded 5h 12m of 24h · only while dgxtop runs"
+            bar_notes(recorded, why_partly(&DiskHistory::On)),
+            [
+                "recorded 5h 12m of 24h · only while dgxtop runs",
+                "recorded 5h 12m of 24h"
+            ]
         );
+        assert!(bar_notes(None, why_partly(&DiskHistory::On)).is_empty());
     }
 }

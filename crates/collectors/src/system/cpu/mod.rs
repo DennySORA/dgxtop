@@ -58,6 +58,7 @@ static SPEC: CollectorSpec = CollectorSpec {
     id: naming::collectors::CPU,
     accepts,
     retains,
+    leaves: context::leaves_none,
 };
 
 /// Host CPU collector.

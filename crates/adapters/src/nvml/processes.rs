@@ -12,6 +12,14 @@
 //!
 //! The usage kind travels as reason code `gpu_usage:<kind>` so the process
 //! collector can fill `ProcessGpuLink::usage` without a second source.
+//!
+//! A GPU whose two lists were read and name no process gets one record of
+//! `gpu.memory.process_allocated`, 0 bytes (D-119): nothing else tells the
+//! collector that the lists were read and are empty, not unread. A graphics
+//! list the device does not support counts as read and empty (a
+//! compute-only device lists no graphics context). A list that failed gets
+//! a failed record there instead, so the collector drops the last 0 at
+//! once.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,7 +42,9 @@ use super::inventory::Inventory;
 
 /// Associations kept per GPU per cycle (the default `max_process_gpu_links`).
 pub const MAX_PROCESSES_PER_GPU: usize = 1024;
-const COMPUTE_LIST_KEY: &str = "process.compute";
+/// The compute list's query, whose support the process memory's channels
+/// report (D-119).
+pub(super) const COMPUTE_LIST_KEY: &str = "process.compute";
 const GRAPHICS_LIST_KEY: &str = "process.graphics";
 
 /// How a process uses one GPU.
@@ -224,19 +234,42 @@ impl ProcessSampler {
         }
         if compute.is_err() && graphics.is_err() {
             outcome.partial = true;
+            let timing = (started, read.clock.now_boot_ns());
+            // A failure, the compute list's: never 0.
+            let failed = lists_read(&compute, &graphics).map(|()| 0);
+            outcome
+                .records
+                .extend(process_memory_total(read, uuid, failed, timing));
             return;
         }
         let merged = merge_processes(
             compute.as_deref().unwrap_or_default(),
             graphics.as_deref().unwrap_or_default(),
         );
-        outcome.partial |= merged.truncated || compute.is_err() || graphics.is_err();
+        // A graphics list the device does not support leaves the read whole.
+        outcome.partial |= merged.truncated || lists_read(&compute, &graphics).is_err();
         let utilization = self.utilization(backend, uuid, read, &merged);
         if note_fatal(read, uuid, &utilization, outcome) {
             return;
         }
         let finished = read.clock.now_boot_ns();
         let timing = (started, finished);
+        let total = match lists_read(&compute, &graphics) {
+            Ok(()) if merged.associations.is_empty() && merged.invalid_pids == 0 => Some(Ok(0)),
+            // Only PIDs no process key holds: memory held unseen.
+            Ok(()) if merged.associations.is_empty() => Some(Err((
+                "NVML_PROCESS_PID_INVALID".to_owned(),
+                ReadStatus::Error,
+            ))),
+            // The collector sums the processes listed.
+            Ok(()) => None,
+            Err(failure) => Some(Err(failure)),
+        };
+        if let Some(total) = total {
+            outcome
+                .records
+                .extend(process_memory_total(read, uuid, total, timing));
+        }
         for association in &merged.associations {
             outcome.records.extend(association_records(
                 read,
@@ -279,10 +312,14 @@ fn wants_device(read: &ProcessRead<'_>, uuid: &str) -> bool {
     if read.requested_slots.is_empty() {
         return true;
     }
-    [Channel::ProcessMemory, Channel::ProcessUtilization]
-        .into_iter()
-        .filter_map(|channel| read.published.get(uuid, channel))
-        .any(|descriptor| read.requested_slots.contains(&descriptor.slot))
+    [
+        Channel::ProcessMemory,
+        Channel::ProcessUtilization,
+        Channel::ProcessMemoryTotal,
+    ]
+    .into_iter()
+    .filter_map(|channel| read.published.get(uuid, channel))
+    .any(|descriptor| read.requested_slots.contains(&descriptor.slot))
 }
 
 fn list(
@@ -369,6 +406,50 @@ fn association_records(
         records.push(record);
     }
     records
+}
+
+/// Whether both of a GPU's lists were read; a graphics list the device does
+/// not support counts as read and empty. Else the first failure's reason
+/// and status.
+fn lists_read(
+    compute: &BackendResult<Vec<GpuProcessEntry>>,
+    graphics: &BackendResult<Vec<GpuProcessEntry>>,
+) -> Result<(), (String, ReadStatus)> {
+    let failure = |error: &BackendError| (error.reason_code(), error.read_status());
+    if let Err(error) = compute {
+        return Err(failure(error));
+    }
+    match graphics {
+        Ok(_) | Err(BackendError::NotSupported) => Ok(()),
+        Err(error) => Err(failure(error)),
+    }
+}
+
+/// What a GPU's processes hold together, as its lists say it (D-119): 0
+/// bytes when they name none, or why they could not be read.
+fn process_memory_total(
+    read: &ProcessRead<'_>,
+    uuid: &str,
+    value: Result<u64, (String, ReadStatus)>,
+    (started, finished): (u64, u64),
+) -> Option<Observation> {
+    let descriptor = read.published.get(uuid, Channel::ProcessMemoryTotal)?;
+    let key = descriptor.metric.clone()?;
+    Some(match value {
+        Ok(bytes) => RecordFactory::ok(
+            read.plan,
+            descriptor,
+            key,
+            Scalar::from_u64(bytes),
+            Quality::Usable,
+            started,
+            finished,
+            Vec::new(),
+        ),
+        Err((reason, status)) => RecordFactory::failed(
+            read.plan, descriptor, key, status, started, finished, reason,
+        ),
+    })
 }
 
 fn process_record(

@@ -32,6 +32,8 @@ pub const OFFERED_TABS: [Tab; 5] = [
 
 /// Page of the history module the process history opens on (the list).
 pub const PROCESS_LIST_PAGE: u8 = 1;
+/// Page of the history module showing the opened run.
+pub const RUN_PAGE: u8 = 2;
 
 impl Tab {
     pub const fn view(self) -> ViewKind {

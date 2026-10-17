@@ -214,7 +214,8 @@ fn buckets_of(
             let bucket = unpack(start, &packed).ok_or_else(|| DatabaseFailure::Row {
                 operation: "process_history.buckets",
                 detail: format!(
-                    "run {run_id} holds a {tier:?} bucket of {} bytes, not {PACKED_BYTES}",
+                    "run {run_id} holds a {tier:?} bucket of {} bytes, not a whole number of \
+                     metrics up to {PACKED_BYTES}",
                     packed.len()
                 ),
             })?;
@@ -376,10 +377,17 @@ fn cause_of(text: &str, code: Option<i64>) -> Option<EndCause> {
     })
 }
 
-/// Per metric: count, mean and peak, little-endian.
+/// Per metric: count, mean and peak, little-endian, through the last
+/// metric with a sample: a run on one GPU leaves the other GPUs' figures
+/// out (D-120).
 pub(super) fn pack(bucket: &RunBucket) -> Vec<u8> {
-    let mut packed = Vec::with_capacity(PACKED_BYTES);
-    for aggregate in &bucket.values {
+    let used = bucket
+        .values
+        .iter()
+        .rposition(|aggregate| aggregate.count > 0)
+        .map_or(1, |last| last + 1);
+    let mut packed = Vec::with_capacity(used * AGGREGATE_BYTES);
+    for aggregate in &bucket.values[..used] {
         #[allow(clippy::cast_possible_truncation)]
         let mean = aggregate.mean().unwrap_or(0.0) as f32;
         packed.extend(aggregate.count.to_le_bytes());
@@ -389,12 +397,17 @@ pub(super) fn pack(bucket: &RunBucket) -> Vec<u8> {
     packed
 }
 
-/// A stored bucket, every metric in [`RunMetric`] order; `None` for any
-/// other layout (a file of another format is recreated, D-85).
+/// A stored bucket, its metrics in [`RunMetric`] order, those it leaves
+/// out (or a version before them did not know) empty; `None` for any other
+/// layout, more metrics than this version knows among them: the load then
+/// fails with its reason and nothing is deleted (D-120).
 ///
 /// [`RunMetric`]: dgxtop_core::process_history::RunMetric
 pub(super) fn unpack(start_utc_ns: i64, packed: &[u8]) -> Option<RunBucket> {
-    if packed.len() != PACKED_BYTES {
+    if packed.is_empty()
+        || packed.len() > PACKED_BYTES
+        || !packed.len().is_multiple_of(AGGREGATE_BYTES)
+    {
         return None;
     }
     let mut bucket = RunBucket::new(start_utc_ns);

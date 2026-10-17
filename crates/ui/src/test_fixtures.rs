@@ -289,6 +289,7 @@ fn gpu_card(index: u32) -> GpuCard {
         temperature_trend: trend(vec![Some(70.0), Some(71.0)]),
         power_trend: trend(vec![Some(120.0), Some(121.0)]),
         memory_trend: trend(vec![Some(11.0 * GIB), Some(12.3 * GIB)]),
+        recorded_power_peak: None,
     }
 }
 
@@ -943,24 +944,36 @@ pub(crate) fn process_history_view() -> dgxtop_core::view::ProcessHistoryView {
     let charts = RunMetric::ALL
         .iter()
         .map(|metric| {
-            let (unit, scale_max) = match metric {
-                RunMetric::Cpu | RunMetric::ChildrenCpu => (CanonicalUnit::Percent, Some(2_000.0)),
-                RunMetric::GpuUtilization => (CanonicalUnit::Percent, Some(100.0)),
-                RunMetric::Memory | RunMetric::ChildrenMemory | RunMetric::Swap => {
+            use dgxtop_core::process_history::GpuFigure;
+            let (unit, scale_max) = match (metric, metric.gpu_slot()) {
+                (_, Some((_, GpuFigure::Memory))) | (RunMetric::GpuMemory, _) => {
+                    (CanonicalUnit::Bytes, Some(120.0 * GIB))
+                }
+                (_, Some(_)) | (RunMetric::GpuUtilization, _) => {
+                    (CanonicalUnit::Percent, Some(100.0))
+                }
+                (RunMetric::Cpu | RunMetric::ChildrenCpu, _) => {
+                    (CanonicalUnit::Percent, Some(2_000.0))
+                }
+                (RunMetric::Memory | RunMetric::ChildrenMemory | RunMetric::Swap, _) => {
                     (CanonicalUnit::Bytes, Some(128.0 * GIB))
                 }
-                RunMetric::GpuMemory => (CanonicalUnit::Bytes, Some(120.0 * GIB)),
-                RunMetric::Threads | RunMetric::Children | RunMetric::OpenFiles => {
+                (RunMetric::Threads | RunMetric::Children | RunMetric::OpenFiles, _) => {
                     (CanonicalUnit::Count, None)
                 }
                 _ => (CanonicalUnit::BytesPerSecond, None),
             };
+            // Figures of the GPUs it used only (D-120).
+            let used = metric
+                .gpu_slot()
+                .is_none_or(|(slot, _)| slot < killed.gpus.len());
             let top = scale_max.unwrap_or(29.0);
             RunChartView {
                 metric: *metric,
                 unit,
                 scale_max,
                 points: (0..30)
+                    .filter(|_| used)
                     .map(|minute| {
                         point(
                             minute,

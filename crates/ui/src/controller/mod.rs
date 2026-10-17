@@ -50,7 +50,9 @@ use paging::PageStep;
 use requests::{PendingRequests, RequestKind};
 use session::SessionDrafts;
 
-use crate::modules::{CPU_MODULE_ID, GPU_MODULE_ID, HISTORY_MODULE_ID, MEMORY_MODULE_ID};
+use crate::modules::{
+    CPU_MODULE_ID, GPU_MODULE_ID, HISTORY_MODULE_ID, MEMORY_MODULE_ID, PROCESSES_MODULE_ID,
+};
 use crate::registry::controls;
 pub use crate::viewer::UiState;
 use crate::viewer::{HitMap, ModeView};
@@ -368,6 +370,21 @@ impl Controller {
         sink: &S,
     ) {
         let view = current_view(context);
+        // A key of one of the Overview's other panels shows them again
+        // first, so it never acts on a panel out of sight (D-121).
+        if view == ViewKind::Overview
+            && matches!(
+                action,
+                KeyAction::ToggleCpuDetail
+                    | KeyAction::ScrollMemoryUp
+                    | KeyAction::ScrollMemoryDown
+                    | KeyAction::Fold(_)
+                    | KeyAction::UnfoldAll
+            )
+            && self.unzoom_processes()
+        {
+            self.bump();
+        }
         match action {
             KeyAction::Quit => {
                 self.quit = true;
@@ -377,8 +394,16 @@ impl Controller {
             KeyAction::CloseHelp => self.set_mode(InputMode::Normal),
             KeyAction::DismissNotices => {
                 let dismissed = self.notices.clear();
-                if self.clear_marks() || dismissed {
+                let unmarked = self.clear_marks();
+                // With nothing else to dismiss, `Esc` brings the
+                // Overview's panels back (D-121).
+                if dismissed || unmarked || self.unzoom_processes() {
                     self.bump();
+                }
+            }
+            KeyAction::ZoomProcesses => {
+                if let Ok(processes) = ModuleId::new(PROCESSES_MODULE_ID) {
+                    self.toggle_expanded(processes);
                 }
             }
             KeyAction::MoveDown
@@ -464,12 +489,21 @@ impl Controller {
                 self.navigate_history_gpu(movement, context);
             }
             KeyAction::HistoryFirst | KeyAction::HistoryLast if self.history_page() == 0 => {
-                let step = if action == KeyAction::HistoryFirst {
-                    PageStep::First
-                } else {
-                    PageStep::Last
-                };
-                self.scroll_page(HISTORY_MODULE_ID, step, context);
+                if let Some(step) = PageStep::of_history_key(action) {
+                    self.scroll_page(HISTORY_MODULE_ID, step, context);
+                }
+            }
+            // An opened run: ↑/↓ turn its charts' pages and g/G go to the
+            // first and the last; it never switches to another run (D-116).
+            KeyAction::HistoryDown
+            | KeyAction::HistoryUp
+            | KeyAction::HistoryFirst
+            | KeyAction::HistoryLast
+                if self.history_page() == views::RUN_PAGE =>
+            {
+                if let Some(step) = PageStep::of_history_key(action) {
+                    self.scroll_page(HISTORY_MODULE_ID, step, context);
+                }
             }
             KeyAction::HistoryDown
             | KeyAction::HistoryUp
@@ -482,7 +516,7 @@ impl Controller {
             KeyAction::HistoryMarkAll => self.toggle_mark_all(context),
             KeyAction::HistoryDelete => self.ask_delete(context),
             KeyAction::HistoryExpandCommand => {
-                if self.history_page() == 2
+                if self.history_page() == views::RUN_PAGE
                     && let Ok(history) = ModuleId::new(HISTORY_MODULE_ID)
                 {
                     self.toggle_expanded(history);
@@ -550,6 +584,10 @@ impl Controller {
     /// Shows `tab`: its view and, for a history tab, its page (D-75); the
     /// process history keeps an open process open.
     fn show_tab(&mut self, tab: views::Tab, context: &ControllerContext<'_>) {
+        // The processes shown alone are for a moment on the Overview (D-121).
+        if tab.view() != ViewKind::Overview {
+            self.unzoom_processes();
+        }
         let page = self.history_page();
         match tab {
             views::Tab::OverviewHistory => self.set_history_page(0),
@@ -613,7 +651,7 @@ impl Controller {
             }
             ViewKind::Settings => self.navigate_modules(movement, context),
             // PgUp/PgDn scroll the Overview History's bands (D-107) and
-            // turn an opened run's pages (D-112).
+            // turn an opened run's pages (D-112, D-116).
             ViewKind::History if self.history_page() != views::PROCESS_LIST_PAGE => {
                 self.scroll_page(HISTORY_MODULE_ID, PageStep::of(movement), context);
             }
@@ -718,7 +756,7 @@ impl Controller {
     /// an opened run the Process History's (D-77, D-78), each its own
     /// session field (D-80).
     fn cycle_history_bar_size(&mut self, forward: bool, context: &ControllerContext<'_>) {
-        let on_run = self.history_page() == 2;
+        let on_run = self.history_page() == views::RUN_PAGE;
         self.update_fields(context, |fields| {
             if on_run {
                 fields.process_bar = fields.process_bar.step(forward);
@@ -874,9 +912,11 @@ impl Controller {
         }
     }
 
-    /// The process history (D-72, D-75, D-76): `j`/`k` move the cursor over
-    /// the runs and Enter opens or closes the run under it. The run under
-    /// the cursor is the session's selection, so the Manager details it.
+    /// The process history (D-72, D-75, D-76): on the list `j`/`k` move the
+    /// cursor over the runs and `g`/`G` to the top and the end (D-108);
+    /// Enter opens or closes the run under it. The run under the cursor is
+    /// the session's selection, so the Manager details it. An opened run's
+    /// `j`/`k` and `g`/`G` turn its pages instead (D-116).
     fn navigate_history(&mut self, action: KeyAction, context: &ControllerContext<'_>) {
         let Ok(history) = ModuleId::new(HISTORY_MODULE_ID) else {
             return;
@@ -904,20 +944,17 @@ impl Controller {
             .map_or(scroll.min(last), saturate_u16);
         let moved = match action {
             KeyAction::HistoryOpen => {
-                self.set_history_page(if tab == 1 { 2 } else { 1 });
+                self.set_history_page(if tab == views::PROCESS_LIST_PAGE {
+                    views::RUN_PAGE
+                } else {
+                    views::PROCESS_LIST_PAGE
+                });
                 cursor
             }
             KeyAction::HistoryDown => cursor.saturating_add(1).min(last),
             KeyAction::HistoryUp => cursor.saturating_sub(1),
-            // The top or the end of the list, from an opened run too.
-            KeyAction::HistoryFirst | KeyAction::HistoryLast => {
-                self.set_history_page(views::PROCESS_LIST_PAGE);
-                if action == KeyAction::HistoryFirst {
-                    0
-                } else {
-                    last
-                }
-            }
+            KeyAction::HistoryFirst => 0,
+            KeyAction::HistoryLast => last,
             _ => return,
         };
         if moved != cursor {
@@ -933,7 +970,7 @@ impl Controller {
 
     /// Queues the opened run's command line for the clipboard (D-76).
     fn copy_command(&mut self, context: &ControllerContext<'_>) {
-        if self.history_page() != 2 {
+        if self.history_page() != views::RUN_PAGE {
             return;
         }
         let command = context
@@ -1025,6 +1062,12 @@ impl Controller {
             }
             _ => {}
         }
+    }
+
+    /// Brings the Overview's other panels back; whether the processes were
+    /// shown alone (D-121).
+    fn unzoom_processes(&mut self) -> bool {
+        ModuleId::new(PROCESSES_MODULE_ID).is_ok_and(|processes| self.expanded.remove(&processes))
     }
 
     /// Expands a collapsed module or collapses an expanded one. A pure
@@ -1467,6 +1510,11 @@ impl Controller {
     /// toward an off-window target with the best known row.
     pub fn on_projection(&mut self, model: &ViewModel, context: &ControllerContext<'_>) {
         self.drafts.on_projection(model);
+        // However the view changed, the processes shown alone were the
+        // Overview's moment (D-121).
+        if model.session.view != ViewKind::Overview && self.unzoom_processes() {
+            self.bump();
+        }
         let shown = self.folds.shown().clone();
         self.folds.adopt(&model.folded);
         if *self.folds.shown() != shown {

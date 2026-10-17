@@ -571,6 +571,114 @@ pub(crate) fn draw_caption(
     );
 }
 
+/// What a divider says at its right end (D-116): a note and the keys acting
+/// on the part under it.
+pub(crate) type DividerForm = (String, &'static str);
+
+/// The keys turning a module's pages (D-110, D-116), the fullest first.
+pub(crate) const PAGE_KEYS: [&str; 2] = ["j/k/↑/↓ page", "j/k page"];
+
+/// Columns of rule a divider keeps left of its note.
+const DIVIDER_LEAD: usize = 4;
+
+/// The divider over pages (D-116): `page 1 of 3 · next: PCIe, Thermal`,
+/// then the next page's count of `noun`s, then the place alone, each with
+/// the keys turning pages, then shorter keys and `1/3`; nothing on one
+/// page. `next` names what the next page holds.
+pub(crate) fn page_divider_forms(
+    (page, count): (usize, usize),
+    next: &[String],
+    noun: &str,
+) -> Vec<DividerForm> {
+    if count < 2 {
+        return Vec::new();
+    }
+    let place = format!("page {} of {count}", page + 1);
+    let mut forms = Vec::new();
+    if !next.is_empty() {
+        forms.push((format!("{place} · next: {}", next.join(", ")), PAGE_KEYS[0]));
+        forms.push((
+            format!(
+                "{place} · next: {}",
+                crate::format::counted(next.len(), noun)
+            ),
+            PAGE_KEYS[0],
+        ));
+    }
+    let short = format!("{}/{count}", page + 1);
+    forms.extend([
+        (place.clone(), PAGE_KEYS[0]),
+        (place, PAGE_KEYS[1]),
+        (short.clone(), PAGE_KEYS[1]),
+        (short, ""),
+    ]);
+    forms
+}
+
+/// `──── page 1 of 2 · next: PCIe (j/k page) `: a divider's line `width`
+/// wide, ending in the first of `forms` that fits after a few columns of
+/// rule, as a panel's title row ends in its keys; a bare rule when none
+/// does.
+pub(crate) fn divider_line(
+    width: u16,
+    forms: &[DividerForm],
+    context: &DisplayContext,
+) -> Line<'static> {
+    let width = usize::from(width);
+    let spans_width = |spans: &[Span<'static>]| spans.iter().map(Span::width).sum::<usize>();
+    let tail = forms
+        .iter()
+        .map(|(note, keys)| divider_tail(note, keys, context))
+        .find(|tail| spans_width(tail) + DIVIDER_LEAD <= width)
+        .unwrap_or_default();
+    let rule = width.saturating_sub(spans_width(&tail));
+    let mut spans = vec![Span::styled(
+        "─".repeat(rule),
+        context.theme.border_style(false),
+    )];
+    spans.extend(tail);
+    Line::from(spans)
+}
+
+/// ` page 1 of 2 (j/k page) `: the note, then the keys as [`key_spans`]
+/// writes them.
+fn divider_tail(note: &str, keys: &str, context: &DisplayContext) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    if !note.is_empty() {
+        spans.push(Span::styled(
+            format!(" {note}"),
+            context.theme.label_style(),
+        ));
+    }
+    if !keys.is_empty() {
+        spans.extend(key_spans(keys, context));
+    } else if !spans.is_empty() {
+        spans.push(Span::raw(" "));
+    }
+    spans
+}
+
+/// [`divider_line`] across `row`, a row inside a bordered panel, joined to
+/// the panel's side borders: `├` and `┤` take the place of their `│`, so
+/// the divider parts the panel's fixed top from its pages (D-116).
+pub(crate) fn draw_divider(
+    buffer: &mut Buffer,
+    row: Rect,
+    forms: &[DividerForm],
+    context: &DisplayContext,
+) {
+    if row.is_empty() {
+        return;
+    }
+    draw_line(buffer, row, &divider_line(row.width, forms, context));
+    let style = context.theme.border_style(false);
+    for (x, joint) in [(row.x.checked_sub(1), "├"), (Some(row.right()), "┤")] {
+        if let Some(cell) = x.and_then(|x| buffer.cell_mut((x, row.y))) {
+            cell.set_symbol(joint).set_style(style);
+        }
+    }
+}
+
 /// A context for measuring text in the sizing hooks, which get none: the
 /// projection is taken as fresh.
 pub(crate) fn measuring_context(model: &ViewModel, slot: Slot) -> DisplayContext {
@@ -1248,6 +1356,51 @@ mod tests {
                 (" kill", text),
                 (") ", muted),
             ]
+        );
+    }
+
+    /// A divider (D-116) ends in the fullest note and keys that fit after
+    /// a few columns of rule, the next page's titles giving way first,
+    /// then the keys' arrows, then the words; with nothing to say it is a
+    /// bare rule. Drawn in a bordered panel it joins the side borders.
+    #[test]
+    fn a_divider_ends_in_the_fullest_note_that_fits() {
+        let context = display_context();
+        let next = ["Tasks".to_owned(), "Disk".to_owned()];
+        let forms = page_divider_forms((0, 2), &next, "panel");
+        let text = |width: u16, forms: &[DividerForm]| -> String {
+            divider_line(width, forms, &context)
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        };
+        let full = text(60, &forms);
+        assert_eq!(full.chars().count(), 60);
+        assert!(
+            full.ends_with("─ page 1 of 2 · next: Tasks, Disk (j/k/↑/↓ page) "),
+            "{full}"
+        );
+        assert!(full.starts_with("────"), "{full}");
+        assert!(text(50, &forms).ends_with("─ page 1 of 2 · next: 2 panels (j/k/↑/↓ page) "));
+        assert!(text(32, &forms).ends_with("─ page 1 of 2 (j/k/↑/↓ page) "));
+        assert!(text(30, &forms).ends_with("─ page 1 of 2 (j/k page) "));
+        assert!(text(22, &forms).ends_with("─ 1/2 (j/k page) "));
+        assert!(text(9, &forms).ends_with("─ 1/2 "));
+        assert_eq!(text(5, &forms), "─────", "no room for any note");
+        let last = page_divider_forms((1, 2), &[], "panel");
+        assert!(text(60, &last).ends_with("─ page 2 of 2 (j/k/↑/↓ page) "));
+        assert!(page_divider_forms((0, 1), &next, "panel").is_empty());
+        assert_eq!(text(8, &[]), "────────");
+        // In a bordered panel the divider replaces the borders' `│`.
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 12, 3));
+        let inner = Rect::new(1, 1, 10, 1);
+        draw_divider(&mut buffer, inner, &[], &context);
+        let row: String = (0..12).map(|x| buffer[(x, 1)].symbol()).collect();
+        assert_eq!(row, "├──────────┤");
+        assert_eq!(
+            buffer[(0, 1)].fg,
+            context.theme.border_style(false).fg.unwrap()
         );
     }
 

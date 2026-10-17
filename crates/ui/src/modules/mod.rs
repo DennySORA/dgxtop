@@ -26,7 +26,7 @@ pub(crate) use history::history_gpus;
 pub use memory::MEMORY_MODULE_ID;
 pub use memory::MemoryModule;
 pub use network::NetworkModule;
-pub use processes::ProcessesModule;
+pub use processes::{PROCESSES_MODULE_ID, ProcessesModule};
 pub use settings::SettingsModule;
 
 use crate::registry::{DisplayModule, ManifestError};

@@ -1033,6 +1033,77 @@ fn two_gpus_with_the_same_pid_are_two_associations() {
     );
 }
 
+/// A GPU whose process lists are both read and name no process says its
+/// processes hold nothing (D-119): one 0-byte reading of the GPU's process
+/// memory; a graphics list the device does not support counts as empty. A
+/// GPU listing a process gets none (the collector sums what the lists
+/// name), and one whose list failed a failed reading, never 0.
+#[test]
+fn an_empty_process_list_reads_as_no_process_memory() {
+    let idle = FakeDevice::healthy("GPU-idle");
+    let mut compute_only = FakeDevice::healthy("GPU-compute");
+    compute_only.graphics = Err(BackendError::NotSupported);
+    let mut busy = FakeDevice::healthy("GPU-busy");
+    busy.compute = Ok(vec![GpuProcessEntry {
+        pid: 7,
+        used_memory_bytes: Some(1 << 20),
+    }]);
+    let mut failed = FakeDevice::healthy("GPU-failed");
+    failed.graphics = Err(BackendError::Other("NVML_ERROR_UNKNOWN".to_owned()));
+    // Only a PID no process key can hold: something holds memory unseen.
+    let mut unkeyable = FakeDevice::healthy("GPU-unkeyable");
+    unkeyable.compute = Ok(vec![GpuProcessEntry {
+        pid: 0,
+        used_memory_bytes: Some(1 << 20),
+    }]);
+    let mut harness = Harness::new(vec![idle, compute_only, busy, failed, unkeyable]);
+    harness.discover();
+    let batch = harness.read("process");
+    let held = |gpu: &str| -> Vec<&Observation> {
+        batch
+            .records
+            .iter()
+            .filter(|record| {
+                record.key.entity_id.as_str() == gpu
+                    && record.key.metric_id.as_str() == ids::GPU_MEMORY_PROCESS_ALLOCATED
+            })
+            .collect()
+    };
+    let idle = held("gpu:GPU-idle");
+    assert_eq!(idle.len(), 1, "{:?}", batch.records);
+    assert_eq!(idle[0].value.unwrap().as_u64(), Some(0));
+    assert!(idle[0].read_status.is_ok());
+    assert_eq!(idle[0].key.scope.as_str(), "gpu");
+    assert_eq!(idle[0].native_unit.as_str(), native::BYTES);
+    assert_eq!(
+        idle[0].provenance.source_id.as_str(),
+        "nvml:GPU-idle:memory.process_allocated"
+    );
+    let compute_only = held("gpu:GPU-compute");
+    assert_eq!(compute_only.len(), 1);
+    assert_eq!(compute_only[0].value.unwrap().as_u64(), Some(0));
+    assert!(held("gpu:GPU-busy").is_empty());
+    for gpu in ["gpu:GPU-failed", "gpu:GPU-unkeyable"] {
+        let failed = held(gpu);
+        assert_eq!(failed.len(), 1, "{gpu}: {:?}", batch.records);
+        assert!(!failed[0].read_status.is_ok(), "{gpu}");
+        assert_eq!(failed[0].value, None, "{gpu}");
+    }
+    assert_never_zero_substitute(&batch.records);
+    // The lists' support is the reading's, as the catalog says it.
+    let delta = harness.discover();
+    assert_eq!(
+        capability(&delta, "gpu:GPU-idle", ids::GPU_MEMORY_PROCESS_ALLOCATED).support,
+        Support::Supported
+    );
+    // A graphics list the device does not support leaves the read whole.
+    let mut alone = FakeDevice::healthy("GPU-compute");
+    alone.graphics = Err(BackendError::NotSupported);
+    let mut harness = Harness::new(vec![alone]);
+    harness.discover();
+    assert_eq!(harness.read("process").status, BatchStatus::Ok);
+}
+
 #[test]
 fn compute_and_graphics_of_one_pid_are_one_association() {
     let mut device = FakeDevice::healthy("GPU-a");

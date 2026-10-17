@@ -22,6 +22,9 @@ const LOOPBACK_NAME: &str = "lo";
 pub(super) struct TableContext {
     pub(super) clk_tck: Option<u64>,
     pub(super) gpu_labels: BTreeMap<EntityId, String>,
+    /// Each of those GPUs' own utilization while it holds a current value
+    /// (D-120).
+    pub(super) gpu_utilization: BTreeMap<EntityId, f64>,
     /// Received and sent, bytes per second; `None` where no interface
     /// reports.
     pub(super) host_network: [Option<f64>; 2],
@@ -29,9 +32,11 @@ pub(super) struct TableContext {
 
 impl TableContext {
     pub(super) fn of(sample: &ProcessTableSample) -> Self {
+        let gpu_labels = gpu_labels(sample.table(), &sample.catalog);
         Self {
             clk_tck: sample.catalog.clk_tck(),
-            gpu_labels: gpu_labels(sample.table(), &sample.catalog),
+            gpu_utilization: gpu_utilization(&sample.snapshot, gpu_labels.keys()),
+            gpu_labels,
             host_network: [ids::NET_RX_BPS, ids::NET_TX_BPS]
                 .map(|metric| host_total(&sample.snapshot, &sample.catalog, metric)),
         }
@@ -48,6 +53,29 @@ fn gpu_labels(table: &ProcessTable, catalog: &CatalogSnapshot) -> BTreeMap<Entit
         .into_iter()
         .map(|gpu| (gpu.clone(), catalog.gpu_label(gpu)))
         .collect()
+}
+
+/// The compute utilization of each of `gpus` that holds a current value.
+fn gpu_utilization<'g>(
+    snapshot: &ImmutableSnapshot,
+    gpus: impl Iterator<Item = &'g EntityId>,
+) -> BTreeMap<EntityId, f64> {
+    let wanted: BTreeSet<&EntityId> = gpus.collect();
+    let mut utilization = BTreeMap::new();
+    for domain in snapshot.domains.values() {
+        for (key, entry) in &domain.samples {
+            if key.metric_id.as_str() != ids::GPU_UTILIZATION_COMPUTE
+                || key.scope.as_str() != entity::SCOPE_GPU
+                || !wanted.contains(&key.entity_id)
+            {
+                continue;
+            }
+            if let Some(value) = current_value(entry, snapshot.committed_boot_ns) {
+                utilization.insert(key.entity_id.clone(), value);
+            }
+        }
+    }
+    utilization
 }
 
 /// `metric` summed over the host's interfaces other than the loopback that
@@ -155,6 +183,14 @@ mod tests {
                 rate("netif:ns:3", ids::NET_RX_BPS, Some(24.0)),
                 rate("netif:ns:2", ids::NET_TX_BPS, Some(500.0)),
                 rate("netif:ns:3", ids::NET_TX_BPS, None),
+                (
+                    "gpu",
+                    snapshot_entry(
+                        &metric_key("gpu:GPU-aaaa1111", ids::GPU_UTILIZATION_COMPUTE, "gpu"),
+                        Some(87.0),
+                        NOW,
+                    ),
+                ),
             ],
         );
         snapshot.committed_boot_ns = NOW;
@@ -192,6 +228,28 @@ mod tests {
         let bare = TableContext::of(&without);
         assert_eq!(bare.clk_tck, None, "never defaulted");
         assert!(bare.gpu_labels.is_empty());
+    }
+
+    /// Each GPU a process uses gives its own utilization now (D-120); a GPU
+    /// without a value, or no process's, gives none.
+    #[test]
+    fn the_gpus_in_use_give_their_own_utilization() {
+        let context = TableContext::of(&sample(vec![
+            gpu_process(10, "train", &[("gpu:GPU-aaaa1111", Some(1))]),
+            gpu_process(11, "render", &[("gpu:GPU-cccc3333-x", None)]),
+        ]));
+        let utilization: Vec<(&str, f64)> = context
+            .gpu_utilization
+            .iter()
+            .map(|(gpu, value)| (gpu.as_str(), *value))
+            .collect();
+        assert_eq!(utilization, vec![("gpu:GPU-aaaa1111", 87.0)]);
+        assert!(
+            TableContext::of(&sample(Vec::new()))
+                .gpu_utilization
+                .is_empty(),
+            "no process uses it"
+        );
     }
 
     /// The host's traffic is the sum over its interfaces but the loopback;
