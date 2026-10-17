@@ -15,7 +15,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2.3.0"
+version = "2.4.0"
 edition = "2024"
 rust-version = "1.92"
 license = "Apache-2.0"
@@ -25,16 +25,16 @@ repository = "https://github.com/DennySORA/dgxtop"
 # Workspace crates. Only the `dgxtop` composition root may depend on more than
 # `dgxtop-core` (and the pure `dgxtop-compression`, D-79);
 # scripts/check_boundaries.py enforces this.
-dgxtop-core = { path = "crates/core", version = "2.3.0" }
-dgxtop-runtime = { path = "crates/runtime", version = "2.3.0" }
-dgxtop-adapters = { path = "crates/adapters", version = "2.3.0" }
-dgxtop-collectors = { path = "crates/collectors", version = "2.3.0" }
-dgxtop-state = { path = "crates/state", version = "2.3.0" }
-dgxtop-history = { path = "crates/history", version = "2.3.0" }
-dgxtop-compression = { path = "crates/compression", version = "2.3.0" }
-dgxtop-store = { path = "crates/store", version = "2.3.0" }
-dgxtop-manager = { path = "crates/manager", version = "2.3.0" }
-dgxtop-ui = { path = "crates/ui", version = "2.3.0" }
+dgxtop-core = { path = "crates/core", version = "2.4.0" }
+dgxtop-runtime = { path = "crates/runtime", version = "2.4.0" }
+dgxtop-adapters = { path = "crates/adapters", version = "2.4.0" }
+dgxtop-collectors = { path = "crates/collectors", version = "2.4.0" }
+dgxtop-state = { path = "crates/state", version = "2.4.0" }
+dgxtop-history = { path = "crates/history", version = "2.4.0" }
+dgxtop-compression = { path = "crates/compression", version = "2.4.0" }
+dgxtop-store = { path = "crates/store", version = "2.4.0" }
+dgxtop-manager = { path = "crates/manager", version = "2.4.0" }
+dgxtop-ui = { path = "crates/ui", version = "2.4.0" }
 
 # DTO / serialization (allowed in core).
 serde = { version = "1.0.229", features = ["derive", "rc"] }

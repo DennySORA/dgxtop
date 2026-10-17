@@ -28,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | 
 
 x86_64 または aarch64 の Linux で、glibc 2.34 以降（Ubuntu 22.04、Debian 12、RHEL 9 以降）。DGX Spark も含みます。WSL 2 では Linux 版が動きます。GPU の値には NVIDIA ドライバーが必要で、ない場合も CPU、メモリ、ディスク、ネットワークは表示します。WSL 1、musl、macOS、Windows には対応していません。
 
-インストーラーは CPU に合ったビルドを選び、リリースの `SHA256SUMS` で検証してから `~/.local/bin` にインストールします。以前のバージョンは残り、`./install.sh --rollback` で戻せます。特定のリリースを入れるには、`bash` の後ろに `-s -- --version v2.3.0` を付けます。
+インストーラーは CPU に合ったビルドを選び、リリースの `SHA256SUMS` で検証してから `~/.local/bin` にインストールします。以前のバージョンは残り、`./install.sh --rollback` で戻せます。特定のリリースを入れるには、`bash` の後ろに `-s -- --version v2.4.0` を付けます。
 
 Rust 1.92.0（`rust-toolchain.toml` で固定）を使ってソースからビルドすることもできます：
 
