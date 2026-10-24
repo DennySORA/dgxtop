@@ -89,6 +89,7 @@ pub fn manager_setup(
         boot_id: identity.boot_id.clone(),
         pid_namespace: identity.pid_namespace.clone(),
         euid: TEST_EUID,
+        sudo_uid: None,
         self_pid: super::probes::own_pid(),
         adapters,
         facts: HostFacts {

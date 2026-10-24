@@ -36,7 +36,7 @@ use crate::overload::OverloadController;
 use crate::pacing::FramePacing;
 use crate::policy::QualityPolicyService;
 use crate::presentation::HostFacts;
-use crate::process::{ActionIdentity, Now, ProcessPorts, ProcessService};
+use crate::process::{ActionIdentity, Now, ProcessPorts, ProcessService, acting_uid};
 use crate::process_link::ProcessHistoryLink;
 use crate::projection::PresentationService;
 use crate::results::ResultCache;
@@ -169,7 +169,8 @@ impl ControlCore {
                 host_id: setup.host_id.clone(),
                 boot_id: setup.boot_id.clone(),
                 pid_namespace: setup.pid_namespace.clone(),
-                euid: setup.euid,
+                acting_uid: acting_uid(setup.euid, setup.sudo_uid),
+                any_user: setup.facts.any_user,
                 self_pid: setup.self_pid,
             },
             &effective,

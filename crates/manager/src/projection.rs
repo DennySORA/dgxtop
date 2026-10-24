@@ -144,6 +144,7 @@ mod tests {
                 hosts_healthy: 0,
                 hosts_total: 0,
                 read_only: false,
+                any_user: false,
                 theme: Theme::Dark,
                 total_power: dgxtop_core::view::MetricCell::missing(
                     dgxtop_core::metric::CanonicalUnit::Watts,

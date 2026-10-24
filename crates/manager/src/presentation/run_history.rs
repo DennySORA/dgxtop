@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 
 use dgxtop_core::commands::ViewKind;
+use dgxtop_core::identity::ProcessKey;
 use dgxtop_core::metric::CanonicalUnit;
 use dgxtop_core::process_history::{RunBucket, RunInfo, RunMetric};
 use dgxtop_core::process_model::{ProcessHistoryModel, RunBars, RunDetail, RunRequest, RunRow};
@@ -145,7 +146,7 @@ pub(crate) fn build_process_history_view(inputs: &RunHistoryInputs<'_>) -> Proce
     let kept: Vec<&RunRow> = model
         .runs
         .iter()
-        .filter(|row| needle.matches(&row.name) || needle.matches(&row.key.pid.to_string()))
+        .filter(|row| is_kept(&needle, row))
         .collect();
     let more = kept.len().saturating_sub(MAX_RUN_ROWS);
     ProcessHistoryView {
@@ -164,6 +165,24 @@ pub(crate) fn build_process_history_view(inputs: &RunHistoryInputs<'_>) -> Proce
         bar: inputs.bar,
         cpu_scale: inputs.scales.cpu,
     }
+}
+
+/// Every ended run `filter` keeps in the whole run list (D-128), not only
+/// the newest a projection carries: what deleting every run deletes.
+pub(crate) fn ended_runs_kept(model: &ProcessHistoryModel, filter: &str) -> Vec<ProcessKey> {
+    let needle = TextNeedle::new(filter);
+    model
+        .runs
+        .iter()
+        .filter(|row| row.end.is_some() && is_kept(&needle, row))
+        .map(|row| row.key.clone())
+        .collect()
+}
+
+/// Whether the session's filter keeps a run (D-113): its name or PID
+/// holds it.
+fn is_kept(needle: &TextNeedle, row: &RunRow) -> bool {
+    needle.matches(&row.name) || needle.matches(&row.key.pid.to_string())
 }
 
 fn row_view(

@@ -294,6 +294,7 @@ pub(crate) fn harness_setup(options: &HarnessOptions) -> ManagerSetup {
         boot_id: boot_id("fake-boot"),
         pid_namespace: PidNamespace::new("pid:[4026531836]").unwrap(),
         euid: options.euid,
+        sudo_uid: None,
         self_pid: HARNESS_SELF_PID,
         adapters: options.adapters.clone(),
         facts: HostFacts {

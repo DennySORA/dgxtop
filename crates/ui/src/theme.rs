@@ -16,6 +16,45 @@ const LEVEL_STEPS: u8 = 100;
 /// The step of a half fill, where the level color is the theme's amber,
 /// halfway from its green to its red.
 const MIDDLE_STEP: u8 = LEVEL_STEPS / 2;
+/// A percentage's full scale.
+const PERCENT_SCALE: f64 = 100.0;
+
+/// How a reading takes the level colors (D-104, D-126): green up to
+/// `green_until`, then a step of the gradient for each whole percent of the
+/// way to `top` (amber halfway), red from `top` on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LevelScale {
+    green_until: f64,
+    top: f64,
+}
+
+impl LevelScale {
+    /// Temperatures (D-126): green up to 50 °C, where idle and lightly
+    /// loaded parts sit, amber at 75 °C, red at 100 °C.
+    pub const TEMPERATURE: Self = Self {
+        green_until: 50.0,
+        top: TEMPERATURE_SCALE_C,
+    };
+    /// Fan speeds (D-126): green up to 50 %, amber at 75 %, red at 100 %.
+    pub const FAN: Self = Self {
+        green_until: 50.0,
+        top: PERCENT_SCALE,
+    };
+
+    /// The share of `top`, like a gauge that full: green only when empty.
+    pub const fn share_of(top: f64) -> Self {
+        Self {
+            green_until: 0.0,
+            top,
+        }
+    }
+
+    /// Where `value` sits on the gradient: 0 up to `green_until`, 1 at
+    /// `top`; [`ThemePalette::level_color`] takes it from there.
+    pub fn level(self, value: f64) -> f64 {
+        (value - self.green_until) / (self.top - self.green_until)
+    }
+}
 
 /// Colors of the tracked GPU processes, in slot order (D-64, D-65), the
 /// same in every theme: teal, orange, magenta, blue, rose, violet, olive,
@@ -168,6 +207,8 @@ pub struct ThemePalette {
     pub gauge_high: Color,
     pub gauge_track: Color,
     pub sparkline: Color,
+    /// The brand's gradient, left to right across `DGXTOP` (D-129).
+    pub brand: [Color; 3],
 }
 
 impl ThemePalette {
@@ -209,6 +250,11 @@ impl ThemePalette {
             gauge_high: Color::Rgb(225, 70, 70),
             gauge_track: Color::Rgb(48, 48, 54),
             sparkline: Color::Rgb(110, 150, 230),
+            brand: [
+                Color::Rgb(118, 210, 90),
+                Color::Rgb(0, 200, 230),
+                Color::Rgb(170, 120, 255),
+            ],
         }
     }
 
@@ -235,6 +281,11 @@ impl ThemePalette {
             gauge_high: Color::Rgb(220, 60, 60),
             gauge_track: Color::Rgb(40, 42, 46),
             sparkline: Color::Rgb(0, 160, 180),
+            brand: [
+                Color::Rgb(0, 220, 200),
+                Color::Rgb(90, 150, 255),
+                Color::Rgb(200, 110, 240),
+            ],
         }
     }
 
@@ -261,6 +312,11 @@ impl ThemePalette {
             gauge_high: Color::Rgb(220, 60, 60),
             gauge_track: Color::Rgb(38, 42, 38),
             sparkline: Color::Rgb(60, 180, 80),
+            brand: [
+                Color::Rgb(170, 230, 60),
+                Color::Rgb(60, 220, 130),
+                Color::Rgb(0, 200, 200),
+            ],
         }
     }
 
@@ -287,6 +343,11 @@ impl ThemePalette {
             gauge_high: Color::Rgb(220, 60, 60),
             gauge_track: Color::Rgb(42, 40, 36),
             sparkline: Color::Rgb(200, 150, 30),
+            brand: [
+                Color::Rgb(255, 210, 70),
+                Color::Rgb(250, 150, 40),
+                Color::Rgb(235, 90, 70),
+            ],
         }
     }
 
@@ -311,20 +372,54 @@ impl ThemePalette {
         }
     }
 
-    /// The level color of a temperature on its 0–100 °C scale (D-104),
-    /// the scale of the GPU's temperature bar and History chart.
+    /// The color at `position` (0 the first letter, 1 the last) of the
+    /// brand's gradient (D-129), mixed in OKLab like the level colors.
+    pub fn brand_color(&self, position: f64) -> Color {
+        let [first, middle, last] = self.brand;
+        let position = if position.is_finite() {
+            position.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        if position <= 0.5 {
+            mix_oklab(first, middle, position * 2.0)
+        } else {
+            mix_oklab(middle, last, (position - 0.5) * 2.0)
+        }
+    }
+
+    /// The level color of a temperature (D-104, D-126): green up to 50 °C,
+    /// then the gradient to red at 100 °C ([`LevelScale::TEMPERATURE`]), as
+    /// its text, the GPU's temperature bar and History chart draw it.
     pub fn temperature_color(&self, celsius: f64) -> Color {
-        self.level_color(celsius / TEMPERATURE_SCALE_C)
+        self.level_color(LevelScale::TEMPERATURE.level(celsius))
     }
 
     /// The style a temperature's value is written in: its level color
     /// ([`Self::temperature_color`]) when it is read as it should be, else
     /// the tone that says it is a fallback, stale, conflicting or missing.
     pub fn temperature_style(&self, cell: &MetricCell) -> Style {
+        self.level_style(cell, LevelScale::TEMPERATURE)
+    }
+
+    /// The style a percentage's value is written in (D-125): the level
+    /// color of its share of 100 % when it is read as it should be, else
+    /// the tone that says otherwise, like [`Self::temperature_style`].
+    pub fn percent_style(&self, cell: &MetricCell) -> Style {
+        self.level_style(cell, LevelScale::share_of(PERCENT_SCALE))
+    }
+
+    /// The style a fan speed is written in (D-126): green up to 50 %, then
+    /// the gradient to red at 100 % ([`LevelScale::FAN`]), else its tone.
+    pub fn fan_style(&self, cell: &MetricCell) -> Style {
+        self.level_style(cell, LevelScale::FAN)
+    }
+
+    fn level_style(&self, cell: &MetricCell, scale: LevelScale) -> Style {
         let tone = cell_tone(cell);
         let style = self.tone_style(tone);
         match (tone, cell.value_f64()) {
-            (CellTone::Normal, Some(celsius)) => style.fg(self.temperature_color(celsius)),
+            (CellTone::Normal, Some(value)) => style.fg(self.level_color(scale.level(value))),
             _ => style,
         }
     }
@@ -581,17 +676,31 @@ mod tests {
         }
     }
 
-    /// A temperature takes the level color of its share of 100 °C (D-104).
+    /// Temperatures and fan speeds stay green up to 50 and turn from there
+    /// to red at 100 (D-126); a percentage turns from 0 (D-125).
     #[test]
-    fn temperatures_take_the_level_color_of_their_hundred_degree_scale() {
+    fn temperatures_and_fans_turn_only_past_fifty() {
         let palette = ThemePalette::default();
-        assert_eq!(palette.temperature_color(0.0), palette.gauge_low);
-        assert_eq!(palette.temperature_color(50.0), palette.gauge_mid);
+        for celsius in [-5.0, 0.0, 32.0, 50.0] {
+            assert_eq!(palette.temperature_color(celsius), palette.gauge_low);
+        }
+        assert_eq!(palette.temperature_color(75.0), palette.gauge_mid);
         assert_eq!(palette.temperature_color(100.0), palette.gauge_high);
-        assert_eq!(palette.temperature_color(71.0), palette.level_color(0.71));
-        assert_ne!(palette.temperature_color(85.0), palette.gauge_high);
+        assert_eq!(palette.temperature_color(71.0), palette.level_color(0.42));
+        assert_ne!(palette.temperature_color(95.0), palette.gauge_high);
         assert_eq!(palette.temperature_color(120.0), palette.gauge_high);
-        assert_eq!(palette.temperature_color(-5.0), palette.gauge_low);
+        let fan = |percent: f64| {
+            palette
+                .fan_style(&crate::test_fixtures::ok(
+                    percent,
+                    dgxtop_core::metric::CanonicalUnit::Percent,
+                ))
+                .fg
+        };
+        assert_eq!(fan(45.0), Some(palette.gauge_low));
+        assert_eq!(fan(75.0), Some(palette.gauge_mid));
+        assert_eq!(fan(100.0), Some(palette.gauge_high));
+        assert_eq!(LevelScale::share_of(100.0).level(50.0), 0.5);
     }
 
     /// The viewer's palette takes the projection's theme, so an applied

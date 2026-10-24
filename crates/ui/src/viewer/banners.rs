@@ -127,8 +127,13 @@ fn confirmation_block(
 ) -> Option<BannerBlock> {
     // The controller asks to delete only while no signal waits for its own
     // confirmation, so y/Enter answers this question (D-108).
-    if let ModeView::ConfirmDelete { runs, running } = ui.mode {
-        return Some(deletion_block(runs, running, width));
+    if let ModeView::ConfirmDelete {
+        runs,
+        running,
+        every,
+    } = ui.mode
+    {
+        return Some(deletion_block(runs, running, every, width));
     }
     let projected = model
         .modules
@@ -206,15 +211,17 @@ const fn awaiting_hint(early_answer: Option<bool>) -> &'static str {
 
 /// The Process History's deletion prompt: the question, the keys, then
 /// what stays (D-108).
-fn deletion_block(runs: usize, running: usize, width: u16) -> BannerBlock {
+fn deletion_block(runs: usize, running: usize, every: bool, width: u16) -> BannerBlock {
     let separator = if width < COMPACT_CONFIRMATION_WIDTH {
         " "
     } else {
         " · "
     };
+    // Every one the filter keeps, listed or not (D-128).
+    let all = if every { "all " } else { "" };
     let mut lines = vec![
         format!(
-            "CONFIRM{separator}Delete {} from the Process History?",
+            "CONFIRM{separator}Delete {all}{} from the Process History?",
             counted(runs, "ended run")
         ),
         CONFIRM_DELETE_HINT.to_owned(),
@@ -222,8 +229,9 @@ fn deletion_block(runs: usize, running: usize, width: u16) -> BannerBlock {
     ];
     if running > 0 {
         lines.push(format!(
-            "{} marked stay{}: a running run is kept until it ends",
+            "{}{} stay{}: a running run is kept until it ends",
             counted(running, "running run"),
+            if every { "" } else { " marked" },
             if running == 1 { "s" } else { "" }
         ));
     }
@@ -384,15 +392,20 @@ mod tests {
     fn the_deletion_prompt_says_what_goes_and_what_stays() {
         let mut model = test_fixtures::view_model(ViewKind::History, 1);
         model.modules.actions = Some(Arc::new(test_fixtures::actions_view(true)));
-        let ask = |runs, running, width| {
+        let ask_any = |runs, running, every, width| {
             let ui = UiState {
-                mode: ModeView::ConfirmDelete { runs, running },
+                mode: ModeView::ConfirmDelete {
+                    runs,
+                    running,
+                    every,
+                },
                 ..UiState::default()
             };
             let blocks = collect(&model, &ui, &[], 0, width);
             assert_eq!(blocks[0].level, BannerLevel::Confirmation);
             blocks[0].lines.clone()
         };
+        let ask = |runs, running, width| ask_any(runs, running, false, width);
         assert_eq!(
             ask(3, 1, 120),
             [
@@ -409,6 +422,13 @@ mod tests {
         );
         assert_eq!(one.len(), 3, "no running run to mention: {one:?}");
         assert!(ask(2, 2, 120)[3].starts_with("2 running runs marked stay:"));
+        // Every run the filter keeps, listed or not (D-128).
+        let every = ask_any(523, 2, true, 120);
+        assert_eq!(
+            every[0],
+            "CONFIRM · Delete all 523 ended runs from the Process History?"
+        );
+        assert!(every[3].starts_with("2 running runs stay:"), "{every:?}");
     }
 
     #[test]

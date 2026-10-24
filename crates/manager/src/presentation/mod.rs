@@ -35,7 +35,7 @@ pub use cell::build_metric_cell;
 pub(crate) use history_charts::history_charts;
 pub use plan::visible_modules;
 pub use processes::PROCESS_OVERSCAN_ROWS;
-pub(crate) use run_history::run_request;
+pub(crate) use run_history::{ended_runs_kept, run_request};
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -73,6 +73,9 @@ pub struct HostFacts {
     /// Local time's offset from UTC at startup, seconds east, for the
     /// times of the Process History (D-76).
     pub utc_offset_s: i32,
+    /// Process actions reach every user's processes this run
+    /// (`--any-user`, D-127), which the header says.
+    pub any_user: bool,
 }
 
 /// Settings presentation inputs.
@@ -142,6 +145,7 @@ fn build_header(context: &PresentationContext<'_>, reader: &MetricReader<'_>) ->
         hosts_healthy: u32::try_from(healthy).unwrap_or(u32::MAX),
         hosts_total: u32::try_from(context.hosts.len()).unwrap_or(u32::MAX),
         read_only: effective.actions.read_only || !effective.actions.enabled,
+        any_user: context.facts.any_user,
         theme: effective.viewer.theme,
         total_power: reader.cell(ids::HOST_POWER_TOTAL, entity::HOST, entity::SCOPE_HOST),
     }

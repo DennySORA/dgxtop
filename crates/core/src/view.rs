@@ -375,7 +375,8 @@ pub struct DiskDeviceView {
     pub read_iops: MetricCell,
     pub write_iops: MetricCell,
     pub await_ms: MetricCell,
-    /// The drive's temperature (D-92); a partition shows its disk's.
+    /// The drive's temperature (D-92); a partition, or a volume stacked on
+    /// one device, shows its disk's (D-124).
     pub temperature: MetricCell,
 }
 
@@ -397,11 +398,17 @@ pub struct FilesystemView {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiskView {
+    /// The block devices the Disk panel lists, busiest first: those
+    /// holding a filesystem (D-124).
     pub devices: Vec<DiskDeviceView>,
     pub filesystems: Vec<FilesystemView>,
-    /// Read rate trend of the first (busiest) device, for the panel chart.
+    /// The device the panel charts and names in its title (D-124): the
+    /// busiest whole disk, whose rates count everything stacked on it,
+    /// whether or not it is listed.
+    pub charted: Option<DiskDeviceView>,
+    /// Read rate trend of the charted device, for the panel chart.
     pub read_trend: Trend,
-    /// Write rate trend of the first (busiest) device.
+    /// Write rate trend of the charted device.
     pub write_trend: Trend,
 }
 
@@ -867,6 +874,8 @@ pub struct HeaderView {
     pub hosts_healthy: u32,
     pub hosts_total: u32,
     pub read_only: bool,
+    /// Process actions reach every user's processes (`--any-user`, D-127).
+    pub any_user: bool,
     pub theme: Theme,
     /// What the CPU packages and every GPU draw together
     /// (`host.power.total`, D-106); missing while any of them does not
@@ -1024,6 +1033,7 @@ mod tests {
                 hosts_healthy: 0,
                 hosts_total: 0,
                 read_only: false,
+                any_user: false,
                 theme: Theme::Dark,
                 total_power: MetricCell::missing(CanonicalUnit::Watts, CellState::Unavailable),
             },

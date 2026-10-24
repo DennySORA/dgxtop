@@ -170,14 +170,15 @@ fn disk_lines(model: &ViewModel, palette: &ThemePalette, narrow: bool) -> Vec<Li
     let Some(disk) = model.modules.disk.as_deref() else {
         return vec![no_data("DISK", palette)];
     };
-    let Some(device) = disk.devices.first() else {
+    // The disk the panel charts and names (D-124), which need not be one
+    // of its rows, so no count of further rows follows.
+    let Some(device) = disk.charted.as_ref() else {
         return vec![Line::from(vec![
             label("DISK ", palette),
             Span::styled("no devices", palette.muted_style()),
         ])];
     };
-    let mut head = vec![label(format!("DISK {}", clean(&device.name)), palette)];
-    head.extend(more(disk.devices.len(), palette));
+    let head = vec![label(format!("DISK {}", clean(&device.name)), palette)];
     let tail = vec![
         sep("r ", palette),
         value(&device.read_bps, palette),

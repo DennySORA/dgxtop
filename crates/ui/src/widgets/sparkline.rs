@@ -13,7 +13,7 @@ use ratatui::style::{Color, Style};
 use ratatui::widgets::Widget;
 
 use crate::num::{saturate_u16, scaled_round};
-use crate::theme::ThemePalette;
+use crate::theme::{LevelScale, ThemePalette};
 
 const LEVELS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 /// Eighths of a row left empty above a full-scale column.
@@ -33,6 +33,9 @@ pub struct GapSparkline<'a> {
     max: Option<f64>,
     style: Style,
     levels: Option<&'a ThemePalette>,
+    /// How columns take the level colors where that is not their share of
+    /// the scale: a temperature's own (D-126).
+    level_scale: Option<LevelScale>,
     parts: Vec<Part<'a>>,
 }
 
@@ -43,6 +46,7 @@ impl<'a> GapSparkline<'a> {
             max: None,
             style,
             levels: None,
+            level_scale: None,
             parts: Vec::new(),
         }
     }
@@ -68,6 +72,14 @@ impl<'a> GapSparkline<'a> {
         self
     }
 
+    /// With [`Self::level_colors`], colors every column by where its value
+    /// sits on `scale` instead: a temperature stays green up to 50 °C
+    /// (D-126).
+    pub fn level_scale(mut self, scale: LevelScale) -> Self {
+        self.level_scale = Some(scale);
+        self
+    }
+
     /// The largest finite visible point (the scale when none is fixed).
     pub fn peak(&self, width: u16) -> Option<f64> {
         visible(self.points, width)
@@ -85,10 +97,11 @@ impl<'a> GapSparkline<'a> {
         })
     }
 
-    /// The column's style for `ratio` of the scale.
-    fn style_for(&self, ratio: f64) -> Style {
+    /// The style of a column of `value`, `ratio` of the scale.
+    fn style_for(&self, value: f64, ratio: f64) -> Style {
         self.levels.map_or(self.style, |palette| {
-            self.style.fg(palette.level_color(ratio))
+            let level = self.level_scale.map_or(ratio, |scale| scale.level(value));
+            self.style.fg(palette.level_color(level))
         })
     }
 }
@@ -124,7 +137,7 @@ impl Widget for GapSparkline<'_> {
                 let end = part_eighths(area, ratio_of(stacked)).min(whole);
                 layers.push((end, *style));
             }
-            layers.push((whole, self.style_for(ratio_of(value))));
+            layers.push((whole, self.style_for(value, ratio_of(value))));
             draw_layers(buf, area, x, &layers);
         }
     }

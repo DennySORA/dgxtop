@@ -369,6 +369,7 @@ impl RefComposition {
             boot_id: clock.boot_id(),
             pid_namespace: pid_namespace_of(self_pid).map_err(|error| error.to_string())?,
             euid: current_euid(),
+            sudo_uid: None,
             self_pid,
             adapters: manifests,
             facts: HostFacts {
@@ -378,6 +379,7 @@ impl RefComposition {
                 version: BuildInfo::current().version.to_owned(),
                 namespace_label: Some("replay (simulated data)".to_owned()),
                 utc_offset_s: 0,
+                any_user: false,
             },
             namespace: Namespace::Replay,
         };

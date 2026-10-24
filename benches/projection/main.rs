@@ -394,6 +394,7 @@ impl StaticInputs {
                 version: dgxtop::version::BuildInfo::current().version.to_owned(),
                 namespace_label: Some("replay (simulated data)".to_owned()),
                 utc_offset_s: 0,
+                any_user: false,
             },
             first_gpu: catalog
                 .entities

@@ -32,14 +32,13 @@ pub enum ModeView {
         signal: Signal,
         remaining_ms: Option<u64>,
     },
-    Help {
-        scroll: u16,
-    },
     /// The user asked to delete `runs` ended runs from the Process History
-    /// (D-108); y/Enter deletes, n/Esc cancels. `running` marked runs stay.
+    /// (D-108), `every` one the filter keeps (D-128); y/Enter deletes,
+    /// n/Esc cancels. `running` runs stay.
     ConfirmDelete {
         runs: usize,
         running: usize,
+        every: bool,
     },
 }
 

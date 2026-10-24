@@ -15,7 +15,7 @@ use dgxtop_core::quality::Namespace;
 use dgxtop_manager::presentation::HostFacts;
 use dgxtop_manager::{Manager, ManagerChannels, ManagerPorts, ManagerSetup};
 use dgxtop_runtime::clock::{
-    current_euid, host_identity, host_name, kernel_release, pid_namespace_of,
+    current_euid, host_identity, host_name, kernel_release, pid_namespace_of, sudo_uid,
 };
 use dgxtop_runtime::logger::FileLogger;
 use dgxtop_runtime::supervisor::{Supervisor, SupervisorConfig};
@@ -158,7 +158,7 @@ impl Wiring {
         let config = self.spawn_config(config_repository, completions.clone(), &mut workers)?;
         let audit = self.spawn_audit(effective, paths, completions.clone(), &mut workers)?;
         let actions = self.spawn_actions(completions.clone(), &mut workers)?;
-        let facts = host_facts(self.namespace);
+        let facts = host_facts(self.namespace, cli.any_user);
         let process_history = self.spawn_process_history_parts(
             effective,
             paths,
@@ -194,6 +194,7 @@ impl Wiring {
             boot_id,
             pid_namespace,
             euid: current_euid(),
+            sudo_uid: sudo_uid(),
             self_pid,
             adapters: manifests,
             facts,
@@ -250,7 +251,7 @@ impl Wiring {
     }
 }
 
-fn host_facts(namespace: Namespace) -> HostFacts {
+fn host_facts(namespace: Namespace, any_user: bool) -> HostFacts {
     HostFacts {
         host_name: host_name().unwrap_or_else(|_| "unknown host".to_owned()),
         kernel: kernel_release().ok(),
@@ -259,5 +260,6 @@ fn host_facts(namespace: Namespace) -> HostFacts {
         namespace_label: (namespace == Namespace::Replay)
             .then(|| "replay (simulated data)".to_owned()),
         utc_offset_s: local_utc_offset_s(),
+        any_user,
     }
 }

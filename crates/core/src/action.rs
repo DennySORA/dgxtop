@@ -161,15 +161,21 @@ impl fmt::Debug for ConfirmationToken {
     }
 }
 
-/// Caller context built by the Manager from the real euid of this process;
-/// never deserialized from user-supplied JSON.
+/// Caller context built by the Manager from this process's identity; never
+/// deserialized from user-supplied JSON.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityContext {
     pub host_id: HostId,
     pub boot_id: BootId,
     pub pid_namespace: PidNamespace,
     pub session_id: SessionId,
-    pub euid: u32,
+    /// The uid actions act for, whose processes alone may be signaled: this
+    /// process's euid, or in a root session started with sudo the user who
+    /// ran it (D-127). 0 (root) is refused unless `any_user`.
+    pub acting_uid: u32,
+    /// Signals may reach every user's processes (`--any-user`, D-127): no
+    /// uid check, the OS decides; protected targets stay protected.
+    pub any_user: bool,
     pub policy_revision: u32,
     pub actions_enabled: bool,
     pub read_only: bool,

@@ -134,6 +134,7 @@ fn fixture_with_audit(audit: Box<dyn Dispatch<AuditOp>>) -> Fixture {
         boot_id: boot_id("fake-boot"),
         pid_namespace: PidNamespace::new("pid:[1]").unwrap(),
         euid: 1000,
+        sudo_uid: None,
         self_pid: 4000,
         adapters: vec![manifest()],
         facts: HostFacts::default(),

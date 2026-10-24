@@ -23,7 +23,7 @@ pub fn check_policy(
     if context.read_only {
         return Err(ActionError::Disabled("read-only mode".to_owned()));
     }
-    if context.euid == 0 {
+    if context.acting_uid == 0 && !context.any_user {
         return Err(ActionError::RootSession);
     }
     if signal == Signal::Sigkill && !context.allow_force {
@@ -64,7 +64,8 @@ mod tests {
             boot_id: boot_id("b"),
             pid_namespace: PidNamespace::new("pid:[1]").unwrap(),
             session_id: SessionId::new("s").unwrap(),
-            euid: 1000,
+            acting_uid: 1000,
+            any_user: false,
             policy_revision: 1,
             actions_enabled: true,
             read_only: false,
@@ -96,7 +97,7 @@ mod tests {
         let mut everything_wrong = context();
         everything_wrong.actions_enabled = false;
         everything_wrong.read_only = true;
-        everything_wrong.euid = 0;
+        everything_wrong.acting_uid = 0;
         assert!(matches!(
             check_policy(&key(1), Signal::Sigkill, &everything_wrong, 9),
             Err(ActionError::Disabled(_))
@@ -111,7 +112,14 @@ mod tests {
             check_policy(&key(1), Signal::Sigkill, &everything_wrong, 9),
             Err(ActionError::RootSession)
         );
-        everything_wrong.euid = 1000;
+        everything_wrong.any_user = true;
+        assert_eq!(
+            check_policy(&key(1), Signal::Sigkill, &everything_wrong, 9),
+            Err(ActionError::ForceNotAllowed),
+            "--any-user lets root through (D-127)"
+        );
+        everything_wrong.any_user = false;
+        everything_wrong.acting_uid = 1000;
         assert_eq!(
             check_policy(&key(1), Signal::Sigkill, &everything_wrong, 9),
             Err(ActionError::ForceNotAllowed)

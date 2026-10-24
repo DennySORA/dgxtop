@@ -4,14 +4,14 @@
 //! host's total power and each CPU package's power against their peaks
 //! (D-106), each GPU's utilization, memory in use, temperature and power
 //! against their scales ([`gpu_series`]), and the read/write and
-//! receive/transmit rates of one disk and one interface. The disk and the
-//! interface are the busiest when the view opens and stay while they
-//! report, so the charts never jump between devices. A memory chart names
-//! the GPUs whose tracked processes' parts it stacks (D-64): a GPU's memory
-//! its GPU, the RAM used the GPUs that share the RAM; the history joins
-//! them (D-99). On the GPU view the HistoryService reads only the power of
-//! each GPU that reports no power limit, whose recorded peak scales its
-//! power bar (D-118).
+//! receive/transmit rates of one disk and one interface. The disk (the
+//! whole disk the Disk panel charts, D-124) and the interface are the
+//! busiest when the view opens and stay while they report, so the charts
+//! never jump between devices. A memory chart names the GPUs whose tracked processes' parts it
+//! stacks (D-64): a GPU's memory its GPU, the RAM used the GPUs that share
+//! the RAM; the history joins them (D-99). On the GPU view the
+//! HistoryService reads only the power of each GPU that reports no power
+//! limit, whose recorded peak scales its power bar (D-118).
 
 use std::collections::BTreeSet;
 
@@ -21,7 +21,7 @@ use dgxtop_core::metric::ids;
 use dgxtop_core::naming::entity;
 use dgxtop_core::view::{HistoryChartKind, TEMPERATURE_SCALE_C};
 
-use super::disk::device_views;
+use super::disk::charted_device;
 use super::gpu::gpu_name;
 use super::gpu_directory::{GpuDirectory, GpuIdentity};
 use super::network::ranked_interfaces;
@@ -122,12 +122,8 @@ fn dashboard(
     {
         charts.add_gpu(gpu);
     }
-    let busiest_disk = || {
-        device_views(reader)
-            .into_iter()
-            .next()
-            .map(|device| (device.entity_id.to_string(), device.name))
-    };
+    let busiest_disk =
+        || charted_device(reader).map(|device| (device.entity_id.to_string(), device.name));
     charts.add_device(
         previous,
         [HistoryChartKind::DiskRead, HistoryChartKind::DiskWrite],

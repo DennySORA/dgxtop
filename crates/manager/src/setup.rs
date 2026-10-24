@@ -78,6 +78,9 @@ pub struct ManagerSetup {
     pub pid_namespace: PidNamespace,
     /// Real effective uid of this process (never taken from commands).
     pub euid: u32,
+    /// The uid of the user who started this process with sudo (its
+    /// `SUDO_UID`), whom a root session's process actions act for (D-127).
+    pub sudo_uid: Option<u32>,
     pub self_pid: i32,
     pub adapters: Vec<AdapterManifest>,
     pub facts: HostFacts,

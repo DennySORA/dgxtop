@@ -13,6 +13,7 @@ use uuid::Uuid;
 use super::ControlCore;
 use crate::config::{ConfigDecision, ConfigRequest};
 use crate::effects::Effects;
+use crate::presentation::ended_runs_kept;
 use crate::process::{Now, PrepareRequest, TokenCommand};
 use crate::process_link::Deletion;
 use crate::results::CacheLookup;
@@ -174,6 +175,7 @@ impl ControlCore {
                 self.apply(fx);
             }
             CommandBody::DeleteRuns { runs } => self.delete_runs(request_id, runs),
+            CommandBody::DeleteAllRuns { filter } => self.delete_all_runs(request_id, &filter),
             CommandBody::SetFolded { panels } => {
                 self.submit_config(request_id, ConfigRequest::Folds { panels }, now);
             }
@@ -207,6 +209,19 @@ impl ControlCore {
             ),
         };
         self.finish(result);
+    }
+
+    /// Deletes every ended run `filter` keeps (D-128), found in the whole
+    /// run list the process actor published, so the runs a projection does
+    /// not carry go too.
+    fn delete_all_runs(&mut self, request_id: Uuid, filter: &str) {
+        let runs = ended_runs_kept(&self.process_history.model(), filter);
+        if runs.is_empty() {
+            let result = CommandResult::completed(request_id, "no ended run to delete");
+            self.finish(result);
+            return;
+        }
+        self.delete_runs(request_id, runs);
     }
 
     fn submit_config(&mut self, request_id: Uuid, request: ConfigRequest, now: Now) {

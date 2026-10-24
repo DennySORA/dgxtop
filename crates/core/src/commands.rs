@@ -159,6 +159,13 @@ pub enum CommandBody {
     DeleteRuns {
         runs: Vec<ProcessKey>,
     },
+    /// Deletes every ended run whose name or PID holds `filter`, any case
+    /// (every ended run when it is empty), from the Process History
+    /// (D-128): those beyond the newest a projection carries too, which the
+    /// Manager finds in the whole run list. A running run stays.
+    DeleteAllRuns {
+        filter: String,
+    },
     /// The panels folded away (D-114), all of them: saved in
     /// `viewer.folded` without an expected revision, since only the
     /// frontends' layout reads them.
@@ -181,6 +188,7 @@ impl CommandBody {
             Self::CancelSignal { .. } => "CancelSignal",
             Self::SetModuleEnabled { .. } => "SetModuleEnabled",
             Self::DeleteRuns { .. } => "DeleteRuns",
+            Self::DeleteAllRuns { .. } => "DeleteAllRuns",
             Self::SetFolded { .. } => "SetFolded",
             Self::Shutdown { .. } => "Shutdown",
         }
@@ -258,7 +266,8 @@ impl CommandEnvelope {
                     return Err(CommandSyntaxError::Revision);
                 }
             }
-            CommandBody::UpdateViewSession { filter, .. } => {
+            CommandBody::UpdateViewSession { filter, .. }
+            | CommandBody::DeleteAllRuns { filter } => {
                 if filter.len() > MAX_FILTER_BYTES {
                     return Err(CommandSyntaxError::FilterTooLong);
                 }

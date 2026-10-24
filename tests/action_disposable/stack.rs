@@ -769,6 +769,7 @@ fn manager_setup(config: &Config, identity: &Identity) -> ManagerSetup {
         boot_id: identity.boot_id.clone(),
         pid_namespace: identity.pid_namespace.clone(),
         euid: identity.euid,
+        sudo_uid: None,
         self_pid: identity.self_pid,
         // No adapter hosts: nothing to schedule and no managed host to protect.
         adapters: Vec::new(),

@@ -182,6 +182,16 @@ pub fn current_euid() -> u32 {
     nix::unistd::geteuid().as_raw()
 }
 
+/// The uid of the user who started this process with sudo: the `SUDO_UID`
+/// sudo sets, when it is a uid. Only a root session acts on it (D-127).
+pub fn sudo_uid() -> Option<u32> {
+    parse_uid(&std::env::var("SUDO_UID").ok()?)
+}
+
+fn parse_uid(text: &str) -> Option<u32> {
+    text.trim().parse().ok()
+}
+
 fn read_identity_file(path: &Path, operation: &'static str) -> Result<String, InfraError> {
     let file = File::open(path).map_err(|error| InfraError::from_io(operation, &error))?;
     let mut text = String::new();
@@ -195,6 +205,15 @@ fn read_identity_file(path: &Path, operation: &'static str) -> Result<String, In
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn a_sudo_uid_is_a_number_or_nothing() {
+        assert_eq!(parse_uid("1000"), Some(1000));
+        assert_eq!(parse_uid(" 1000\n"), Some(1000));
+        for text in ["", "bob", "-1", "4294967296"] {
+            assert_eq!(parse_uid(text), None, "{text:?}");
+        }
+    }
 
     struct TempRoot(PathBuf);
 

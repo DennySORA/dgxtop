@@ -287,16 +287,36 @@ pub(crate) fn cell_spans(
 }
 
 /// [`cell_spans`] of a temperature: a value read as it should be is
-/// written in the level color of its share of 100 °C (D-104); a fallback,
-/// stale, conflicting or missing one keeps the tone that says so.
+/// written in its level color, green up to 50 °C (D-104, D-126); a
+/// fallback, stale, conflicting or missing one keeps the tone that says so.
 pub(crate) fn temperature_spans(
     cell: &MetricCell,
     detail: CellDetail,
     context: &DisplayContext,
 ) -> Vec<Span<'static>> {
-    let mut spans = cell_spans(cell, detail, context);
+    value_styled(
+        cell_spans(cell, detail, context),
+        context.theme.temperature_style(cell),
+    )
+}
+
+/// [`cell_spans`] of a fan speed, in its level color like a temperature:
+/// green up to 50 % (D-126).
+pub(crate) fn fan_speed_spans(
+    cell: &MetricCell,
+    detail: CellDetail,
+    context: &DisplayContext,
+) -> Vec<Span<'static>> {
+    value_styled(
+        cell_spans(cell, detail, context),
+        context.theme.fan_style(cell),
+    )
+}
+
+/// `spans` with the value, their first, in `style`.
+fn value_styled(mut spans: Vec<Span<'static>>, style: Style) -> Vec<Span<'static>> {
     if let Some(first) = spans.first_mut() {
-        first.style = context.theme.temperature_style(cell);
+        first.style = style;
     }
     spans
 }
@@ -463,7 +483,8 @@ pub(crate) fn bar_row_areas(row: Rect, value_width: u16) -> BarRowAreas {
 /// One bar of the current value (D-43).
 pub(crate) struct BarRow<'a> {
     pub label: &'a str,
-    /// Share of the scale now, which colors the value (`None`: missing).
+    /// The level the value is colored by (`None`: missing): its share of
+    /// the scale, or a temperature's place on its own scale (D-126).
     pub ratio: Option<f64>,
     /// Drawn right after the gauge, so it reads as the bar's figure; values
     /// of one kind padded on the left end on one column.

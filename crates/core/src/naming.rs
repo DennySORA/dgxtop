@@ -407,6 +407,20 @@ pub mod entity {
     }
 }
 
+/// Values of [`attributes::BLOCK_LAYER`] (D-124), read from sysfs.
+pub mod block_layer {
+    /// A whole disk (an NVMe namespace, a SATA or virtio disk): the bottom
+    /// of its stack, whose I/O counts everything stacked on it.
+    pub const DISK: &str = "disk";
+    /// A partition of a disk.
+    pub const PARTITION: &str = "partition";
+    /// Built on other block devices (its `slaves`): device-mapper, md RAID.
+    pub const STACKED: &str = "stacked";
+    /// A software device on no other (`/sys/devices/virtual/block`): zram,
+    /// nbd.
+    pub const VIRTUAL: &str = "virtual";
+}
+
 /// Well-known entity attribute keys.
 pub mod attributes {
     pub const UUID: &str = "uuid";
@@ -460,6 +474,9 @@ pub mod attributes {
     pub const DEVICE: &str = "device";
     pub const FS_TYPE: &str = "fs_type";
     pub const MAJOR_MINOR: &str = "major_minor";
+    /// Where a block device sits in its stack (D-124), one of
+    /// [`super::block_layer`]; absent when sysfs cannot tell.
+    pub const BLOCK_LAYER: &str = "block_layer";
     pub const IFNAME: &str = "ifname";
     pub const OPERSTATE: &str = "operstate";
     pub const CLK_TCK: &str = "clk_tck";

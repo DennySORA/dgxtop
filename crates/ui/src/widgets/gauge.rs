@@ -18,6 +18,8 @@ use crate::theme::ThemePalette;
 #[derive(Debug, Clone)]
 pub struct Gauge<'a> {
     ratio: Option<f64>,
+    /// Where the value sits on the level colors, when that is not its fill.
+    level: Option<f64>,
     label: &'a str,
     palette: &'a ThemePalette,
     label_style: Option<Style>,
@@ -28,10 +30,18 @@ impl<'a> Gauge<'a> {
     pub fn new(ratio: Option<f64>, label: &'a str, palette: &'a ThemePalette) -> Self {
         Self {
             ratio,
+            level: None,
             label,
             palette,
             label_style: None,
         }
+    }
+
+    /// Colors the fill by `level` rather than by its share of the bar: a
+    /// temperature stays green up to 50 °C (D-126).
+    pub fn level(mut self, level: Option<f64>) -> Self {
+        self.level = level;
+        self
     }
 
     pub fn label_style(mut self, style: Style) -> Self {
@@ -51,7 +61,8 @@ impl<'a> Gauge<'a> {
         match self.ratio.filter(|ratio| ratio.is_finite()) {
             Some(ratio) => {
                 let clamped = ratio.clamp(0.0, 1.0);
-                let fill = Style::new().fg(self.palette.level_color(clamped));
+                let level = self.level.unwrap_or(clamped);
+                let fill = Style::new().fg(self.palette.level_color(level));
                 let track = Style::new().fg(self.palette.gauge_track);
                 // Whole cells: a half cell of a bar lower than its row would
                 // leave a notch in the track.

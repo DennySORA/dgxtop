@@ -633,6 +633,20 @@ fn the_header_shows_the_total_power_only_while_it_is_read() {
 }
 
 #[test]
+fn header_says_when_actions_reach_every_user() {
+    let mut model = model(ViewKind::Overview);
+    model.header.any_user = true;
+    let header = render(&model, (200, 50)).rows[0].clone();
+    assert!(header.contains("ANY-USER"), "{header}");
+    model.header.read_only = true;
+    let header = render(&model, (200, 50)).rows[0].clone();
+    assert!(
+        header.contains("READ-ONLY") && !header.contains("ANY-USER"),
+        "no action to reach anyone: {header}"
+    );
+}
+
+#[test]
 fn header_shows_the_host_and_warnings_and_the_footer_the_interval() {
     let mut model = model(ViewKind::Overview);
     model.header.effective_interval_ms = 2000;

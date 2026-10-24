@@ -37,7 +37,7 @@ pub mod timezone;
 
 pub use broker::{Admission, BrokerKey, ReadBroker};
 pub use clock::{
-    BootClock, current_euid, host_identity, host_name, kernel_release, pid_namespace_of,
+    BootClock, current_euid, host_identity, host_name, kernel_release, pid_namespace_of, sudo_uid,
 };
 pub use host::{
     HOST_GENERATION_ARG, HOST_NONCE_ENV, HostExit, host_nonce_from_env, run_adapter_host,

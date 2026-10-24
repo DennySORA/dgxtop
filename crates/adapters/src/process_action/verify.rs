@@ -33,14 +33,21 @@ pub fn verify_identity(
         .map_err(|error| unverifiable("status", &error))?;
     let uids = parse_uids(&status)
         .ok_or_else(|| ActionError::Unavailable("unparseable /proc status".to_owned()))?;
-    if uids.real != context.euid || uids.effective != context.euid {
+    let foreign = uids.real != context.acting_uid || uids.effective != context.acting_uid;
+    if foreign && !context.any_user {
         return Err(ActionError::UidMismatch);
     }
-    let namespace = files
-        .pid_namespace(pid)
-        .map_err(|error| unverifiable("pid namespace", &error))?;
-    if namespace != key.pid_namespace.as_str() {
-        return Err(ActionError::NamespaceMismatch);
+    // The key's PID is numbered in this process's namespace (the policy
+    // checked it), so the pidfd names the target wherever it lives; a target
+    // in a namespace of its own (a container) is reached only `--any-user`,
+    // as htop reaches it from the host (D-127).
+    if !context.any_user {
+        let namespace = files
+            .pid_namespace(pid)
+            .map_err(|error| unverifiable("pid namespace", &error))?;
+        if namespace != key.pid_namespace.as_str() {
+            return Err(ActionError::NamespaceMismatch);
+        }
     }
     ensure_held_target_alive(files, syscalls, pidfd, pid)?;
     Ok(VerifiedIdentity {

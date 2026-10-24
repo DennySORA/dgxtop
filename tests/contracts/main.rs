@@ -269,6 +269,9 @@ fn every_command_body() -> Vec<CommandBody> {
         CommandBody::DeleteRuns {
             runs: vec![process_key(); dgxtop_core::commands::MAX_DELETE_RUNS],
         },
+        CommandBody::DeleteAllRuns {
+            filter: "comfy".into(),
+        },
         CommandBody::SetFolded {
             panels: dgxtop_core::view::FOLDABLE_PANELS
                 .iter()

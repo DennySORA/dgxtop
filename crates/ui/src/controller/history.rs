@@ -1,16 +1,18 @@
 //! The history views' keys beyond the run cursor: on the Overview History
 //! the GPU its GPU panels show (D-107; its bands scroll with
 //! [`super::paging`]); on the Process History the marks and the deletion of
-//! runs (D-108), which asks to confirm before anything is sent.
+//! runs (D-108), which asks to confirm before anything is sent. `a` marks
+//! every ended run the filter keeps, the ones beyond the projected rows too
+//! (D-128), until a mark changes one by one.
 
 use std::time::Duration;
 
-use dgxtop_core::commands::{CommandBody, CommandResult, CommandStatus, delete_run_batches};
+use dgxtop_core::commands::{CommandResult, CommandStatus, delete_run_batches};
 use dgxtop_core::config::MIN_COMMAND_BYTES;
 use dgxtop_core::identity::{EntityId, ModuleId, ProcessKey};
 use dgxtop_core::view::{BannerLevel, ProcessHistoryView, RunRowView};
 
-use super::deletion::RunDeletion;
+use super::deletion::{RunDeletion, RunSet};
 use super::keymap::KeyAction;
 use super::navigation::{self, Movement};
 use super::requests::RequestKind;
@@ -76,6 +78,7 @@ impl Controller {
         let Some(key) = self.history_cursor_run(context).map(|run| run.key.clone()) else {
             return;
         };
+        self.marked_every = None;
         if !self.marked.remove(&key) {
             self.marked.insert(key);
         }
@@ -83,8 +86,8 @@ impl Controller {
         self.navigate_history(KeyAction::HistoryDown, context);
     }
 
-    /// `a` on the list: marks every ended run listed, or unmarks all when
-    /// they all are.
+    /// `a` on the list: marks every ended run the filter keeps, listed or
+    /// not (D-128), or unmarks all when the listed ones all are.
     pub(super) fn toggle_mark_all(&mut self, context: &ControllerContext<'_>) {
         if self.history_page() != crate::views::PROCESS_LIST_PAGE {
             return;
@@ -103,8 +106,15 @@ impl Controller {
         }
         if ended.iter().all(|key| self.marked.contains(key)) {
             self.marked.clear();
+            self.marked_every = None;
         } else {
             self.marked.extend(ended);
+            self.marked_every = Some(
+                self.drafts
+                    .current(context.model, context.now)
+                    .map(|fields| fields.filter)
+                    .unwrap_or_default(),
+            );
         }
         self.bump();
     }
@@ -113,6 +123,7 @@ impl Controller {
     pub(super) fn clear_marks(&mut self) -> bool {
         let had = !self.marked.is_empty();
         self.marked.clear();
+        self.marked_every = None;
         had
     }
 
@@ -133,6 +144,12 @@ impl Controller {
         let Some(runs) = process_history(context) else {
             return;
         };
+        if page == crate::views::PROCESS_LIST_PAGE
+            && let Some(filter) = self.marked_every.clone()
+        {
+            self.ask_delete_every(runs, filter, context);
+            return;
+        }
         let chosen: Vec<&RunRowView> =
             if self.marked.is_empty() || page != crate::views::PROCESS_LIST_PAGE {
                 self.history_cursor_run(context).into_iter().collect()
@@ -153,7 +170,33 @@ impl Controller {
             return;
         }
         self.set_mode(InputMode::ConfirmDelete {
-            runs: ended.into_iter().map(|run| run.key.clone()).collect(),
+            runs: RunSet::Listed(ended.into_iter().map(|run| run.key.clone()).collect()),
+            running: running.len(),
+        });
+    }
+
+    /// Asks to delete every ended run `filter` keeps (D-128): the listed
+    /// ones and the runs beyond the projected rows, which are all ended
+    /// since running runs are listed first.
+    fn ask_delete_every(
+        &mut self,
+        runs: &ProcessHistoryView,
+        filter: String,
+        context: &ControllerContext<'_>,
+    ) {
+        let (ended, running): (Vec<&RunRowView>, Vec<&RunRowView>) =
+            runs.runs.iter().partition(|run| has_ended(run));
+        let count = ended.len() + runs.more_runs;
+        if count == 0 {
+            self.notify(
+                BannerLevel::Info,
+                "nothing to delete: a running run stays until it ends",
+                context.now,
+            );
+            return;
+        }
+        self.set_mode(InputMode::ConfirmDelete {
+            runs: RunSet::Every { filter, count },
             running: running.len(),
         });
     }
@@ -162,11 +205,17 @@ impl Controller {
     /// (see [`RunDeletion`]) and goes back to the list.
     pub(super) fn confirm_delete<S: CommandSink + ?Sized>(
         &mut self,
-        runs: &[ProcessKey],
+        runs: &RunSet,
         context: &ControllerContext<'_>,
         sink: &S,
     ) {
-        let batches = delete_run_batches(sink.session_id(), runs, MIN_COMMAND_BYTES);
+        let batches = match runs {
+            RunSet::Listed(runs) => delete_run_batches(sink.session_id(), runs, MIN_COMMAND_BYTES)
+                .into_iter()
+                .map(RunSet::Listed)
+                .collect(),
+            RunSet::Every { .. } => vec![runs.clone()],
+        };
         self.deletion = Some(RunDeletion::new(batches));
         self.send_next_deletion(context, sink);
         if self.history_page() == crate::views::RUN_PAGE {
@@ -184,7 +233,7 @@ impl Controller {
         let Some(deletion) = self.deletion.as_mut() else {
             return;
         };
-        let Some(runs) = deletion.next_batch() else {
+        let Some(batch) = deletion.next_batch() else {
             let deleted = deletion.deleted();
             self.deletion = None;
             let text = format!(
@@ -194,15 +243,14 @@ impl Controller {
             self.notify(BannerLevel::Info, text, context.now);
             return;
         };
-        let body = CommandBody::DeleteRuns { runs: runs.clone() };
-        match self.submit(body, RequestKind::DeleteRuns, context, sink) {
+        match self.submit(batch.body(), RequestKind::DeleteRuns, context, sink) {
             Some(request_id) => {
                 if let Some(deletion) = self.deletion.as_mut() {
-                    deletion.sent(request_id, runs);
+                    deletion.sent(request_id, batch);
                 }
             }
             // The submission said why; the runs left keep their marks.
-            None => self.stop_deletion(runs.len(), context.now),
+            None => self.stop_deletion(batch.len(), context.now),
         }
     }
 
@@ -215,7 +263,7 @@ impl Controller {
         context: &ControllerContext<'_>,
         sink: &S,
     ) {
-        let Some(runs) = self
+        let Some(batch) = self
             .deletion
             .as_mut()
             .and_then(|deletion| deletion.answered(request_id))
@@ -223,12 +271,18 @@ impl Controller {
             return;
         };
         if result.status != CommandStatus::Completed {
-            self.stop_deletion(runs.len(), context.now);
+            self.stop_deletion(batch.len(), context.now);
             return;
         }
-        self.marked.retain(|key| !runs.contains(key));
+        match &batch {
+            RunSet::Listed(runs) => self.marked.retain(|key| !runs.contains(key)),
+            RunSet::Every { .. } => {
+                self.marked.clear();
+                self.marked_every = None;
+            }
+        }
         if let Some(deletion) = self.deletion.as_mut() {
-            deletion.count_deleted(runs.len());
+            deletion.count_deleted(batch.len());
         }
         self.bump();
         self.send_next_deletion(context, sink);

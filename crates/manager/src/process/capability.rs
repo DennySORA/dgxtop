@@ -1,7 +1,8 @@
 //! Capability checks performed before anything reaches the action worker.
-//! The caller context is built from the REAL euid of
-//! this process and the setup's host/boot/namespace — never from command
-//! JSON. Every check fails closed.
+//! The caller context is built from the REAL euid of this process (in a
+//! root session started with sudo, the user who ran it: [`acting_uid`]) and
+//! the setup's host/boot/namespace — never from command JSON. Every check
+//! fails closed.
 
 use dgxtop_core::action::{CapabilityContext, PersistenceStatus, Signal};
 use dgxtop_core::canonical::ProcessRow;
@@ -15,10 +16,27 @@ pub(crate) struct ActionIdentity {
     pub(crate) host_id: HostId,
     pub(crate) boot_id: BootId,
     pub(crate) pid_namespace: PidNamespace,
-    /// Real effective uid of the dgxtop process.
-    pub(crate) euid: u32,
+    /// The uid actions act for ([`acting_uid`]); `None` in a root session
+    /// that names no user, which may not signal.
+    pub(crate) acting_uid: Option<u32>,
+    /// Signals may reach every user's processes (`--any-user`, D-127): the
+    /// OS decides, as for htop; protected targets stay protected.
+    pub(crate) any_user: bool,
     pub(crate) self_pid: i32,
 }
+
+/// The uid process actions act for (D-127): a process that is not root
+/// acts for itself; a root session only for the user who started it with
+/// sudo, so it signals nothing that user could not signal, and never for
+/// root itself. `sudo_uid` counts only under root.
+pub(crate) fn acting_uid(euid: u32, sudo_uid: Option<u32>) -> Option<u32> {
+    if euid != ROOT_UID {
+        return Some(euid);
+    }
+    sudo_uid.filter(|uid| *uid != ROOT_UID)
+}
+
+const ROOT_UID: u32 = 0;
 
 /// The action-relevant part of the effective configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,11 +109,13 @@ pub(crate) fn availability_problem(
             "read-only mode: process actions are not allowed",
         ));
     }
-    // deny_root_session is a fixed safety constant: root never signals.
-    if identity.euid == 0 {
+    // deny_root_session is a fixed safety constant: root never signals for
+    // itself, only for the user who ran sudo (D-127), unless started
+    // `--any-user`.
+    if identity.acting_uid.is_none() && !identity.any_user {
         return Some(Denial::new(
             ErrorCode::CapabilityDenied,
-            "root sessions may not send process signals",
+            "root sessions may not send process signals unless started with sudo by a user",
         ));
     }
     audit_problem(audit)
@@ -172,8 +192,8 @@ pub(crate) fn check_target(
     }
     let foreign_uid = row
         .and_then(|row| row.uid)
-        .is_some_and(|uid| uid != identity.euid);
-    if policy.same_uid_only && foreign_uid {
+        .is_some_and(|uid| Some(uid) != identity.acting_uid);
+    if policy.same_uid_only && !identity.any_user && foreign_uid {
         return Err(Denial::new(
             ErrorCode::CapabilityDenied,
             "target belongs to another user",
@@ -200,7 +220,10 @@ pub(crate) fn capability_context(
         boot_id: identity.boot_id.clone(),
         pid_namespace: identity.pid_namespace.clone(),
         session_id: session_id.clone(),
-        euid: identity.euid,
+        // Root, which the worker refuses but `--any-user`, where no user is
+        // acted for.
+        acting_uid: identity.acting_uid.unwrap_or(ROOT_UID),
+        any_user: identity.any_user,
         policy_revision,
         actions_enabled: policy.enabled,
         read_only: policy.read_only,
@@ -221,9 +244,22 @@ mod tests {
             host_id: host_id("test-host"),
             boot_id: boot_id("fake-boot"),
             pid_namespace: PidNamespace::new("pid:[1]").unwrap(),
-            euid,
+            acting_uid: acting_uid(euid, None),
+            any_user: false,
             self_pid: 4000,
         }
+    }
+
+    /// Who actions act for (D-127): a process that is not root for itself;
+    /// root only for the user who ran sudo, never for root, and for nobody
+    /// without sudo.
+    #[test]
+    fn root_acts_only_for_the_user_who_ran_sudo() {
+        assert_eq!(acting_uid(1000, None), Some(1000));
+        assert_eq!(acting_uid(1000, Some(1001)), Some(1000));
+        assert_eq!(acting_uid(0, Some(1000)), Some(1000));
+        assert_eq!(acting_uid(0, Some(0)), None);
+        assert_eq!(acting_uid(0, None), None);
     }
 
     fn policy() -> ActionPolicy {
@@ -348,7 +384,7 @@ mod tests {
             3,
             &[77, 4000],
         );
-        assert_eq!(context.euid, 1000);
+        assert_eq!(context.acting_uid, 1000);
         assert_eq!(context.policy_revision, 3);
         assert_eq!(context.protected_pids, vec![1, 77, 4000]);
         assert!(context.actions_enabled);

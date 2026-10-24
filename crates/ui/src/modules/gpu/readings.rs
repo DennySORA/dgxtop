@@ -2,7 +2,8 @@
 //! now and the value right after it: utilization against 100 %, the memory
 //! in use (`VRAM` against the framebuffer, or on a unified-memory GPU `RAM`,
 //! what its processes hold, against the system RAM), the temperature on a
-//! fixed 0–100 °C scale and the power against the enforced limit, or on a
+//! fixed 0–100 °C scale, green up to 50 °C like its text (D-126), and the
+//! power against the enforced limit, or on a
 //! GPU without one against the highest draw the history recorded (D-118).
 //! The overview shows the first two, the utilization's history under its
 //! gauge; the GPU view shows all four, live only. The memory bar shows what
@@ -17,6 +18,7 @@ use super::facts::{has_value, reported};
 use crate::format::{display_width, format_value, pad_left, value_text};
 use crate::modules::common::{BarRow, RowCursor, render_bar_row, render_chart, under_bar};
 use crate::registry::DisplayContext;
+use crate::theme::LevelScale;
 use crate::widgets::Gauge;
 
 /// Fixed top of the temperature scale, so small changes stay small.
@@ -35,6 +37,9 @@ pub(super) struct GpuReading<'a> {
     trend: &'a Trend,
     /// Top of the bar's and the chart's scale.
     max: Option<f64>,
+    /// How the value takes the level colors where that is not its share of
+    /// the scale: a temperature's own (D-126).
+    levels: Option<LevelScale>,
 }
 
 impl GpuReading<'_> {
@@ -42,6 +47,15 @@ impl GpuReading<'_> {
     pub(super) fn ratio(&self) -> Option<f64> {
         let max = self.max.filter(|max| *max > 0.0)?;
         Some(self.current.value_f64()? / max)
+    }
+
+    /// Where the value now sits on the level colors: on its own scale
+    /// where it has one, else its share of the bar's.
+    pub(super) fn level(&self) -> Option<f64> {
+        match self.levels {
+            Some(levels) => Some(levels.level(self.current.value_f64()?)),
+            None => self.ratio(),
+        }
     }
 
     /// Whether the GPU reports the value or its history has a point.
@@ -82,6 +96,7 @@ fn utilization(card: &GpuCard) -> GpuReading<'_> {
         value: value_text(&card.utilization),
         trend: &card.utilization_trend,
         max: Some(100.0),
+        levels: None,
     }
 }
 
@@ -95,6 +110,7 @@ fn memory(card: &GpuCard) -> GpuReading<'_> {
             value: with_total(&card.process_allocated, Some(&card.system_ram_total)),
             trend: &card.memory_trend,
             max: card.system_ram_total.value_f64(),
+            levels: None,
         };
     }
     GpuReading {
@@ -103,6 +119,7 @@ fn memory(card: &GpuCard) -> GpuReading<'_> {
         value: with_total(&card.framebuffer_used, Some(&card.framebuffer_total)),
         trend: &card.memory_trend,
         max: card.framebuffer_total.value_f64(),
+        levels: None,
     }
 }
 
@@ -113,6 +130,7 @@ fn temperature(card: &GpuCard) -> GpuReading<'_> {
         value: value_text(&card.temperature),
         trend: &card.temperature_trend,
         max: Some(TEMPERATURE_SCALE_C),
+        levels: Some(LevelScale::TEMPERATURE),
     }
 }
 
@@ -129,6 +147,7 @@ fn power(card: &GpuCard) -> GpuReading<'_> {
             value: with_total(&card.power_draw, Some(&card.power_limit)),
             trend: &card.power_trend,
             max: card.power_limit.value_f64(),
+            levels: None,
         };
     }
     let peak = card.recorded_power_peak.map(|recorded| {
@@ -155,6 +174,7 @@ fn power(card: &GpuCard) -> GpuReading<'_> {
         value,
         trend: &card.power_trend,
         max: peak,
+        levels: None,
     }
 }
 
@@ -179,21 +199,22 @@ pub(super) fn render_bar(
 ) {
     let mut rows = RowCursor::new(area);
     let Some(row) = rows.next_row() else { return };
-    let ratio = reading.ratio();
+    let (ratio, level) = (reading.ratio(), reading.level());
     let padded = usize::from(kind_width).max(display_width(&reading.value));
     let gauge = render_bar_row(
         frame,
         row,
         &BarRow {
             label: reading.label,
-            ratio,
+            ratio: level,
             value: &pad_left(&reading.value, padded),
             value_width: column,
         },
         context,
     );
-    // Every GPU bar, its memory too, is green and turns as it fills (D-73).
-    frame.render_widget(Gauge::new(ratio, "", &context.theme), gauge);
+    // Every GPU bar, its memory too, is green and turns as it fills (D-73);
+    // the temperature only past 50 °C (D-126).
+    frame.render_widget(Gauge::new(ratio, "", &context.theme).level(level), gauge);
     if let Some(chart) = rows.rest() {
         render_chart(
             frame,
@@ -255,6 +276,43 @@ mod tests {
             (no_total.value.as_str(), no_total.ratio()),
             ("12.3 GiB", None)
         );
+    }
+
+    /// The temperature bar is as long as its share of 100 °C, but it and
+    /// its value are colored like the temperature's text: green up to 50 °C,
+    /// amber at 75 °C (D-126).
+    #[test]
+    fn the_temperature_bar_turns_only_past_fifty_degrees() {
+        let context = crate::test_fixtures::display_context();
+        let theme = &context.theme;
+        let mut card = gpu_view().cards.remove(0);
+        let width = 5 + 20 + 1 + 6;
+        let colors = |card: &GpuCard| {
+            let readings = status_readings(card);
+            let temperature = readings
+                .iter()
+                .find(|reading| reading.label == "temp")
+                .unwrap();
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 1)).unwrap();
+            terminal
+                .draw(|frame| {
+                    render_bar(
+                        frame,
+                        Rect::new(0, 0, width, 1),
+                        temperature,
+                        (6, 6),
+                        &context,
+                    );
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            (buffer[(5, 0)].fg, buffer[(width - 1, 0)].fg)
+        };
+        for (celsius, color) in [(45.0, theme.gauge_low), (75.0, theme.gauge_mid)] {
+            card.temperature = crate::test_fixtures::ok(celsius, CanonicalUnit::DegC);
+            assert_eq!(colors(&card), (color, color), "{celsius} °C");
+        }
     }
 
     /// A GPU's memory bar turns from green through amber to red as it

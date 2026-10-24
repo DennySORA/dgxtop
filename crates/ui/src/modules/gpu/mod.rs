@@ -22,8 +22,8 @@ use self::readings::{OVERVIEW_READINGS, overview_readings, render_bar};
 use super::ModuleBuildError;
 use super::common::{
     ManifestSpec, Output, RowCursor, build_manifest, cell_label, cell_spans, draw_line,
-    fraction_ratio, gauge_row, labeled_cell, message, no_data, panel, percent_ratio, power_icon,
-    render_chart, separator, split_columns, temperature_spans,
+    fan_speed_spans, fraction_ratio, gauge_row, labeled_cell, message, no_data, panel,
+    percent_ratio, power_icon, render_chart, separator, split_columns, temperature_spans,
 };
 use crate::format::{CellDetail, clean, display_width, value_text};
 use crate::num::saturate_u16;
@@ -323,12 +323,8 @@ impl ReadingWidths {
 /// `GPU 0 │ NVIDIA GB10 │ 71°C │ ⚡120 W / 250 W │ 1980 MHz │ fan 45%`
 /// (D-66).
 fn overview_headline(card: &GpuCard, context: &DisplayContext) -> Line<'static> {
-    let mut spans = vec![
-        Span::styled(clean(&card.label), gpu_label_style(card, context)),
-        separator(context),
-        Span::styled(clean(&card.name), context.theme.text_style()),
-        separator(context),
-    ];
+    let mut spans = Vec::from(identity_spans(card, context));
+    spans.push(separator(context));
     spans.extend(temperature_spans(
         &card.temperature,
         CellDetail::GLANCE,
@@ -360,8 +356,11 @@ fn fan_spans(card: &GpuCard, context: &DisplayContext) -> Vec<Span<'static>> {
     if !reported(&card.fan) {
         return Vec::new();
     }
-    let mut spans = vec![separator(context)];
-    spans.extend(labeled_cell("fan", &card.fan, CellDetail::GLANCE, context));
+    let mut spans = vec![
+        separator(context),
+        Span::styled("fan ", context.theme.label_style()),
+    ];
+    spans.extend(fan_speed_spans(&card.fan, CellDetail::GLANCE, context));
     spans
 }
 
@@ -436,13 +435,22 @@ fn gpu_label_style(card: &GpuCard, context: &DisplayContext) -> Style {
     theme.gpu_style(&card.label, theme.title_style())
 }
 
-fn card_headline(card: &GpuCard, context: &DisplayContext) -> Line<'static> {
-    let mut spans = vec![
+/// `GPU 0 │ NVIDIA GeForce RTX 5080` all in the GPU's color (D-123,
+/// D-125): the label bold, the bar and the model beside it plain. The bars
+/// after it stay gray (D-66).
+fn identity_spans(card: &GpuCard, context: &DisplayContext) -> [Span<'static>; 3] {
+    let theme = &context.theme;
+    let model = theme.gpu_style(&card.label, theme.text_style());
+    [
         Span::styled(clean(&card.label), gpu_label_style(card, context)),
-        separator(context),
-        Span::styled(clean(&card.name), context.theme.text_style()),
-        separator(context),
-    ];
+        separator(context).style(model),
+        Span::styled(clean(&card.name), model),
+    ]
+}
+
+fn card_headline(card: &GpuCard, context: &DisplayContext) -> Line<'static> {
+    let mut spans = Vec::from(identity_spans(card, context));
+    spans.push(separator(context));
     spans.extend(temperature_spans(
         &card.temperature,
         CellDetail::GLANCE,
@@ -493,9 +501,10 @@ mod tests {
             .collect()
     }
 
-    /// Both headlines name the GPU in its own color, bold (D-123), and
-    /// write the temperature in the level color of its share of 100 °C
-    /// (D-104).
+    /// Both headlines name the GPU in its own color (D-123): the label
+    /// bold, the bar and the model beside it too (D-125), the bars after
+    /// them gray; and write the temperature in the level color of its share
+    /// of 100 °C (D-104).
     #[test]
     fn headlines_color_the_gpu_and_the_temperature() {
         let context = display_context();
@@ -505,10 +514,20 @@ mod tests {
                 overview_headline(card, &context),
                 card_headline(card, &context),
             ] {
-                let label = &headline.spans[0];
+                let color = Some(context.theme.gpu_color(number));
+                let [label, bar, model, next] = &headline.spans[..4] else {
+                    unreachable!("a headline starts with four spans");
+                };
                 assert_eq!(label.content, format!("GPU {number}"));
-                assert_eq!(label.style.fg, Some(context.theme.gpu_color(number)));
+                assert_eq!(label.style.fg, color);
                 assert!(label.style.add_modifier.contains(Modifier::BOLD));
+                assert_eq!((bar.content.as_ref(), bar.style.fg), (" │ ", color));
+                assert_eq!(
+                    (model.content.as_ref(), model.style.fg),
+                    (card.name.as_str(), color)
+                );
+                assert!(!model.style.add_modifier.contains(Modifier::BOLD));
+                assert_eq!(next.style, context.theme.muted_style());
             }
         }
         let card = &cards[0];
@@ -551,14 +570,25 @@ mod tests {
     #[test]
     fn headlines_show_a_reported_limit_and_fan() {
         let context = display_context();
+        let theme = &context.theme;
         let mut card = gpu_view().cards.remove(0);
-        card.fan = ok(45.0, CanonicalUnit::Percent);
-        for headline in [
-            text(&overview_headline(&card, &context)),
-            text(&card_headline(&card, &context)),
-        ] {
-            assert!(headline.contains("120 W / 250 W"), "{headline}");
-            assert!(headline.contains("fan 45"), "{headline}");
+        // The fan speed in its level color, green up to 50 % (D-126).
+        for (speed, color) in [(45.0, theme.gauge_low), (75.0, theme.gauge_mid)] {
+            card.fan = ok(speed, CanonicalUnit::Percent);
+            for headline in [
+                overview_headline(&card, &context),
+                card_headline(&card, &context),
+            ] {
+                let line = text(&headline);
+                assert!(line.contains("120 W / 250 W"), "{line}");
+                assert!(line.contains(&format!("fan {speed:.0}")), "{line}");
+                let label = headline
+                    .spans
+                    .iter()
+                    .position(|span| span.content == "fan ")
+                    .unwrap();
+                assert_eq!(headline.spans[label + 1].style.fg, Some(color), "{line}");
+            }
         }
     }
 

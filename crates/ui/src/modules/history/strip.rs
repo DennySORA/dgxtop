@@ -22,6 +22,7 @@ use super::panels::{Paint, SeriesState, Strip};
 use crate::format::{CellTone, NOT_AVAILABLE, fixed, format_energy, format_value, pad_left};
 use crate::modules::common::draw_line;
 use crate::registry::DisplayContext;
+use crate::theme::LevelScale;
 use crate::widgets::GapSparkline;
 
 /// Marks a column where nothing was recorded.
@@ -177,6 +178,9 @@ fn render_plot(
     if strip.paint == Paint::Levels {
         sparkline = sparkline.level_colors(theme);
     }
+    if let Some(levels) = temperature_levels(strip) {
+        sparkline = sparkline.level_scale(levels);
+    }
     frame.render_widget(sparkline, plot);
     let base = plot.bottom() - 1;
     for (column, mean) in means.iter().enumerate() {
@@ -226,8 +230,15 @@ fn legend_lines(strip: &Strip<'_>, rows: u16, context: &DisplayContext) -> Vec<L
     lines
 }
 
+/// A temperature strip's own level scale, green up to 50 °C like the
+/// temperatures written elsewhere (D-126).
+fn temperature_levels(strip: &Strip<'_>) -> Option<LevelScale> {
+    (strip.paint == Paint::Levels && strip.series.unit == CanonicalUnit::DegC)
+        .then_some(LevelScale::TEMPERATURE)
+}
+
 /// `max 98.0%`: the value colored by its share of the scale on a bounded
-/// strip.
+/// strip, a temperature by its own scale.
 fn legend_entry(
     label: &'static str,
     value: Option<f64>,
@@ -239,7 +250,8 @@ fn legend_entry(
         Some(value) => {
             let style = match (strip.paint, strip.scale) {
                 (Paint::Levels, Some(scale)) if scale > 0.0 => {
-                    Style::new().fg(theme.level_color(value / scale))
+                    let levels = temperature_levels(strip).unwrap_or(LevelScale::share_of(scale));
+                    Style::new().fg(theme.level_color(levels.level(value)))
                 }
                 _ => theme.text_style(),
             };
@@ -554,6 +566,40 @@ mod tests {
             "{rows:#?}"
         );
         assert_ne!(buffer[(x, 0)].fg, context.theme.process_color(2));
+    }
+
+    /// A temperature strip's columns and legend stay green up to 50 °C and
+    /// turn from there, like the temperatures written elsewhere (D-126):
+    /// GPU 0 idles at 40 °C, then runs a job at 75 °C.
+    #[test]
+    fn a_temperature_strip_turns_only_past_fifty_degrees() {
+        let context = display_context();
+        let theme = &context.theme;
+        let history = history_view();
+        let panels = panels(&history, None);
+        let strip = panels
+            .iter()
+            .find(|panel| panel.title == "GPU temperature")
+            .and_then(|panel| panel.strips.first())
+            .unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(84, 3)).unwrap();
+        terminal
+            .draw(|frame| render_strip(frame, frame.area(), (strip, true), hour(), &context))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text_at = |x: u16, y: u16, width: u16| -> String {
+            (x..x + width).map(|x| buffer[(x, y)].symbol()).collect()
+        };
+        let legend = (0..80).find(|&x| text_at(x, 0, 4) == "now ").unwrap() + 4;
+        assert_eq!(text_at(legend, 0, 4), "75°C");
+        assert_eq!(buffer[(legend, 0)].fg, theme.gauge_mid);
+        let glyphs = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+        let columns: Vec<_> = (HISTORY_GUTTER_COLUMNS..legend)
+            .filter(|&x| glyphs.contains(&buffer[(x, 2)].symbol()))
+            .map(|x| buffer[(x, 2)].fg)
+            .collect();
+        assert_eq!(columns.first(), Some(&theme.gauge_low));
+        assert_eq!(columns.last(), Some(&theme.gauge_mid));
     }
 
     #[test]

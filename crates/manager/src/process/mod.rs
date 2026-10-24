@@ -48,7 +48,7 @@ use uuid::Uuid;
 
 use crate::effects::Effects;
 use audit::AttemptFacts;
-pub(crate) use capability::{ActionIdentity, ActionPolicy};
+pub(crate) use capability::{ActionIdentity, ActionPolicy, acting_uid};
 use capability::{AuditReadiness, Denial, availability_problem, capability_context, check_target};
 use record::{
     ActionRecord, ActionRegistry, ConfirmContext, ExitWatch, MAX_INFLIGHT_ACTIONS, RevokeReason,
@@ -690,7 +690,10 @@ impl ProcessService {
                 "verified identity differs from the selected process",
             );
         }
-        if self.policy.same_uid_only && prepared.verified.uid != self.identity.euid {
+        if self.policy.same_uid_only
+            && !self.identity.any_user
+            && Some(prepared.verified.uid) != self.identity.acting_uid
+        {
             return deny(
                 ErrorCode::CapabilityDenied,
                 "target belongs to another user",

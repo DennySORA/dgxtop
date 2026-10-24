@@ -7,7 +7,6 @@
 
 mod banners;
 mod chrome;
-mod help;
 mod hitmap;
 mod isolation;
 pub mod layout;
@@ -206,9 +205,6 @@ impl Viewer {
         }
         let interval = chrome::interval_text(model);
         chrome::render_footer(frame, plan.footer, input.ui, view, Some(&interval), palette);
-        if let ModeView::Help { scroll } = input.ui.mode {
-            help::render_help(frame, plan.body, scroll, palette);
-        }
         report.hidden_modules = plan
             .hidden
             .iter()

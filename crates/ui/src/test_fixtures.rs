@@ -402,17 +402,19 @@ pub(crate) fn memory_view() -> MemoryView {
 }
 
 pub(crate) fn disk_view() -> DiskView {
+    let nvme = DiskDeviceView {
+        entity_id: entity("disk:nvme0n1"),
+        name: "nvme0n1".into(),
+        read_bps: ok(1.25 * 1024.0 * 1024.0, CanonicalUnit::BytesPerSecond),
+        write_bps: ok(0.0, CanonicalUnit::BytesPerSecond),
+        read_iops: ok(120.0, CanonicalUnit::CountPerSecond),
+        write_iops: missing(CanonicalUnit::CountPerSecond, CellState::Warmup),
+        await_ms: ok(0.4, CanonicalUnit::Milliseconds),
+        temperature: ok(58.85, CanonicalUnit::DegC),
+    };
     DiskView {
-        devices: vec![DiskDeviceView {
-            entity_id: entity("disk:nvme0n1"),
-            name: "nvme0n1".into(),
-            read_bps: ok(1.25 * 1024.0 * 1024.0, CanonicalUnit::BytesPerSecond),
-            write_bps: ok(0.0, CanonicalUnit::BytesPerSecond),
-            read_iops: ok(120.0, CanonicalUnit::CountPerSecond),
-            write_iops: missing(CanonicalUnit::CountPerSecond, CellState::Warmup),
-            await_ms: ok(0.4, CanonicalUnit::Milliseconds),
-            temperature: ok(58.85, CanonicalUnit::DegC),
-        }],
+        devices: vec![nvme.clone()],
+        charted: Some(nvme),
         filesystems: vec![FilesystemView {
             entity_id: entity("fs:/"),
             mount_point: "/".into(),
@@ -840,6 +842,7 @@ pub(crate) fn header() -> HeaderView {
         hosts_healthy: 6,
         hosts_total: 7,
         read_only: false,
+        any_user: false,
         theme: Theme::Dark,
         total_power: missing(CanonicalUnit::Watts, CellState::Unavailable),
     }

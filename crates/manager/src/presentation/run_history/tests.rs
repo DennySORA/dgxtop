@@ -165,6 +165,39 @@ fn the_filter_keeps_the_runs_whose_name_or_pid_hold_it() {
     assert!(none.runs.is_empty() && none.more_runs == 0);
 }
 
+/// Deleting every run takes each ended run the filter keeps from the
+/// whole list, beyond the rows a projection carries (D-128); a running run
+/// stays.
+#[test]
+fn deleting_every_run_finds_each_ended_run_the_filter_keeps() {
+    let mut model = model();
+    model.runs = (1..=300)
+        .map(|pid| {
+            let mut run = row(pid, bucket(0, 10.0, 4));
+            run.live = pid == 300;
+            run.end = (!run.live).then_some(dgxtop_core::process_history::RunEnd {
+                utc_ns: START + MINUTE,
+                cause: dgxtop_core::process_history::EndCause::Exit(0),
+            });
+            if pid % 3 == 0 {
+                run.name = "ComfyUI/main".to_owned();
+            }
+            run
+        })
+        .collect();
+    let every = ended_runs_kept(&model, "");
+    assert_eq!(
+        every.len(),
+        299,
+        "more than the {MAX_RUN_ROWS} rows carried"
+    );
+    assert!(!every.contains(&key(300)), "the running run stays");
+    let comfy = ended_runs_kept(&model, "comfyui");
+    assert_eq!(comfy.len(), 99, "any case; pid 300 still runs");
+    assert!(comfy.iter().all(|run| run.pid.get() % 3 == 0));
+    assert_eq!(ended_runs_kept(&model, "nothing"), Vec::new());
+}
+
 /// The rows come in the model's order with the figures of their whole
 /// life and their colors.
 #[test]

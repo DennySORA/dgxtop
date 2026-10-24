@@ -28,12 +28,17 @@ fn identity(euid: u32) -> ActionIdentity {
         host_id: host_id("test-host"),
         boot_id: boot_id("fake-boot"),
         pid_namespace: PidNamespace::new("pid:[4026531836]").unwrap(),
-        euid,
+        acting_uid: acting_uid(euid, None),
+        any_user: false,
         self_pid: SELF_PID,
     }
 }
 
 fn bench_with(config: &Config, euid: u32) -> Bench {
+    bench_as(config, identity(euid))
+}
+
+fn bench_as(config: &Config, identity: ActionIdentity) -> Bench {
     let audit = CapturingDispatch::new();
     let actions = CapturingDispatch::new();
     let session = SessionId::new("s1").unwrap();
@@ -42,7 +47,7 @@ fn bench_with(config: &Config, euid: u32) -> Bench {
             audit: Box::new(audit.clone()),
             actions: Box::new(actions.clone()),
         },
-        identity(euid),
+        identity,
         config,
     );
     let mut bench = Bench {
@@ -194,7 +199,10 @@ impl Bench {
         };
         assert_eq!(*op_id, request_id);
         assert_eq!(op_key, &key);
-        assert_eq!(context.euid, EUID, "real euid, never from JSON");
+        assert_eq!(
+            context.acting_uid, EUID,
+            "the uid acted for, never from JSON"
+        );
         assert!(context.protected_pids.contains(&SELF_PID));
         let fx = self.action_completion(ActionCompletion::Prepared {
             request_id,
@@ -983,6 +991,55 @@ fn forbidden_requests_are_rejected_before_the_worker_sees_them() {
             case.name
         );
     }
+}
+
+/// A root session started with sudo acts for the user who ran it (D-127):
+/// that user's process is prepared, the worker told to act for that user;
+/// another user's process is refused before the worker sees it.
+#[test]
+fn a_sudo_session_acts_for_the_user_who_ran_sudo() {
+    let config = Config::defaults().unwrap();
+    let sudo = ActionIdentity {
+        acting_uid: acting_uid(0, Some(EUID)),
+        ..identity(0)
+    };
+    bench_as(&config, sudo.clone()).prepared(Signal::Sigterm);
+    let mut bench = bench_as(&config, sudo);
+    bench.audit.take();
+    let (request_id, fx) = bench.prepare_with(&target(4243), Signal::Sigterm, 0, &[]);
+    assert_eq!(
+        result_for(&fx, request_id).code,
+        ResultCode::from(ErrorCode::CapabilityDenied)
+    );
+    assert!(bench.actions.is_empty(), "the worker must not see it");
+}
+
+/// Started `--any-user`, even a root session without sudo signals any
+/// user's process, as the OS allows (D-127): another user's process goes
+/// to the worker, told to check no uid; PID 1 stays protected.
+#[test]
+fn any_user_reaches_every_users_processes_but_protected_ones() {
+    let config = Config::defaults().unwrap();
+    let mut bench = bench_as(
+        &config,
+        ActionIdentity {
+            any_user: true,
+            ..identity(0)
+        },
+    );
+    bench.audit.take();
+    let (_, fx) = bench.prepare_with(&target(4242), Signal::Sigterm, 0, &[]);
+    assert!(fx.results.is_empty(), "the worker verifies it");
+    let ops = bench.actions.take();
+    let ActionOp::Prepare { context, .. } = &ops[0] else {
+        panic!("prepare op expected, got {ops:?}");
+    };
+    assert!(context.any_user);
+    let (request_id, fx) = bench.prepare_with(&target(1), Signal::Sigterm, 0, &[]);
+    assert_eq!(
+        result_for(&fx, request_id).code,
+        ResultCode::from(ErrorCode::CapabilityDenied)
+    );
 }
 
 #[test]

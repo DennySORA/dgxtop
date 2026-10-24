@@ -502,6 +502,102 @@ fn a_partition_hangs_below_the_disk_holding_it() {
     );
 }
 
+/// Each block device names its layer (D-124), and a device stacked on
+/// exactly one other hangs below it: `dm-1` on `dm-0` on the partition
+/// `nvme0n1p1`, so the drive's facts reach the volume. A RAID on two disks
+/// hangs below the host, zram is virtual, and a device sysfs does not list
+/// names no layer rather than passing for a disk.
+#[test]
+fn block_devices_name_their_layer_and_hang_below_what_they_stack_on() {
+    let tree = FakeTree::new("procfs-block-layers");
+    standard_procfs(&tree);
+    let stacked = "\
+ 254       0 dm-0 10 0 80 1 20 0 160 2 0 3 3 0 0 0 0 0 0
+ 254       1 dm-1 10 0 80 1 20 0 160 2 0 3 3 0 0 0 0 0 0
+   9       0 md0 10 0 80 1 20 0 160 2 0 3 3 0 0 0 0 0 0
+ 252       0 zram0 10 0 80 1 20 0 160 2 0 3 3 0 0 0 0 0 0
+  65     144 sdz 10 0 80 1 20 0 160 2 0 3 3 0 0 0 0 0 0
+";
+    tree.write("/proc/diskstats", &format!("{DISKSTATS}{stacked}"));
+    let disk = "/sys/devices/pci0000:00/0000:00:1d.0/0000:02:00.0/nvme/nvme0/nvme0n1";
+    let partition = format!("{disk}/nvme0n1p1");
+    let virtual_block = "/sys/devices/virtual/block";
+    tree.write(&format!("{disk}/dev"), "259:0\n");
+    tree.write(&format!("{partition}/dev"), "259:1\n");
+    tree.write(&format!("{partition}/partition"), "1\n");
+    for (name, dev) in [
+        ("dm-0", "254:0"),
+        ("dm-1", "254:1"),
+        ("md0", "9:0"),
+        ("zram0", "252:0"),
+    ] {
+        tree.write(&format!("{virtual_block}/{name}/dev"), &format!("{dev}\n"));
+    }
+    let slave = |device: &str, name: &str, target: &str| {
+        let link = format!("{virtual_block}/{device}/slaves/{name}");
+        tree.symlink(&link, tree.path(target).to_str().unwrap());
+    };
+    tree.mkdir(&format!("{virtual_block}/dm-0/slaves"));
+    tree.mkdir(&format!("{virtual_block}/dm-1/slaves"));
+    tree.mkdir(&format!("{virtual_block}/md0/slaves"));
+    slave("dm-0", "nvme0n1p1", &partition);
+    slave("dm-1", "dm-0", &format!("{virtual_block}/dm-0"));
+    slave("md0", "nvme0n1", disk);
+    slave("md0", "sda", "/sys/class/block/sda");
+    let class_links = [
+        ("nvme0n1", disk.to_owned()),
+        ("nvme0n1p1", partition.clone()),
+        ("dm-0", format!("{virtual_block}/dm-0")),
+        ("dm-1", format!("{virtual_block}/dm-1")),
+        ("md0", format!("{virtual_block}/md0")),
+        ("zram0", format!("{virtual_block}/zram0")),
+    ];
+    for (name, target) in class_links {
+        let link = format!("/sys/class/block/{name}");
+        tree.remove(&link);
+        tree.symlink(&link, tree.path(&target).to_str().unwrap());
+    }
+    let clock = FakeClock::new(DISCOVERY_NS);
+    let mut adapter = procfs_with(&clock, tree.files());
+    let mut parent = ParentCatalog::default();
+    parent.sync(&mut adapter, ADAPTER);
+    let placement = |entity: &str| {
+        let record = parent.entity(entity);
+        (
+            record.attribute("block_layer").map(str::to_owned),
+            record.parent_id.as_ref().map(|id| id.as_str().to_owned()),
+        )
+    };
+    let expected = [
+        ("blockdev:259:0", Some("disk"), "host"),
+        ("blockdev:259:1", Some("partition"), "blockdev:259:0"),
+        ("blockdev:8:0", Some("disk"), "host"),
+        ("blockdev:254:0", Some("stacked"), "blockdev:259:1"),
+        ("blockdev:254:1", Some("stacked"), "blockdev:254:0"),
+        ("blockdev:9:0", Some("stacked"), "host"),
+        ("blockdev:252:0", Some("virtual"), "host"),
+        ("blockdev:65:144", None, "host"),
+    ];
+    for (entity, layer, parent_id) in expected {
+        assert_eq!(
+            placement(entity),
+            (layer.map(str::to_owned), Some(parent_id.to_owned())),
+            "{entity}"
+        );
+    }
+    assert_eq!(
+        parent
+            .source("procfs:blockdev.254.1:sectors_read")
+            .metric
+            .as_ref()
+            .unwrap()
+            .scope
+            .as_str(),
+        "device",
+        "a stacked device keeps the device scope"
+    );
+}
+
 #[test]
 fn renamed_block_device_is_a_new_generation() {
     let (tree, _clock, mut adapter, mut parent) = standard();

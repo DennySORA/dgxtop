@@ -43,7 +43,7 @@ use crate::format::{
     CellDetail, clean, fixed, format_duration_ms, format_energy, format_percent, format_si_rate,
     value_text,
 };
-use crate::modules::common::{cell_spans, temperature_spans};
+use crate::modules::common::{cell_spans, fan_speed_spans, temperature_spans};
 use crate::num::saturate_u16;
 use crate::registry::DisplayContext;
 
@@ -178,6 +178,11 @@ impl CardInfo<'_> {
                 temperature_spans(cell, CellDetail::GLANCE, self.context),
             )
         })
+    }
+
+    /// A fan's speed in its level color (D-126), when the GPU reports it.
+    fn fan_speed(&self, cell: &MetricCell) -> Option<Value> {
+        reported(cell).then(|| fan_speed_spans(cell, CellDetail::GLANCE, self.context))
     }
 
     /// A row of the card's details.
@@ -507,17 +512,20 @@ impl CardInfo<'_> {
         rows
     }
 
-    /// `45.0% · 47.0%`: each fan of a GPU with several, else its one fan.
+    /// `45.0% · 47.0%`: each fan of a GPU with several, else its one fan,
+    /// each in its level color (D-126).
     fn fans(&self) -> Option<BlockRow> {
         let fans = self
             .details
             .map_or(&[][..], |details| details.fans.as_slice());
         let speeds: Vec<Value> = fans
             .iter()
-            .filter_map(|fan| self.value(&fan.cell))
+            .filter_map(|fan| self.fan_speed(&fan.cell))
             .collect();
         if speeds.len() < 2 {
-            return self.metric("fan", &self.card.fan);
+            return self
+                .fan_speed(&self.card.fan)
+                .map(|speed| BlockRow::new("fan", speed));
         }
         let mut value = Vec::new();
         for (position, speed) in speeds.into_iter().enumerate() {
@@ -914,6 +922,17 @@ mod tests {
             block(&shown, "Thermal").starts_with("Thermal: temperature 71°C, fans 45.0% · 47.0%"),
             "{shown:#?}"
         );
+        // Each fan in its level color: green up to 50 % (D-126).
+        let speeds: Vec<_> = blocks(&card, None, &context)
+            .into_iter()
+            .flat_map(|block| block.rows)
+            .filter(|row| row.key == "fans")
+            .flat_map(|row| row.cells)
+            .flatten()
+            .filter(|span| span.content.ends_with('%'))
+            .map(|span| span.style.fg)
+            .collect();
+        assert_eq!(speeds, vec![Some(context.theme.gauge_low); 2]);
         // What the driver could not name says so; a cut entry is left out.
         assert!(
             block(&shown, "Topology").ends_with(

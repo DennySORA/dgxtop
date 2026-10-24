@@ -25,8 +25,7 @@ use crate::theme::ThemePalette;
 use crate::views::{OFFERED_TABS, Tab};
 
 const SEPARATOR: &str = " │ ";
-/// Footer hints that close the row, in this order.
-const CLOSING_HINTS: [&str; 2] = ["help", INTERVAL_HINT];
+/// The footer hint that closes the row, beside its current value.
 const INTERVAL_HINT: &str = "interval";
 
 /// One header item; narrow terminals keep the highest priorities.
@@ -113,6 +112,28 @@ pub struct HeaderInput<'a> {
     pub chrome_id: Option<&'a ModuleId>,
 }
 
+const BRAND: &str = "DGXTOP";
+
+/// ` DGXTOP` bold on the bar, each letter a step of the theme's brand
+/// gradient (D-129), then `rest` in the title style.
+fn brand_line(palette: &ThemePalette, rest: &'static str) -> Line<'static> {
+    let style = palette.title_style().bg(palette.bar_background);
+    let last = BRAND.len().saturating_sub(1).max(1);
+    let mut spans = vec![Span::styled(" ", style)];
+    spans.extend(BRAND.chars().enumerate().map(|(index, letter)| {
+        let position = ratio(index, last);
+        Span::styled(letter.to_string(), style.fg(palette.brand_color(position)))
+    }));
+    spans.push(Span::styled(rest, style));
+    Line::from(spans)
+}
+
+/// `part / whole` of two small counts.
+fn ratio(part: usize, whole: usize) -> f64 {
+    let as_f64 = |count: usize| f64::from(u32::try_from(count).unwrap_or(u32::MAX));
+    as_f64(part) / as_f64(whole)
+}
+
 /// Header row: the brand and the tabs on the left; on the right the host,
 /// GPU count, driver and uptime, and any warning (simulated namespace,
 /// read-only, overload, unhealthy hosts, an old projection). Narrow rows
@@ -129,10 +150,7 @@ pub fn render_header(
     }
     let background = Style::new().bg(palette.bar_background);
     frame.buffer_mut().set_style(area, background);
-    let brand = Line::from(Span::styled(
-        " DGXTOP ",
-        palette.title_style().bg(palette.bar_background),
-    ));
+    let brand = brand_line(palette, " ");
     frame
         .buffer_mut()
         .set_line(area.x, area.y, &brand, area.width);
@@ -187,6 +205,9 @@ fn header_facts(input: &HeaderInput<'_>, palette: &ThemePalette) -> Vec<Segment>
     }
     if header.read_only {
         facts.push(Segment::new("READ-ONLY".to_owned(), warning, 98));
+    } else if header.any_user {
+        // K/F9 reach every user's processes this run (D-127).
+        facts.push(Segment::new("ANY-USER".to_owned(), warning, 98));
     }
     if header.overload != OverloadState::Normal {
         facts.push(Segment::new(
@@ -392,7 +413,6 @@ fn mode_kind(mode: &ModeView) -> ModeKind {
         ModeView::Normal => ModeKind::Normal,
         ModeView::Filter { .. } => ModeKind::Filter,
         ModeView::Confirm { .. } | ModeView::ConfirmDelete { .. } => ModeKind::Confirm,
-        ModeView::Help { .. } => ModeKind::Help,
     }
 }
 
@@ -417,8 +437,7 @@ fn filter_display(buffer: &str, cursor: usize, room: usize) -> String {
 }
 
 /// Footer: the quit hint first (always visible), then mode content and
-/// hints; help and the sampling interval (with its current value) close the
-/// row.
+/// hints; the sampling interval (with its current value) closes the row.
 pub fn render_footer(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -453,7 +472,6 @@ pub fn render_footer(
         // The process table and the Process History's runs (D-113).
         ModeView::Filter { .. } => Some(" FILTER name or PID ".to_owned()),
         ModeView::Confirm { .. } | ModeView::ConfirmDelete { .. } => Some(" CONFIRM ".to_owned()),
-        ModeView::Help { .. } => Some(" HELP ".to_owned()),
     };
     if let Some(badge) = badge {
         spans.push(Span::styled(SEPARATOR, text_style));
@@ -478,7 +496,7 @@ pub fn render_footer(
         .copied()
         .filter(|(_, hint)| *hint != "quit")
         .collect();
-    ordered.sort_by_key(|(_, hint)| CLOSING_HINTS.contains(hint));
+    ordered.sort_by_key(|(_, hint)| *hint == INTERVAL_HINT);
     for (keys, hint) in ordered {
         spans.push(Span::styled(SEPARATOR, text_style));
         spans.push(Span::styled(format!("{keys} "), key_style));
@@ -542,12 +560,14 @@ pub fn render_waiting(frame: &mut Frame<'_>, area: Rect, ui: &UiState, palette: 
     frame
         .buffer_mut()
         .set_style(header, Style::new().bg(palette.bar_background));
-    frame.buffer_mut().set_stringn(
+    frame.buffer_mut().set_line(
         header.x,
         header.y,
-        " DGXTOP · waiting for the first projection from the manager",
-        usize::from(header.width),
-        palette.title_style().bg(palette.bar_background),
+        &brand_line(
+            palette,
+            " · waiting for the first projection from the manager",
+        ),
+        header.width,
     );
     rows.y += 1;
     rows.height = rows.height.saturating_sub(2);
@@ -613,4 +633,34 @@ pub fn render_body_note(frame: &mut Frame<'_>, area: Rect, text: &str, palette: 
         .wrap(Wrap { trim: true }),
         area,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dgxtop_core::config::Theme;
+
+    /// `DGXTOP` takes a step of its theme's brand gradient a letter (D-129):
+    /// the gradient's ends on the first and last letters, every letter
+    /// another color, all bold on the bar.
+    #[test]
+    fn the_brand_takes_its_themes_gradient_a_letter() {
+        for theme in [Theme::Dark, Theme::Cyan, Theme::Green, Theme::Amber] {
+            let palette = ThemePalette::for_theme(theme);
+            let line = brand_line(&palette, " ");
+            assert_eq!(line.to_string(), " DGXTOP ");
+            let letters = &line.spans[1..=BRAND.len()];
+            let colors: Vec<_> = letters.iter().map(|span| span.style.fg).collect();
+            assert_eq!(colors[0], Some(palette.brand[0]), "{theme:?}");
+            assert_eq!(colors[BRAND.len() - 1], Some(palette.brand[2]), "{theme:?}");
+            assert!(
+                colors.windows(2).all(|pair| pair[0] != pair[1]),
+                "{theme:?}: {colors:?}"
+            );
+            assert!(letters.iter().all(|span| {
+                span.style.add_modifier.contains(Modifier::BOLD)
+                    && span.style.bg == Some(palette.bar_background)
+            }));
+        }
+    }
 }

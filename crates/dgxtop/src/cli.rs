@@ -34,6 +34,10 @@ pub struct Cli {
     #[arg(long)]
     pub read_only: bool,
 
+    /// Let K/F9 reach every user's processes for this run, as far as the OS allows (in a root session any process, like htop); PID 1 and dgxtop's own processes stay protected.
+    #[arg(long)]
+    pub any_user: bool,
+
     /// Absolute path of the v2 configuration file.
     #[arg(long, value_name = "ABSOLUTE_PATH")]
     pub config: Option<PathBuf>,
@@ -195,6 +199,17 @@ mod tests {
             overrides,
             CliOverrides::default(),
             "no flag may override persisted settings"
+        );
+    }
+
+    /// `--any-user` is a run's choice, no configuration override (D-127).
+    #[test]
+    fn any_user_is_a_flag_of_the_run() {
+        assert!(parse(&["--any-user"]).any_user);
+        assert!(!parse(&[]).any_user);
+        assert_eq!(
+            parse(&["--any-user"]).overrides().unwrap(),
+            parse(&[]).overrides().unwrap()
         );
     }
 

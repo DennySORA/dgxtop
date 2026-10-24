@@ -174,8 +174,8 @@ one, after a confirmation; a run still running is kept.
 - **Private.** No network access and no telemetry. Settings and history are files only you can
   read. Process History keeps the command lines, working folders and programs of GPU processes;
   environments are never stored.
-- **Safe process actions.** Only your own processes, never from a root session, and only after a
-  confirmation that expires. Signals go through a pidfd, so a reused PID is never hit, and every
+- **Safe process actions.** Only your own processes (under `sudo`, those of the user who ran it;
+  never from a plain root login), and only after a confirmation that expires. Signals go through a pidfd, so a reused PID is never hit, and every
   action is logged. `--read-only` turns them off.
 - **Safe upgrades.** The installer verifies every download and keeps the previous version for a
   one-command rollback.
@@ -246,6 +246,7 @@ dgxtop -i 0.5                # sample every 0.5 s for this run (saved settings a
 dgxtop -t amber              # color theme for this run: dark, cyan, green or amber
 dgxtop --no-gpu              # do not start the NVML host
 dgxtop --read-only           # no process actions
+sudo -H dgxtop --any-user    # K / F9 reach every user's processes, as htop does as root
 dgxtop --replay fixture.json # simulated data only, read-only, separate temporary state
 dgxtop --check-config        # validate the configuration and print its saved and effective values
 dgxtop --diagnostics-json    # versions, SQLite, capabilities and health as JSON
@@ -264,7 +265,11 @@ sudo -H ./target/release/dgxtop   # built from source; run from the repository d
 
 The hardware and driver must still expose CPU power data, and every GPU must report its power
 for the total to appear. `sudo` cannot provide missing sensors. With default paths, these commands
-use root's configuration and history. Process termination (`K` / `F9`) is disabled in root sessions.
+use root's configuration and history. Process termination (`K` / `F9`) acts for the user who ran
+`sudo`: it reaches that user's processes only, never root's or another user's, and a root session
+started without `sudo` cannot terminate processes. `--any-user` lifts that for one run, as `htop` run
+as root does: `K` / `F9` reach any process the OS lets root signal, root's, other users' and containers' too,
+while PID 1 and dgxtop's own processes stay protected and the header shows `ANY-USER`.
 
 `--config` and `--state-dir` take absolute paths for the configuration file and the state
 directory. Command-line values override saved settings only for the current run.
@@ -278,7 +283,6 @@ keyboard without arrow keys, `h` / `j` / `k` / `l` stand in for `←` / `↓` / 
 |---|---|
 | `1`–`5`, `Tab`, `Shift-Tab` | Overview, GPU, Overview History, Process History, Settings |
 | `q`, `Ctrl-C` | Quit (`q` is text while typing a filter; `Ctrl-C` always quits) |
-| `?`, `F1` | Help |
 | `+` / `-` | Faster / slower sampling |
 | `j`/`k`, arrows, `PgUp`/`PgDn` (`Ctrl-U`/`Ctrl-D`), `Home`/`End` (`<`/`>`) | Move the selection in the Overview and Settings |
 | `c` | Show or hide the CPU sensors and per-core bars (or click the CPU panel) |

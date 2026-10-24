@@ -104,13 +104,10 @@ pub struct ControllerContext<'a> {
 enum InputMode {
     Normal,
     Filter(FilterEdit),
-    Help {
-        scroll: u16,
-    },
-    /// Asking to delete these ended runs from the Process History (D-108);
-    /// `running` marked runs stay.
+    /// Asking to delete these ended runs from the Process History (D-108),
+    /// or every one the filter keeps (D-128); `running` runs stay.
     ConfirmDelete {
-        runs: Vec<ProcessKey>,
+        runs: deletion::RunSet,
         running: usize,
     },
 }
@@ -148,6 +145,9 @@ pub struct Controller {
     offsets: BTreeMap<ModuleId, u16>,
     /// The runs marked in the Process History (D-108).
     marked: BTreeSet<ProcessKey>,
+    /// The filter under which `a` marked every ended run, listed or not
+    /// (D-128); `None` once the marks change one by one.
+    marked_every: Option<String>,
     /// The entity picked in each module: the Overview History's GPU (D-107).
     picks: BTreeMap<ModuleId, EntityId>,
     /// The deletion of Process History runs being sent (D-108).
@@ -206,6 +206,7 @@ impl Controller {
             tabs: BTreeMap::new(),
             offsets: BTreeMap::new(),
             marked: BTreeSet::new(),
+            marked_every: None,
             picks: BTreeMap::new(),
             deletion: None,
             folds: folds::Folds::default(),
@@ -253,7 +254,6 @@ impl Controller {
         match self.mode {
             InputMode::Normal => ModeKind::Normal,
             InputMode::Filter(_) => ModeKind::Filter,
-            InputMode::Help { .. } => ModeKind::Help,
             InputMode::ConfirmDelete { .. } => ModeKind::Confirm,
         }
     }
@@ -272,10 +272,10 @@ impl Controller {
                 buffer: edit.text().to_owned(),
                 cursor: edit.cursor(),
             },
-            (None, InputMode::Help { scroll }) => ModeView::Help { scroll: *scroll },
             (None, InputMode::ConfirmDelete { runs, running }) => ModeView::ConfirmDelete {
                 runs: runs.len(),
                 running: *running,
+                every: matches!(runs, deletion::RunSet::Every { .. }),
             },
             (None, InputMode::Normal) => ModeView::Normal,
         };
@@ -390,8 +390,6 @@ impl Controller {
                 self.quit = true;
                 self.bump();
             }
-            KeyAction::ToggleHelp => self.set_mode(InputMode::Help { scroll: 0 }),
-            KeyAction::CloseHelp => self.set_mode(InputMode::Normal),
             KeyAction::DismissNotices => {
                 let dismissed = self.notices.clear();
                 let unmarked = self.clear_marks();
@@ -413,21 +411,7 @@ impl Controller {
             | KeyAction::First
             | KeyAction::Last => {
                 let movement = self.movement_for(action, context);
-                if let InputMode::Help { scroll } = &mut self.mode {
-                    *scroll = match movement {
-                        Movement::Down(step) => {
-                            scroll.saturating_add(u16::try_from(step).unwrap_or(u16::MAX))
-                        }
-                        Movement::Up(step) => {
-                            scroll.saturating_sub(u16::try_from(step).unwrap_or(u16::MAX))
-                        }
-                        Movement::First => 0,
-                        Movement::Last => u16::MAX,
-                    };
-                    self.bump();
-                } else {
-                    self.navigate(movement, context);
-                }
+                self.navigate(movement, context);
             }
             KeyAction::ShowTab(target) => self.show_tab(target, context),
             KeyAction::NextView | KeyAction::PreviousView => {
@@ -804,6 +788,8 @@ impl Controller {
         });
         if runs && let Ok(history) = ModuleId::new(HISTORY_MODULE_ID) {
             self.scroll.insert(history, 0);
+            // `a` marked every run another filter kept.
+            self.marked_every = None;
         }
     }
 
@@ -878,17 +864,6 @@ impl Controller {
     fn handle_mouse(&mut self, mouse: &MouseEvent, context: &ControllerContext<'_>) {
         match self.mode() {
             ModeKind::Normal => {}
-            ModeKind::Help => {
-                if let InputMode::Help { scroll } = &mut self.mode {
-                    match mouse.kind {
-                        MouseEventKind::ScrollDown => *scroll = scroll.saturating_add(1),
-                        MouseEventKind::ScrollUp => *scroll = scroll.saturating_sub(1),
-                        _ => return,
-                    }
-                    self.bump();
-                }
-                return;
-            }
             // Confirmation and text entry ignore the mouse: a click must
             // never confirm or retarget anything.
             ModeKind::Confirm | ModeKind::Filter => return,

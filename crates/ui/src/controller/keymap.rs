@@ -1,5 +1,6 @@
-//! The keymap table. One static table drives key dispatch, the
-//! footer hints and the help overlay, so they can never disagree.
+//! The keymap table. One static table drives key dispatch and the footer
+//! hints, so they can never disagree; each panel names its own keys on its
+//! title (D-114), so there is no help screen (D-131).
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use dgxtop_core::commands::ViewKind;
@@ -31,8 +32,6 @@ pub enum KeyAction {
     Kill,
     Confirm,
     Cancel,
-    ToggleHelp,
-    CloseHelp,
     NextHistoryBarSize,
     PreviousHistoryBarSize,
     ToggleModule,
@@ -74,7 +73,6 @@ pub enum ModeKind {
     Normal,
     Filter,
     Confirm,
-    Help,
 }
 
 /// Set of modes (bit mask).
@@ -85,17 +83,15 @@ impl ModeSet {
     pub const NORMAL: Self = Self(1);
     pub const FILTER: Self = Self(2);
     pub const CONFIRM: Self = Self(4);
-    pub const HELP: Self = Self(8);
-    pub const ALL: Self = Self(15);
+    pub const ALL: Self = Self(7);
     /// Every mode except text entry (where printable keys are text).
-    pub const NOT_FILTER: Self = Self(13);
+    pub const NOT_FILTER: Self = Self(5);
 
     pub const fn contains(self, mode: ModeKind) -> bool {
         let bit = match mode {
             ModeKind::Normal => 1,
             ModeKind::Filter => 2,
             ModeKind::Confirm => 4,
-            ModeKind::Help => 8,
         };
         self.0 & bit != 0
     }
@@ -113,51 +109,6 @@ impl ViewScope {
         match self {
             Self::All => true,
             Self::Only(views) => views.contains(&view),
-        }
-    }
-}
-
-/// Help overlay grouping.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Section {
-    General,
-    Views,
-    Navigation,
-    Processes,
-    Gpu,
-    History,
-    Settings,
-    FilterMode,
-    ConfirmMode,
-    HelpMode,
-}
-
-impl Section {
-    pub const ORDER: [Section; 10] = [
-        Section::General,
-        Section::Views,
-        Section::Navigation,
-        Section::Processes,
-        Section::Gpu,
-        Section::History,
-        Section::Settings,
-        Section::FilterMode,
-        Section::ConfirmMode,
-        Section::HelpMode,
-    ];
-
-    pub const fn title(self) -> &'static str {
-        match self {
-            Self::General => "General",
-            Self::Views => "Views",
-            Self::Navigation => "Navigation (selection is by identity, never row number)",
-            Self::Processes => "Processes (Overview)",
-            Self::Gpu => "GPU view",
-            Self::History => "History views",
-            Self::Settings => "Settings view",
-            Self::FilterMode => "Filter input",
-            Self::ConfirmMode => "Confirmation (only with an active token)",
-            Self::HelpMode => "Help",
         }
     }
 }
@@ -210,10 +161,10 @@ impl KeyPattern {
 #[derive(Debug, Clone, Copy)]
 pub struct KeyBinding {
     pub keys: &'static str,
+    /// What the binding does, for whoever reads the table.
     pub description: &'static str,
     /// Short footer label; `None` keeps the binding out of the footer.
     pub hint: Option<&'static str>,
-    pub section: Section,
     pub modes: ModeSet,
     pub views: ViewScope,
     pub patterns: &'static [KeyPattern],
@@ -236,7 +187,6 @@ const fn binding(
     keys: &'static str,
     description: &'static str,
     hint: Option<&'static str>,
-    section: Section,
     modes: ModeSet,
     views: ViewScope,
     patterns: &'static [KeyPattern],
@@ -246,7 +196,6 @@ const fn binding(
         keys,
         description,
         hint,
-        section,
         modes,
         views,
         patterns,
@@ -257,76 +206,72 @@ const fn binding(
 /// The complete keymap, in precedence and footer order.
 #[rustfmt::skip]
 pub static KEYMAP: &[KeyBinding] = &[
-    binding("q", "quit (in filter input q is text)", Some("quit"), Section::General, ModeSet::NOT_FILTER, ViewScope::All, &[KeyPattern::char('q')], KeyAction::Quit),
-    binding("Ctrl-C", "quit from any mode, including filter input", None, Section::General, ModeSet::ALL, ViewScope::All, &[KeyPattern::ctrl('c')], KeyAction::Quit),
-    binding("?/F1", "toggle this help", Some("help"), Section::General, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('?'), KeyPattern::key(KeyCode::F(1))], KeyAction::ToggleHelp),
-    binding("Esc", "dismiss notices and the Process History's marks; with neither, the Overview's other panels again after z", None, Section::General, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::key(KeyCode::Esc)], KeyAction::DismissNotices),
-    binding("+/-", "faster / slower sampling (SetSamplingInterval with the settings revision)", Some("interval"), Section::General, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('+'), KeyPattern::char('=')], KeyAction::FasterInterval),
-    binding("-", "slower sampling", None, Section::General, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('-')], KeyAction::SlowerInterval),
-    binding("Tab", "next view", Some("view"), Section::Views, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::key(KeyCode::Tab)], KeyAction::NextView),
-    binding("Shift-Tab", "previous view", None, Section::Views, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::key(KeyCode::BackTab)], KeyAction::PreviousView),
-    binding("1", "Overview (GPUs, system, GPU processes)", None, Section::Views, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('1')], KeyAction::ShowTab(Tab::Overview)),
-    binding("2", "GPU detail", None, Section::Views, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('2')], KeyAction::ShowTab(Tab::Gpu)),
-    binding("3", "Overview History", None, Section::Views, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('3')], KeyAction::ShowTab(Tab::OverviewHistory)),
-    binding("4", "Process History", None, Section::Views, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('4')], KeyAction::ShowTab(Tab::ProcessHistory)),
-    binding("5/F2", "Settings", None, Section::Views, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('5'), KeyPattern::key(KeyCode::F(2))], KeyAction::ShowTab(Tab::Settings)),
-    binding("j/↓", "select next", None, Section::Navigation, ModeSet::NORMAL, ViewScope::Only(LIST_VIEWS), &[KeyPattern::char('j'), KeyPattern::key(KeyCode::Down)], KeyAction::MoveDown),
-    binding("k/↑", "select previous", None, Section::Navigation, ModeSet::NORMAL, ViewScope::Only(LIST_VIEWS), &[KeyPattern::char('k'), KeyPattern::key(KeyCode::Up)], KeyAction::MoveUp),
-    binding("PgDn/Ctrl-D", "page down", None, Section::Navigation, ModeSet::NORMAL, ViewScope::Only(LIST_VIEWS), &[KeyPattern::key(KeyCode::PageDown), KeyPattern::ctrl('d')], KeyAction::PageDown),
-    binding("PgUp/Ctrl-U", "page up", None, Section::Navigation, ModeSet::NORMAL, ViewScope::Only(LIST_VIEWS), &[KeyPattern::key(KeyCode::PageUp), KeyPattern::ctrl('u')], KeyAction::PageUp),
-    binding("Home/<", "first row", None, Section::Navigation, ModeSet::NORMAL, ViewScope::Only(LIST_VIEWS), &[KeyPattern::key(KeyCode::Home), KeyPattern::char('<')], KeyAction::First),
-    binding("End/>", "last row (reachable in long lists)", None, Section::Navigation, ModeSet::NORMAL, ViewScope::Only(LIST_VIEWS), &[KeyPattern::key(KeyCode::End), KeyPattern::char('>')], KeyAction::Last),
-    binding("h/←", "previous GPU", None, Section::Gpu, ModeSet::NORMAL, ViewScope::Only(GPU_VIEWS), &[KeyPattern::char('h'), KeyPattern::key(KeyCode::Left)], KeyAction::PreviousGpu),
-    binding("l/→", "next GPU", None, Section::Gpu, ModeSet::NORMAL, ViewScope::Only(GPU_VIEWS), &[KeyPattern::char('l'), KeyPattern::key(KeyCode::Right)], KeyAction::NextGpu),
-    binding("j/↓", "next page of the GPU's sections, when they do not all fit", None, Section::Gpu, ModeSet::NORMAL, ViewScope::Only(GPU_VIEWS), &[KeyPattern::char('j'), KeyPattern::key(KeyCode::Down)], KeyAction::MoveDown),
-    binding("k/↑", "previous page of the GPU's sections", None, Section::Gpu, ModeSet::NORMAL, ViewScope::Only(GPU_VIEWS), &[KeyPattern::char('k'), KeyPattern::key(KeyCode::Up)], KeyAction::MoveUp),
-    binding("PgDn/Ctrl-D, PgUp/Ctrl-U", "next / previous page of the GPU's sections", None, Section::Gpu, ModeSet::NORMAL, ViewScope::Only(GPU_VIEWS), &[KeyPattern::key(KeyCode::PageDown), KeyPattern::ctrl('d')], KeyAction::PageDown),
-    binding("PgUp/Ctrl-U", "previous page of the GPU's sections", None, Section::Gpu, ModeSet::NORMAL, ViewScope::Only(GPU_VIEWS), &[KeyPattern::key(KeyCode::PageUp), KeyPattern::ctrl('u')], KeyAction::PageUp),
-    binding("g/Home/<, G/End/>", "first / last page of the GPU's sections", None, Section::Gpu, ModeSet::NORMAL, ViewScope::Only(GPU_VIEWS), &[KeyPattern::char('g'), KeyPattern::key(KeyCode::Home), KeyPattern::char('<')], KeyAction::First),
-    binding("G/End/>", "last page of the GPU's sections", None, Section::Gpu, ModeSet::NORMAL, ViewScope::Only(GPU_VIEWS), &[KeyPattern::char('G'), KeyPattern::key(KeyCode::End), KeyPattern::char('>')], KeyAction::Last),
-    binding("c", "show / hide the CPU sensors and per-core bars", None, Section::Views, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char('c')], KeyAction::ToggleCpuDetail),
-    binding("z", "show the GPU processes alone on the whole Overview / everything again (Esc or another view too)", None, Section::Views, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char('z')], KeyAction::ZoomProcesses),
-    binding("i", "fold / unfold the disk I/O panel, so the processes get its rows (kept after a restart)", None, Section::Views, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char('i')], KeyAction::Fold("disk")),
-    binding("n", "fold / unfold the network panel", None, Section::Views, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char('n')], KeyAction::Fold("network")),
-    binding("o", "unfold every panel", None, Section::Views, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview, ViewKind::History]), &[KeyPattern::char('o')], KeyAction::UnfoldAll),
-    binding("[/]", "scroll the GPU processes of the memory panel up / down", None, Section::Views, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char('[')], KeyAction::ScrollMemoryUp),
-    binding("]", "scroll the GPU processes of the memory panel down", None, Section::Views, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char(']')], KeyAction::ScrollMemoryDown),
-    binding("g", "cycle GPU filter: all → each GPU → all", None, Section::Processes, ModeSet::NORMAL, ViewScope::Only(PROCESS_VIEWS), &[KeyPattern::char('g')], KeyAction::CycleGpuFilter),
-    binding("/", "filter processes, or the Process History's runs, by name or PID (≤ 256 bytes; Enter applies, Esc clears; Ctrl-B/F/A/E move like ←/→/Home/End)", None, Section::Processes, ModeSet::NORMAL, ViewScope::Only(FILTER_VIEWS), &[KeyPattern::char('/')], KeyAction::StartFilter),
-    binding("s", "next sort column", None, Section::Processes, ModeSet::NORMAL, ViewScope::Only(PROCESS_VIEWS), &[KeyPattern::char('s')], KeyAction::CycleSort),
-    binding("r", "reverse sort order", None, Section::Processes, ModeSet::NORMAL, ViewScope::Only(PROCESS_VIEWS), &[KeyPattern::char('r')], KeyAction::ToggleOrder),
-    binding("K", "terminate the visible selected process (SIGTERM, asks to confirm)", None, Section::Processes, ModeSet::NORMAL, ViewScope::Only(PROCESS_VIEWS), &[KeyPattern::char('K')], KeyAction::Terminate),
-    binding("F9", "force kill the visible selected process (SIGKILL, asks to confirm)", None, Section::Processes, ModeSet::NORMAL, ViewScope::Only(PROCESS_VIEWS), &[KeyPattern::key(KeyCode::F(9))], KeyAction::Kill),
-    binding("j/↓", "next run in the Process History's list; the next page of an opened run's charts; the next GPU in the Overview History", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('j'), KeyPattern::key(KeyCode::Down)], KeyAction::HistoryDown),
-    binding("k/↑", "previous run; the previous page of an opened run; the previous GPU", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('k'), KeyPattern::key(KeyCode::Up)], KeyAction::HistoryUp),
-    binding("PgDn/Ctrl-D, PgUp/Ctrl-U", "scroll the Overview History's panels a band down / up, when they do not all fit; the next / previous page of an opened run's charts", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::key(KeyCode::PageDown), KeyPattern::ctrl('d')], KeyAction::PageDown),
-    binding("PgUp/Ctrl-U", "scroll the Overview History's panels a band up; the previous page of an opened run", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::key(KeyCode::PageUp), KeyPattern::ctrl('u')], KeyAction::PageUp),
-    binding("g/Home/<", "back to the top of the list: the running runs, then the newest; an opened run's first page; the first panels", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('g'), KeyPattern::key(KeyCode::Home), KeyPattern::char('<')], KeyAction::HistoryFirst),
-    binding("G/End/>", "to the end of the list: the oldest ended run; an opened run's last page; the last panels", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('G'), KeyPattern::key(KeyCode::End), KeyPattern::char('>')], KeyAction::HistoryLast),
-    binding("Space", "mark / unmark the run under the cursor and go to the next", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char(' ')], KeyAction::HistoryMark),
-    binding("a", "mark every ended run / unmark all", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('a')], KeyAction::HistoryMarkAll),
-    binding("d/Del", "delete the marked runs, else the run under the cursor (asks to confirm; running runs stay)", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('d'), KeyPattern::key(KeyCode::Delete)], KeyAction::HistoryDelete),
-    binding("Enter", "open / close the selected run", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::key(KeyCode::Enter)], KeyAction::HistoryOpen),
-    binding("c/m/u/v", "fold / unfold the Overview History's CPU, memory, GPU utilization or GPU memory panel, so the others get its rows (kept after a restart)", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('c')], KeyAction::Fold("history.cpu")),
-    binding("m", "fold / unfold the Overview History's memory panel", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('m')], KeyAction::Fold("history.memory")),
-    binding("u", "fold / unfold the Overview History's GPU utilization panel", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('u')], KeyAction::Fold("history.gpu_utilization")),
-    binding("v", "fold / unfold the Overview History's GPU memory panel", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('v')], KeyAction::Fold("history.gpu_memory")),
-    binding("t/p/i/n", "fold / unfold the Overview History's GPU temperature, power, disk or network panel", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('t')], KeyAction::Fold("history.gpu_temperature")),
-    binding("p", "fold / unfold the Overview History's power panel", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('p')], KeyAction::Fold("history.power")),
-    binding("i", "fold / unfold the Overview History's disk panel", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('i')], KeyAction::Fold("history.disk")),
-    binding("n", "fold / unfold the Overview History's network panel", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('n')], KeyAction::Fold("history.network")),
-    binding("e", "show the whole command line of the opened run / one line", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('e')], KeyAction::HistoryExpandCommand),
-    binding("y", "copy the opened run's command line (OSC 52)", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('y')], KeyAction::HistoryCopyCommand),
-    binding("→/l/w", "next bar size of the history charts (1m … 24h)", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::key(KeyCode::Right), KeyPattern::char('l'), KeyPattern::char('w')], KeyAction::NextHistoryBarSize),
-    binding("←/h/W", "previous bar size of the history charts", None, Section::History, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::key(KeyCode::Left), KeyPattern::char('h'), KeyPattern::char('W')], KeyAction::PreviousHistoryBarSize),
-    binding("Space", "enable / disable the selected module", None, Section::Settings, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Settings]), &[KeyPattern::char(' ')], KeyAction::ToggleModule),
-    binding("Enter", "apply the filter", Some("apply"), Section::FilterMode, ModeSet::FILTER, ViewScope::All, &[KeyPattern::key(KeyCode::Enter)], KeyAction::FilterApply),
-    binding("Esc", "clear the filter and leave input", Some("clear"), Section::FilterMode, ModeSet::FILTER, ViewScope::All, &[KeyPattern::key(KeyCode::Esc)], KeyAction::FilterClear),
-    binding("y/Enter", "do what the confirmation asks: send the signal (pressed before it is verified, it goes out once it is), delete the runs", Some("confirm"), Section::ConfirmMode, ModeSet::CONFIRM, ViewScope::All, &[KeyPattern::char('y'), KeyPattern::key(KeyCode::Enter)], KeyAction::Confirm),
-    binding("n/Esc", "cancel the confirmation (before it is verified too)", Some("cancel"), Section::ConfirmMode, ModeSet::CONFIRM, ViewScope::All, &[KeyPattern::char('n'), KeyPattern::key(KeyCode::Esc)], KeyAction::Cancel),
-    binding("Esc/?/F1", "close help", Some("close"), Section::HelpMode, ModeSet::HELP, ViewScope::All, &[KeyPattern::key(KeyCode::Esc), KeyPattern::char('?'), KeyPattern::key(KeyCode::F(1))], KeyAction::CloseHelp),
-    binding("j/k", "scroll help", None, Section::HelpMode, ModeSet::HELP, ViewScope::All, &[KeyPattern::char('j'), KeyPattern::key(KeyCode::Down)], KeyAction::MoveDown),
-    binding("k", "scroll help up", None, Section::HelpMode, ModeSet::HELP, ViewScope::All, &[KeyPattern::char('k'), KeyPattern::key(KeyCode::Up)], KeyAction::MoveUp),
+    binding("q", "quit (in filter input q is text)", Some("quit"), ModeSet::NOT_FILTER, ViewScope::All, &[KeyPattern::char('q')], KeyAction::Quit),
+    binding("Ctrl-C", "quit from any mode, including filter input", None, ModeSet::ALL, ViewScope::All, &[KeyPattern::ctrl('c')], KeyAction::Quit),
+    binding("Esc", "dismiss notices and the Process History's marks; with neither, the Overview's other panels again after z", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::key(KeyCode::Esc)], KeyAction::DismissNotices),
+    binding("+/-", "faster / slower sampling (SetSamplingInterval with the settings revision)", Some("interval"), ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('+'), KeyPattern::char('=')], KeyAction::FasterInterval),
+    binding("-", "slower sampling", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('-')], KeyAction::SlowerInterval),
+    binding("Tab", "next view", Some("view"), ModeSet::NORMAL, ViewScope::All, &[KeyPattern::key(KeyCode::Tab)], KeyAction::NextView),
+    binding("Shift-Tab", "previous view", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::key(KeyCode::BackTab)], KeyAction::PreviousView),
+    binding("1", "Overview (GPUs, system, GPU processes)", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('1')], KeyAction::ShowTab(Tab::Overview)),
+    binding("2", "GPU detail", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('2')], KeyAction::ShowTab(Tab::Gpu)),
+    binding("3", "Overview History", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('3')], KeyAction::ShowTab(Tab::OverviewHistory)),
+    binding("4", "Process History", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('4')], KeyAction::ShowTab(Tab::ProcessHistory)),
+    binding("5/F2", "Settings", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('5'), KeyPattern::key(KeyCode::F(2))], KeyAction::ShowTab(Tab::Settings)),
+    binding("j/↓", "select next", None, ModeSet::NORMAL, ViewScope::Only(LIST_VIEWS), &[KeyPattern::char('j'), KeyPattern::key(KeyCode::Down)], KeyAction::MoveDown),
+    binding("k/↑", "select previous", None, ModeSet::NORMAL, ViewScope::Only(LIST_VIEWS), &[KeyPattern::char('k'), KeyPattern::key(KeyCode::Up)], KeyAction::MoveUp),
+    binding("PgDn/Ctrl-D", "page down", None, ModeSet::NORMAL, ViewScope::Only(LIST_VIEWS), &[KeyPattern::key(KeyCode::PageDown), KeyPattern::ctrl('d')], KeyAction::PageDown),
+    binding("PgUp/Ctrl-U", "page up", None, ModeSet::NORMAL, ViewScope::Only(LIST_VIEWS), &[KeyPattern::key(KeyCode::PageUp), KeyPattern::ctrl('u')], KeyAction::PageUp),
+    binding("Home/<", "first row", None, ModeSet::NORMAL, ViewScope::Only(LIST_VIEWS), &[KeyPattern::key(KeyCode::Home), KeyPattern::char('<')], KeyAction::First),
+    binding("End/>", "last row (reachable in long lists)", None, ModeSet::NORMAL, ViewScope::Only(LIST_VIEWS), &[KeyPattern::key(KeyCode::End), KeyPattern::char('>')], KeyAction::Last),
+    binding("h/←", "previous GPU", None, ModeSet::NORMAL, ViewScope::Only(GPU_VIEWS), &[KeyPattern::char('h'), KeyPattern::key(KeyCode::Left)], KeyAction::PreviousGpu),
+    binding("l/→", "next GPU", None, ModeSet::NORMAL, ViewScope::Only(GPU_VIEWS), &[KeyPattern::char('l'), KeyPattern::key(KeyCode::Right)], KeyAction::NextGpu),
+    binding("j/↓", "next page of the GPU's sections, when they do not all fit", None, ModeSet::NORMAL, ViewScope::Only(GPU_VIEWS), &[KeyPattern::char('j'), KeyPattern::key(KeyCode::Down)], KeyAction::MoveDown),
+    binding("k/↑", "previous page of the GPU's sections", None, ModeSet::NORMAL, ViewScope::Only(GPU_VIEWS), &[KeyPattern::char('k'), KeyPattern::key(KeyCode::Up)], KeyAction::MoveUp),
+    binding("PgDn/Ctrl-D, PgUp/Ctrl-U", "next / previous page of the GPU's sections", None, ModeSet::NORMAL, ViewScope::Only(GPU_VIEWS), &[KeyPattern::key(KeyCode::PageDown), KeyPattern::ctrl('d')], KeyAction::PageDown),
+    binding("PgUp/Ctrl-U", "previous page of the GPU's sections", None, ModeSet::NORMAL, ViewScope::Only(GPU_VIEWS), &[KeyPattern::key(KeyCode::PageUp), KeyPattern::ctrl('u')], KeyAction::PageUp),
+    binding("g/Home/<, G/End/>", "first / last page of the GPU's sections", None, ModeSet::NORMAL, ViewScope::Only(GPU_VIEWS), &[KeyPattern::char('g'), KeyPattern::key(KeyCode::Home), KeyPattern::char('<')], KeyAction::First),
+    binding("G/End/>", "last page of the GPU's sections", None, ModeSet::NORMAL, ViewScope::Only(GPU_VIEWS), &[KeyPattern::char('G'), KeyPattern::key(KeyCode::End), KeyPattern::char('>')], KeyAction::Last),
+    binding("c", "show / hide the CPU sensors and per-core bars", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char('c')], KeyAction::ToggleCpuDetail),
+    binding("z", "show the GPU processes alone on the whole Overview / everything again (Esc or another view too)", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char('z')], KeyAction::ZoomProcesses),
+    binding("i", "fold / unfold the disk I/O panel, so the processes get its rows (kept after a restart)", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char('i')], KeyAction::Fold("disk")),
+    binding("n", "fold / unfold the network panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char('n')], KeyAction::Fold("network")),
+    binding("o", "unfold every panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview, ViewKind::History]), &[KeyPattern::char('o')], KeyAction::UnfoldAll),
+    binding("[/]", "scroll the GPU processes of the memory panel up / down", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char('[')], KeyAction::ScrollMemoryUp),
+    binding("]", "scroll the GPU processes of the memory panel down", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char(']')], KeyAction::ScrollMemoryDown),
+    binding("g", "cycle GPU filter: all → each GPU → all", None, ModeSet::NORMAL, ViewScope::Only(PROCESS_VIEWS), &[KeyPattern::char('g')], KeyAction::CycleGpuFilter),
+    binding("/", "filter processes, or the Process History's runs, by name or PID (≤ 256 bytes; Enter applies, Esc clears; Ctrl-B/F/A/E move like ←/→/Home/End)", None, ModeSet::NORMAL, ViewScope::Only(FILTER_VIEWS), &[KeyPattern::char('/')], KeyAction::StartFilter),
+    binding("s", "next sort column", None, ModeSet::NORMAL, ViewScope::Only(PROCESS_VIEWS), &[KeyPattern::char('s')], KeyAction::CycleSort),
+    binding("r", "reverse sort order", None, ModeSet::NORMAL, ViewScope::Only(PROCESS_VIEWS), &[KeyPattern::char('r')], KeyAction::ToggleOrder),
+    binding("K", "terminate the visible selected process (SIGTERM, asks to confirm)", None, ModeSet::NORMAL, ViewScope::Only(PROCESS_VIEWS), &[KeyPattern::char('K')], KeyAction::Terminate),
+    binding("F9", "force kill the visible selected process (SIGKILL, asks to confirm)", None, ModeSet::NORMAL, ViewScope::Only(PROCESS_VIEWS), &[KeyPattern::key(KeyCode::F(9))], KeyAction::Kill),
+    binding("j/↓", "next run in the Process History's list; the next page of an opened run's charts; the next GPU in the Overview History", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('j'), KeyPattern::key(KeyCode::Down)], KeyAction::HistoryDown),
+    binding("k/↑", "previous run; the previous page of an opened run; the previous GPU", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('k'), KeyPattern::key(KeyCode::Up)], KeyAction::HistoryUp),
+    binding("PgDn/Ctrl-D, PgUp/Ctrl-U", "scroll the Overview History's panels a band down / up, when they do not all fit; the next / previous page of an opened run's charts", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::key(KeyCode::PageDown), KeyPattern::ctrl('d')], KeyAction::PageDown),
+    binding("PgUp/Ctrl-U", "scroll the Overview History's panels a band up; the previous page of an opened run", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::key(KeyCode::PageUp), KeyPattern::ctrl('u')], KeyAction::PageUp),
+    binding("g/Home/<", "back to the top of the list: the running runs, then the newest; an opened run's first page; the first panels", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('g'), KeyPattern::key(KeyCode::Home), KeyPattern::char('<')], KeyAction::HistoryFirst),
+    binding("G/End/>", "to the end of the list: the oldest ended run; an opened run's last page; the last panels", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('G'), KeyPattern::key(KeyCode::End), KeyPattern::char('>')], KeyAction::HistoryLast),
+    binding("Space", "mark / unmark the run under the cursor and go to the next", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char(' ')], KeyAction::HistoryMark),
+    binding("a", "mark every ended run, the ones beyond the list too / unmark all", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('a')], KeyAction::HistoryMarkAll),
+    binding("d/Del", "delete the marked runs, else the run under the cursor (asks to confirm; running runs stay)", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('d'), KeyPattern::key(KeyCode::Delete)], KeyAction::HistoryDelete),
+    binding("Enter", "open / close the selected run", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::key(KeyCode::Enter)], KeyAction::HistoryOpen),
+    binding("c/m/u/v", "fold / unfold the Overview History's CPU, memory, GPU utilization or GPU memory panel, so the others get its rows (kept after a restart)", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('c')], KeyAction::Fold("history.cpu")),
+    binding("m", "fold / unfold the Overview History's memory panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('m')], KeyAction::Fold("history.memory")),
+    binding("u", "fold / unfold the Overview History's GPU utilization panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('u')], KeyAction::Fold("history.gpu_utilization")),
+    binding("v", "fold / unfold the Overview History's GPU memory panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('v')], KeyAction::Fold("history.gpu_memory")),
+    binding("t/p/i/n", "fold / unfold the Overview History's GPU temperature, power, disk or network panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('t')], KeyAction::Fold("history.gpu_temperature")),
+    binding("p", "fold / unfold the Overview History's power panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('p')], KeyAction::Fold("history.power")),
+    binding("i", "fold / unfold the Overview History's disk panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('i')], KeyAction::Fold("history.disk")),
+    binding("n", "fold / unfold the Overview History's network panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('n')], KeyAction::Fold("history.network")),
+    binding("e", "show the whole command line of the opened run / one line", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('e')], KeyAction::HistoryExpandCommand),
+    binding("y", "copy the opened run's command line (OSC 52)", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('y')], KeyAction::HistoryCopyCommand),
+    binding("→/l/w", "next bar size of the history charts (1m … 24h)", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::key(KeyCode::Right), KeyPattern::char('l'), KeyPattern::char('w')], KeyAction::NextHistoryBarSize),
+    binding("←/h/W", "previous bar size of the history charts", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::key(KeyCode::Left), KeyPattern::char('h'), KeyPattern::char('W')], KeyAction::PreviousHistoryBarSize),
+    binding("Space", "enable / disable the selected module", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Settings]), &[KeyPattern::char(' ')], KeyAction::ToggleModule),
+    binding("Enter", "apply the filter", Some("apply"), ModeSet::FILTER, ViewScope::All, &[KeyPattern::key(KeyCode::Enter)], KeyAction::FilterApply),
+    binding("Esc", "clear the filter and leave input", Some("clear"), ModeSet::FILTER, ViewScope::All, &[KeyPattern::key(KeyCode::Esc)], KeyAction::FilterClear),
+    binding("y/Enter", "do what the confirmation asks: send the signal (pressed before it is verified, it goes out once it is), delete the runs", Some("confirm"), ModeSet::CONFIRM, ViewScope::All, &[KeyPattern::char('y'), KeyPattern::key(KeyCode::Enter)], KeyAction::Confirm),
+    binding("n/Esc", "cancel the confirmation (before it is verified too)", Some("cancel"), ModeSet::CONFIRM, ViewScope::All, &[KeyPattern::char('n'), KeyPattern::key(KeyCode::Esc)], KeyAction::Cancel),
 ];
 
 /// Resolves a key event in the given mode and view (`None` = unbound).
@@ -361,13 +306,6 @@ pub fn hints(mode: ModeKind, view: ViewKind) -> Vec<(&'static str, &'static str)
     hints
 }
 
-/// Bindings of one help section, in table order.
-pub fn section_bindings(section: Section) -> impl Iterator<Item = &'static KeyBinding> {
-    KEYMAP
-        .iter()
-        .filter(move |binding| binding.section == section)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,9 +331,26 @@ mod tests {
             resolve(&q, ModeKind::Confirm, ViewKind::Overview),
             Some(KeyAction::Quit)
         );
-        assert_eq!(
-            resolve(&q, ModeKind::Help, ViewKind::Overview),
-            Some(KeyAction::Quit)
+    }
+
+    /// Each panel names its own keys, so no key opens a help screen and
+    /// the footer offers none (D-131).
+    #[test]
+    fn no_key_opens_a_help_screen() {
+        for code in [KeyCode::Char('?'), KeyCode::F(1)] {
+            assert_eq!(
+                resolve(
+                    &key(code, KeyModifiers::NONE),
+                    ModeKind::Normal,
+                    ViewKind::Overview
+                ),
+                None
+            );
+        }
+        assert!(
+            hints(ModeKind::Normal, ViewKind::Overview)
+                .iter()
+                .all(|(_, hint)| *hint != "help")
         );
     }
 

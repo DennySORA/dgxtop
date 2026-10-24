@@ -115,7 +115,8 @@ fn context() -> CapabilityContext {
         boot_id: boot_id(),
         pid_namespace: namespace_of(own),
         session_id: SessionId::new("session-1").unwrap(),
-        euid: euid(),
+        acting_uid: euid(),
+        any_user: false,
         policy_revision: 1,
         actions_enabled: true,
         read_only: false,
@@ -197,6 +198,8 @@ struct ScriptedFiles {
     stat_override: Arc<Mutex<Option<String>>>,
     status_fails: bool,
     fdinfo_override: Option<String>,
+    /// The PID namespace the target's own `/proc/<pid>/ns/pid` names.
+    namespace_override: Option<String>,
 }
 
 impl ProcessFiles for ScriptedFiles {
@@ -220,7 +223,10 @@ impl ProcessFiles for ScriptedFiles {
     }
 
     fn pid_namespace(&self, pid: i32) -> std::io::Result<String> {
-        HostProcessFiles.pid_namespace(pid)
+        match &self.namespace_override {
+            Some(namespace) => Ok(namespace.clone()),
+            None => HostProcessFiles.pid_namespace(pid),
+        }
     }
 
     fn descriptor_info(&self, fd: RawFd) -> std::io::Result<String> {
@@ -351,7 +357,7 @@ fn send_after_the_process_exited_reports_exited() {
 fn pid_one_and_own_pid_are_protected() {
     let (mut adapter, _clock) = adapter();
     let mut context = context();
-    context.euid = context.euid.max(1);
+    context.acting_uid = context.acting_uid.max(1);
     let own = i32::try_from(std::process::id()).unwrap();
     for pid in [1, own] {
         let mut key = key_of(own);
@@ -369,7 +375,7 @@ fn managed_pids_are_protected() {
     let mut child = Disposable::sleep("30");
     let (mut adapter, _clock) = adapter();
     let mut context = context();
-    context.euid = context.euid.max(1);
+    context.acting_uid = context.acting_uid.max(1);
     context.protected_pids = vec![child.pid()];
     assert!(matches!(
         adapter.prepare(&key_of(child.pid()), Signal::Sigterm, &context),
@@ -383,7 +389,7 @@ fn root_session_is_refused() {
     let mut child = Disposable::sleep("30");
     let (mut adapter, _clock) = adapter();
     let mut context = context();
-    context.euid = 0;
+    context.acting_uid = 0;
     assert_eq!(
         adapter.prepare(&key_of(child.pid()), Signal::Sigterm, &context),
         Err(ActionError::RootSession)
@@ -396,7 +402,7 @@ fn foreign_namespace_host_or_boot_is_refused() {
     let mut child = Disposable::sleep("30");
     let (mut adapter, _clock) = adapter();
     let mut context = context();
-    context.euid = context.euid.max(1);
+    context.acting_uid = context.acting_uid.max(1);
     let key = key_of(child.pid());
     let mut other_namespace = key.clone();
     other_namespace.pid_namespace = PidNamespace::new("pid:[1]").unwrap();
@@ -411,6 +417,40 @@ fn foreign_namespace_host_or_boot_is_refused() {
         );
     }
     assert!(child.is_alive());
+}
+
+/// A target living in a PID namespace of its own (a container) whose PID
+/// this namespace numbers: refused, unless `--any-user`, which reaches and
+/// signals it as htop does from the host (D-127).
+#[test]
+fn a_container_process_is_reached_only_with_any_user() {
+    if running_as_root() {
+        return;
+    }
+    let mut child = Disposable::sleep("30");
+    child.wait_for_exec();
+    let files = ScriptedFiles {
+        namespace_override: Some("pid:[4026532999]".to_owned()),
+        ..ScriptedFiles::default()
+    };
+    let (mut adapter, clock) = scripted_adapter(Box::new(LinuxPidfd), files);
+    let mut context = context();
+    context.acting_uid = context.acting_uid.max(1);
+    let key = key_of(child.pid());
+    assert_eq!(
+        adapter.prepare(&key, Signal::Sigterm, &context),
+        Err(ActionError::NamespaceMismatch)
+    );
+    context.any_user = true;
+    let prepared = adapter.prepare(&key, Signal::Sigterm, &context).unwrap();
+    assert_eq!(prepared.verified.key, key);
+    clock.advance_ms(10);
+    assert_eq!(
+        adapter.send(prepared.handle, Signal::Sigterm, &receipt(&clock)),
+        SignalOutcome::Sent
+    );
+    let status = child.child.wait().unwrap();
+    assert_eq!(status.signal(), Some(Signal::Sigterm.number()));
 }
 
 #[test]
@@ -455,7 +495,7 @@ fn other_users_process_is_uid_mismatch() {
     let mut child = Disposable::sleep("30");
     let (mut adapter, _clock) = adapter();
     let mut context = context();
-    context.euid = euid().wrapping_add(1).max(1);
+    context.acting_uid = euid().wrapping_add(1).max(1);
     assert_eq!(
         adapter.prepare(&key_of(child.pid()), Signal::Sigterm, &context),
         Err(ActionError::UidMismatch)
@@ -569,7 +609,7 @@ fn kernels_without_pidfd_are_unsupported() {
         let (mut adapter, _clock) =
             scripted_adapter(Box::new(NoPidfdKernel(errno)), ScriptedFiles::default());
         let mut context = context();
-        context.euid = context.euid.max(1);
+        context.acting_uid = context.acting_uid.max(1);
         assert_eq!(
             adapter.prepare(&key_of(child.pid()), Signal::Sigterm, &context),
             Err(ActionError::PidfdUnsupported)

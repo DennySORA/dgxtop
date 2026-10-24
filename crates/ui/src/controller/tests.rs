@@ -1046,7 +1046,12 @@ fn answer_deletions(harness: &mut Harness, completed: bool) -> Vec<Vec<ProcessKe
         let sent: Vec<CommandEnvelope> = harness
             .take()
             .into_iter()
-            .filter(|envelope| matches!(envelope.body, CommandBody::DeleteRuns { .. }))
+            .filter(|envelope| {
+                matches!(
+                    envelope.body,
+                    CommandBody::DeleteRuns { .. } | CommandBody::DeleteAllRuns { .. }
+                )
+            })
             .collect();
         if sent.is_empty() {
             return answered;
@@ -1056,10 +1061,10 @@ fn answer_deletions(harness: &mut Harness, completed: bool) -> Vec<Vec<ProcessKe
                 envelope.encoded_len() <= dgxtop_core::config::MIN_COMMAND_BYTES,
                 "every command fits any Manager"
             );
-            let CommandBody::DeleteRuns { runs } = envelope.body else {
-                unreachable!()
-            };
-            answered.push(runs);
+            answered.push(match envelope.body {
+                CommandBody::DeleteRuns { runs } => runs,
+                _ => Vec::new(),
+            });
             let result = if completed {
                 CommandResult::completed(envelope.request_id, "deleting")
             } else {
@@ -1295,7 +1300,8 @@ fn d_deletes_the_ended_runs_it_asked_about() {
         harness.controller.ui_state(harness.now).mode,
         ModeView::ConfirmDelete {
             runs: 1,
-            running: 0
+            running: 0,
+            every: false,
         }
     );
     harness.keys(&[key('n')]);
@@ -1330,7 +1336,8 @@ fn d_deletes_the_ended_runs_it_asked_about() {
         harness.controller.ui_state(harness.now).mode,
         ModeView::ConfirmDelete {
             runs: 1,
-            running: 1
+            running: 1,
+            every: false,
         }
     );
     harness.keys(&[code(KeyCode::Enter)]);
@@ -1356,7 +1363,8 @@ fn an_opened_run_is_deleted_alone_and_the_list_comes_back() {
         harness.controller.ui_state(harness.now).mode,
         ModeView::ConfirmDelete {
             runs: 1,
-            running: 0
+            running: 0,
+            every: false,
         }
     );
     harness.keys(&[key('y')]);
@@ -1411,12 +1419,14 @@ fn a_large_deletion_is_sent_a_bounded_command_at_a_time() {
         .collect();
     runs.opened = None;
     let mut harness = Harness::with_model(model);
-    harness.keys(&[key('4'), key('a'), key('d')]);
+    // `a`, then a run unmarked and marked again: marks one by one (D-128).
+    harness.keys(&[key('4'), key('a'), key(' '), key('k'), key(' '), key('d')]);
     assert_eq!(
         harness.controller.ui_state(harness.now).mode,
         ModeView::ConfirmDelete {
             runs: 300,
-            running: 0
+            running: 0,
+            every: false,
         }
     );
     harness.keys(&[key('y')]);
@@ -1433,6 +1443,62 @@ fn a_large_deletion_is_sent_a_bounded_command_at_a_time() {
             .filter(|text| text.starts_with("deleted"))
             .collect::<Vec<_>>(),
         ["deleted 300 runs from the Process History"]
+    );
+}
+
+/// `a` marks every ended run the filter keeps, the ones beyond the
+/// projected rows too (D-128): `d` asks for all of them and sends one
+/// DeleteAllRuns of the filter, which the Manager expands; a mark changed
+/// one by one afterwards makes the marks explicit again.
+#[test]
+fn a_then_d_deletes_every_ended_run_beyond_the_list_too() {
+    let mut model = test_fixtures::view_model(ViewKind::History, 5);
+    let runs = Arc::make_mut(model.modules.process_history.as_mut().unwrap());
+    runs.more_runs = 598;
+    runs.opened = None;
+    let mut harness = Harness::with_model(model);
+    harness.keys(&[key('4'), key('a'), key('d')]);
+    assert_eq!(
+        harness.controller.ui_state(harness.now).mode,
+        ModeView::ConfirmDelete {
+            runs: 599,
+            running: 1,
+            every: true,
+        }
+    );
+    harness.keys(&[key('y')]);
+    let sent: Vec<CommandBody> = harness
+        .submitted()
+        .into_iter()
+        .filter(|body| {
+            matches!(
+                body,
+                CommandBody::DeleteRuns { .. } | CommandBody::DeleteAllRuns { .. }
+            )
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        vec![CommandBody::DeleteAllRuns {
+            filter: String::new()
+        }]
+    );
+    answer_deletions(&mut harness, true);
+    assert!(marked_pids(&harness).is_empty());
+    assert!(
+        notice_texts(&harness).contains(&"deleted 599 runs from the Process History".to_owned()),
+        "{:?}",
+        notice_texts(&harness)
+    );
+    harness.keys(&[key('a'), key(' '), key('k'), key(' '), key('d')]);
+    assert_eq!(
+        harness.controller.ui_state(harness.now).mode,
+        ModeView::ConfirmDelete {
+            runs: 1,
+            running: 0,
+            every: false,
+        },
+        "the listed runs marked one by one"
     );
 }
 
@@ -1474,7 +1540,8 @@ fn a_refused_deletion_stops_and_keeps_the_marks() {
         harness.controller.ui_state(harness.now).mode,
         ModeView::ConfirmDelete {
             runs: 100,
-            running: 0
+            running: 0,
+            every: true,
         },
         "asked again"
     );
