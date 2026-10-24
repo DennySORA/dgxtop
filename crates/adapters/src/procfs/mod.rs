@@ -11,6 +11,7 @@ pub(crate) mod catalog;
 pub(crate) mod mechanics;
 pub(crate) mod records;
 
+mod arm_cores;
 mod command;
 mod cpu;
 mod disk;

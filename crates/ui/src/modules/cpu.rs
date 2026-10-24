@@ -1,4 +1,5 @@
-//! CPU module: the first temperature (in the level color of its 0–100 °C
+//! CPU module: the CPU's model on the title (an arm64 CPU's kinds of
+//! cores, D-132); the first temperature (in the level color of its 0–100 °C
 //! scale, D-104), the first CPU package's power after `⚡` (D-106) and the
 //! current and maximum frequency of each kind of core, with load and tasks
 //! on the same line when they fit; the
@@ -17,9 +18,9 @@ use ratatui::text::{Line, Span};
 use super::ModuleBuildError;
 use super::common::{
     BarRow, ManifestSpec, Output, RowCursor, build_manifest, cell_label, cell_spans, draw_line,
-    gap, has_value, join_if_fits, labeled_cell, labeled_temperature, measuring_context, message,
-    no_data, panel, panel_with_keys, percent_ratio, power_icon, render_bar_row, render_chart,
-    separator, temperature_spans, under_bar,
+    fitting_keys, gap, has_value, join_if_fits, labeled_cell, labeled_temperature,
+    measuring_context, message, no_data, panel, panel_with_keys, percent_ratio, power_icon,
+    render_bar_row, render_chart, separator, temperature_spans, under_bar,
 };
 use crate::format::{CellDetail, cell_tone, clean, display_width, truncate_to_width, value_text};
 use crate::num::saturate_u16;
@@ -47,9 +48,10 @@ const BAR_AND_CHART_ROWS: u16 = 1 + CHART_ROWS;
 const PERCENT_WIDTH: u16 = 6;
 const EXPAND_HINT: &str = " ▸";
 const COLLAPSE_HINT: &str = " ▾";
-/// The keys acting on the panel, at the right of its title (D-70).
-const EXPAND_KEYS: &str = "c/click cores";
-const COLLAPSE_KEYS: &str = "c/click collapse";
+/// The keys acting on the panel, at the right of its title (D-70): the
+/// fullest form that fits beside the CPU's name.
+const EXPAND_KEYS: &[&str] = &["c/click cores", "c cores"];
+const COLLAPSE_KEYS: &[&str] = &["c/click collapse", "c collapse"];
 /// Breakdown marker drawn in each part's color.
 const SWATCH: &str = "■ ";
 /// A kind of core whose cores report no current frequency (idle).
@@ -134,8 +136,8 @@ impl DisplayModule for CpuModule {
         }
         let keys = match (collapsible, expanded) {
             (false, _) => "",
-            (true, false) => EXPAND_KEYS,
-            (true, true) => COLLAPSE_KEYS,
+            (true, false) => fitting_keys(area.width, &title, EXPAND_KEYS),
+            (true, true) => fitting_keys(area.width, &title, COLLAPSE_KEYS),
         };
         let inner = panel_with_keys(frame, area, &title, keys, context);
         if collapsible {
@@ -665,6 +667,46 @@ mod tests {
             !without.contains("GHz") && !without.ends_with("│ "),
             "{without}"
         );
+    }
+
+    /// The title names the CPU (an arm64 CPU by its kinds of cores) and
+    /// keeps a shorter form of its keys where the full one no longer fits
+    /// beside the name.
+    #[test]
+    fn the_title_names_the_cpu_and_keeps_its_keys() {
+        let context = test_fixtures::display_context();
+        let mut model = test_fixtures::view_model(dgxtop_core::commands::ViewKind::Overview, 1);
+        let mut cpu = test_fixtures::cpu_view();
+        cpu.model = Some("10× Cortex-A725 + 10× Cortex-X925".to_owned());
+        model.modules.cpu = Some(std::sync::Arc::new(cpu));
+        let module = CpuModule::new().unwrap();
+        let title_row = |width: u16| -> String {
+            let height = module
+                .preferred_rows(&model, width, Slot::Overview)
+                .unwrap();
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    module.render(&context, &model, frame.area(), frame);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..width).map(|x| buffer[(x, 0)].symbol()).collect()
+        };
+        let wide = title_row(80);
+        assert!(
+            wide.contains(" CPU ▸ 10× Cortex-A725 + 10× Cortex-X925 "),
+            "{wide}"
+        );
+        assert!(wide.contains("(c/click cores)"), "{wide}");
+        // The overview's CPU panel on a 136-column terminal (D-40).
+        let narrow = title_row(57);
+        assert!(
+            narrow.contains(" CPU ▸ 10× Cortex-A725 + 10× Cortex-X925 "),
+            "{narrow}"
+        );
+        assert!(narrow.contains("(c cores)"), "{narrow}");
     }
 
     /// Collapsed, the utilization chart takes the rows a taller panel has

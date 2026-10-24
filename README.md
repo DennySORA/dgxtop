@@ -97,7 +97,8 @@ of the whole machine.
 
 ### Overview
 
-Every GPU with its utilization and memory, the CPU, memory, busiest disks and network interfaces,
+Every GPU with its utilization and memory, the CPU named by its model (on Arm by its kinds of cores,
+`10× Cortex-A725 + 10× Cortex-X925` on a DGX Spark), memory, busiest disks and network interfaces,
 and the GPU processes in their colors. `c` expands the CPU into per-core bars and sensors. `i` / `n`
 fold the disk I/O and network panels to one row so the processes get the rest, and `o` unfolds them
 (a click on a folded row does too); each foldable panel names its key on its title, and folded

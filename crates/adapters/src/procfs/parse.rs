@@ -7,6 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use dgxtop_core::metric::{ids, native};
 
+use super::arm_cores::arm_core_kinds;
+
 /// One field of a kernel text record.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Field<T> {
@@ -479,13 +481,15 @@ pub(crate) fn parse_pid_stat(text: &str) -> Option<PidStat> {
     })
 }
 
-/// First non-empty `model name` of `/proc/cpuinfo` (absent on many ARM
-/// kernels, in which case no model is claimed).
+/// The CPU model `/proc/cpuinfo` names: its first non-empty `model name`,
+/// else, as an arm64 kernel writes none, its kinds of cores
+/// ([`arm_core_kinds`], D-132); `None` when it names neither.
 pub(crate) fn parse_cpu_model(text: &str) -> Option<String> {
     text.lines()
         .filter_map(|line| line.split_once(':'))
         .find(|(key, value)| key.trim() == "model name" && !value.trim().is_empty())
         .map(|(_, value)| value.trim().to_owned())
+        .or_else(|| arm_core_kinds(text))
 }
 
 #[cfg(test)]
@@ -630,6 +634,40 @@ ctxt 18225208\n";
         assert_eq!(stat.state, Some('Z'));
         assert_eq!(stat.start_time_ticks, 777);
         assert_eq!(stat.exit_code, Some(9));
+    }
+
+    /// `/proc/cpuinfo` of an arm64 host: one block per logical CPU with its
+    /// implementer and part, as GB10's kernel writes them.
+    fn arm_cpuinfo(parts: &[&str]) -> String {
+        parts
+            .iter()
+            .enumerate()
+            .map(|(cpu, part)| {
+                format!(
+                    "processor\t: {cpu}\nBogoMIPS\t: 2000.00\nFeatures\t: fp asimd\n\
+                     CPU implementer\t: 0x41\nCPU architecture: 8\nCPU variant\t: 0x0\n\
+                     CPU part\t: {part}\nCPU revision\t: 1\n\n"
+                )
+            })
+            .collect()
+    }
+
+    /// x86 names its model; an arm64 kernel writes no `model name`, so its
+    /// cores' kinds name the CPU, each with its count (GB10: ten Cortex-A725
+    /// and ten Cortex-X925 cores, the kind of CPU 0 first).
+    #[test]
+    fn the_cpu_model_is_the_model_name_or_the_arm_cores() {
+        let x86 = "processor\t: 0\nmodel name\t: Acme Core 9 7900X\n\n\
+                   processor\t: 1\nmodel name\t: Acme Core 9 7900X\n";
+        assert_eq!(parse_cpu_model(x86).as_deref(), Some("Acme Core 9 7900X"));
+        let gb10: Vec<&str> = [["0xd87"; 5], ["0xd85"; 5], ["0xd87"; 5], ["0xd85"; 5]].concat();
+        assert_eq!(
+            parse_cpu_model(&arm_cpuinfo(&gb10)).as_deref(),
+            Some("10× Cortex-A725 + 10× Cortex-X925")
+        );
+        let named = format!("model name\t: Acme Arm 1\n{}", arm_cpuinfo(&["0xd85"]));
+        assert_eq!(parse_cpu_model(&named).as_deref(), Some("Acme Arm 1"));
+        assert_eq!(parse_cpu_model("processor\t: 0\nflags\t: fpu\n"), None);
     }
 
     #[test]
