@@ -2,7 +2,8 @@
 //! GPU processes hold on unified-memory GPUs (D-36) and, of it, what each
 //! tracked process holds (D-64); the used bar, which draws each process's
 //! part in its color and the other GPU processes in gray, with the used
-//! percentage and the used chart under it, stacked the same way (D-43);
+//! percentage and the used chart under it, stacked the same way (D-43), a
+//! column lower than a row drawn a row high so both colors show (D-134);
 //! swap, joined by buffers/cache/available when they fit.
 
 use dgxtop_core::view::{MemoryView, MetricCell, ViewModel};
@@ -175,13 +176,15 @@ fn title(memory: &MemoryView) -> String {
     }
 }
 
-/// Used fraction of the RAM, and of it the part GPU processes hold (display
+/// The RAM in use and, of it, what GPU processes hold, in bytes (display
 /// arithmetic only; `None` until total and used are known).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Shares {
-    /// The RAM total in bytes, the whole of the bar.
+    /// The RAM total, the whole of the bar.
     total: f64,
+    /// The RAM in use, at most the total.
     used: f64,
+    /// What GPU processes hold, at most the RAM in use.
     gpu: Option<f64>,
 }
 
@@ -194,36 +197,39 @@ impl Shares {
             .gpu_resident
             .as_ref()
             .and_then(MetricCell::value_f64)
-            .map(|gpu| gpu.clamp(0.0, used) / total);
-        Some(Self {
-            total,
-            used: used / total,
-            gpu,
-        })
+            .map(|gpu| gpu.clamp(0.0, used));
+        Some(Self { total, used, gpu })
+    }
+
+    /// The used share of the RAM.
+    fn used_fraction(&self) -> f64 {
+        self.used / self.total
     }
 
     /// The bar's segments: each tracked GPU process in its color, the other
-    /// GPU processes in gray, then the rest of the used RAM in the color of
-    /// the used share's level. Without a GPU figure the processes' parts
-    /// stay within the used RAM.
+    /// GPU processes in gray, then the rest of the used RAM in the system's
+    /// color, or the used share's level color where no GPU shares the RAM.
+    /// Without a GPU figure the processes' parts stay within the used RAM.
+    /// Counted in bytes, so a part the legend leaves out is exactly none
+    /// and takes no cell (D-133).
     fn segments(&self, memory: &MemoryView, context: &DisplayContext) -> Vec<Segment> {
         let theme = &context.theme;
-        let gpu = self.gpu.unwrap_or(0.0);
-        let room = self.gpu.unwrap_or(self.used) * self.total;
+        let room = self.gpu.unwrap_or(self.used);
         let (mut segments, tracked) =
             share_segments(&memory.gpu_processes, self.total, room, context);
-        let attributed = gpu.max(tracked / self.total);
+        // In whole bytes, as the legend's `other` is.
+        let other = (self.gpu.unwrap_or(0.0) - tracked).max(0.0).round();
         segments.push(Segment {
-            fraction: attributed - tracked / self.total,
+            fraction: other / self.total,
             color: theme.other_processes_color(),
         });
         let rest = if self.gpu.is_some() {
             theme.os_memory_color()
         } else {
-            theme.level_color(self.used)
+            theme.level_color(self.used_fraction())
         };
         segments.push(Segment {
-            fraction: self.used - attributed,
+            fraction: (self.used - tracked - other).max(0.0) / self.total,
             color: rest,
         });
         segments
@@ -382,18 +388,21 @@ fn other_bytes(memory: &MemoryView) -> Option<u64> {
 /// `used ▆▆▆▆▆▆▆▆▆ 19.2%` (D-43): the used RAM as a bar whose GPU part shows
 /// each tracked process in its color ([`Shares::segments`]), the used
 /// percentage, and the used chart under it against the total, stacked the
-/// same way; a plain `n/a` gauge until total and used are known.
+/// same way, a column of GPU processes lower than a row drawn a row high,
+/// split between them and the system (D-134); a plain `n/a` gauge until
+/// total and used are known.
 fn render_used(frame: &mut Frame<'_>, area: Rect, memory: &MemoryView, context: &DisplayContext) {
     let theme = &context.theme;
     let mut rows = RowCursor::new(area);
     let Some(row) = rows.next_row() else { return };
     if let Some(chart) = rows.rest() {
+        let shared = memory.gpu_resident.is_some();
         let other = other_points(
             &memory.gpu_resident_trend.points,
             &memory.gpu_process_trends,
         );
         let mut parts = trend_parts(&memory.gpu_process_trends, context);
-        if memory.gpu_resident.is_some() {
+        if shared {
             parts.push((
                 other.as_slice(),
                 Style::new().fg(theme.other_processes_color()),
@@ -403,13 +412,7 @@ fn render_used(frame: &mut Frame<'_>, area: Rect, memory: &MemoryView, context: 
             frame,
             under_bar(chart),
             &memory.used_trend.points,
-            (
-                parts,
-                memory
-                    .gpu_resident
-                    .is_some()
-                    .then(|| theme.os_memory_color()),
-            ),
+            (parts, shared.then(|| theme.os_memory_color())),
             memory.total.value_f64(),
             context,
         );
@@ -417,14 +420,14 @@ fn render_used(frame: &mut Frame<'_>, area: Rect, memory: &MemoryView, context: 
     let shares = Shares::of(memory);
     let value = shares.map_or_else(
         || value_text(&memory.used),
-        |shares| format_percent(shares.used * 100.0),
+        |shares| format_percent(shares.used_fraction() * 100.0),
     );
     let gauge = render_bar_row(
         frame,
         row,
         &BarRow {
             label: "used",
-            ratio: shares.map(|shares| shares.used),
+            ratio: shares.map(|shares| shares.used_fraction()),
             value: &value,
             value_width: PERCENT_WIDTH,
         },
@@ -511,11 +514,11 @@ mod tests {
     #[test]
     fn the_gpu_share_is_part_of_the_used_share() {
         let shares = Shares::of(&memory(bytes(16.0 * GIB), Some(bytes(8.0 * GIB)))).unwrap();
-        assert_eq!(shares.used, 0.25);
-        assert_eq!(shares.gpu, Some(0.125));
+        assert_eq!(shares.used_fraction(), 0.25);
+        assert_eq!(shares.gpu, Some(8.0 * GIB));
         // A GPU figure above `used` (counted at another instant) is capped.
         let capped = Shares::of(&memory(bytes(16.0 * GIB), Some(bytes(40.0 * GIB)))).unwrap();
-        assert_eq!(capped.gpu, Some(0.25));
+        assert_eq!(capped.gpu, Some(16.0 * GIB));
     }
 
     #[test]
@@ -527,7 +530,7 @@ mod tests {
         assert_eq!(Shares::of(&no_total), None);
         let unknown_gpu = MetricCell::missing(CanonicalUnit::Bytes, CellState::Unavailable);
         let shares = Shares::of(&memory(bytes(32.0 * GIB), Some(unknown_gpu))).unwrap();
-        assert_eq!((shares.used, shares.gpu), (0.5, None));
+        assert_eq!((shares.used_fraction(), shares.gpu), (0.5, None));
     }
 
     fn draw_used(view: &MemoryView, size: (u16, u16)) -> ratatui::buffer::Buffer {
@@ -624,6 +627,77 @@ mod tests {
         assert_eq!(buffer[(x, 1)].symbol(), " ");
         // The column before it has job1's point missing: job0, then gray.
         assert_eq!(buffer[(x - 1, 3)].fg, theme.other_processes_color());
+    }
+
+    /// A job holding 12.2 GiB of the 19.5 GiB in use of 122 GiB, beside one
+    /// far under a cell: the bar gives the job its share and the small one a
+    /// cell of its own, and no gray shows while the two hold all the GPU's
+    /// memory; the chart under it, whose column is lower than a row, draws
+    /// that row split between the jobs, in the larger one's color, and the
+    /// system (D-134).
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn a_small_job_keeps_its_color_on_the_bar_and_the_chart() {
+        let theme = crate::test_fixtures::display_context().theme;
+        let (job, small) = (share(3, 12.2), share(5, 0.1));
+        let held = (job.bytes + small.bytes) as f64;
+        let mut view = memory(bytes(19.5 * GIB), Some(bytes(held)));
+        view.total = bytes(122.0 * GIB);
+        view.used_trend.points = vec![Some(19.5 * GIB); 2];
+        view.gpu_resident_trend.points = vec![Some(held); 2];
+        view.gpu_process_trends = [&job, &small]
+            .iter()
+            .map(|process| ProcessTrend {
+                slot: process.slot,
+                trend: Trend {
+                    points: vec![Some(process.bytes as f64); 2],
+                },
+            })
+            .collect();
+        view.gpu_processes = vec![job, small];
+        // 64 columns of bar: the job to 6.4 → 6, less the cell the small
+        // job keeps, the system to 10.2 → 10, then the track.
+        let buffer = draw_used(&view, (BAR_LABEL + 64 + 1 + 6, 4));
+        let bar: Vec<_> = (BAR_LABEL..BAR_LABEL + 64)
+            .map(|x| buffer[(x, 0)].fg)
+            .collect();
+        let mut expected = vec![theme.process_color(3); 5];
+        expected.push(theme.process_color(5));
+        expected.extend([theme.os_memory_color(); 4]);
+        expected.extend([theme.gauge_track; 54]);
+        assert_eq!(bar, expected);
+        // Three chart rows (22 eighths) against the total: the column to
+        // 3.5 → 4, so one row high; the jobs hold 12.3 of the 19.5 GiB in
+        // use → 5 of its 8 eighths.
+        let x = buffer.area.right() - 1;
+        let cell = |y: u16| {
+            let cell = &buffer[(x, y)];
+            (cell.symbol().to_owned(), cell.fg, cell.bg)
+        };
+        assert_eq!(
+            cell(3),
+            (
+                "▅".to_owned(),
+                theme.process_color(3),
+                theme.os_memory_color()
+            )
+        );
+        assert_eq!(cell(2).0, " ");
+    }
+
+    /// RAM no GPU shares keeps the total as the chart's scale: its columns
+    /// take the level colors of their share of it.
+    #[test]
+    fn a_chart_of_ram_no_gpu_shares_is_scaled_to_the_total() {
+        let theme = crate::test_fixtures::display_context().theme;
+        let mut view = memory(bytes(16.0 * GIB), None);
+        view.used_trend.points = vec![Some(16.0 * GIB); 2];
+        // A quarter of 22 eighths: 5.5 → 6, in the bottom row only.
+        let buffer = draw_used(&view, (30, 4));
+        let x = buffer.area.right() - 1;
+        assert_eq!(buffer[(x, 3)].symbol(), "▆");
+        assert_eq!(buffer[(x, 3)].fg, theme.level_color(0.25));
+        assert_eq!(buffer[(x, 2)].symbol(), " ");
     }
 
     /// The RAM line names what the system holds in its fixed color; the GPU

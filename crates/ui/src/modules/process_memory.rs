@@ -166,7 +166,9 @@ pub(crate) fn trend_parts<'a>(
 
 /// What the other GPU processes hold at each point of `whole` (what all
 /// of them hold): `whole` less the tracked processes' `trends`, aligned at
-/// the newest end; `None` where `whole` has no point.
+/// the newest end, in whole bytes like the legend's `other`, so a rounding
+/// remainder never takes an eighth of its own (D-133); `None` where
+/// `whole` has no point.
 pub(crate) fn other_points(whole: &[Option<f64>], trends: &[ProcessTrend]) -> Vec<Option<f64>> {
     whole
         .iter()
@@ -181,7 +183,7 @@ pub(crate) fn other_points(whole: &[Option<f64>], trends: &[ProcessTrend]) -> Ve
                     points.get(position).copied().flatten()
                 })
                 .sum();
-            point.map(|whole| (whole - tracked).max(0.0))
+            point.map(|whole| (whole - tracked).max(0.0).round())
         })
         .collect()
 }
@@ -302,5 +304,10 @@ mod tests {
             vec![Some(3.0), Some(2.0), Some(0.0)]
         );
         assert_eq!(other_points(&whole, &trends)[3], None);
+        // Less than half a byte left over is none, not a sliver of gray.
+        assert_eq!(
+            other_points(&[Some(4.3), Some(14.4)], &trends),
+            vec![Some(0.0), Some(0.0)]
+        );
     }
 }

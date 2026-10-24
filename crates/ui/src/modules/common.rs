@@ -548,7 +548,8 @@ pub(crate) fn render_chart(
 
 /// [`render_chart`] with parts of each point (what each GPU process holds
 /// of the used RAM, D-64) stacked from the foot of its column, each in its
-/// style.
+/// style; a column of parts lower than a row is drawn a row high, split
+/// between them and the rest of it, so both show (D-134).
 /// `whole` colors what the parts leave of each column; `None` colors it by
 /// level.
 pub(crate) fn render_chart_with_parts(
@@ -577,7 +578,8 @@ pub(crate) fn render_chart_with_parts(
         None => GapSparkline::new(points, Style::new()).level_colors(&context.theme),
     }
     .max(max)
-    .parts(parts);
+    .parts(parts)
+    .raise_low_columns();
     frame.render_widget(sparkline, area);
 }
 

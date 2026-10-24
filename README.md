@@ -53,7 +53,10 @@ of the whole machine.
   with live charts. Gauges, chart columns and temperatures shade in 100 steps from green at 0 %
   through amber at 50 % to red at 100 % (a temperature on a 0–100 °C scale).
 - **Memory by process.** The eight processes holding the most GPU memory each get a color, the same
-  in the memory bars, the charts and the process table, so you see which job holds how much. The
+  in the memory bars, the charts and the process table, so you see which job holds how much;
+  however small its share, a job keeps at least one cell of the memory bar. On a DGX Spark a
+  column of the chart under that bar lower than a row is drawn a row high, split between the jobs
+  and the system in proportion, so both colors always show. The
   color comes from the process name, so a job keeps it when the job or dgxtop restarts, unless another listed process already has it.
 - **Named by what they run.** `python -m vllm.entrypoints.openai.api_server` shows as
   `vllm.api_server`, and `python main.py` in a `ComfyUI` folder as `ComfyUI/main`, not as
