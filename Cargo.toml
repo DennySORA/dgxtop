@@ -38,31 +38,31 @@ dgxtop-ui = { path = "crates/ui", version = "2.5.0" }
 
 # DTO / serialization (allowed in core).
 serde = { version = "1.0.229", features = ["derive", "rc"] }
-serde_json = "1.0.151"
-uuid = { version = "1.27.0", features = ["v4", "serde"] }
+serde_json = "1.0.154"
+uuid = { version = "1.29.1", features = ["v4", "serde"] }
 thiserror = "2.0.21"
-sha2 = "0.11.0"
+sha2 = "0.11.1"
 
 # Runtime mechanics.
 crossbeam-channel = "0.5.17"
-libc = "0.2.180"
+libc = "0.2.191"
 nix = { version = "0.31.3", features = ["fs", "poll", "process", "signal", "time", "term", "user", "resource"] }
 
 # Drivers and persistence.
-nvml-wrapper = "0.12.1"
+nvml-wrapper = "0.13.0"
 rusqlite = { version = "=0.40.2", features = ["bundled"] }
 
 # Terminal UI.
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "underline-color"] }
 crossterm = "0.29.0"
-unicode-width = "0.2.2"
+unicode-width = "0.2.3"
 
 # CLI.
 clap = { version = "4.6.7", features = ["derive"] }
 
 # Test-only.
-proptest = "1.11.0"
-jsonschema = { version = "0.58.5", default-features = false }
+proptest = "1.12.0"
+jsonschema = { version = "0.60.2", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
