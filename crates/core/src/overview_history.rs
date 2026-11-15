@@ -26,10 +26,15 @@ use crate::tiers::Tier;
 const NANOS_PER_SECOND_F64: f64 = 1e9;
 
 /// The metrics the Overview History charts or summarizes (D-46, D-48,
-/// D-50, D-106): the only series the history keeps in every bar size.
-pub const OVERVIEW_METRICS: [&str; 13] = [
+/// D-50, D-106, D-135, D-137): the only series the history keeps in every
+/// bar size.
+pub const OVERVIEW_METRICS: [&str; 17] = [
     ids::CPU_UTILIZATION_TOTAL,
     ids::MEMORY_USED,
+    ids::MEMORY_PRESSURE_SOME_AVG10,
+    ids::MEMORY_PRESSURE_FULL_AVG10,
+    ids::CPU_TEMPERATURE_PACKAGE,
+    ids::SOC_TEMPERATURE,
     ids::HOST_POWER_TOTAL,
     ids::CPU_POWER_PACKAGE,
     ids::GPU_UTILIZATION_COMPUTE,
@@ -403,5 +408,22 @@ mod tests {
         assert!(is_overview_series(ids::HOST_POWER_TOTAL, entity::HOST));
         assert!(is_overview_series(ids::CPU_POWER_PACKAGE, "cpu.package.0"));
         assert!(!is_overview_metric(ids::CPU_POWER_CLUSTER));
+        // The memory's 10 s stall pressure (D-135), not its longer
+        // averages nor another resource's.
+        assert!(is_overview_series(
+            ids::MEMORY_PRESSURE_SOME_AVG10,
+            entity::MEMORY
+        ));
+        assert!(is_overview_metric(ids::MEMORY_PRESSURE_FULL_AVG10));
+        assert!(!is_overview_metric(ids::MEMORY_PRESSURE_SOME_AVG60));
+        assert!(!is_overview_metric(ids::IO_PRESSURE_SOME_AVG10));
+        // Each CPU package's and the SoC's temperature (D-137), not a
+        // cluster's or a core's.
+        assert!(is_overview_series(
+            ids::CPU_TEMPERATURE_PACKAGE,
+            "cpu.package.0"
+        ));
+        assert!(is_overview_series(ids::SOC_TEMPERATURE, entity::SOC));
+        assert!(!is_overview_metric(ids::CPU_TEMPERATURE_CLUSTER));
     }
 }

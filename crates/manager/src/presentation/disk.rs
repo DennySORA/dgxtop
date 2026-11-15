@@ -1,7 +1,8 @@
 //! Disk module projection: the I/O of the block devices that hold a mounted
 //! filesystem (busiest first) with each drive's temperature, mounted
-//! filesystems (by mount point), and the busiest whole disk, whose rate
-//! trends feed the panel chart. A mount is never presented as a device.
+//! filesystems (by mount point), the busiest whole disk, whose rate
+//! trends feed the panel chart, and the host's I/O stall pressure (D-135).
+//! A mount is never presented as a device.
 
 use std::collections::BTreeSet;
 
@@ -10,10 +11,12 @@ use dgxtop_core::identity::EntityId;
 use dgxtop_core::metric::ids;
 use dgxtop_core::naming::{attributes, block_layer, entity};
 use dgxtop_core::observation::EntityRecord;
+use dgxtop_core::pressure::PressureResource;
 use dgxtop_core::view::{DiskDeviceView, DiskView, FilesystemView, Trend};
 
 use super::labels::label_text;
 use super::ordering::{descending_present, sum_present};
+use super::pressure::pressure_view;
 use super::reader::MetricReader;
 
 /// Device and filesystem rows kept per projection.
@@ -56,6 +59,12 @@ pub(crate) fn build_disk_view(reader: &MetricReader<'_>, trend_width: usize) -> 
     DiskView {
         read_trend: trend(ids::DISK_READ_BPS),
         write_trend: trend(ids::DISK_WRITE_BPS),
+        pressure: pressure_view(
+            reader,
+            PressureResource::Io,
+            entity::HOST,
+            entity::SCOPE_HOST,
+        ),
         devices,
         filesystems,
         charted,

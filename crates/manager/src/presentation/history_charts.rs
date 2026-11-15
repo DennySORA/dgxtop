@@ -1,8 +1,10 @@
 //! Series the HistoryService queries for a session on the history view.
 //! The charts (D-46, D-50) are the overview's series over a longer window:
-//! the CPU total against 100 %, the RAM in use against the RAM total, the
-//! host's total power and each CPU package's power against their peaks
-//! (D-106), each GPU's utilization, memory in use, temperature and power
+//! the CPU total against 100 %, the RAM in use against the RAM total and
+//! the memory's stall pressure against its peak (D-135), the host's total
+//! power and each CPU package's power against their peaks (D-106), each
+//! CPU package's and the SoC's temperature against 100 °C (D-137), each
+//! GPU's utilization, memory in use, temperature and power
 //! against their scales ([`gpu_series`]), and the read/write and
 //! receive/transmit rates of one disk and one interface. The disk (the
 //! whole disk the Disk panel charts, D-124) and the interface are the
@@ -28,13 +30,14 @@ use super::network::ranked_interfaces;
 use super::reader::MetricReader;
 use crate::history::{ChartRequest, HistoryChartSpec, HistoryPicks, MAX_CHARTS};
 
-/// CPU packages whose power is charted, the first ones by number: a host
-/// has one or two.
-const CPU_POWER_CHARTS: usize = 2;
-/// Charts besides the GPUs: CPU, memory, the total power, the CPU
-/// packages' power and two rates each of a disk and an interface; the GPUs
-/// get the rest of [`MAX_CHARTS`].
-const HOST_CHARTS: usize = 7 + CPU_POWER_CHARTS;
+/// CPU packages whose power and temperature are charted, the first ones by
+/// number: a host has one or two.
+const CPU_PACKAGE_CHARTS: usize = 2;
+/// Charts besides the GPUs: CPU, memory and its two stall pressures, the
+/// total power, the SoC's temperature, two rates each of a disk and an
+/// interface, and the CPU packages' power and temperature; the GPUs get
+/// the rest of [`MAX_CHARTS`].
+const HOST_CHARTS: usize = 10 + 2 * CPU_PACKAGE_CHARTS;
 const PERCENT_SCALE: f64 = 100.0;
 
 /// Series of one GPU: utilization, memory, temperature, power.
@@ -113,7 +116,9 @@ fn dashboard(
         (ids::MEMORY_USED, entity::MEMORY, entity::SCOPE_SYSTEM),
         ram_total(reader),
     );
+    charts.add_memory_pressure();
     charts.add_power();
+    charts.add_temperatures();
     let directory = GpuDirectory::new(catalog, reader.index());
     for gpu in directory
         .gpus()
@@ -233,6 +238,29 @@ struct Charts<'r, 'a> {
 }
 
 impl Charts<'_, '_> {
+    /// Adds the memory's stall pressure over 10 s (D-135), `some` then
+    /// `full`, each scaled to its peak: a share of time that is nearly
+    /// always far below 100 %.
+    fn add_memory_pressure(&mut self) {
+        for (kind, metric) in [
+            (
+                HistoryChartKind::MemoryPressureSome,
+                ids::MEMORY_PRESSURE_SOME_AVG10,
+            ),
+            (
+                HistoryChartKind::MemoryPressureFull,
+                ids::MEMORY_PRESSURE_FULL_AVG10,
+            ),
+        ] {
+            self.add(
+                kind,
+                "",
+                (metric, entity::MEMORY, entity::SCOPE_SYSTEM),
+                None,
+            );
+        }
+    }
+
     /// Adds the host's total power and the power of its first CPU packages
     /// (D-106), each scaled to its peak: neither has a limit to scale to.
     fn add_power(&mut self) {
@@ -242,10 +270,33 @@ impl Charts<'_, '_> {
             (ids::HOST_POWER_TOTAL, entity::HOST, entity::SCOPE_HOST),
             None,
         );
+        self.add_packages(HistoryChartKind::CpuPower, ids::CPU_POWER_PACKAGE, None);
+    }
+
+    /// Adds the temperature of the first CPU packages and of the SoC
+    /// (D-137), against the 100 °C every temperature is drawn against.
+    fn add_temperatures(&mut self) {
+        let scale = Some(TEMPERATURE_SCALE_C);
+        self.add_packages(
+            HistoryChartKind::CpuTemperature,
+            ids::CPU_TEMPERATURE_PACKAGE,
+            scale,
+        );
+        self.add(
+            HistoryChartKind::SocTemperature,
+            "",
+            (ids::SOC_TEMPERATURE, entity::SOC, entity::SCOPE_SOC),
+            scale,
+        );
+    }
+
+    /// Adds `metric` of the first CPU packages reporting it, by number,
+    /// each the chart `CPU <number>`.
+    fn add_packages(&mut self, kind: HistoryChartKind, metric: &str, scale_max: Option<f64>) {
         let mut packages: Vec<(u32, String, String)> = self
             .reader
             .index()
-            .entries_of_metric(ids::CPU_POWER_PACKAGE)
+            .entries_of_metric(metric)
             .filter_map(|entry| {
                 let key = &entry.sample.key;
                 let number = package_number(key.entity_id.as_str())?;
@@ -253,12 +304,12 @@ impl Charts<'_, '_> {
             })
             .collect();
         packages.sort();
-        for (number, entity_id, scope) in packages.into_iter().take(CPU_POWER_CHARTS) {
+        for (number, entity_id, scope) in packages.into_iter().take(CPU_PACKAGE_CHARTS) {
             self.add(
-                HistoryChartKind::CpuPower,
+                kind,
                 &format!("CPU {number}"),
-                (ids::CPU_POWER_PACKAGE, &entity_id, &scope),
-                None,
+                (metric, &entity_id, &scope),
+                scale_max,
             );
         }
     }
@@ -492,6 +543,10 @@ mod tests {
         let metrics = [
             ids::CPU_UTILIZATION_TOTAL,
             ids::MEMORY_USED,
+            ids::MEMORY_PRESSURE_SOME_AVG10,
+            ids::MEMORY_PRESSURE_FULL_AVG10,
+            ids::CPU_TEMPERATURE_PACKAGE,
+            ids::SOC_TEMPERATURE,
             ids::GPU_UTILIZATION_COMPUTE,
             ids::GPU_MEMORY_FB_USED,
             ids::GPU_MEMORY_PROCESS_ALLOCATED,
@@ -515,7 +570,9 @@ mod tests {
             "cpu",
             sample(ids::CPU_POWER_PACKAGE, "cpu.package.0", "package:0").f64(25.0),
         );
+        pressure_and_temperatures(&mut fixture);
         let picked = pick(&fixture, &[]);
+        assert_eq!(picked.charts.len(), 11, "{:?}", kinds(&picked.charts));
         for spec in &picked.charts {
             assert!(
                 is_overview_metric(spec.key.metric_id.as_str()),
@@ -579,6 +636,102 @@ mod tests {
             ]
         );
         assert_eq!(MAX_CHARTS, HOST_CHARTS + SERIES_PER_GPU * 8);
+    }
+
+    /// The memory's stall pressure, each CPU package's temperature and the
+    /// SoC's, as a GB10 reports them.
+    fn pressure_and_temperatures(fixture: &mut Fixture) {
+        for (metric, percent) in [
+            (ids::MEMORY_PRESSURE_SOME_AVG10, 2.4),
+            (ids::MEMORY_PRESSURE_FULL_AVG10, 0.8),
+            (ids::MEMORY_PRESSURE_SOME_AVG60, 0.9),
+        ] {
+            fixture.add("memory", sample(metric, "memory", "system").f64(percent));
+        }
+        fixture.add(
+            "cpu",
+            sample(ids::CPU_TEMPERATURE_PACKAGE, "cpu.package.0", "package:0").f64(88.0),
+        );
+        fixture.add(
+            "cpu",
+            sample(ids::CPU_TEMPERATURE_CLUSTER, "cpu.package.0", "cluster:0p").f64(88.0),
+        );
+        fixture.add("cpu", sample(ids::SOC_TEMPERATURE, "soc", "soc").f64(93.0));
+    }
+
+    /// The memory's 10 s stall pressure follows the RAM in use, scaled to
+    /// its peak (D-135), and each CPU package's and the SoC's temperature
+    /// are charted against 100 °C like a GPU's (D-137); the longer
+    /// averages and the cluster sensors are not charted, and a host whose
+    /// kernel reports none of them has none of the charts.
+    #[test]
+    fn memory_pressure_and_the_cpu_and_soc_temperatures_are_charted() {
+        let added = [
+            HistoryChartKind::MemoryPressureSome,
+            HistoryChartKind::MemoryPressureFull,
+            HistoryChartKind::CpuTemperature,
+            HistoryChartKind::SocTemperature,
+        ];
+        let mut fixture = host();
+        let without = charts(&fixture, &[]);
+        assert!(without.iter().all(|chart| !added.contains(&chart.kind)));
+        pressure_and_temperatures(&mut fixture);
+        let charts = charts(&fixture, &[]);
+        let picked: Vec<(HistoryChartKind, &str, &str, &str, Option<f64>)> = charts
+            .iter()
+            .filter(|chart| added.contains(&chart.kind))
+            .map(|chart| {
+                (
+                    chart.kind,
+                    chart.subject.as_str(),
+                    chart.key.metric_id.as_str(),
+                    chart.key.entity_id.as_str(),
+                    chart.scale_max,
+                )
+            })
+            .collect();
+        assert_eq!(
+            picked,
+            vec![
+                (
+                    HistoryChartKind::MemoryPressureSome,
+                    "",
+                    ids::MEMORY_PRESSURE_SOME_AVG10,
+                    "memory",
+                    None
+                ),
+                (
+                    HistoryChartKind::MemoryPressureFull,
+                    "",
+                    ids::MEMORY_PRESSURE_FULL_AVG10,
+                    "memory",
+                    None
+                ),
+                (
+                    HistoryChartKind::CpuTemperature,
+                    "CPU 0",
+                    ids::CPU_TEMPERATURE_PACKAGE,
+                    "cpu.package.0",
+                    Some(100.0)
+                ),
+                (
+                    HistoryChartKind::SocTemperature,
+                    "",
+                    ids::SOC_TEMPERATURE,
+                    "soc",
+                    Some(100.0)
+                ),
+            ]
+        );
+        assert_eq!(
+            kinds(&charts)[..3],
+            [
+                HistoryChartKind::CpuUtilization,
+                HistoryChartKind::MemoryUsed,
+                HistoryChartKind::MemoryPressureSome,
+            ],
+            "the pressure follows the RAM in use"
+        );
     }
 
     #[test]

@@ -691,7 +691,9 @@ impl<'a> RunCharts<'a> {
         let chart = self.chart(metric)?;
         let scale = match paint {
             Paint::Levels => chart.scale_max.or_else(|| positive(chart.peak)),
-            Paint::Count => positive(chart.peak),
+            // A run has no stall pressure of its own; one would scale like
+            // a count, to its peak.
+            Paint::Count | Paint::Pressure => positive(chart.peak),
             Paint::Read | Paint::Write | Paint::Receive | Paint::Transmit => None,
         };
         // A GPU's figures are in its color (D-123).

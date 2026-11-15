@@ -16,6 +16,7 @@ use dgxtop_core::identity::{AdapterId, CollectorId, IdentityError, MetricKey};
 use dgxtop_core::metric::{CanonicalUnit, Domain, MetricDescriptor, MetricRole, Scalar, ids};
 use dgxtop_core::naming;
 use dgxtop_core::ports::Collector;
+use dgxtop_core::pressure::PressureResource;
 use dgxtop_core::quality::Freshness;
 
 use crate::shared::context::{self, CollectorSpec, Route, Session};
@@ -64,9 +65,12 @@ const DERIVED: [&str; 7] = [
 /// of use%.
 const FS_CAPACITY: [&str; 3] = [ids::FS_TOTAL, ids::FS_FREE, ids::FS_AVAILABLE];
 
-/// Gauges published straight through arbitration.
+/// Gauges published straight through arbitration: filesystem capacity,
+/// drive temperatures and the host's I/O pressure averages (D-135).
 fn is_pass_through(metric: &str) -> bool {
-    FS_CAPACITY.contains(&metric) || metric == ids::DISK_TEMPERATURE
+    FS_CAPACITY.contains(&metric)
+        || metric == ids::DISK_TEMPERATURE
+        || PressureResource::Io.reports(metric)
 }
 
 const FS_USED: Difference = Difference {
@@ -536,6 +540,43 @@ mod tests {
                 .iter()
                 .all(|value| value.key.metric_id.as_str() != ids::FS_USE_PERCENT)
         );
+        assert!(batch.failures.is_empty(), "{:?}", batch.failures);
+    }
+
+    /// The host's I/O pressure averages pass through as the kernel computed
+    /// them (D-135), beside the devices' rates and never as one of them.
+    #[test]
+    fn io_pressure_averages_pass_through_on_the_host() {
+        let collector = DiskCollector::new().unwrap();
+        let key = |metric: &str| metric_key("host", metric, "host");
+        let average = |metric: &str, percent: f64| {
+            reading(
+                &key(metric),
+                "procfs",
+                &format!("procfs:pressure.io:{metric}"),
+                SECOND,
+            )
+            .unit(native::PERCENT)
+            .f64(percent)
+            .build()
+        };
+        let plan = PlanBuilder::new("disk")
+            .at(SECOND + 1)
+            .batch(
+                "procfs",
+                "disk",
+                vec![
+                    average(ids::IO_PRESSURE_SOME_AVG300, 0.37),
+                    average(ids::IO_PRESSURE_FULL_AVG10, 0.0),
+                ],
+            )
+            .build();
+        let batch = collect(&collector, &plan);
+        let some = value_of(&batch, &key(ids::IO_PRESSURE_SOME_AVG300)).unwrap();
+        assert_close(some.value.unwrap().to_f64_lossy(), 0.37);
+        assert_eq!(some.unit, CanonicalUnit::Percent);
+        assert!(!some.eligible_for_history);
+        assert_eq!(number(&batch, &key(ids::IO_PRESSURE_FULL_AVG10)), Some(0.0));
         assert!(batch.failures.is_empty(), "{:?}", batch.failures);
     }
 

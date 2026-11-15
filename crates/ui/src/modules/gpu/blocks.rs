@@ -10,7 +10,9 @@
 //!   graphics engine is the status bar above).
 //! - Clocks: graphics, SM, memory and video, now and at most.
 //! - Memory: total, used, free, reserved, the processes' share, BAR1, the
-//!   bus and its theoretical peak.
+//!   bus and its theoretical peak; on unified memory, what the processes
+//!   hold, the system RAM still available and the memory's stall pressure
+//!   (D-135).
 //! - PCIe: the link and its theoretical capacity now and at most, transmit
 //!   over receive, replays.
 //! - Thermal: temperature and fans, then the device's thresholds in rising
@@ -43,7 +45,9 @@ use crate::format::{
     CellDetail, clean, fixed, format_duration_ms, format_energy, format_percent, format_si_rate,
     value_text,
 };
-use crate::modules::common::{cell_spans, fan_speed_spans, temperature_spans};
+use crate::modules::common::{
+    PRESSURE_SPANS, cell_spans, fan_speed_spans, pressure_average_spans, temperature_spans,
+};
 use crate::num::saturate_u16;
 use crate::registry::DisplayContext;
 
@@ -345,18 +349,23 @@ impl CardInfo<'_> {
         Some(BlockRow { key, cells })
     }
 
-    /// The framebuffer's use (on unified memory, what the processes hold),
-    /// BAR1, the bus.
+    /// The framebuffer's use, BAR1 and the bus; on unified memory, what
+    /// the processes hold, what the system can still hand out and the
+    /// memory's stall pressure (D-135): such a GPU has no memory of its
+    /// own to fill, so its room and its health are the system's.
     fn memory(&self) -> Rows {
         let card = self.card;
         let mut rows = if card.unified_memory {
-            vec![
+            let mut rows = vec![
                 Some(BlockRow::new(
                     "memory",
                     vec![self.text("unified with system RAM")],
                 )),
                 self.metric("processes", &card.process_allocated),
-            ]
+                self.available_ram(),
+            ];
+            rows.extend(self.memory_pressure().into_iter().map(Some));
+            rows
         } else {
             vec![
                 self.metric("total", &card.framebuffer_total),
@@ -367,6 +376,45 @@ impl CardInfo<'_> {
             ]
         };
         rows.extend([self.bar1(), self.bus_width(), self.peak_bandwidth()]);
+        rows
+    }
+
+    /// `44.5 GiB of 122 GiB`: the system RAM a unified-memory GPU's next
+    /// allocation can still come from (D-135).
+    fn available_ram(&self) -> Option<BlockRow> {
+        let unified = self.details?.unified_memory.as_ref()?;
+        let total = &self.card.system_ram_total;
+        let mut row = self.metric("available", &unified.available)?;
+        if has_value(&unified.available)
+            && has_value(total)
+            && let Some(value) = row.cells.first_mut()
+        {
+            value.push(self.muted(" of "));
+            value.push(self.text(value_text(total)));
+        }
+        Some(row)
+    }
+
+    /// `pressure some  0.0% 0.0% 0.0%  (10s 1m 5m)` over `pressure full`:
+    /// the time tasks lost waiting for the memory a unified-memory GPU
+    /// shares (D-135), each average in its level color.
+    fn memory_pressure(&self) -> Vec<BlockRow> {
+        let Some(pressure) = self
+            .details
+            .and_then(|details| details.unified_memory.as_ref())
+            .and_then(|unified| unified.pressure.as_ref())
+        else {
+            return Vec::new();
+        };
+        let mut some = pressure_average_spans(&pressure.some, self.context);
+        some.push(self.muted(format!("  {PRESSURE_SPANS}")));
+        let mut rows = vec![BlockRow::new("pressure some", some)];
+        if let Some(full) = &pressure.full {
+            rows.push(BlockRow::new(
+                "pressure full",
+                pressure_average_spans(full, self.context),
+            ));
+        }
         rows
     }
 
@@ -836,14 +884,57 @@ mod tests {
         let card = gpu_view().cards.remove(1);
         let texts = texts(&card);
         assert!(
-            block(&texts, "Memory")
-                .starts_with("Memory: memory unified with system RAM, processes 10.0 GiB, BAR1"),
+            block(&texts, "Memory").starts_with(
+                "Memory: memory unified with system RAM, processes 10.0 GiB, \
+                 available 51.7 GiB of 64.0 GiB, BAR1"
+            ),
             "{texts:#?}"
         );
         assert!(
             block(&texts, "PCIe").contains("transmit 2243 KB/s, receive 1767 KB/s"),
             "{texts:#?}"
         );
+    }
+
+    /// A unified-memory GPU has no memory of its own to fill: its Memory
+    /// block says what the system can still hand out and how much time
+    /// tasks lose waiting for memory (D-135), each average in its level
+    /// color. A GPU with a framebuffer shows neither.
+    #[test]
+    fn a_unified_gpu_shows_the_memory_pressure_of_the_system() {
+        let context = display_context();
+        let mut card = gpu_view().cards.remove(1);
+        let details = card.details.as_mut().unwrap();
+        details.unified_memory.as_mut().unwrap().pressure = Some(
+            crate::test_fixtures::pressure_view([12.0, 3.1, 0.4], Some([2.0, 0.6, 0.0])),
+        );
+        let texts = texts(&card);
+        assert!(
+            block(&texts, "Memory").starts_with(
+                "Memory: memory unified with system RAM, processes 10.0 GiB, \
+                 available 51.7 GiB of 64.0 GiB, \
+                 pressure some 12.0% 3.1% 0.4%  (10s 1m 5m), pressure full 2.0% 0.6% 0.0%, BAR1"
+            ),
+            "{texts:#?}"
+        );
+        let blocks = blocks(&card, None, &context);
+        let memory = blocks.iter().find(|block| block.title == "Memory").unwrap();
+        let some = memory
+            .rows
+            .iter()
+            .find(|row| row.key == "pressure some")
+            .unwrap();
+        let color = |text: &str| {
+            some.cells[0]
+                .iter()
+                .find(|span| span.content == text)
+                .and_then(|span| span.style.fg)
+        };
+        assert_eq!(color("0.4%"), Some(context.theme.gauge_low));
+        assert_ne!(color("12.0%"), Some(context.theme.gauge_low));
+        let discrete = gpu_view().cards.remove(0);
+        let memory = block(&super::tests::texts(&discrete), "Memory").to_owned();
+        assert!(!memory.contains("pressure") && !memory.contains("available"));
     }
 
     /// GB10 moves its data over NVLink-C2C, not its PCIe link: both are

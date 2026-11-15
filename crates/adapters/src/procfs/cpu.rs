@@ -1,6 +1,6 @@
 //! `cpu` read group: `/proc/stat` time counters for the aggregate line and
 //! every logical CPU (identified by its `cpuN` label, never by line order),
-//! `/proc/loadavg`, and cpufreq. `cpuinfo_max_freq` is static metadata read
+//! `/proc/loadavg`, the CPU's pressure averages (D-135) and cpufreq. `cpuinfo_max_freq` is static metadata read
 //! at discovery and cached per CPU generation, then served with each read's
 //! time; a missing or denied cpufreq is re-probed at most once per re-probe
 //! interval. The current frequency is `cpuinfo_avg_freq` where the kernel
@@ -14,6 +14,7 @@ use dgxtop_core::identity::{EntityId, Scope};
 use dgxtop_core::metric::{Scalar, ids, native};
 use dgxtop_core::naming::{entity, groups};
 use dgxtop_core::observation::{Capability, EntityKind, Observation, ReadPlan, SourceDescriptor};
+use dgxtop_core::pressure::PressureResource;
 use dgxtop_core::quality::{Quality, RawKind, ReadStatus, Support};
 
 use super::catalog::{
@@ -27,6 +28,7 @@ use super::locator::{
 };
 use super::mechanics::{ReadSnapshot, ReprobeGate, TimedRead, invariant, io_failure, timed};
 use super::parse::{CpuLabel, CpuTimes, STAT_COLUMNS, StatColumn, parse_cpu_times, parse_loadavg};
+use super::pressure::PressureRead;
 use super::records::{
     ReadWindow, deferred_record, f64_field_record, failed_record, io_failed_record, ok_record,
     removed_record, u64_field_record, u64_text_record,
@@ -462,12 +464,13 @@ pub(crate) fn read(
     }
 }
 
-/// `/proc/stat` and `/proc/loadavg`, each read at most once per cycle and
-/// shared by every source that needs them.
+/// `/proc/stat`, `/proc/loadavg` and the CPU's pressure file, each read at
+/// most once per cycle and shared by every source that needs them.
 struct SharedCpuFiles {
     stat: Option<TimedRead<String>>,
     stat_lines: BTreeMap<CpuLabel, CpuTimes>,
     load: Option<TimedRead<String>>,
+    pressure: PressureRead,
 }
 
 impl SharedCpuFiles {
@@ -495,6 +498,12 @@ impl SharedCpuFiles {
             stat,
             stat_lines,
             load,
+            pressure: PressureRead::of(
+                PressureResource::Cpu,
+                selection,
+                context.files,
+                context.clock,
+            ),
         }
     }
 
@@ -516,7 +525,10 @@ impl SharedCpuFiles {
                 current_frequency_record(context, descriptor, (*cpu, *current), gate)
             }
             ProcfsLocator::FrequencyMaximum { khz } => static_record(context, descriptor, *khz),
-            ProcfsLocator::Memory(_) | ProcfsLocator::Disk { .. } => None,
+            ProcfsLocator::Pressure { .. } => self.pressure.record(context.plan, source),
+            ProcfsLocator::Memory(_) | ProcfsLocator::VmStat(_) | ProcfsLocator::Disk { .. } => {
+                None
+            }
         }
     }
 

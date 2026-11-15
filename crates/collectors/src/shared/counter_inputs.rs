@@ -121,6 +121,40 @@ pub(crate) fn step<'a>(
     }
 }
 
+/// Publishes `rate_metric` for every key of `counter_metric` with a new
+/// reading, from the exact deltas of its counter in `unit`.
+///
+/// Every candidate's counter base advances, so switching sources later
+/// still starts from an exact base; but the state rejects a batch carrying
+/// a key twice, so one rate is published per key.
+pub(crate) fn publish_key_rates(
+    session: &mut Session<'_>,
+    counter_metric: &str,
+    unit: CanonicalUnit,
+    rate_metric: &str,
+) {
+    let keys = session.pending_keys(|key| key.metric_id.as_str() == counter_metric);
+    for key in keys {
+        let steps: Vec<Step<'_>> = session
+            .records(key)
+            .into_iter()
+            .map(|record| step(session, record, Some(unit)))
+            .collect();
+        if let Some(step) = preferred_step(&steps) {
+            publish_rate(session, step, rate_metric);
+        }
+    }
+}
+
+/// The first exact delta among a key's candidates (source-id order), else
+/// the first explained gap; unchanged candidates publish nothing.
+fn preferred_step<'s, 'a>(steps: &'s [Step<'a>]) -> Option<&'s Step<'a>> {
+    steps
+        .iter()
+        .find(|step| matches!(step, Step::Delta { .. }))
+        .or_else(|| steps.iter().find(|step| !matches!(step, Step::Unchanged)))
+}
+
 /// Whether the record's read is still fresh at `now`.
 pub(crate) fn is_fresh(session: &Session<'_>, record: Record<'_>) -> bool {
     session.now() < session.deadlines(record).read_boot_ns

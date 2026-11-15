@@ -1,14 +1,17 @@
 //! Memory module projection: system RAM and swap (never GPU framebuffer),
-//! plus the RAM held by GPU allocations when a GPU shares system RAM, and
-//! of it the part each tracked GPU process holds (D-64).
+//! what moves in and out of swap, the memory's stall pressure and the OOM
+//! kills (D-135), plus the RAM held by GPU allocations when a GPU shares
+//! system RAM, and of it the part each tracked GPU process holds (D-64).
 
 use dgxtop_core::metric::{Scalar, ids};
 use dgxtop_core::naming::entity;
+use dgxtop_core::pressure::PressureResource;
 use dgxtop_core::process_model::TrackedProcess;
 use dgxtop_core::quality::SampleKind;
 use dgxtop_core::view::{CellState, MemoryView, MetricCell, ProcessShare, ProcessTrend, Trend};
 
 use super::gpu_directory::GpuDirectory;
+use super::pressure::pressure_view;
 use super::process_shares::process_shares;
 use super::reader::MetricReader;
 
@@ -31,6 +34,15 @@ pub(crate) fn build_memory_view(
         cached: cell(ids::MEMORY_CACHED),
         swap_total: cell(ids::MEMORY_SWAP_TOTAL),
         swap_used: cell(ids::MEMORY_SWAP_USED),
+        swap_in: cell(ids::MEMORY_SWAP_IN_BPS),
+        swap_out: cell(ids::MEMORY_SWAP_OUT_BPS),
+        pressure: pressure_view(
+            reader,
+            PressureResource::Memory,
+            entity::MEMORY,
+            entity::SCOPE_SYSTEM,
+        ),
+        oom_kills: cell(ids::MEMORY_OOM_KILLS),
         gpu_resident: unified_gpu_resident(reader, directory),
         used_trend: reader.trend_preferring(
             ids::MEMORY_USED,

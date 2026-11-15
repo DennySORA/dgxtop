@@ -31,8 +31,9 @@ const MINIMAL_CORES: usize = 16;
 type TrimStep = fn(&mut ModuleViews, &BudgetHints) -> bool;
 
 /// Ordered from least to most information loss: the process rows first,
-/// which only the table standing alone shows (D-121).
-const TRIM_STEPS: [TrimStep; 12] = [
+/// which only the table standing alone shows (D-121); the per-core rows
+/// last, which only the expanded CPU panel draws.
+const TRIM_STEPS: [TrimStep; 14] = [
     drop_process_overscan,
     narrow_process_window,
     halve_trends,
@@ -42,9 +43,11 @@ const TRIM_STEPS: [TrimStep; 12] = [
     shorten_lists,
     |modules, _| limit_cores(modules, REDUCED_CORES),
     clear_trends,
+    drop_pressure,
     drop_secondary_modules,
     |modules, _| limit_cores(modules, MINIMAL_CORES),
     strip_gpu_details,
+    |modules, _| limit_cores(modules, 0),
 ];
 
 /// Returns the size the projection is accounted at ([`ViewModel::accounted_bytes`]):
@@ -285,6 +288,29 @@ fn limit_cores(modules: &mut ModuleViews, keep: usize) -> bool {
         .is_some_and(|cpu| truncate(&mut Arc::make_mut(cpu).cores, keep))
 }
 
+/// The stall pressures (D-135) go before a whole module does: they add to
+/// what a panel says of its resource, and every other figure of it stays.
+fn drop_pressure(modules: &mut ModuleViews, _: &BudgetHints) -> bool {
+    let mut changed = false;
+    if let Some(cpu) = modules.cpu.as_mut().filter(|cpu| cpu.pressure.is_some()) {
+        Arc::make_mut(cpu).pressure = None;
+        changed = true;
+    }
+    if let Some(memory) = modules
+        .memory
+        .as_mut()
+        .filter(|memory| memory.pressure.is_some())
+    {
+        Arc::make_mut(memory).pressure = None;
+        changed = true;
+    }
+    if let Some(disk) = modules.disk.as_mut().filter(|disk| disk.pressure.is_some()) {
+        Arc::make_mut(disk).pressure = None;
+        changed = true;
+    }
+    changed
+}
+
 fn drop_secondary_modules(modules: &mut ModuleViews, _: &BudgetHints) -> bool {
     let dropped = modules.disk.is_some() || modules.network.is_some();
     modules.disk = None;
@@ -310,7 +336,7 @@ fn strip_gpu_details(modules: &mut ModuleViews, _: &BudgetHints) -> bool {
 mod tests {
     use super::*;
     use dgxtop_core::metric::CanonicalUnit;
-    use dgxtop_core::view::{CellState, MemoryView, MetricCell, ProcessTrend};
+    use dgxtop_core::view::{CellState, MemoryView, MetricCell, PressureView, ProcessTrend};
 
     fn trend(points: usize) -> Trend {
         Trend {
@@ -501,7 +527,14 @@ mod tests {
             buffers: missing.clone(),
             cached: missing.clone(),
             swap_total: missing.clone(),
-            swap_used: missing,
+            swap_used: missing.clone(),
+            swap_in: missing.clone(),
+            swap_out: missing.clone(),
+            pressure: Some(PressureView {
+                some: [missing.clone(), missing.clone(), missing.clone()],
+                full: None,
+            }),
+            oom_kills: missing,
             gpu_resident: None,
             used_trend: trend(64),
             gpu_resident_trend: trend(64),
@@ -517,5 +550,11 @@ mod tests {
         assert_eq!(memory.gpu_resident_trend.points.len(), 32);
         assert_eq!(memory.gpu_process_trends[0].trend.points.len(), 32);
         assert!(clear_trends(&mut modules, &hints));
+        // The stall pressure goes once, and the module's other figures stay.
+        assert!(drop_pressure(&mut modules, &hints));
+        assert!(!drop_pressure(&mut modules, &hints));
+        let memory = modules.memory.as_ref().unwrap();
+        assert!(memory.pressure.is_none());
+        assert_eq!(memory.swap_in.state, CellState::Unavailable);
     }
 }

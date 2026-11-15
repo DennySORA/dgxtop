@@ -756,6 +756,33 @@ pub mod ids {
     pub const MEMORY_SWAP_TOTAL: &str = "memory.swap_total";
     pub const MEMORY_SWAP_USED: &str = "memory.swap_used";
     pub const MEMORY_SWAP_FREE_RAW: &str = "memory.swap_free";
+    /// What is read back from swap and written out to it each second
+    /// (D-135), from the kernel's page counters.
+    pub const MEMORY_SWAP_IN_BPS: &str = "memory.swap_in.bytes_per_second";
+    pub const MEMORY_SWAP_OUT_BPS: &str = "memory.swap_out.bytes_per_second";
+    /// Bytes swapped in and out since boot (`pswpin` and `pswpout` pages).
+    pub const MEMORY_SWAP_IN_BYTES: &str = "memory.swap_in.bytes";
+    pub const MEMORY_SWAP_OUT_BYTES: &str = "memory.swap_out.bytes";
+    /// Processes the kernel's OOM killer killed since boot (D-135).
+    pub const MEMORY_OOM_KILLS: &str = "memory.oom_kills";
+
+    // Pressure stall information (D-135): the share of the last 10 s, 60 s
+    // and 300 s tasks stalled waiting for a resource ([`crate::pressure`]).
+    pub const CPU_PRESSURE_SOME_AVG10: &str = "cpu.pressure.some.avg10";
+    pub const CPU_PRESSURE_SOME_AVG60: &str = "cpu.pressure.some.avg60";
+    pub const CPU_PRESSURE_SOME_AVG300: &str = "cpu.pressure.some.avg300";
+    pub const MEMORY_PRESSURE_SOME_AVG10: &str = "memory.pressure.some.avg10";
+    pub const MEMORY_PRESSURE_SOME_AVG60: &str = "memory.pressure.some.avg60";
+    pub const MEMORY_PRESSURE_SOME_AVG300: &str = "memory.pressure.some.avg300";
+    pub const MEMORY_PRESSURE_FULL_AVG10: &str = "memory.pressure.full.avg10";
+    pub const MEMORY_PRESSURE_FULL_AVG60: &str = "memory.pressure.full.avg60";
+    pub const MEMORY_PRESSURE_FULL_AVG300: &str = "memory.pressure.full.avg300";
+    pub const IO_PRESSURE_SOME_AVG10: &str = "io.pressure.some.avg10";
+    pub const IO_PRESSURE_SOME_AVG60: &str = "io.pressure.some.avg60";
+    pub const IO_PRESSURE_SOME_AVG300: &str = "io.pressure.some.avg300";
+    pub const IO_PRESSURE_FULL_AVG10: &str = "io.pressure.full.avg10";
+    pub const IO_PRESSURE_FULL_AVG60: &str = "io.pressure.full.avg60";
+    pub const IO_PRESSURE_FULL_AVG300: &str = "io.pressure.full.avg300";
 
     // GPU
     pub const GPU_UTILIZATION_COMPUTE: &str = "gpu.utilization.compute";
@@ -879,6 +906,14 @@ macro_rules! descriptor {
             history: $history,
             label: $label,
         }
+    };
+}
+
+/// A pressure average (D-135): a percentage the kernel reads out, kept as
+/// history only where the Overview History draws it.
+macro_rules! pressure {
+    ($id:expr, $domain:ident, $history:expr, $label:expr) => {
+        descriptor!($id, Percent, Canonical, Gauge, $domain, $history, $label)
     };
 }
 
@@ -1225,6 +1260,143 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         Memory,
         false,
         "SwapFree"
+    ),
+    descriptor!(
+        ids::MEMORY_SWAP_IN_BPS,
+        BytesPerSecond,
+        Canonical,
+        Gauge,
+        Memory,
+        false,
+        "Swap in"
+    ),
+    descriptor!(
+        ids::MEMORY_SWAP_OUT_BPS,
+        BytesPerSecond,
+        Canonical,
+        Gauge,
+        Memory,
+        false,
+        "Swap out"
+    ),
+    descriptor!(
+        ids::MEMORY_SWAP_IN_BYTES,
+        Bytes,
+        Raw,
+        Counter,
+        Memory,
+        false,
+        "swapped in"
+    ),
+    descriptor!(
+        ids::MEMORY_SWAP_OUT_BYTES,
+        Bytes,
+        Raw,
+        Counter,
+        Memory,
+        false,
+        "swapped out"
+    ),
+    descriptor!(
+        ids::MEMORY_OOM_KILLS,
+        Count,
+        Canonical,
+        Counter,
+        Memory,
+        false,
+        "OOM kills"
+    ),
+    pressure!(
+        ids::CPU_PRESSURE_SOME_AVG10,
+        Cpu,
+        false,
+        "CPU pressure 10 s"
+    ),
+    pressure!(
+        ids::CPU_PRESSURE_SOME_AVG60,
+        Cpu,
+        false,
+        "CPU pressure 60 s"
+    ),
+    pressure!(
+        ids::CPU_PRESSURE_SOME_AVG300,
+        Cpu,
+        false,
+        "CPU pressure 300 s"
+    ),
+    // The memory's 10 s averages are the Overview History's pressure
+    // strips; the longer ones only repeat them smoothed.
+    pressure!(
+        ids::MEMORY_PRESSURE_SOME_AVG10,
+        Memory,
+        true,
+        "Memory pressure 10 s"
+    ),
+    pressure!(
+        ids::MEMORY_PRESSURE_SOME_AVG60,
+        Memory,
+        false,
+        "Memory pressure 60 s"
+    ),
+    pressure!(
+        ids::MEMORY_PRESSURE_SOME_AVG300,
+        Memory,
+        false,
+        "Memory pressure 300 s"
+    ),
+    pressure!(
+        ids::MEMORY_PRESSURE_FULL_AVG10,
+        Memory,
+        true,
+        "Memory full pressure 10 s"
+    ),
+    pressure!(
+        ids::MEMORY_PRESSURE_FULL_AVG60,
+        Memory,
+        false,
+        "Memory full pressure 60 s"
+    ),
+    pressure!(
+        ids::MEMORY_PRESSURE_FULL_AVG300,
+        Memory,
+        false,
+        "Memory full pressure 300 s"
+    ),
+    pressure!(
+        ids::IO_PRESSURE_SOME_AVG10,
+        Disk,
+        false,
+        "I/O pressure 10 s"
+    ),
+    pressure!(
+        ids::IO_PRESSURE_SOME_AVG60,
+        Disk,
+        false,
+        "I/O pressure 60 s"
+    ),
+    pressure!(
+        ids::IO_PRESSURE_SOME_AVG300,
+        Disk,
+        false,
+        "I/O pressure 300 s"
+    ),
+    pressure!(
+        ids::IO_PRESSURE_FULL_AVG10,
+        Disk,
+        false,
+        "I/O full pressure 10 s"
+    ),
+    pressure!(
+        ids::IO_PRESSURE_FULL_AVG60,
+        Disk,
+        false,
+        "I/O full pressure 60 s"
+    ),
+    pressure!(
+        ids::IO_PRESSURE_FULL_AVG300,
+        Disk,
+        false,
+        "I/O full pressure 300 s"
     ),
     descriptor!(
         ids::GPU_UTILIZATION_COMPUTE,

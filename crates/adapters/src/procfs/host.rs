@@ -1,11 +1,15 @@
 //! Host-level facts: scheduler tick and page size (`sysconf`), the bounded
 //! host metadata attributes, and the `host` entity with its `/proc/loadavg`
-//! sources. The entity carries only the attributes something reads (the
-//! tick rate and the CPU model); the page size serves the process RSS.
+//! sources and the pressure averages of the CPU (read group `cpu`) and of
+//! I/O (read group `disk`), which belong to no single device (D-135). The
+//! entity carries only the attributes something reads (the tick rate and
+//! the CPU model); the page size serves the process RSS and the swap
+//! counters.
 
 use dgxtop_core::identity::{EntityId, Scope};
 use dgxtop_core::naming::{attributes, entity, groups};
 use dgxtop_core::observation::{Attribute, EntityKind};
+use dgxtop_core::pressure::PressureResource;
 use dgxtop_core::quality::RawKind;
 use nix::unistd::{SysconfVar, sysconf};
 
@@ -13,6 +17,7 @@ use super::catalog::{EntityParts, KeyContext, SnapshotBuilder, SourceSpec, sourc
 use super::locator::{DRIVER, FAMILY_HOST, LOAD_FIELDS, ProcfsLocator, RANK_HOST_WIDE};
 use super::mechanics::invariant;
 use super::parse::parse_cpu_model;
+use super::pressure::{self, PressurePlace};
 use crate::common::SystemFiles;
 
 const HOSTNAME_PATH: &str = "/proc/sys/kernel/hostname";
@@ -95,19 +100,27 @@ pub(crate) fn host_scope() -> Scope {
     invariant(Scope::new(entity::SCOPE_HOST), entity::SCOPE_HOST)
 }
 
-/// Adds the `host` entity (metadata attributes) and its load sources.
+/// The host-wide pressure averages and the read group each is read with.
+const HOST_PRESSURE: [(PressureResource, &str); 2] = [
+    (PressureResource::Cpu, groups::CPU),
+    (PressureResource::Io, groups::DISK),
+];
+
+/// Adds the `host` entity (metadata attributes) with its load sources and
+/// the CPU's and I/O's pressure averages.
 pub(crate) fn add_host(
     builder: &mut SnapshotBuilder<'_, ProcfsLocator>,
     keys: &KeyContext,
     metadata: &HostMetadata,
     constants: &HostConstants,
+    files: &dyn SystemFiles,
 ) {
     let entity_id = host_entity_id();
     let Some(incarnation) = builder.incarnation(&entity_id, entity::HOST) else {
         return;
     };
     let scope = host_scope();
-    let sources = LOAD_FIELDS
+    let mut sources: Vec<_> = LOAD_FIELDS
         .into_iter()
         .filter_map(|field| {
             let origin = format!("procfs:{LOADAVG_PATH}:{}", field.channel());
@@ -130,6 +143,15 @@ pub(crate) fn add_host(
             source_draft(builder.config(), keys, &spec, ProcfsLocator::Load(field))
         })
         .collect();
+    for (resource, group) in HOST_PRESSURE {
+        let place = PressurePlace {
+            resource,
+            entity: &entity_id,
+            scope: &scope,
+            group,
+        };
+        sources.extend(pressure::sources(builder, keys, files, &place));
+    }
     let parts = EntityParts {
         entity_id,
         kind: EntityKind::Host,

@@ -421,7 +421,11 @@ fn small_budget_is_respected_and_announced() {
     );
     let gpu = model.modules.gpu.as_ref().unwrap();
     assert_eq!(gpu.cards.len(), 8);
-    assert!(model.modules.cpu.as_ref().unwrap().cores.len() < 256);
+    // The per-core rows, which only the expanded CPU panel draws, are the
+    // last to go; the CPU's own figures stay.
+    let cpu = model.modules.cpu.as_ref().unwrap();
+    assert!(cpu.cores.len() < 256);
+    assert!(cpu.total.value.is_some());
 }
 
 /// On the GPU view a GPU without a power limit carries the highest draw

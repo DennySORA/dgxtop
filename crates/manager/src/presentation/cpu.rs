@@ -1,6 +1,6 @@
 //! CPU module projection: host aggregate, logical cores, the current and
 //! maximum frequency of each kind of core, package, cluster and SoC
-//! temperatures, power, load and tasks. Package, core, cluster and SoC
+//! temperatures, power, load, tasks and the CPU's stall pressure (D-135). Package, core, cluster and SoC
 //! temperatures are different metrics and are never substituted for one
 //! another.
 
@@ -11,11 +11,13 @@ use dgxtop_core::identity::EntityId;
 use dgxtop_core::metric::Scalar;
 use dgxtop_core::metric::ids;
 use dgxtop_core::naming::{attributes, entity};
+use dgxtop_core::pressure::PressureResource;
 use dgxtop_core::quality::SampleKind;
 use dgxtop_core::view::{CellState, CoreView, CpuView, FrequencyGroup, LabeledCell, MetricCell};
 
 use super::cell::missing_cell;
 use super::labels::{humanize_scope, label_text};
+use super::pressure::pressure_view;
 use super::reader::MetricReader;
 
 /// Logical CPUs kept per projection (the largest reference hosts have 512).
@@ -55,6 +57,12 @@ pub(crate) fn build_cpu_view(
         ],
         tasks_running: host(ids::CPU_TASKS_RUNNING),
         tasks_total: host(ids::CPU_TASKS_TOTAL),
+        pressure: pressure_view(
+            reader,
+            PressureResource::Cpu,
+            entity::HOST,
+            entity::SCOPE_HOST,
+        ),
         utilization_trend: reader.trend_preferring(
             ids::CPU_UTILIZATION_TOTAL,
             entity::CPU_AGGREGATE,

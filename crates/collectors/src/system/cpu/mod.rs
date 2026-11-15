@@ -1,5 +1,5 @@
 //! CPU collector: utilization breakdown from `/proc/stat` tick counters,
-//! frequency/load/task pass-through, arbitrated temperatures (package, core,
+//! frequency/load/task/pressure pass-through, arbitrated temperatures (package, core,
 //! cluster and SoC are distinct keys; GB10's package from its clusters),
 //! CPU package/platform power from energy counters, hwmon power channels
 //! and the GB10 cluster formula, and the host's total power: the CPU
@@ -15,6 +15,7 @@ use dgxtop_core::identity::{AdapterId, CollectorId, IdentityError};
 use dgxtop_core::metric::{Domain, MetricDescriptor, ids};
 use dgxtop_core::naming;
 use dgxtop_core::ports::Collector;
+use dgxtop_core::pressure::PressureResource;
 
 use crate::shared::context::{self, CollectorSpec, Route, Session};
 use crate::shared::formulas::{self, Selections};
@@ -33,6 +34,12 @@ const PASS_THROUGH: [&str; 11] = [
     ids::CPU_TASKS_RUNNING,
     ids::CPU_TASKS_TOTAL,
 ];
+
+/// Gauges published straight through arbitration: the listed ones and the
+/// CPU's pressure averages (D-135).
+fn is_pass_through(metric: &str) -> bool {
+    PASS_THROUGH.contains(&metric) || PressureResource::Cpu.reports(metric)
+}
 
 /// Metrics only this collector derives; adapters never provide them.
 const DERIVED_ONLY: [&str; 6] = [
@@ -98,11 +105,7 @@ fn collect_cpu(session: &mut Session<'_>) {
     power::publish(session);
     total_power::publish(session);
     let mut selections = Selections::new();
-    formulas::publish_pending(
-        session,
-        |metric| PASS_THROUGH.contains(&metric),
-        &mut selections,
-    );
+    formulas::publish_pending(session, is_pass_through, &mut selections);
     temperature::publish(session, &mut selections);
 }
 

@@ -10,7 +10,7 @@ use dgxtop_core::naming;
 use dgxtop_core::ports::Collector;
 
 use crate::shared::context::{self, CollectorSpec, Route, Session};
-use crate::shared::counter_inputs::{self, Step};
+use crate::shared::counter_inputs;
 use crate::shared::formulas::{self, Selections};
 
 const CUMULATIVE_COUNTS: [&str; 6] = [
@@ -85,30 +85,13 @@ fn collect_network(session: &mut Session<'_>) {
 
 fn publish_byte_rates(session: &mut Session<'_>) {
     for (counter_metric, rate_metric) in BYTE_RATES {
-        let keys = session.pending_keys(|key| key.metric_id.as_str() == counter_metric);
-        for key in keys {
-            // Every candidate's counter base advances, so switching sources
-            // later still starts from an exact base; but the state rejects a
-            // batch carrying a key twice, so one rate is published per key.
-            let steps: Vec<Step<'_>> = session
-                .records(key)
-                .into_iter()
-                .map(|record| counter_inputs::step(session, record, Some(CanonicalUnit::Bytes)))
-                .collect();
-            if let Some(step) = preferred_step(&steps) {
-                counter_inputs::publish_rate(session, step, rate_metric);
-            }
-        }
+        counter_inputs::publish_key_rates(
+            session,
+            counter_metric,
+            CanonicalUnit::Bytes,
+            rate_metric,
+        );
     }
-}
-
-/// The first exact delta among a key's candidates (source-id order), else
-/// the first explained gap; unchanged candidates publish nothing.
-fn preferred_step<'s, 'a>(steps: &'s [Step<'a>]) -> Option<&'s Step<'a>> {
-    steps
-        .iter()
-        .find(|step| matches!(step, Step::Delta { .. }))
-        .or_else(|| steps.iter().find(|step| !matches!(step, Step::Unchanged)))
 }
 
 #[cfg(test)]

@@ -1,10 +1,13 @@
 //! What the history view draws (D-50): panels in the overview's order, each
 //! a title over one strip per series, all on the window's time axis. The
-//! CPU and the memory (one strip each, against 100 % and the RAM total);
-//! the GPUs' utilization, memory in use, temperature and power (each
-//! against its own scale), for one GPU at a time on a host of several
-//! (D-107), the power panel also leading with the host's total and each CPU
-//! package's power once the CPU's is read (D-106); the disk's read and
+//! CPU and the memory (one strip each, against 100 % and the RAM total),
+//! the memory's also with its stall pressure, `some` and `full`, where the
+//! kernel reports it (D-135); the GPUs' utilization, memory in use,
+//! temperature and power (each against its own scale), for one GPU at a
+//! time on a host of several (D-107), the power panel also leading with
+//! the host's total and each CPU package's power once the CPU's is read
+//! (D-106), the temperature panel with each CPU package's and the SoC's
+//! temperature (D-137); the disk's read and
 //! write and the interface's receive and transmit rates (two strips on one
 //! scale, the tallest column of the pair, so their heights compare).
 
@@ -22,6 +25,9 @@ use crate::format::{clean, format_value, gpu_with_model};
 pub(super) enum Paint {
     /// The gauge color of each column's share of the scale: bounded series.
     Levels,
+    /// The level color of a stall pressure (D-135): green up to 1 %, red
+    /// from 20 %, whatever height the strip's own scale gives the column.
+    Pressure,
     /// The overview's rate colors.
     Read,
     Write,
@@ -148,7 +154,7 @@ impl Panel<'_> {
     pub(super) fn is_rate(&self) -> bool {
         self.strips
             .iter()
-            .any(|strip| !matches!(strip.paint, Paint::Levels | Paint::Count))
+            .any(|strip| !matches!(strip.paint, Paint::Levels | Paint::Pressure | Paint::Count))
     }
 }
 
@@ -174,6 +180,12 @@ const GPU_PANELS: [(HistoryChartKind, &str, &str); 4] = [
 ];
 /// The power panel's title once the host's power leads it (D-106).
 const POWER_TITLE: &str = "Power";
+/// The temperature panel's title once the CPU's or the SoC's leads it
+/// (D-137).
+const TEMPERATURE_TITLE: &str = "Temperature";
+/// The top of a pressure strip's scale at least (D-135): its peak, but a
+/// stall of a hundredth of a percent must not fill the strip.
+const MIN_PRESSURE_SCALE: f64 = 1.0;
 
 /// A rate of a pair: its series, label and paint.
 type Rate = (HistoryChartKind, &'static str, Paint);
@@ -271,23 +283,18 @@ pub(super) fn panels<'a>(history: &'a HistoryView, gpu: Option<&EntityId>) -> Ve
         );
     }
     if let Some(memory) = first(HistoryChartKind::MemoryUsed) {
-        let title = memory.scale_max.map_or_else(
-            || "Memory used".to_owned(),
-            |total| format!("Memory used · {}", format_value(total, memory.unit)),
-        );
-        panels.push(single(title, series(memory), memory.scale_max).folding("history.memory"));
+        panels.push(memory_panel(history, memory).folding("history.memory"));
     }
     for (kind, title, fold) in GPU_PANELS {
-        let mut strips = if kind == HistoryChartKind::GpuPower {
-            host_power_strips(history)
-        } else {
-            Vec::new()
+        // The host's own strips lead the panel and rename it (D-106, D-137).
+        let (mut strips, host_title) = match kind {
+            HistoryChartKind::GpuPower => (host_power_strips(history), POWER_TITLE),
+            HistoryChartKind::GpuTemperature => {
+                (host_temperature_strips(history), TEMPERATURE_TITLE)
+            }
+            _ => (Vec::new(), title),
         };
-        let title = if strips.is_empty() {
-            title
-        } else {
-            POWER_TITLE
-        };
+        let title = if strips.is_empty() { title } else { host_title };
         strips.extend(
             history
                 .charts
@@ -311,6 +318,54 @@ pub(super) fn panels<'a>(history: &'a HistoryView, gpu: Option<&EntityId>) -> Ve
         }
     }
     panels
+}
+
+/// The memory panel: the RAM in use against the RAM total, alone until the
+/// kernel reports the memory's stall pressure, then with the strips `some`
+/// and `full` under it (D-135), each scaled to its peak (1 % at least) and
+/// colored by how much time was lost.
+fn memory_panel<'a>(history: &'a HistoryView, used: &'a HistoryChartView) -> Panel<'a> {
+    let total = used
+        .scale_max
+        .map(|total| format!(" · {}", format_value(total, used.unit)))
+        .unwrap_or_default();
+    let pressure: Vec<Strip<'a>> = [
+        (HistoryChartKind::MemoryPressureSome, "some"),
+        (HistoryChartKind::MemoryPressureFull, "full"),
+    ]
+    .into_iter()
+    .filter_map(|(kind, label)| {
+        let chart = history.charts.iter().find(|chart| chart.kind == kind)?;
+        Some(pressure_strip(label, chart))
+    })
+    .collect();
+    if pressure.is_empty() {
+        return single(
+            format!("Memory used{total}"),
+            Series::of_chart(used),
+            used.scale_max,
+        );
+    }
+    let mut strips = vec![level_strip("used".to_owned(), used)];
+    strips.extend(pressure);
+    Panel {
+        title: format!("Memory used and pressure{total}"),
+        title_parts: Vec::new(),
+        strips,
+        fold: None,
+    }
+}
+
+/// A stall pressure's strip (D-135).
+fn pressure_strip<'a>(label: &str, chart: &'a HistoryChartView) -> Strip<'a> {
+    let peak = chart.peak.filter(|peak| peak.is_finite()).unwrap_or(0.0);
+    Strip {
+        label: label.to_owned(),
+        series: Series::of_chart(chart),
+        scale: Some(peak.max(MIN_PRESSURE_SCALE)),
+        paint: Paint::Pressure,
+        gpu: None,
+    }
 }
 
 /// A strip of `chart` labeled `label`, in the level colors of its scale.
@@ -356,6 +411,31 @@ fn host_power_strips(history: &HistoryView) -> Vec<Strip<'_>> {
         level_strip(label, chart)
     });
     total.chain(cpus).collect()
+}
+
+/// Each CPU package's temperature (`CPU`, or `CPU 0`, `CPU 1` on a host of
+/// several) and the SoC's (`SoC`), which lead the temperature panel where
+/// they are read (D-137); none elsewhere.
+fn host_temperature_strips(history: &HistoryView) -> Vec<Strip<'_>> {
+    let packages: Vec<&HistoryChartView> = history
+        .charts
+        .iter()
+        .filter(|chart| chart.kind == HistoryChartKind::CpuTemperature)
+        .collect();
+    let cpus = packages.iter().map(|chart| {
+        let label = if packages.len() == 1 {
+            "CPU".to_owned()
+        } else {
+            clean(&chart.subject)
+        };
+        level_strip(label, chart)
+    });
+    let soc = history
+        .charts
+        .iter()
+        .filter(|chart| chart.kind == HistoryChartKind::SocTemperature)
+        .map(|chart| level_strip("SoC".to_owned(), chart));
+    cpus.chain(soc).collect()
 }
 
 /// The chart's fixed scale; without one (a GPU that reports no power
@@ -642,5 +722,139 @@ mod tests {
             .and_then(|panel| panel.strips.first())
             .unwrap();
         assert_eq!(strip.scale, Some(68.2));
+    }
+
+    /// A chart like `template` of another series.
+    fn chart_of(
+        template: &HistoryChartView,
+        kind: HistoryChartKind,
+        subject: &str,
+        unit: CanonicalUnit,
+        (scale_max, peak): (Option<f64>, f64),
+    ) -> HistoryChartView {
+        HistoryChartView {
+            kind,
+            subject: subject.to_owned(),
+            unit,
+            scale_max,
+            peak: Some(peak),
+            mean: Some(peak / 4.0),
+            ..template.clone()
+        }
+    }
+
+    /// Where the kernel reports the memory's stall pressure the memory
+    /// panel carries it under the RAM in use (D-135): `some` and `full`,
+    /// each scaled to its peak, 1 % at least, and colored by the time lost,
+    /// not by its share of that scale. It stays one panel under one fold.
+    #[test]
+    fn the_memory_panel_adds_the_stall_pressure_strips() {
+        let mut history = history_view();
+        let template = history.charts[1].clone();
+        let pressure =
+            |kind, peak: f64| chart_of(&template, kind, "", CanonicalUnit::Percent, (None, peak));
+        history
+            .charts
+            .push(pressure(HistoryChartKind::MemoryPressureSome, 2.4));
+        history
+            .charts
+            .push(pressure(HistoryChartKind::MemoryPressureFull, 0.02));
+        let panels = panels(&history, None);
+        let memory = &panels[1];
+        assert_eq!(memory.title, "Memory used and pressure · 64.0 GiB");
+        assert_eq!(memory.fold, Some("history.memory"));
+        let strips: Vec<(&str, Paint, Option<f64>)> = memory
+            .strips
+            .iter()
+            .map(|strip| (strip.label.as_str(), strip.paint, strip.scale))
+            .collect();
+        assert_eq!(
+            strips,
+            vec![
+                ("used", Paint::Levels, Some(64.0 * 1_073_741_824.0)),
+                ("some", Paint::Pressure, Some(2.4)),
+                ("full", Paint::Pressure, Some(1.0)),
+            ]
+        );
+        assert!(!memory.is_rate());
+        // Only `some` reported: its strip alone follows the RAM in use.
+        history
+            .charts
+            .retain(|chart| chart.kind != HistoryChartKind::MemoryPressureFull);
+        let panels = super::panels(&history, None);
+        assert_eq!(panels[1].strips.len(), 2);
+    }
+
+    /// Where the CPU's and the SoC's temperature are read they lead the
+    /// temperature panel, which then is `Temperature` (D-137): `CPU` (or
+    /// each package by its number) and `SoC`, against 100 °C like a GPU's,
+    /// then the GPUs in their colors. A host without a GPU keeps the panel.
+    #[test]
+    fn the_temperature_panel_leads_with_the_cpu_and_the_soc() {
+        let mut history = history_view();
+        let template = history.charts[1].clone();
+        let celsius = |kind, subject: &str, peak: f64| {
+            chart_of(
+                &template,
+                kind,
+                subject,
+                CanonicalUnit::DegC,
+                (Some(100.0), peak),
+            )
+        };
+        history
+            .charts
+            .push(celsius(HistoryChartKind::CpuTemperature, "CPU 0", 88.0));
+        history
+            .charts
+            .push(celsius(HistoryChartKind::SocTemperature, "", 93.0));
+        let temperature = |history: &HistoryView| -> (String, Vec<String>) {
+            let panels = panels(history, None);
+            let panel = panels
+                .iter()
+                .find(|panel| panel.title.ends_with("emperature"))
+                .unwrap();
+            (
+                panel.title.clone(),
+                panel
+                    .strips
+                    .iter()
+                    .map(|strip| strip.label.clone())
+                    .collect(),
+            )
+        };
+        let (title, labels) = temperature(&history);
+        assert_eq!(title, "Temperature");
+        assert_eq!(labels, ["CPU", "SoC", "GPU 0", "GPU 1"]);
+        let panels = panels(&history, None);
+        let panel = panels
+            .iter()
+            .find(|panel| panel.title == "Temperature")
+            .unwrap();
+        assert_eq!(panel.fold, Some("history.gpu_temperature"));
+        assert_eq!(panel.strips[0].scale, Some(100.0));
+        let colored: Vec<Option<&str>> = panel
+            .strips
+            .iter()
+            .map(|strip| strip.gpu.as_deref())
+            .collect();
+        assert_eq!(colored, [None, None, Some("GPU 0"), Some("GPU 1")]);
+        // Several packages are named apart.
+        history
+            .charts
+            .push(celsius(HistoryChartKind::CpuTemperature, "CPU 1", 80.0));
+        assert_eq!(
+            temperature(&history).1[..3],
+            ["CPU 0".to_owned(), "CPU 1".to_owned(), "SoC".to_owned()]
+        );
+        // Without a GPU the CPU's and the SoC's temperature keep the panel.
+        history.charts.retain(|chart| !is_gpu(chart.kind));
+        assert_eq!(
+            temperature(&history),
+            (
+                "Temperature".to_owned(),
+                vec!["CPU 0".to_owned(), "CPU 1".to_owned(), "SoC".to_owned()]
+            )
+        );
     }
 }

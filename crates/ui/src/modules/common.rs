@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use dgxtop_core::identity::{EntityId, ModuleId, ProcessKey};
 use dgxtop_core::metric::CanonicalUnit;
-use dgxtop_core::view::{CellState, MetricCell, ViewModel};
+use dgxtop_core::view::{CellState, MetricCell, PressureView, ViewModel};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -386,6 +386,82 @@ pub(crate) fn separator(context: &DisplayContext) -> Span<'static> {
     Span::styled(" │ ", context.theme.muted_style())
 }
 
+/// What the three averages of a pressure line span, written after them.
+pub(crate) const PRESSURE_SPANS: &str = "(10s 1m 5m)";
+
+/// `pressure some 2.4% 0.9% 0.2% │ full 0.8% 0.3% 0.1%  (10s 1m 5m)`
+/// (D-135): the share of the last 10 s, 60 s and 300 s tasks stalled
+/// waiting for a resource, each in its level color (green up to 1 %). It is
+/// time lost waiting, not how full the resource is. The CPU has no `full`.
+pub(crate) fn pressure_line(pressure: &PressureView, context: &DisplayContext) -> Line<'static> {
+    let theme = &context.theme;
+    let mut spans = vec![Span::styled("pressure ", theme.label_style())];
+    spans.extend(pressure_kind_spans("some", &pressure.some, context));
+    if let Some(full) = &pressure.full {
+        spans.push(separator(context));
+        spans.extend(pressure_kind_spans("full", full, context));
+    }
+    spans.push(Span::styled(
+        format!("  {PRESSURE_SPANS}"),
+        theme.muted_style(),
+    ));
+    Line::from(spans)
+}
+
+/// `some 2.4% 0.9% 0.2%`: a kind's averages after its name.
+fn pressure_kind_spans(
+    kind: &'static str,
+    averages: &[MetricCell; 3],
+    context: &DisplayContext,
+) -> Vec<Span<'static>> {
+    let mut spans = vec![Span::styled(
+        format!("{kind} "),
+        context.theme.label_style(),
+    )];
+    spans.extend(pressure_average_spans(averages, context));
+    spans
+}
+
+/// `2.4% 0.9% 0.2%`: a kind's averages, shortest first, each in its level
+/// color (D-135).
+pub(crate) fn pressure_average_spans(
+    averages: &[MetricCell; 3],
+    context: &DisplayContext,
+) -> Vec<Span<'static>> {
+    let theme = &context.theme;
+    let mut spans = Vec::new();
+    for (index, cell) in averages.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled(value_text(cell), theme.pressure_style(cell)));
+    }
+    spans
+}
+
+/// Accessibility labels of `resource`'s pressure: the 10 s average of each
+/// kind, which the line leads with.
+pub(crate) fn pressure_labels(
+    output: &mut Output,
+    resource: &str,
+    pressure: &PressureView,
+    context: &DisplayContext,
+) {
+    let kinds = [
+        ("some", Some(&pressure.some)),
+        ("full", pressure.full.as_ref()),
+    ];
+    for (kind, averages) in kinds {
+        if let Some(averages) = averages {
+            output.label(cell_label(
+                &format!("{resource} pressure {kind} over 10 s"),
+                &averages[0],
+                context,
+            ));
+        }
+    }
+}
+
 /// Percent cell as a 0..=1 ratio.
 pub(crate) fn percent_ratio(cell: &MetricCell) -> Option<f64> {
     cell.value_f64().map(|value| value / 100.0)
@@ -750,6 +826,23 @@ pub(crate) fn join_if_fits(
     spans.push(separator(context));
     spans.extend(second.spans);
     vec![Line::from(spans)]
+}
+
+/// `lines` in order, each joined by ` │ ` to the line before it while both
+/// fit `width` ([`join_if_fits`]).
+pub(crate) fn pack_lines(
+    lines: Vec<Line<'static>>,
+    width: u16,
+    context: &DisplayContext,
+) -> Vec<Line<'static>> {
+    let mut packed: Vec<Line<'static>> = Vec::new();
+    for line in lines {
+        match packed.pop() {
+            Some(last) => packed.extend(join_if_fits(last, line, width, context)),
+            None => packed.push(line),
+        }
+    }
+    packed
 }
 
 /// Rows of the rate histories below the disk and network tables (D-41).

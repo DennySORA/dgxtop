@@ -1,5 +1,5 @@
 //! `disk` read group: `/proc/diskstats` counters per block device, entity
-//! `blockdev:MAJ:MIN`. `ram*` and `loop*` devices are skipped. The scope is
+//! `blockdev:MAJ:MIN`, and the host's I/O pressure averages (D-135). `ram*` and `loop*` devices are skipped. The scope is
 //! `partition` when `/sys/class/block/<name>/partition` exists, and a
 //! partition's parent entity is the disk holding it (the `dev` of its sysfs
 //! parent directory), so the disk's own facts such as its temperature
@@ -17,6 +17,7 @@ use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::identity::{EntityId, Scope};
 use dgxtop_core::naming::{attributes, block_layer, entity, groups};
 use dgxtop_core::observation::{Attribute, EntityKind, Observation, ReadPlan};
+use dgxtop_core::pressure::PressureResource;
 use dgxtop_core::quality::{RawKind, ReadStatus};
 
 use super::catalog::{
@@ -27,6 +28,7 @@ use super::host::host_entity_id;
 use super::locator::{DRIVER, FAMILY_DISK, ProcfsLocator, RANK_DEVICE};
 use super::mechanics::{ReadSnapshot, TimedRead, invariant, io_failure, timed};
 use super::parse::{DISK_FIELDS, DiskLine, parse_diskstats};
+use super::pressure::PressureRead;
 use super::records::{
     DEVICE_NOT_PRESENT, ReadWindow, failed_record, io_failed_record, removed_record,
     u64_field_record,
@@ -299,7 +301,8 @@ fn device_sources(
         .collect()
 }
 
-/// Reads `/proc/diskstats` once for every selected device field.
+/// Reads `/proc/diskstats` once for every selected device field, and the
+/// I/O pressure file for its averages.
 pub(crate) fn read(
     plan: &ReadPlan,
     selection: &[Selected<'_, ProcfsLocator>],
@@ -308,11 +311,14 @@ pub(crate) fn read(
 ) -> ReadSnapshot {
     let started_boot_ns = clock.now_boot_ns();
     let diskstats = DiskstatsRead::read(files, clock);
+    let pressure = PressureRead::of(PressureResource::Io, selection, files, clock);
     let mut records = Vec::with_capacity(selection.len());
     for selected in selection {
         let record = match selected {
             Selected::Removed(descriptor) => removed_record(plan, descriptor, clock.now_boot_ns()),
-            Selected::Live(source) => diskstats.record(plan, source),
+            Selected::Live(source) => diskstats
+                .record(plan, source)
+                .or_else(|| pressure.record(plan, source)),
         };
         records.extend(record);
     }

@@ -19,8 +19,8 @@ use dgxtop_core::view::{
     DiskHistory, DiskView, FilesystemView, FrequencyGroup, GpuCard, GpuDetails, GpuView,
     HeaderView, HistoryChartKind, HistoryChartView, HistoryPointView, HistoryView, HostState,
     HostStatus, InterfaceView, LabeledCell, LastGoodView, MemoryView, MetricCell, ModuleViews,
-    NetworkView, OverloadState, ProcessGpuView, ProcessRowView, ProcessesView, SessionState,
-    SettingField, SettingsView, Trend, ViewModel,
+    NetworkView, OverloadState, PressureView, ProcessGpuView, ProcessRowView, ProcessesView,
+    SessionState, SettingField, SettingsView, Trend, UnifiedMemoryView, ViewModel,
 };
 
 pub(crate) const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
@@ -200,6 +200,7 @@ pub(crate) fn cpu_view() -> CpuView {
         ],
         tasks_running: exact(3, CanonicalUnit::Count),
         tasks_total: exact(412, CanonicalUnit::Count),
+        pressure: None,
         utilization_trend: trend(vec![Some(40.0), Some(42.0), None, Some(45.0)]),
     }
 }
@@ -359,6 +360,10 @@ fn gpu_details(unified: bool) -> GpuDetails {
         encoder_sessions: exact_count(0),
         encoder_fps: ok(0.0, CanonicalUnit::CountPerSecond),
         encoder_latency: ok(0.0, CanonicalUnit::Milliseconds),
+        unified_memory: unified.then(|| UnifiedMemoryView {
+            available: ok(51.7 * GIB, CanonicalUnit::Bytes),
+            pressure: None,
+        }),
         throttle_time: [
             ("power", ok(219.152, CanonicalUnit::Milliseconds)),
             ("thermal", ok(0.0, CanonicalUnit::Milliseconds)),
@@ -393,6 +398,12 @@ pub(crate) fn memory_view() -> MemoryView {
         cached: ok(20.1 * GIB, CanonicalUnit::Bytes),
         swap_total: ok(8.0 * GIB, CanonicalUnit::Bytes),
         swap_used: ok(0.0, CanonicalUnit::Bytes),
+        // A kernel without the swap counters, PSI or an OOM-kill count: the
+        // tests of those lines set their own.
+        swap_in: missing(CanonicalUnit::BytesPerSecond, CellState::Unavailable),
+        swap_out: missing(CanonicalUnit::BytesPerSecond, CellState::Unavailable),
+        pressure: None,
+        oom_kills: missing(CanonicalUnit::Count, CellState::Unavailable),
         gpu_resident: Some(ok(10.0 * GIB, CanonicalUnit::Bytes)),
         used_trend: trend(vec![Some(12.0 * GIB), Some(12.3 * GIB)]),
         gpu_resident_trend: trend(vec![Some(9.5 * GIB), Some(10.0 * GIB)]),
@@ -427,8 +438,19 @@ pub(crate) fn disk_view() -> DiskView {
             available: ok(900.0 * GIB, CanonicalUnit::Bytes),
             use_percent: ok(45.1, CanonicalUnit::Percent),
         }],
+        pressure: None,
         read_trend: trend(vec![Some(0.0), Some(1.25 * 1024.0 * 1024.0)]),
         write_trend: trend(vec![Some(0.0), Some(0.0)]),
+    }
+}
+
+/// A resource's stall pressure (D-135): `some` and `full`, each as its
+/// 10 s, 60 s and 300 s averages in percent; `full` left out for the CPU.
+pub(crate) fn pressure_view(some: [f64; 3], full: Option<[f64; 3]>) -> PressureView {
+    let cells = |averages: [f64; 3]| averages.map(|percent| ok(percent, CanonicalUnit::Percent));
+    PressureView {
+        some: cells(some),
+        full: full.map(cells),
     }
 }
 

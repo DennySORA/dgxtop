@@ -1,8 +1,10 @@
 //! Procfs adapter (`procfs`): read groups `cpu` (`/proc/stat`,
-//! `/proc/loadavg`, cpufreq), `memory` (`/proc/meminfo`), `disk`
-//! (`/proc/diskstats`) and `process` (`/proc/<pid>`). It only reads files
-//! under `/proc` and `/sys` (resolved under the configured root), returns
-//! native units with provenance and never substitutes 0 for a missing value.
+//! `/proc/loadavg`, cpufreq), `memory` (`/proc/meminfo`, `/proc/vmstat`),
+//! `disk` (`/proc/diskstats`) and `process` (`/proc/<pid>`), each with the
+//! pressure averages of its resource (`/proc/pressure/*`, D-135). It only
+//! reads files under `/proc` and `/sys` (resolved under the configured
+//! root), returns native units with provenance and never substitutes 0 for
+//! a missing value.
 //!
 //! The submodules `catalog`, `mechanics` and `records` are shared with the
 //! network and filesystem adapters.
@@ -19,6 +21,7 @@ mod host;
 mod locator;
 mod memory;
 mod parse;
+mod pressure;
 mod probe;
 mod process;
 
@@ -43,6 +46,7 @@ use self::mechanics::{
     GroupPagers, PlanTarget, ReprobeGate, invariant, namespace_link, plan_target,
     rejected_discovery, rejected_plan,
 };
+use self::memory::MemoryRead;
 use self::process::{MAX_SCANNED_PROCESSES, ProcessMemo, ProcessScan};
 use crate::common::{RecordFactory, SystemFiles, read_status_of};
 use crate::registry::{AdapterOptions, compile_time_adapter_id, kernel_file_manifest};
@@ -168,7 +172,7 @@ impl ProcfsAdapter {
             ..
         } = self;
         let mut builder = book.begin_snapshot(now_boot_ns);
-        host::add_host(&mut builder, &keys, &metadata, constants);
+        host::add_host(&mut builder, &keys, &metadata, constants, &**files);
         let discovery = CpuDiscovery {
             keys: &keys,
             files: &**files,
@@ -200,6 +204,7 @@ impl ProcfsAdapter {
             files,
             clock,
             read_gate,
+            constants,
             ..
         } = self;
         pagers.serve(plan, target, page_size, now_boot_ns, || {
@@ -213,7 +218,15 @@ impl ProcfsAdapter {
                     };
                     cpu::read(&context, &selection.sources, read_gate)
                 }
-                groups::MEMORY => memory::read(plan, &selection.sources, &**files, &**clock),
+                groups::MEMORY => {
+                    let context = MemoryRead {
+                        plan,
+                        files: &**files,
+                        clock: &**clock,
+                        page_size: constants.page_size,
+                    };
+                    memory::read(&context, &selection.sources)
+                }
                 _ => disk::read(plan, &selection.sources, &**files, &**clock),
             };
             if selection.unknown_slots > 0 {

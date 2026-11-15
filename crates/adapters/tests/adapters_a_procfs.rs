@@ -382,6 +382,289 @@ fn memory_fields_are_native_kib_and_missing_available_is_unsupported() {
     );
 }
 
+const PRESSURE_MEMORY: &str = "\
+some avg10=2.40 avg60=0.91 avg300=0.20 total=371340609
+full avg10=0.80 avg60=0.30 avg300=0.10 total=371044034
+";
+const PRESSURE_IO: &str = "\
+some avg10=0.00 avg60=0.05 avg300=0.37 total=1067823427
+full avg10=0.00 avg60=0.04 avg300=0.36 total=1063515857
+";
+const PRESSURE_CPU: &str = "\
+some avg10=1.50 avg60=0.75 avg300=0.25 total=99996176
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+";
+const VMSTAT: &str = "nr_free_pages 100\npswpin 1000\npswpout 2500\noom_kill 4\n";
+
+/// The standard host on a kernel with pressure stall information and the
+/// swap and OOM-kill counters.
+fn with_pressure(label: &str) -> (FakeTree, Arc<FakeClock>, ProcfsAdapter, ParentCatalog) {
+    let tree = FakeTree::new(label);
+    standard_procfs(&tree);
+    tree.write("/proc/pressure/memory", PRESSURE_MEMORY);
+    tree.write("/proc/pressure/io", PRESSURE_IO);
+    tree.write("/proc/pressure/cpu", PRESSURE_CPU);
+    tree.write("/proc/vmstat", VMSTAT);
+    let clock = FakeClock::new(DISCOVERY_NS);
+    let mut adapter = procfs_with(&clock, tree.files());
+    let mut parent = ParentCatalog::default();
+    parent.sync(&mut adapter, ADAPTER);
+    clock.advance_ms(1_000);
+    (tree, clock, adapter, parent)
+}
+
+/// The memory group carries the memory's pressure averages in percent,
+/// the swap counters as bytes of the host's page size and the OOM kills as
+/// a count (D-135), all on the `memory` entity beside the meminfo fields.
+#[test]
+fn memory_pressure_swap_and_oom_kills_are_read_with_the_memory_group() {
+    let (_tree, _clock, mut adapter, parent) = with_pressure("procfs-pressure");
+    let records = read_group(&mut adapter, "memory", 1);
+    assert_eq!(records.len(), 6 + 3 + 6);
+    let some = find(&records, ids::MEMORY_PRESSURE_SOME_AVG10, "memory");
+    assert_eq!(f64_value(some), 2.4);
+    assert_eq!(some.native_unit.as_str(), "percent");
+    assert_eq!(some.key.scope.as_str(), "system");
+    assert_eq!(some.quality, Quality::Verified);
+    assert_eq!(
+        f64_value(find(&records, ids::MEMORY_PRESSURE_SOME_AVG300, "memory")),
+        0.2
+    );
+    assert_eq!(
+        f64_value(find(&records, ids::MEMORY_PRESSURE_FULL_AVG60, "memory")),
+        0.3
+    );
+    let swapped_in = find(&records, ids::MEMORY_SWAP_IN_BYTES, "memory");
+    assert_eq!(u64_value(swapped_in), 1000 * 4096);
+    assert_eq!(swapped_in.native_unit.as_str(), "bytes");
+    assert_eq!(
+        u64_value(find(&records, ids::MEMORY_SWAP_OUT_BYTES, "memory")),
+        2500 * 4096
+    );
+    let kills = find(&records, ids::MEMORY_OOM_KILLS, "memory");
+    assert_eq!(u64_value(kills), 4);
+    assert_eq!(kills.native_unit.as_str(), "count");
+
+    let source = parent.source("procfs:pressure.memory:some.avg10");
+    assert_eq!(source.raw_kind, RawKind::Gauge);
+    assert_eq!(source.read_group.as_str(), "memory");
+    assert_eq!(source.update_interval_ms, Some(2_000));
+    assert_eq!(
+        source.origin.origin_id.as_ref().unwrap().as_str(),
+        "procfs:/proc/pressure/memory:some.avg10"
+    );
+    let counter = parent.source("procfs:vmstat:pswpout");
+    assert_eq!(counter.raw_kind, RawKind::Counter);
+    assert_eq!(
+        counter.origin.origin_id.as_ref().unwrap().as_str(),
+        "procfs:/proc/vmstat:pswpout"
+    );
+}
+
+/// The CPU's and the I/O's pressure belong to no single device: they are
+/// sources of the `host` entity, read with the `cpu` and the `disk` group,
+/// which feed their collectors. The CPU has no system-wide `full`.
+#[test]
+fn cpu_and_io_pressure_are_read_with_their_groups_on_the_host() {
+    let (_tree, _clock, mut adapter, parent) = with_pressure("procfs-host-pressure");
+    let cpu = read_group(&mut adapter, "cpu", 1);
+    let some = find(&cpu, ids::CPU_PRESSURE_SOME_AVG10, "host");
+    assert_eq!(f64_value(some), 1.5);
+    assert_eq!(some.key.scope.as_str(), "host");
+    assert_eq!(
+        f64_value(find(&cpu, ids::CPU_PRESSURE_SOME_AVG300, "host")),
+        0.25
+    );
+    assert!(
+        cpu.iter()
+            .all(|record| !record.key.metric_id.as_str().contains("pressure.full")),
+        "the CPU's full line is no system-wide figure"
+    );
+    assert!(
+        cpu.iter()
+            .all(|record| !record.key.metric_id.as_str().starts_with("io.")),
+        "the I/O pressure is read with the disk group"
+    );
+    let disk = read_group(&mut adapter, "disk", 1);
+    assert_eq!(
+        f64_value(find(&disk, ids::IO_PRESSURE_SOME_AVG300, "host")),
+        0.37
+    );
+    assert_eq!(
+        f64_value(find(&disk, ids::IO_PRESSURE_FULL_AVG60, "host")),
+        0.04
+    );
+    assert_eq!(
+        parent
+            .source("procfs:pressure.io:full.avg10")
+            .read_group
+            .as_str(),
+        "disk"
+    );
+    assert_eq!(
+        parent
+            .source("procfs:pressure.cpu:some.avg60")
+            .read_group
+            .as_str(),
+        "cpu"
+    );
+    assert!(
+        !parent
+            .sources
+            .contains_key("procfs:pressure.cpu:full.avg10")
+    );
+}
+
+/// A kernel without PSI and without the counters has no source for them:
+/// each is an unsupported capability with its reason, and no read touches
+/// the missing files.
+#[test]
+fn a_kernel_without_pressure_or_vmstat_reports_them_unsupported() {
+    let tree = FakeTree::new("procfs-no-pressure");
+    standard_procfs(&tree);
+    let files = tree.faulty();
+    let clock = FakeClock::new(DISCOVERY_NS);
+    let mut adapter = procfs_with(&clock, files.clone());
+    let mut parent = ParentCatalog::default();
+    let pages = parent.sync(&mut adapter, ADAPTER);
+    let reason_of = |capability_id: &str| {
+        pages[0]
+            .capabilities
+            .iter()
+            .find(|capability| capability.capability_id == capability_id)
+            .map(|capability| (capability.support, capability.reason.clone()))
+    };
+    for metric in [
+        ids::MEMORY_PRESSURE_SOME_AVG10,
+        ids::MEMORY_PRESSURE_FULL_AVG10,
+        ids::CPU_PRESSURE_SOME_AVG10,
+        ids::IO_PRESSURE_FULL_AVG10,
+    ] {
+        assert_eq!(
+            reason_of(metric),
+            Some((Support::Unsupported, Some("PSI_NOT_PRESENT".to_owned()))),
+            "{metric}"
+        );
+    }
+    assert_eq!(
+        reason_of(ids::MEMORY_OOM_KILLS),
+        Some((Support::Unsupported, Some("SOURCE_REMOVED".to_owned())))
+    );
+    assert!(
+        parent
+            .sources
+            .keys()
+            .all(|id| !id.contains("pressure") && !id.contains("vmstat"))
+    );
+    clock.advance_ms(1_000);
+    let before = (
+        files.reads_of("/proc/pressure/memory"),
+        files.reads_of("/proc/vmstat"),
+    );
+    assert_eq!(read_group(&mut adapter, "memory", 1).len(), 6);
+    assert_eq!(
+        (
+            files.reads_of("/proc/pressure/memory"),
+            files.reads_of("/proc/vmstat")
+        ),
+        before,
+        "a read never touches a file no source needs"
+    );
+}
+
+/// PSI turned off at boot (`psi=0`) leaves the files but refuses to open
+/// them: unsupported, by the driver's word. A kernel before 4.13 counts no
+/// OOM kills while it still counts swapped pages.
+#[test]
+fn pressure_turned_off_and_a_missing_counter_are_told_apart() {
+    let tree = FakeTree::new("procfs-psi-off");
+    standard_procfs(&tree);
+    tree.write("/proc/pressure/memory", PRESSURE_MEMORY);
+    tree.write("/proc/vmstat", "pswpin 7\npswpout 9\n");
+    let files = tree.faulty();
+    files.inject("/proc/pressure/memory", 95);
+    let clock = FakeClock::new(DISCOVERY_NS);
+    let mut adapter = procfs_with(&clock, files.clone());
+    let mut parent = ParentCatalog::default();
+    let pages = parent.sync(&mut adapter, ADAPTER);
+    let capability = |capability_id: &str| {
+        pages[0]
+            .capabilities
+            .iter()
+            .find(|capability| capability.capability_id == capability_id)
+            .and_then(|capability| capability.reason.clone())
+    };
+    assert_eq!(
+        capability(ids::MEMORY_PRESSURE_SOME_AVG10).as_deref(),
+        Some("UNSUPPORTED_BY_DRIVER")
+    );
+    assert_eq!(
+        capability(ids::MEMORY_OOM_KILLS).as_deref(),
+        Some("FIELD_ABSENT")
+    );
+    assert!(parent.sources.contains_key("procfs:vmstat:pswpin"));
+    assert!(!parent.sources.contains_key("procfs:vmstat:oom_kill"));
+    clock.advance_ms(1_000);
+    let records = read_group(&mut adapter, "memory", 1);
+    assert_eq!(
+        u64_value(find(&records, ids::MEMORY_SWAP_IN_BYTES, "memory")),
+        7 * 4096
+    );
+    // Turned on again, the next discovery finds the averages.
+    files.clear("/proc/pressure/memory");
+    parent.sync(&mut adapter, ADAPTER);
+    assert!(
+        parent
+            .sources
+            .contains_key("procfs:pressure.memory:full.avg300")
+    );
+}
+
+/// A pressure file that stops answering fails its own records with the
+/// reason and leaves the group's other records whole; without the page
+/// size the swap counters have no value, never a guessed 4 KiB.
+#[test]
+fn an_unreadable_pressure_file_fails_only_its_records() {
+    let tree = FakeTree::new("procfs-pressure-fault");
+    standard_procfs(&tree);
+    tree.write("/proc/pressure/memory", PRESSURE_MEMORY);
+    tree.write("/proc/vmstat", VMSTAT);
+    let files = tree.faulty();
+    let clock = FakeClock::new(DISCOVERY_NS);
+    let mut adapter = ProcfsAdapter::with_host_constants(
+        clock.clone(),
+        host_id("test-host"),
+        files.clone(),
+        AdapterOptions::default(),
+        HostConstants {
+            clk_tck: Some(100),
+            page_size: None,
+        },
+    );
+    let mut parent = ParentCatalog::default();
+    parent.sync(&mut adapter, ADAPTER);
+    clock.advance_ms(1_000);
+    files.inject("/proc/pressure/memory", 5);
+    let records = read_group(&mut adapter, "memory", 1);
+    let some = find(&records, ids::MEMORY_PRESSURE_SOME_AVG10, "memory");
+    assert_eq!(some.read_status, ReadStatus::Error);
+    assert_eq!(some.value, None);
+    assert_eq!(some.reason_codes, vec!["IO_ERROR_5".to_owned()]);
+    assert_eq!(
+        u64_value(find(&records, ids::MEMORY_TOTAL, "memory")),
+        32_654_612
+    );
+    let swapped = find(&records, ids::MEMORY_SWAP_OUT_BYTES, "memory");
+    assert_eq!(swapped.read_status, ReadStatus::Unsupported);
+    assert_eq!(swapped.value, None);
+    assert_eq!(swapped.reason_codes, vec!["PAGE_SIZE_UNKNOWN".to_owned()]);
+    assert_eq!(
+        u64_value(find(&records, ids::MEMORY_OOM_KILLS, "memory")),
+        4,
+        "a count needs no page size"
+    );
+}
+
 #[test]
 fn unreadable_file_permission_bits_yield_permission_denied() {
     if running_as_root() {

@@ -168,6 +168,19 @@ pub struct ProcessTrend {
     pub trend: Trend,
 }
 
+/// A resource's stall pressure (PSI, D-135): the share of the last 10 s,
+/// 60 s and 300 s tasks stalled waiting for it, shortest first, as the
+/// kernel averages it. It is time lost waiting, never how much of the
+/// resource is in use.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PressureView {
+    /// While at least one task stalled.
+    pub some: [MetricCell; 3],
+    /// While every task that was not idle stalled at once; `None` for the
+    /// CPU, which has no such state system-wide.
+    pub full: Option<[MetricCell; 3]>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CoreView {
     pub core_id: String,
@@ -219,6 +232,9 @@ pub struct CpuView {
     pub load: [MetricCell; 3],
     pub tasks_running: MetricCell,
     pub tasks_total: MetricCell,
+    /// The CPU's stall pressure (D-135): the time runnable tasks waited
+    /// for a CPU; `None` where the kernel reports none.
+    pub pressure: Option<PressureView>,
     pub utilization_trend: Trend,
 }
 
@@ -330,9 +346,26 @@ pub struct GpuDetails {
     /// Time the clocks were held back since the driver loaded, per cause
     /// (`power`, `thermal`, ...).
     pub throttle_time: Vec<LabeledCell>,
+    /// On a unified-memory GPU, the system memory it allocates from
+    /// (D-135); `None` on a GPU with a framebuffer of its own.
+    pub unified_memory: Option<UnifiedMemoryView>,
     /// Identity, firmware and the driver and CUDA stack, by attribute key
     /// (`dgxtop_core::naming::attributes`).
     pub attributes: Vec<(String, String)>,
+}
+
+/// The system memory a unified-memory GPU allocates from (D-135): such a
+/// GPU has no memory of its own to run out of, so the room it has left and
+/// the health of its memory are the system's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnifiedMemoryView {
+    /// RAM the kernel could still hand out (`MemAvailable`): the room left
+    /// for the GPU's next allocation as much as for a process's.
+    pub available: MetricCell,
+    /// The memory's stall pressure: whether tasks already lose time
+    /// waiting for memory, however much is in use; `None` where the kernel
+    /// reports none.
+    pub pressure: Option<PressureView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -352,6 +385,17 @@ pub struct MemoryView {
     pub cached: MetricCell,
     pub swap_total: MetricCell,
     pub swap_used: MetricCell,
+    /// What is read back from swap and written out to it each second
+    /// (D-135): swap in use says what was moved out once, these whether
+    /// pages are moving now.
+    pub swap_in: MetricCell,
+    pub swap_out: MetricCell,
+    /// The memory's stall pressure (D-135): the time tasks waited for
+    /// memory (reclaim, swap-in, refaults); `None` where the kernel reports
+    /// none. On unified memory it is the GPU's memory pressure too.
+    pub pressure: Option<PressureView>,
+    /// Processes the kernel's OOM killer killed since boot (D-135).
+    pub oom_kills: MetricCell,
     /// RAM held by GPU allocations on unified-memory GPUs (part of `used`);
     /// `None` when no GPU shares system RAM.
     pub gpu_resident: Option<MetricCell>,
@@ -406,6 +450,9 @@ pub struct DiskView {
     /// busiest whole disk, whose rates count everything stacked on it,
     /// whether or not it is listed.
     pub charted: Option<DiskDeviceView>,
+    /// The host's I/O stall pressure (D-135): the time tasks waited for
+    /// I/O on any device; `None` where the kernel reports none.
+    pub pressure: Option<PressureView>,
     /// Read rate trend of the charted device, for the panel chart.
     pub read_trend: Trend,
     /// Write rate trend of the charted device.
@@ -542,6 +589,14 @@ pub enum HistoryChartKind {
     /// package's power, charted beside the GPUs' power (D-106).
     TotalPower,
     CpuPower,
+    /// The memory's stall pressure over 10 s (D-135), charted beside the
+    /// RAM in use: while some tasks stalled, and while all did.
+    MemoryPressureSome,
+    MemoryPressureFull,
+    /// Each CPU package's and the SoC's temperature, charted beside the
+    /// GPUs' (D-137).
+    CpuTemperature,
+    SocTemperature,
 }
 
 impl HistoryChartKind {

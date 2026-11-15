@@ -4,7 +4,9 @@
 //! part in its color and the other GPU processes in gray, with the used
 //! percentage and the used chart under it, stacked the same way (D-43), a
 //! column lower than a row drawn a row high so both colors show (D-134);
-//! swap, joined by buffers/cache/available when they fit.
+//! the memory's stall pressure, joined by the OOM kills once there are any
+//! (D-135); swap with what moves in and out of it, joined by
+//! buffers/cache/available when they fit.
 
 use dgxtop_core::view::{MemoryView, MetricCell, ViewModel};
 use ratatui::Frame;
@@ -15,13 +17,14 @@ use ratatui::text::{Line, Span};
 use super::ModuleBuildError;
 use super::common::{
     BarRow, ManifestSpec, Output, RowCursor, build_manifest, cell_label, draw_line, fraction_ratio,
-    join_if_fits, measuring_context, message, no_data, panel, panel_with_keys, render_bar_row,
-    render_chart_with_parts, separator, under_bar,
+    join_if_fits, labeled_cell, measuring_context, message, no_data, pack_lines, panel,
+    panel_with_keys, pressure_labels, pressure_line, render_bar_row, render_chart_with_parts,
+    reported, separator, under_bar,
 };
 use super::process_memory::{
     SWATCH, legend_line_count, legend_lines, other_points, share_segments, trend_parts,
 };
-use crate::format::{clean, format_bytes, format_percent, value_text};
+use crate::format::{CellDetail, clean, format_bytes, format_percent, value_text};
 use crate::num::saturate_u16;
 use crate::registry::{
     DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot,
@@ -81,9 +84,9 @@ impl DisplayModule for MemoryModule {
         };
         let context = measuring_context(model, slot);
         let inner = width.saturating_sub(2);
-        let swap_rows = swap_lines(memory, inner, &context).len();
+        let footer_rows = footer_lines(memory, inner, &context).len();
         let gpu_rows = gpu_legend_rows(memory, inner, MAX_GPU_ROWS, &context);
-        Some(2 + RAM_ROWS + saturate_u16(gpu_rows + swap_rows))
+        Some(2 + RAM_ROWS + saturate_u16(gpu_rows + footer_rows))
     }
 
     fn render(
@@ -116,11 +119,11 @@ impl DisplayModule for MemoryModule {
         if let Some(row) = rows.next_row() {
             draw_line(frame.buffer_mut(), row, &ram_line(memory, context));
         }
-        let swap = swap_lines(memory, inner.width, context);
-        // The bar, its chart and the swap rows keep their rows; the GPU
+        let footer = footer_lines(memory, inner.width, context);
+        // The bar, its chart and the footer rows keep their rows; the GPU
         // legend takes what is left, up to its most, and scrolls (D-70).
         let room = usize::from(rows.remaining())
-            .saturating_sub(usize::from(1 + CHART_ROWS) + swap.len())
+            .saturating_sub(usize::from(1 + CHART_ROWS) + footer.len())
             .clamp(1, MAX_GPU_ROWS);
         let legend = gpu_legend(memory, inner.width, (room, context.scroll), context);
         if let Some(area) = rows.take(saturate_u16(legend.lines.len())) {
@@ -139,18 +142,28 @@ impl DisplayModule for MemoryModule {
         // a row the CPU panel beside it made taller (D-70).
         let chart_rows = rows
             .remaining()
-            .saturating_sub(saturate_u16(swap.len()))
+            .saturating_sub(saturate_u16(footer.len()))
             .max(1 + CHART_ROWS);
         if let Some(area) = rows.take(chart_rows) {
             render_used(frame, area, memory, context);
         }
-        for line in swap {
+        for line in footer {
             let Some(row) = rows.next_row() else { break };
             draw_line(frame.buffer_mut(), row, &line);
         }
         output.label(cell_label("memory used", &memory.used, context));
         output.label(cell_label("memory total", &memory.total, context));
         output.label(cell_label("memory available", &memory.available, context));
+        if let Some(pressure) = &memory.pressure {
+            pressure_labels(&mut output, "memory", pressure, context);
+        }
+        if oom_line(memory, context).is_some() {
+            output.label(cell_label(
+                "processes killed by the OOM killer since boot",
+                &memory.oom_kills,
+                context,
+            ));
+        }
         if let Some(gpu) = &memory.gpu_resident {
             output.label(cell_label("RAM held by GPU processes", gpu, context));
         }
@@ -163,6 +176,13 @@ impl DisplayModule for MemoryModule {
             ));
         }
         output.label(cell_label("swap used", &memory.swap_used, context));
+        for (label, cell) in swap_rates(memory) {
+            output.label(cell_label(
+                &format!("swapped {label} a second"),
+                cell,
+                context,
+            ));
+        }
         output.finish()
     }
 }
@@ -444,20 +464,62 @@ fn render_used(frame: &mut Frame<'_>, area: Rect, memory: &MemoryView, context: 
     frame.render_widget(StackedBar::new(&segments, theme.gauge_track), gauge);
 }
 
-/// The swap line, joined by the buffers/cache/available line when both fit
-/// `width`.
-fn swap_lines(memory: &MemoryView, width: u16, context: &DisplayContext) -> Vec<Line<'static>> {
-    join_if_fits(
-        swap_line(memory, context),
-        detail_line(memory, context),
-        width,
-        context,
-    )
+/// The lines under the used chart (D-135): the memory's stall pressure,
+/// joined by the OOM kills when both fit `width`; then swap and
+/// buffers/cache/available, led by the OOM kills that found no room above,
+/// each joined to the one before while it fits. The pressure keeps a line
+/// of its own, so it is never read as a figure of the swap.
+fn footer_lines(memory: &MemoryView, width: u16, context: &DisplayContext) -> Vec<Line<'static>> {
+    let pressure = memory
+        .pressure
+        .as_ref()
+        .map(|pressure| pressure_line(pressure, context));
+    let mut lines = Vec::new();
+    let mut below = Vec::new();
+    match (pressure, oom_line(memory, context)) {
+        (Some(pressure), Some(kills)) => {
+            let mut joined = join_if_fits(pressure, kills, width, context);
+            below.extend(joined.drain(1..));
+            lines.extend(joined);
+        }
+        (Some(pressure), None) => lines.push(pressure),
+        (None, Some(kills)) => below.push(kills),
+        (None, None) => {}
+    }
+    below.push(swap_line(memory, context));
+    below.push(detail_line(memory, context));
+    lines.extend(pack_lines(below, width, context));
+    lines
 }
 
-/// `Swap 0 B / 8.0 GiB`.
+/// `OOM kills 4 since boot`, in the warning color: the processes the
+/// kernel's OOM killer killed (D-135). Left out while it killed none, or
+/// where the kernel does not count them.
+fn oom_line(memory: &MemoryView, context: &DisplayContext) -> Option<Line<'static>> {
+    let theme = &context.theme;
+    memory.oom_kills.value_f64().filter(|kills| *kills >= 1.0)?;
+    Some(Line::from(vec![
+        Span::styled("OOM kills ", theme.label_style()),
+        Span::styled(
+            value_text(&memory.oom_kills),
+            Style::new().fg(theme.warning),
+        ),
+        Span::styled(" since boot", theme.label_style()),
+    ]))
+}
+
+/// What is read back from swap (`in`) and written out to it (`out`) each
+/// second, where the kernel counts it (D-135).
+fn swap_rates(memory: &MemoryView) -> impl Iterator<Item = (&'static str, &MetricCell)> {
+    [("in", &memory.swap_in), ("out", &memory.swap_out)]
+        .into_iter()
+        .filter(|(_, cell)| reported(cell))
+}
+
+/// `Swap 0 B / 8.0 GiB │ in 0 B/s │ out 1.2 MiB/s`: the swap in use says
+/// what was moved out once, the rates whether pages are moving now.
 fn swap_line(memory: &MemoryView, context: &DisplayContext) -> Line<'static> {
-    Line::from(vec![
+    let mut spans = vec![
         Span::styled("Swap ", context.theme.label_style()),
         Span::styled(
             format!(
@@ -467,7 +529,12 @@ fn swap_line(memory: &MemoryView, context: &DisplayContext) -> Line<'static> {
             ),
             context.theme.text_style(),
         ),
-    ])
+    ];
+    for (label, cell) in swap_rates(memory) {
+        spans.push(separator(context));
+        spans.extend(labeled_cell(label, cell, CellDetail::GLANCE, context));
+    }
+    Line::from(spans)
 }
 
 /// `buf 1.2 GiB  cache 20.1 GiB  avail 48.0 GiB`.
@@ -787,5 +854,136 @@ mod tests {
             (legend.lines.len(), legend.scrolls)
         };
         assert_eq!((all, scrolls), (3, false));
+    }
+
+    fn footer(view: &MemoryView, width: u16) -> Vec<String> {
+        let context = crate::test_fixtures::display_context();
+        footer_lines(view, width, &context)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Under the chart (D-135): the memory's stall pressure, each kind's
+    /// 10 s, 60 s and 300 s averages, then swap with what is read back
+    /// from it and written out to it each second, beside what is available,
+    /// which pressure never stands for.
+    #[test]
+    fn the_footer_shows_the_pressure_then_swap_with_its_rates() {
+        let context = crate::test_fixtures::display_context();
+        let rate = |value: f64| crate::test_fixtures::ok(value, CanonicalUnit::BytesPerSecond);
+        let mut view = memory(bytes(48.0 * GIB), None);
+        view.pressure = Some(crate::test_fixtures::pressure_view(
+            [2.4, 0.9, 0.2],
+            Some([0.8, 0.3, 0.1]),
+        ));
+        view.swap_in = rate(0.0);
+        view.swap_out = rate(1.2 * 1024.0 * 1024.0);
+        assert_eq!(
+            footer(&view, 120),
+            vec![
+                "pressure some 2.4% 0.9% 0.2% │ full 0.8% 0.3% 0.1%  (10s 1m 5m)",
+                "Swap 0 B / 8.0 GiB │ in 0 B/s │ out 1.2 MiB/s │ buf 1.2 GiB │ cache 20.1 GiB \
+                 │ avail 51.7 GiB",
+            ]
+        );
+        // A panel too narrow for one line keeps available on the next.
+        assert_eq!(
+            footer(&view, 70),
+            vec![
+                "pressure some 2.4% 0.9% 0.2% │ full 0.8% 0.3% 0.1%  (10s 1m 5m)",
+                "Swap 0 B / 8.0 GiB │ in 0 B/s │ out 1.2 MiB/s",
+                "buf 1.2 GiB │ cache 20.1 GiB │ avail 51.7 GiB",
+            ]
+        );
+        // Each average takes its level color: green up to 1 %.
+        let line = pressure_line(view.pressure.as_ref().unwrap(), &context);
+        let color = |text: &str| {
+            line.spans
+                .iter()
+                .find(|span| span.content == text)
+                .and_then(|span| span.style.fg)
+        };
+        assert_eq!(color("0.9%"), Some(context.theme.gauge_low));
+        assert_ne!(color("2.4%"), Some(context.theme.gauge_low));
+        // The module asks for a row more than without the pressure.
+        let module = MemoryModule::new().unwrap();
+        let mut model =
+            crate::test_fixtures::view_model(dgxtop_core::commands::ViewKind::Overview, 1);
+        let rows = |view: &MemoryView, model: &mut ViewModel| {
+            model.modules.memory = Some(std::sync::Arc::new(view.clone()));
+            module.preferred_rows(model, 122, Slot::Overview).unwrap()
+        };
+        let with_pressure = rows(&view, &mut model);
+        view.pressure = None;
+        assert_eq!(rows(&view, &mut model) + 1, with_pressure);
+    }
+
+    /// A kernel without PSI and the swap counters keeps the swap line as it
+    /// was; a counter still warming up says so instead of a rate.
+    #[test]
+    fn a_kernel_without_pressure_or_swap_counters_keeps_the_swap_line() {
+        let mut view = memory(bytes(48.0 * GIB), None);
+        assert_eq!(
+            footer(&view, 120),
+            vec!["Swap 0 B / 8.0 GiB │ buf 1.2 GiB │ cache 20.1 GiB │ avail 51.7 GiB"]
+        );
+        view.swap_in = MetricCell::missing(CanonicalUnit::BytesPerSecond, CellState::Warmup);
+        assert_eq!(
+            footer(&view, 120),
+            vec![
+                "Swap 0 B / 8.0 GiB │ in warming up │ buf 1.2 GiB │ cache 20.1 GiB \
+                 │ avail 51.7 GiB"
+            ]
+        );
+    }
+
+    /// Once the OOM killer killed a process, the count since boot follows
+    /// the pressure in the warning color (D-135); none killed, or a kernel
+    /// that does not count them, adds nothing.
+    #[test]
+    fn oom_kills_follow_the_pressure_once_there_are_any() {
+        let context = crate::test_fixtures::display_context();
+        let count = |kills: f64| crate::test_fixtures::ok(kills, CanonicalUnit::Count);
+        let mut view = memory(bytes(48.0 * GIB), None);
+        view.pressure = Some(crate::test_fixtures::pressure_view(
+            [0.0, 0.0, 0.0],
+            Some([0.0, 0.0, 0.0]),
+        ));
+        view.oom_kills = count(0.0);
+        assert_eq!(footer(&view, 120).len(), 2);
+        assert!(oom_line(&view, &context).is_none());
+        view.oom_kills = count(4.0);
+        assert_eq!(
+            footer(&view, 120)[0],
+            "pressure some 0.0% 0.0% 0.0% │ full 0.0% 0.0% 0.0%  (10s 1m 5m) \
+             │ OOM kills 4 since boot"
+        );
+        let kills = oom_line(&view, &context).unwrap();
+        assert_eq!(kills.spans[1].style.fg, Some(context.theme.warning));
+        // Too narrow for both, the kills lead the swap line instead of
+        // taking a line of their own, and the pressure keeps its line.
+        assert_eq!(
+            footer(&view, 70),
+            vec![
+                "pressure some 0.0% 0.0% 0.0% │ full 0.0% 0.0% 0.0%  (10s 1m 5m)",
+                "OOM kills 4 since boot │ Swap 0 B / 8.0 GiB",
+                "buf 1.2 GiB │ cache 20.1 GiB │ avail 51.7 GiB",
+            ]
+        );
+        // Without PSI they lead the swap line too.
+        view.pressure = None;
+        assert_eq!(
+            footer(&view, 120),
+            vec![
+                "OOM kills 4 since boot │ Swap 0 B / 8.0 GiB │ buf 1.2 GiB │ cache 20.1 GiB \
+                 │ avail 51.7 GiB"
+            ]
+        );
     }
 }

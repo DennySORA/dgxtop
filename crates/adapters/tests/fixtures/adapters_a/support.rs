@@ -290,6 +290,10 @@ pub fn u64_value(record: &Observation) -> u64 {
     record.value.unwrap().as_u64().unwrap()
 }
 
+pub fn f64_value(record: &Observation) -> f64 {
+    record.value.unwrap().to_f64_lossy()
+}
+
 /// What the parent holds after applying deltas the way the Manager does:
 /// upserts immediately, removals and generation only with the complete page.
 #[derive(Debug, Default)]

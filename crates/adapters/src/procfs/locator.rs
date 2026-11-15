@@ -2,8 +2,9 @@
 //! admission ranks shared by the procfs group modules.
 
 use dgxtop_core::metric::{ids, native};
+use dgxtop_core::pressure::{PressureKind, PressureResource, PressureWindow};
 
-use super::parse::{CpuLabel, DiskField, MemField, StatColumn};
+use super::parse::{CpuLabel, DiskField, MemField, StatColumn, VmStatField};
 
 /// Driver name in provenance.
 pub(crate) const DRIVER: &str = "procfs";
@@ -111,6 +112,14 @@ pub(crate) enum ProcfsLocator {
     FrequencyMaximum { khz: u64 },
     /// A `/proc/meminfo` field.
     Memory(MemField),
+    /// A `/proc/vmstat` counter (D-135).
+    VmStat(VmStatField),
+    /// One average of `/proc/pressure/<resource>` (D-135).
+    Pressure {
+        resource: PressureResource,
+        kind: PressureKind,
+        window: PressureWindow,
+    },
     /// A `/proc/diskstats` field of the device `major:minor` named `name`.
     Disk {
         major: u32,

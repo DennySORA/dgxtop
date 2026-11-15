@@ -5,7 +5,8 @@
 //! it; its own row, where it has one, is highlighted. A device's name
 //! follows the name of its filesystem's mount point in brackets (D-130:
 //! `[DennySORA_SSD] nvme0n1p3`). Filesystems on no listed device follow as
-//! rows of their own. The filesystem type, its free
+//! rows of their own. The last row is the host's I/O stall pressure, where
+//! the kernel reports it (D-135). The filesystem type, its free
 //! space (reserved blocks included, beside what is available to users), the
 //! drive's temperature (D-92; blank when the drive reports none) and the
 //! device's await time are the first columns a narrow panel gives up.
@@ -19,8 +20,9 @@ use ratatui::style::Style;
 use super::ModuleBuildError;
 use super::common::{
     ColumnSpec, ManifestSpec, Output, RATE_ROWS, RateHistory, RowCursor, TableCell, build_manifest,
-    cell_label, draw_colored_header, draw_table_row, fit_columns, message, metric_table_cell,
-    no_data, panel, panel_with_keys, rate_rows, render_rate_rows,
+    cell_label, draw_colored_header, draw_line, draw_table_row, fit_columns, message,
+    metric_table_cell, no_data, panel, panel_with_keys, pressure_labels, pressure_line, rate_rows,
+    render_rate_rows,
 };
 use super::folds::{fold_keys, render_folded};
 use crate::format::{clean, display_width, state_label_for_width, truncate_middle, value_text};
@@ -35,6 +37,9 @@ const PREFERRED_TABLE_ROWS: u16 = 4;
 const NOT_APPLICABLE: &str = "–";
 /// Columns the brackets and the gap around a mount point take.
 const MOUNT_MARKS: usize = 3;
+/// Rows the table (its header and a row) and the rate histories take
+/// before the I/O pressure gets the last one.
+const MIN_ROWS_BEFORE_PRESSURE: u16 = 2 + RATE_ROWS;
 
 const COLUMNS: [ColumnSpec; 11] = [
     // Room for `[DennySORA_SSD] nvme0n1p3` (D-130): the optional columns
@@ -89,7 +94,8 @@ impl DisplayModule for DiskModule {
             return Some(3);
         };
         let rows = saturate_u16(table_rows(disk).len()).clamp(1, PREFERRED_TABLE_ROWS);
-        Some(2 + 1 + rows + RATE_ROWS)
+        let pressure_row = u16::from(disk.pressure.is_some());
+        Some(2 + 1 + rows + RATE_ROWS + pressure_row)
     }
 
     fn render(
@@ -135,15 +141,26 @@ impl DisplayModule for DiskModule {
             return output.finish();
         }
         // Read and write histories of the charted disk (D-41) below the
-        // table, which keeps every other row.
-        let history_rows = rate_rows(inner.height);
+        // table, which keeps every other row, then the host's I/O stall
+        // pressure on the last row once the histories have theirs (D-135).
+        let pressure = disk
+            .pressure
+            .as_ref()
+            .filter(|_| inner.height > MIN_ROWS_BEFORE_PRESSURE);
+        let body_rows = inner.height - u16::from(pressure.is_some());
+        let history_rows = rate_rows(body_rows);
         let charted = disk.charted.as_ref();
         let mut cursor = RowCursor::new(inner);
-        if let Some(table) = cursor.take(inner.height - history_rows) {
+        if let Some(table) = cursor.take(body_rows - history_rows) {
             let charted_id = charted.map(|device| &device.entity_id);
             render_table(frame, table, &rows, charted_id, context);
         }
-        if let (Some(history), Some(charted)) = (cursor.rest(), charted) {
+        let histories = cursor.take(history_rows);
+        if let (Some(pressure), Some(row)) = (pressure, cursor.next_row()) {
+            draw_line(frame.buffer_mut(), row, &pressure_line(pressure, context));
+            pressure_labels(&mut output, "I/O", pressure, context);
+        }
+        if let (Some(history), Some(charted)) = (histories, charted) {
             let theme = &context.theme;
             let rates = [
                 RateHistory {
@@ -460,6 +477,38 @@ mod tests {
         let cell = &row_cells(&rows[0], WIDE, &context)[10];
         assert_eq!(cell.text, "59°C");
         assert_eq!(cell.style.fg, Some(context.theme.temperature_color(59.0)));
+    }
+
+    /// The host's I/O stall pressure takes the panel's last row, under the
+    /// rate histories (D-135), and gives way first where the panel is
+    /// short; a kernel without PSI keeps the panel as it was.
+    #[test]
+    fn the_io_pressure_takes_the_last_row() {
+        let module = DiskModule::new().unwrap();
+        let mut model = test_fixtures::view_model(ViewKind::Overview, 1);
+        model.modules.disk = Some(std::sync::Arc::new(disk_view()));
+        let without = module.preferred_rows(&model, 100, Slot::Overview).unwrap();
+        let mut disk = disk_view();
+        disk.pressure = Some(test_fixtures::pressure_view(
+            [0.0, 0.1, 0.4],
+            Some([0.0, 0.1, 0.3]),
+        ));
+        model.modules.disk = Some(std::sync::Arc::new(disk));
+        let rows = module.preferred_rows(&model, 100, Slot::Overview).unwrap();
+        assert_eq!(rows, without + 1);
+        let text = test_fixtures::render_text(&module, &model, (100, rows));
+        let lines: Vec<&str> = text.lines().collect();
+        let last = lines[usize::from(rows) - 2];
+        assert!(
+            last.contains("pressure some 0.0% 0.1% 0.4% │ full 0.0% 0.1% 0.3%  (10s 1m 5m)"),
+            "{last}"
+        );
+        let write = lines[usize::from(rows) - 3];
+        assert!(write.contains('W') && write.contains("peak"), "{write}");
+        let short =
+            test_fixtures::render_text(&module, &model, (100, 2 + MIN_ROWS_BEFORE_PRESSURE));
+        assert!(!short.contains("pressure"), "{short}");
+        assert!(short.contains("peak"), "{short}");
     }
 
     /// The used share is written in the level color of a gauge that full

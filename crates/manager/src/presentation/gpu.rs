@@ -6,14 +6,16 @@ use dgxtop_core::identity::EntityId;
 use dgxtop_core::metric::{CanonicalUnit, Scalar, ids, native};
 use dgxtop_core::naming::{attributes, entity};
 use dgxtop_core::observation::EntityRecord;
+use dgxtop_core::pressure::PressureResource;
 use dgxtop_core::view::{
     CellState, DiskHistory, GpuCard, GpuDetails, GpuView, HistoryChartKind, HistoryView, HostState,
-    HostStatus, LabeledCell, MetricCell,
+    HostStatus, LabeledCell, MetricCell, UnifiedMemoryView,
 };
 
 use super::gpu_derived::{memory_bandwidth, pcie_bandwidth};
 use super::gpu_directory::{GpuDirectory, GpuIdentity};
 use super::labels::{host_state_text, label_text};
+use super::pressure::pressure_view;
 use super::reader::MetricReader;
 
 pub(crate) const GPU_DISABLED_REASON: &str =
@@ -292,8 +294,24 @@ fn build_details(reader: &MetricReader<'_>, gpu: &GpuIdentity<'_>, card: &GpuCar
                 cell: reader.cell(ids::GPU_THROTTLE_TIME, entity_id, scope),
             })
             .collect(),
+        unified_memory: unified_memory(reader, gpu),
         attributes: attribute_pairs(gpu.record, &DETAIL_KEYS),
     }
+}
+
+/// The system memory a unified-memory GPU allocates from (D-135): what is
+/// still available and the memory's stall pressure; a GPU with a
+/// framebuffer has none.
+fn unified_memory(reader: &MetricReader<'_>, gpu: &GpuIdentity<'_>) -> Option<UnifiedMemoryView> {
+    gpu.has_unified_memory().then(|| UnifiedMemoryView {
+        available: reader.cell(ids::MEMORY_AVAILABLE, entity::MEMORY, entity::SCOPE_SYSTEM),
+        pressure: pressure_view(
+            reader,
+            PressureResource::Memory,
+            entity::MEMORY,
+            entity::SCOPE_SYSTEM,
+        ),
+    })
 }
 
 /// The driver's own reading of a PCIe throughput the collector withheld
@@ -629,6 +647,39 @@ mod tests {
         let discrete = &view.cards[1];
         assert_eq!(discrete.system_ram_total.state, CellState::Unsupported);
         assert_eq!(discrete.system_ram_total.value, None);
+    }
+
+    /// The GPU view says what a unified GPU's memory really depends on
+    /// (D-135): the RAM the system can still hand out and the memory's
+    /// stall pressure. A GPU with a framebuffer of its own carries neither.
+    #[test]
+    fn a_unified_cards_details_carry_the_available_ram_and_the_memory_pressure() {
+        let mut fixture = two_gpus();
+        fixture.add(
+            "memory",
+            sample("memory.available", "memory", "system").u64(44 << 30),
+        );
+        let view = build(&fixture, None, enabled());
+        let unified = |view: &GpuView| {
+            view.cards[0]
+                .details
+                .as_ref()
+                .and_then(|details| details.unified_memory.clone())
+                .unwrap()
+        };
+        let memory = unified(&view);
+        assert_eq!(memory.available.value.unwrap().as_u64(), Some(44 << 30));
+        assert!(memory.pressure.is_none(), "a kernel without PSI");
+        fixture.add(
+            "memory",
+            sample(ids::MEMORY_PRESSURE_SOME_AVG10, "memory", "system").f64(2.4),
+        );
+        let pressure = unified(&build(&fixture, None, enabled())).pressure.unwrap();
+        assert_eq!(pressure.some[0].value_f64(), Some(2.4));
+        assert_eq!(pressure.some[1].state, CellState::Unavailable);
+        let discrete = build(&fixture, Some(GPU_B), enabled());
+        let details = discrete.cards[1].details.as_ref().unwrap();
+        assert!(details.unified_memory.is_none());
     }
 
     #[test]

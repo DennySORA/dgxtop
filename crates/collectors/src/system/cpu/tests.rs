@@ -109,6 +109,48 @@ fn breakdown_follows_the_formulas() {
     assert!(total.eligible_for_history);
 }
 
+/// The CPU's pressure averages pass through as the kernel computed them
+/// (D-135), on the host, and are not kept as history.
+#[test]
+fn cpu_pressure_averages_pass_through() {
+    let collector = CpuCollector::new().unwrap();
+    let key = |metric: &str| metric_key("host", metric, "host");
+    let average = |metric: &str, percent: f64| {
+        reading(
+            &key(metric),
+            "procfs",
+            &format!("procfs:pressure.cpu:{metric}"),
+            SECOND,
+        )
+        .unit(native::PERCENT)
+        .f64(percent)
+        .build()
+    };
+    let batch = collect(
+        &collector,
+        &PlanBuilder::new("cpu")
+            .at(SECOND + 1)
+            .batch(
+                "procfs",
+                "cpu",
+                vec![
+                    average(ids::CPU_PRESSURE_SOME_AVG10, 1.5),
+                    average(ids::CPU_PRESSURE_SOME_AVG60, 0.0),
+                ],
+            )
+            .build(),
+    );
+    let short = value_of(&batch, &key(ids::CPU_PRESSURE_SOME_AVG10)).unwrap();
+    assert_eq!(short.value.map(|value| value.to_f64_lossy()), Some(1.5));
+    assert_eq!(short.unit, CanonicalUnit::Percent);
+    assert!(!short.eligible_for_history);
+    // No stall at all is a value of its own, not a missing one.
+    assert_eq!(
+        number(&batch, &key(ids::CPU_PRESSURE_SOME_AVG60)),
+        Some(0.0)
+    );
+}
+
 #[test]
 fn per_core_identity_comes_from_the_entity_not_record_order() {
     let mut first = stat_line(Some(0), [0, 0, 0, 0, 0, 0, 0, 0], SECOND);

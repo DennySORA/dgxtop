@@ -4,7 +4,7 @@
 //! current and maximum frequency of each kind of core, with load and tasks
 //! on the same line when they fit; the
 //! utilization bar with its chart under it (D-43); the usr/sys/iowait/steal
-//! breakdown. In the overview it starts collapsed (D-36); a click on the
+//! breakdown, joined by the CPU's stall pressure when both fit (D-135). In the overview it starts collapsed (D-36); a click on the
 //! panel or `c` adds every sensor with its source and the htop-style
 //! per-core bars.
 
@@ -20,7 +20,8 @@ use super::common::{
     BarRow, ManifestSpec, Output, RowCursor, build_manifest, cell_label, cell_spans, draw_line,
     fitting_keys, gap, has_value, join_if_fits, labeled_cell, labeled_temperature,
     measuring_context, message, no_data, panel, panel_with_keys, percent_ratio, power_icon,
-    render_bar_row, render_chart, separator, temperature_spans, under_bar,
+    pressure_labels, pressure_line, render_bar_row, render_chart, separator, temperature_spans,
+    under_bar,
 };
 use crate::format::{CellDetail, cell_tone, clean, display_width, truncate_to_width, value_text};
 use crate::num::saturate_u16;
@@ -223,7 +224,8 @@ fn collapsed_rows(cpu: &CpuView, model: &ViewModel, width: u16, slot: Slot) -> u
 }
 
 /// The sensors line first, joined by load and tasks when both fit `width`,
-/// then the breakdown and, when it did not fit, the load line.
+/// then the breakdown, joined by the CPU's stall pressure when both fit
+/// (D-135), and, when it did not fit, the load line.
 fn text_lines(cpu: &CpuView, width: u16, context: &DisplayContext) -> Vec<Line<'static>> {
     let mut lines = join_if_fits(
         summary_line(cpu, context),
@@ -231,7 +233,12 @@ fn text_lines(cpu: &CpuView, width: u16, context: &DisplayContext) -> Vec<Line<'
         width,
         context,
     );
-    lines.insert(1, breakdown_line(cpu, context));
+    let breakdown = breakdown_line(cpu, context);
+    let below_chart = match &cpu.pressure {
+        Some(pressure) => join_if_fits(breakdown, pressure_line(pressure, context), width, context),
+        None => vec![breakdown],
+    };
+    lines.splice(1..1, below_chart);
     lines
 }
 
@@ -545,6 +552,9 @@ fn add_labels(output: &mut Output, cpu: &CpuView, context: &DisplayContext) {
         ));
     }
     output.label(cell_label("cpu load 1m", &cpu.load[0], context));
+    if let Some(pressure) = &cpu.pressure {
+        pressure_labels(output, "cpu", pressure, context);
+    }
     output.label(format!("cpu cores: {}", cpu.cores.len()));
 }
 
@@ -736,5 +746,38 @@ mod tests {
                 .expect("the breakdown line");
             assert_eq!(breakdown, height - 2, "right above the bottom border");
         }
+    }
+
+    /// The CPU's stall pressure follows the breakdown on its line where
+    /// both fit, else on the next one (D-135); it has no `full`. A kernel
+    /// without PSI keeps the lines it had.
+    #[test]
+    fn the_cpu_pressure_follows_the_breakdown() {
+        let context = test_fixtures::display_context();
+        let texts = |cpu: &CpuView, width: u16| -> Vec<String> {
+            text_lines(cpu, width, &context)
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect()
+                })
+                .collect()
+        };
+        let mut cpu = test_fixtures::cpu_view();
+        let without = texts(&cpu, 200);
+        cpu.pressure = Some(test_fixtures::pressure_view([1.5, 0.7, 0.2], None));
+        let wide = texts(&cpu, 200);
+        assert_eq!(wide.len(), without.len());
+        assert!(
+            wide[1].ends_with("│ pressure some 1.5% 0.7% 0.2%  (10s 1m 5m)"),
+            "{wide:?}"
+        );
+        assert!(wide[1].starts_with("■ usr"), "{wide:?}");
+        let narrow = texts(&cpu, 60);
+        assert_eq!(narrow[2], "pressure some 1.5% 0.7% 0.2%  (10s 1m 5m)");
+        assert!(!narrow[1].contains("pressure"), "{narrow:?}");
+        assert!(narrow.iter().all(|line| !line.contains("full")));
     }
 }

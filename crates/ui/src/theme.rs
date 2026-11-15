@@ -40,6 +40,14 @@ impl LevelScale {
         green_until: 50.0,
         top: PERCENT_SCALE,
     };
+    /// Stall pressure (D-135): green while tasks stall up to 1 % of the
+    /// time, amber at about 10 %, red from 20 %. A fifth of the time lost
+    /// waiting is a host that crawls, long before the share nears 100 %;
+    /// the colors only say how much time is lost, they raise no alarm.
+    pub const PRESSURE: Self = Self {
+        green_until: 1.0,
+        top: 20.0,
+    };
 
     /// The share of `top`, like a gauge that full: green only when empty.
     pub const fn share_of(top: f64) -> Self {
@@ -415,6 +423,13 @@ impl ThemePalette {
         self.level_style(cell, LevelScale::FAN)
     }
 
+    /// The style a stall pressure is written in (D-135): green up to 1 %,
+    /// then the gradient to red at 20 % ([`LevelScale::PRESSURE`]), else
+    /// its tone.
+    pub fn pressure_style(&self, cell: &MetricCell) -> Style {
+        self.level_style(cell, LevelScale::PRESSURE)
+    }
+
     fn level_style(&self, cell: &MetricCell, scale: LevelScale) -> Style {
         let tone = cell_tone(cell);
         let style = self.tone_style(tone);
@@ -701,6 +716,20 @@ mod tests {
         assert_eq!(fan(75.0), Some(palette.gauge_mid));
         assert_eq!(fan(100.0), Some(palette.gauge_high));
         assert_eq!(LevelScale::share_of(100.0).level(50.0), 0.5);
+        // A stall pressure (D-135): green up to 1 %, red from 20 %.
+        let pressure = |percent: f64| {
+            palette
+                .pressure_style(&crate::test_fixtures::ok(
+                    percent,
+                    dgxtop_core::metric::CanonicalUnit::Percent,
+                ))
+                .fg
+        };
+        assert_eq!(pressure(0.0), Some(palette.gauge_low));
+        assert_eq!(pressure(1.0), Some(palette.gauge_low));
+        assert_eq!(pressure(10.5), Some(palette.gauge_mid));
+        assert_eq!(pressure(20.0), Some(palette.gauge_high));
+        assert_eq!(pressure(80.0), Some(palette.gauge_high));
     }
 
     /// The viewer's palette takes the projection's theme, so an applied

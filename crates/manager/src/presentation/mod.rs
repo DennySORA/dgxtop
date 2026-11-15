@@ -21,6 +21,7 @@ mod memory;
 mod network;
 mod ordering;
 mod plan;
+mod pressure;
 mod process_shares;
 mod processes;
 mod reader;

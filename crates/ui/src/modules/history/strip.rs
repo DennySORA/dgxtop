@@ -148,7 +148,7 @@ fn render_plot(
     );
     let theme = &context.theme;
     let color = match strip.paint {
-        Paint::Levels => theme.text,
+        Paint::Levels | Paint::Pressure => theme.text,
         Paint::Read | Paint::Receive => theme.success,
         Paint::Write => theme.warning,
         Paint::Transmit => theme.accent,
@@ -175,10 +175,10 @@ fn render_plot(
     let mut sparkline = GapSparkline::new(&means, Style::new().fg(color))
         .max(strip.scale)
         .parts(parts);
-    if strip.paint == Paint::Levels {
+    if matches!(strip.paint, Paint::Levels | Paint::Pressure) {
         sparkline = sparkline.level_colors(theme);
     }
-    if let Some(levels) = temperature_levels(strip) {
+    if let Some(levels) = own_levels(strip) {
         sparkline = sparkline.level_scale(levels);
     }
     frame.render_widget(sparkline, plot);
@@ -230,15 +230,20 @@ fn legend_lines(strip: &Strip<'_>, rows: u16, context: &DisplayContext) -> Vec<L
     lines
 }
 
-/// A temperature strip's own level scale, green up to 50 °C like the
-/// temperatures written elsewhere (D-126).
-fn temperature_levels(strip: &Strip<'_>) -> Option<LevelScale> {
-    (strip.paint == Paint::Levels && strip.series.unit == CanonicalUnit::DegC)
-        .then_some(LevelScale::TEMPERATURE)
+/// The level scale a strip's values have of their own, whatever the
+/// strip's height scale: a temperature's, green up to 50 °C like the
+/// temperatures written elsewhere (D-126), and a stall pressure's, green
+/// up to 1 % (D-135).
+fn own_levels(strip: &Strip<'_>) -> Option<LevelScale> {
+    match strip.paint {
+        Paint::Pressure => Some(LevelScale::PRESSURE),
+        Paint::Levels if strip.series.unit == CanonicalUnit::DegC => Some(LevelScale::TEMPERATURE),
+        _ => None,
+    }
 }
 
 /// `max 98.0%`: the value colored by its share of the scale on a bounded
-/// strip, a temperature by its own scale.
+/// strip, a temperature or a stall pressure by its own scale.
 fn legend_entry(
     label: &'static str,
     value: Option<f64>,
@@ -249,8 +254,8 @@ fn legend_entry(
     let (text, style) = match value.filter(|value| value.is_finite()) {
         Some(value) => {
             let style = match (strip.paint, strip.scale) {
-                (Paint::Levels, Some(scale)) if scale > 0.0 => {
-                    let levels = temperature_levels(strip).unwrap_or(LevelScale::share_of(scale));
+                (Paint::Levels | Paint::Pressure, Some(scale)) if scale > 0.0 => {
+                    let levels = own_levels(strip).unwrap_or(LevelScale::share_of(scale));
                     Style::new().fg(theme.level_color(levels.level(value)))
                 }
                 _ => theme.text_style(),
@@ -265,10 +270,14 @@ fn legend_entry(
     ])
 }
 
-/// A scale's top in the gutter's few columns: `100%`, `80G`, `2.8M/s`,
-/// `100°C`, `250W`.
+/// A scale's top in the gutter's few columns: `100%`, `2.4%` (a stall
+/// pressure's peak, below 10 % with its tenth), `80G`, `2.8M/s`, `100°C`,
+/// `250W`.
 pub(super) fn axis_value(value: f64, unit: CanonicalUnit) -> String {
     match unit {
+        CanonicalUnit::Percent if value < 10.0 && value.fract() != 0.0 => {
+            format!("{}%", fixed(value, 1))
+        }
         CanonicalUnit::Percent => format!("{}%", fixed(value, 0)),
         CanonicalUnit::DegC => format!("{}°C", fixed(value, 0)),
         CanonicalUnit::Watts => format!("{}W", fixed(value, 0)),
@@ -600,6 +609,67 @@ mod tests {
             .collect();
         assert_eq!(columns.first(), Some(&theme.gauge_low));
         assert_eq!(columns.last(), Some(&theme.gauge_mid));
+    }
+
+    /// A stall pressure's strip (D-135) is as high as its own peak, which
+    /// the gutter prints with its tenth, yet colored by the time lost:
+    /// 2.4 % fills the strip in a color short of the red a full bounded
+    /// strip would take, and 0.4 % stays green.
+    #[test]
+    fn a_pressure_strip_is_scaled_to_its_peak_and_colored_by_the_time_lost() {
+        let context = display_context();
+        let theme = &context.theme;
+        let mut history = history_view();
+        let mut chart = history.charts[0].clone();
+        chart.kind = HistoryChartKind::MemoryPressureSome;
+        chart.scale_max = None;
+        chart.peak = Some(2.4);
+        chart.mean = Some(0.4);
+        chart.points = (0..60)
+            .map(|minute| {
+                let percent = if minute >= 50 { 2.4 } else { 0.4 };
+                point(
+                    HISTORY_END / SECOND - 3_600 + minute * 60,
+                    HISTORY_END / SECOND - 3_600 + (minute + 1) * 60,
+                    Some(percent),
+                    Some(percent),
+                )
+            })
+            .collect();
+        history.charts.push(chart);
+        let panels = panels(&history, None);
+        let strip = panels[1]
+            .strips
+            .iter()
+            .find(|strip| strip.label == "some")
+            .unwrap();
+        assert_eq!(strip.scale, Some(2.4));
+        let mut terminal = Terminal::new(TestBackend::new(84, 3)).unwrap();
+        terminal
+            .draw(|frame| render_strip(frame, frame.area(), (strip, false), hour(), &context))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text_at = |x: u16, y: u16, width: u16| -> String {
+            (x..x + width).map(|x| buffer[(x, y)].symbol()).collect()
+        };
+        assert!(text_at(0, 1, HISTORY_GUTTER_COLUMNS).contains("2.4%"));
+        let legend = (0..80).find(|&x| text_at(x, 0, 4) == "now ").unwrap() + 4;
+        assert_eq!(text_at(legend, 0, 4), "2.4%");
+        let now_color = buffer[(legend, 0)].fg;
+        assert_ne!(now_color, theme.gauge_low);
+        assert_ne!(now_color, theme.gauge_high, "full height, far from red");
+        let glyphs = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+        let columns: Vec<_> = (HISTORY_GUTTER_COLUMNS..legend)
+            .filter(|&x| glyphs.contains(&buffer[(x, 2)].symbol()))
+            .map(|x| buffer[(x, 2)].fg)
+            .collect();
+        assert_eq!(columns.first(), Some(&theme.gauge_low));
+        assert_eq!(columns.last(), Some(&now_color));
+        // A bounded strip's scale keeps its whole percent.
+        assert_eq!(axis_value(100.0, CanonicalUnit::Percent), "100%");
+        assert_eq!(axis_value(1.0, CanonicalUnit::Percent), "1%");
+        assert_eq!(axis_value(0.4, CanonicalUnit::Percent), "0.4%");
+        assert_eq!(axis_value(12.5, CanonicalUnit::Percent), "12%");
     }
 
     #[test]

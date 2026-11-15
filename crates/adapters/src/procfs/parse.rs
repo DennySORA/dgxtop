@@ -1,11 +1,13 @@
 //! Pure parsers for the procfs text formats this adapter reads
-//! (`/proc/stat`, `/proc/loadavg`, `/proc/meminfo`, `/proc/diskstats`,
-//! `/proc/<pid>/stat`, `/proc/cpuinfo`). Values stay exact `u64`; an absent
-//! column and an unparsable column are distinct and never become 0.
+//! (`/proc/stat`, `/proc/loadavg`, `/proc/meminfo`, `/proc/vmstat`,
+//! `/proc/pressure/*`, `/proc/diskstats`, `/proc/<pid>/stat`,
+//! `/proc/cpuinfo`). Values stay exact `u64`; an absent column and an
+//! unparsable column are distinct and never become 0.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use dgxtop_core::metric::{ids, native};
+use dgxtop_core::pressure::{PRESSURE_WINDOWS, PressureKind, PressureWindow};
 
 use super::arm_cores::arm_core_kinds;
 
@@ -262,6 +264,166 @@ pub(crate) fn parse_meminfo(text: &str) -> MemInfo {
         info.values.entry(field).or_insert(value);
     }
     info
+}
+
+/// The `/proc/vmstat` counters this adapter emits (D-135).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum VmStatField {
+    /// Pages read back from swap.
+    SwapIn,
+    /// Pages written out to swap.
+    SwapOut,
+    /// Processes the OOM killer killed.
+    OomKill,
+}
+
+pub(crate) const VMSTAT_FIELDS: [VmStatField; 3] = [
+    VmStatField::SwapIn,
+    VmStatField::SwapOut,
+    VmStatField::OomKill,
+];
+
+impl VmStatField {
+    pub(crate) fn kernel_name(self) -> &'static str {
+        match self {
+            Self::SwapIn => "pswpin",
+            Self::SwapOut => "pswpout",
+            Self::OomKill => "oom_kill",
+        }
+    }
+
+    pub(crate) fn metric_id(self) -> &'static str {
+        match self {
+            Self::SwapIn => ids::MEMORY_SWAP_IN_BYTES,
+            Self::SwapOut => ids::MEMORY_SWAP_OUT_BYTES,
+            Self::OomKill => ids::MEMORY_OOM_KILLS,
+        }
+    }
+
+    /// Whether the kernel counts pages, which are emitted as bytes.
+    pub(crate) fn counts_pages(self) -> bool {
+        matches!(self, Self::SwapIn | Self::SwapOut)
+    }
+
+    pub(crate) fn native_unit(self) -> &'static str {
+        if self.counts_pages() {
+            native::BYTES
+        } else {
+            native::COUNT
+        }
+    }
+
+    fn from_kernel_name(name: &str) -> Option<Self> {
+        VMSTAT_FIELDS
+            .into_iter()
+            .find(|field| field.kernel_name() == name)
+    }
+}
+
+/// Parsed `/proc/vmstat` (counters never seen are `Absent`).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct VmStat {
+    values: BTreeMap<VmStatField, Field<u64>>,
+}
+
+impl VmStat {
+    pub(crate) fn field(&self, field: VmStatField) -> Field<u64> {
+        self.values.get(&field).copied().unwrap_or(Field::Absent)
+    }
+}
+
+/// `name value` lines; the first of a repeated name wins, and a listed
+/// counter without a value is malformed.
+pub(crate) fn parse_vmstat(text: &str) -> VmStat {
+    let mut stat = VmStat::default();
+    for line in text.lines() {
+        let mut tokens = line.split_whitespace();
+        let Some(field) = tokens.next().and_then(VmStatField::from_kernel_name) else {
+            continue;
+        };
+        let value = match tokens.next() {
+            Some(text) => u64_field(Some(text)),
+            None => Field::Invalid,
+        };
+        stat.values.entry(field).or_insert(value);
+    }
+    stat
+}
+
+/// The averages of one line of a pressure file, in percent, in
+/// [`PRESSURE_WINDOWS`] order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PressureLine {
+    averages: [Field<f64>; 3],
+}
+
+/// Parsed `/proc/pressure/<resource>` (D-135): the lines the kernel wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub(crate) struct Pressure {
+    some: Option<PressureLine>,
+    full: Option<PressureLine>,
+}
+
+impl Pressure {
+    fn line(&self, kind: PressureKind) -> Option<&PressureLine> {
+        match kind {
+            PressureKind::Some => self.some.as_ref(),
+            PressureKind::Full => self.full.as_ref(),
+        }
+    }
+
+    /// Whether the kernel wrote the `kind` line.
+    pub(crate) fn has(&self, kind: PressureKind) -> bool {
+        self.line(kind).is_some()
+    }
+
+    /// One average; `Absent` without its line or its key.
+    pub(crate) fn average(&self, kind: PressureKind, window: PressureWindow) -> Field<f64> {
+        let position = PRESSURE_WINDOWS
+            .iter()
+            .position(|listed| *listed == window)
+            .unwrap_or(0);
+        self.line(kind)
+            .map_or(Field::Absent, |line| line.averages[position])
+    }
+}
+
+/// A share of time: a finite percentage from 0 to 100.
+fn percent_field(token: Option<&str>) -> Field<f64> {
+    match token {
+        None => Field::Absent,
+        Some(text) => match text.parse::<f64>() {
+            Ok(value) if (0.0..=100.0).contains(&value) => Field::Value(value),
+            _ => Field::Invalid,
+        },
+    }
+}
+
+/// `some avg10=0.00 avg60=0.00 avg300=0.00 total=0` lines; the first of a
+/// repeated kind wins, and other lines are ignored.
+pub(crate) fn parse_pressure(text: &str) -> Pressure {
+    let mut pressure = Pressure::default();
+    for line in text.lines() {
+        let mut tokens = line.split_whitespace();
+        let slot = match tokens.next() {
+            Some("some") => &mut pressure.some,
+            Some("full") => &mut pressure.full,
+            _ => continue,
+        };
+        if slot.is_some() {
+            continue;
+        }
+        let pairs: Vec<(&str, &str)> = tokens.filter_map(|pair| pair.split_once('=')).collect();
+        let averages = PRESSURE_WINDOWS.map(|window| {
+            let value = pairs
+                .iter()
+                .find(|(key, _)| *key == window.kernel_name())
+                .map(|(_, value)| *value);
+            percent_field(value)
+        });
+        *slot = Some(PressureLine { averages });
+    }
+    pressure
 }
 
 /// The `/proc/diskstats` fields this adapter emits.
@@ -563,6 +725,75 @@ ctxt 18225208\n";
         assert_eq!(info.field(MemField::Buffers), Field::Invalid);
         assert_eq!(info.field(MemField::Cached), Field::Invalid);
         assert_eq!(info.field(MemField::Available), Field::Absent);
+    }
+
+    #[test]
+    fn vmstat_counters_are_exact_and_missing_ones_absent() {
+        let stat = parse_vmstat(
+            "nr_free_pages 12\npswpin 12118957\npswpout 18446744073709551615\npswpin 1\n",
+        );
+        assert_eq!(stat.field(VmStatField::SwapIn), Field::Value(12_118_957));
+        assert_eq!(stat.field(VmStatField::SwapOut), Field::Value(u64::MAX));
+        // A kernel before 4.13 counts no OOM kills.
+        assert_eq!(stat.field(VmStatField::OomKill), Field::Absent);
+        let malformed = parse_vmstat("oom_kill x\npswpin\n");
+        assert_eq!(malformed.field(VmStatField::OomKill), Field::Invalid);
+        assert_eq!(malformed.field(VmStatField::SwapIn), Field::Invalid);
+        assert!(VmStatField::SwapOut.counts_pages() && !VmStatField::OomKill.counts_pages());
+    }
+
+    /// A pressure file gives each line's averages in percent; a line the
+    /// kernel does not write (an older kernel's CPU `full`) is absent.
+    #[test]
+    fn pressure_lines_give_their_averages_and_missing_lines_are_absent() {
+        let pressure = parse_pressure(
+            "some avg10=2.40 avg60=0.91 avg300=0.20 total=371340609\n\
+             full avg10=0.80 avg60=0.30 avg300=0.10 total=371044034\n",
+        );
+        assert!(pressure.has(PressureKind::Some) && pressure.has(PressureKind::Full));
+        let average = |kind, window| pressure.average(kind, window);
+        assert_eq!(
+            average(PressureKind::Some, PressureWindow::Avg10),
+            Field::Value(2.4)
+        );
+        assert_eq!(
+            average(PressureKind::Some, PressureWindow::Avg300),
+            Field::Value(0.2)
+        );
+        assert_eq!(
+            average(PressureKind::Full, PressureWindow::Avg60),
+            Field::Value(0.3)
+        );
+        let cpu = parse_pressure("some avg10=0.00 avg60=0.00 avg300=0.00 total=99996176\n");
+        assert!(!cpu.has(PressureKind::Full));
+        assert_eq!(
+            cpu.average(PressureKind::Full, PressureWindow::Avg10),
+            Field::Absent
+        );
+        assert_eq!(parse_pressure(""), Pressure::default());
+    }
+
+    /// A share of time lies between 0 and 100 %: anything else is garbage,
+    /// never a number; a repeated line and other lines are ignored.
+    #[test]
+    fn a_pressure_average_out_of_range_or_unparsable_is_invalid() {
+        let pressure = parse_pressure(
+            "some avg10=nan avg60=100.01 avg300=-0.5 total=1\n\
+             full avg10=100.00 total=1\n\
+             some avg10=9.00 avg60=9.00 avg300=9.00\n\
+             noise 1 2 3\n",
+        );
+        for window in PRESSURE_WINDOWS {
+            assert_eq!(pressure.average(PressureKind::Some, window), Field::Invalid);
+        }
+        assert_eq!(
+            pressure.average(PressureKind::Full, PressureWindow::Avg10),
+            Field::Value(100.0)
+        );
+        assert_eq!(
+            pressure.average(PressureKind::Full, PressureWindow::Avg60),
+            Field::Absent
+        );
     }
 
     #[test]
