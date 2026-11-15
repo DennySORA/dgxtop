@@ -10,7 +10,8 @@
 //! host resources are never repeated or multiplied per GPU, compute and
 //! graphics entries of one PID on one GPU merge into one link, and a PID is
 //! only linked to the process instance that already existed when the GPU
-//! list was read (PID-reuse guard). Each GPU process's descendants are
+//! list was read (PID-reuse guard; a replay's starts are on another host's
+//! clock and are not compared). Each GPU process's descendants are
 //! summed from the tree of every scanned process ([`ProcessTree`]) before
 //! the table is bounded with a stable priority; process metrics never
 //! become history series.
@@ -29,6 +30,7 @@ use dgxtop_core::naming::{self, adapters, groups};
 use dgxtop_core::observation::BatchStatus;
 use dgxtop_core::ports::Collector;
 use dgxtop_core::process_stat::{self, ProcessStat};
+use dgxtop_core::quality::Namespace;
 use dgxtop_core::text::{sanitize_command_name, sanitize_display};
 
 use crate::process::tree::{DescendantUsage, ProcessTree, TreeNode};
@@ -411,12 +413,13 @@ fn attach_gpu_links(session: &mut Session<'_>, rows: &mut [ProcessRow], clk_tck:
     for (index, row) in rows.iter().enumerate() {
         by_pid.entry(row.key.pid.get()).or_default().push(index);
     }
+    let starts = StartClock::of(session.policy().namespace, clk_tck);
     for group in groups.values() {
         for (pid, records) in &group.by_pid {
             let Some(candidates) = by_pid.get(pid) else {
                 continue;
             };
-            let Some(row) = guarded_owner(rows, candidates, records, clk_tck) else {
+            let Some(row) = guarded_owner(rows, candidates, records, starts) else {
                 continue;
             };
             let link = gpu_link(session, &group.gpu_entity, records);
@@ -429,13 +432,47 @@ fn attach_gpu_links(session: &mut Session<'_>, rows: &mut [ProcessRow], clk_tck:
     }
 }
 
+/// The clock a process's start ticks count on, against the boot clock
+/// every read is timed on.
+#[derive(Debug, Clone, Copy)]
+enum StartClock {
+    /// This host's boot clock, `CLK_TCK` ticks a second: a start and a read
+    /// are two instants of one clock.
+    ThisBoot { clk_tck: u64 },
+    /// The boot clock of the host a replay's fixture describes. A read is
+    /// timed here, so the two share no instant, and comparing them would
+    /// link a replay's GPU processes only on a host that has been up for
+    /// longer than they had.
+    AnotherBoot,
+}
+
+impl StartClock {
+    const fn of(namespace: Namespace, clk_tck: u64) -> Self {
+        match namespace {
+            Namespace::Live => Self::ThisBoot { clk_tck },
+            Namespace::Replay => Self::AnotherBoot,
+        }
+    }
+
+    /// Whether the process of `key` had started at `read_boot_ns`; on
+    /// another clock nothing says it had not.
+    fn had_started(self, key: &ProcessKey, read_boot_ns: u64) -> bool {
+        match self {
+            Self::ThisBoot { clk_tck } => {
+                start_boot_ns(key, clk_tck).is_some_and(|start| start <= read_boot_ns)
+            }
+            Self::AnotherBoot => true,
+        }
+    }
+}
+
 /// The instance with this PID that had started when the GPU list was read
 /// (latest such start wins); `None` when every candidate started later.
 fn guarded_owner(
     rows: &[ProcessRow],
     candidates: &[usize],
     records: &PidRecords<'_>,
-    clk_tck: u64,
+    starts: StartClock,
 ) -> Option<usize> {
     let gpu_read = records
         .all()
@@ -444,9 +481,7 @@ fn guarded_owner(
     candidates
         .iter()
         .copied()
-        .filter(|index| {
-            start_boot_ns(&rows[*index].key, clk_tck).is_some_and(|start| start <= gpu_read)
-        })
+        .filter(|index| starts.had_started(&rows[*index].key, gpu_read))
         .max_by_key(|index| (rows[*index].key.start_time_ticks, rows[*index].key.clone()))
 }
 

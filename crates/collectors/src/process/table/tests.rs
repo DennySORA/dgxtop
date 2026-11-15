@@ -520,6 +520,52 @@ fn gpu_entry_of_an_older_instance_is_not_linked_to_a_reused_pid() {
     assert!(row(&batch, 42).gpu.is_empty());
 }
 
+/// A replay's processes start on the boot clock of the host its fixture
+/// describes, and its reads are timed on this host's: a start that is later
+/// than the read still owns the GPU entry, so a replay shows its GPU
+/// processes on a host that booted a moment ago. Of two instances with one
+/// PID the latest started owns it.
+#[test]
+fn a_replayed_gpu_entry_is_linked_whatever_this_hosts_uptime() {
+    let replayed = |records: Vec<Observation>| -> Vec<Observation> {
+        records
+            .into_iter()
+            .map(|mut record| {
+                record.sample_kind = SampleKind::Replay;
+                record
+            })
+            .collect()
+    };
+    let at = 2 * SECOND;
+    let started_later = 50 * CLK_TCK;
+    let mut procfs = host(42, started_later, 10, 10, at);
+    procfs.extend(host(42, started_later + 7, 10, 10, at));
+    let collector = ProcessCollector::new().unwrap();
+    let batch = collect(
+        &collector,
+        &plan(
+            replayed(procfs),
+            replayed(vec![gpu_memory(
+                "GPU-a",
+                42,
+                reasons::GPU_USAGE_COMPUTE,
+                300,
+                at,
+            )]),
+            at + 1,
+        )
+        .policy(crate::testkit::replay_policy())
+        .build(),
+    );
+    let linked: Vec<u64> = rows(&batch)
+        .iter()
+        .filter(|row| !row.gpu.is_empty())
+        .map(|row| row.key.start_time_ticks)
+        .collect();
+    assert_eq!(linked, vec![started_later + 7]);
+    assert_eq!(row(&batch, 42).gpu[0].memory_bytes, Some(300));
+}
+
 #[test]
 fn missing_clk_tck_is_never_defaulted() {
     let collector = ProcessCollector::new().unwrap();
