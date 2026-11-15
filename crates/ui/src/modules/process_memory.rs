@@ -175,7 +175,8 @@ pub(crate) fn other_points(whole: &[Option<f64>], trends: &[ProcessTrend]) -> Ve
         .collect()
 }
 
-fn bytes_f64(bytes: u64) -> f64 {
+/// `bytes` as the bars and charts count: a float, exact up to 8 PiB.
+pub(crate) fn bytes_f64(bytes: u64) -> f64 {
     #[allow(clippy::cast_precision_loss)]
     let value = bytes as f64;
     value

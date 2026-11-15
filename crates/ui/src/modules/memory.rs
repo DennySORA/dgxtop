@@ -24,7 +24,9 @@ use super::common::{
     panel_with_keys, pressure_labels, pressure_line, render_bar_row, render_chart_with_parts,
     reported, separator, short_pressure_line, telling_pressure,
 };
-use super::process_memory::{SWATCH, legend_lines, other_points, share_segments, trend_parts};
+use super::process_memory::{
+    SWATCH, bytes_f64, legend_lines, other_points, share_segments, trend_parts,
+};
 use crate::format::{CellDetail, clean, format_bytes, format_percent, value_text};
 use crate::num::saturate_u16;
 use crate::registry::{
@@ -249,11 +251,8 @@ impl Shares {
             share_segments(&memory.gpu_processes, self.total, room, context);
         // In whole bytes, as the legend's `other` is, and within what the
         // bar shows of GPU memory.
-        let other = match (other_bytes(memory), self.gpu) {
-            (Some(other), _) => bytes_f64(other).min((room - tracked).max(0.0)),
-            (None, Some(gpu)) => (gpu - tracked).max(0.0).round(),
-            (None, None) => 0.0,
-        };
+        let other = other_bytes(memory)
+            .map_or(0.0, |other| bytes_f64(other).min((room - tracked).max(0.0)));
         segments.push(Segment {
             fraction: other / self.total,
             color: theme.other_processes_color(),
@@ -360,7 +359,7 @@ fn gpu_legend(
     let lines_at = |width: usize| {
         legend_lines(
             (gpu_label(context), &memory.gpu_processes),
-            legend_other(memory),
+            other_bytes(memory),
             width,
             usize::MAX,
             context,
@@ -411,23 +410,12 @@ fn gpu_legend_rows(
     }
     legend_lines(
         (gpu_label(context), &memory.gpu_processes),
-        legend_other(memory),
+        other_bytes(memory),
         usize::from(width),
         max_lines,
         context,
     )
     .len()
-}
-
-/// The GPU memory no tracked process accounts for.
-fn legend_other(memory: &MemoryView) -> Option<u64> {
-    other_bytes(memory)
-}
-
-fn bytes_f64(bytes: u64) -> f64 {
-    #[allow(clippy::cast_precision_loss)]
-    let value = bytes as f64;
-    value
 }
 
 /// What the CPU side holds of the used RAM: the used RAM less the GPU share
@@ -455,11 +443,10 @@ fn other_bytes(memory: &MemoryView) -> Option<u64> {
 /// The GPU share less the tracked processes (display arithmetic).
 fn share_beyond_tracked(memory: &MemoryView) -> Option<u64> {
     let gpu = memory.gpu_resident.as_ref()?.value_f64()?;
-    #[allow(clippy::cast_precision_loss)]
     let tracked: f64 = memory
         .gpu_processes
         .iter()
-        .map(|share| share.bytes as f64)
+        .map(|share| bytes_f64(share.bytes))
         .sum();
     let other = (gpu - tracked).max(0.0);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
