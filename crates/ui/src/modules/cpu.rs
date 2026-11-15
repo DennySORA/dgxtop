@@ -19,11 +19,11 @@ use ratatui::text::{Line, Span};
 
 use super::ModuleBuildError;
 use super::common::{
-    BarRow, ManifestSpec, Output, RowCursor, build_manifest, cell_label, cell_spans, draw_line,
-    fitting_keys, gap, has_value, join_if_fits, labeled_cell, labeled_temperature,
-    measuring_context, message, no_data, panel, panel_with_keys, percent_ratio, power_icon,
-    pressure_labels, pressure_line, render_bar_row, render_chart, separator, temperature_spans,
-    under_bar,
+    BAR_LABEL_WIDTH, BarRow, ManifestSpec, Output, RowCursor, build_manifest, cell_label,
+    cell_spans, draw_line, fitting_keys, gap, has_value, join_if_fits, labeled_cell,
+    labeled_temperature, measuring_context, message, no_data, panel, panel_with_keys,
+    percent_ratio, power_icon, pressure_labels, pressure_line, render_bar_row, render_chart,
+    separator, telling_pressure, temperature_spans, under_bar, value_styled,
 };
 use crate::format::{
     CellDetail, cell_tone, clean, display_width, fixed, truncate_to_width, value_text,
@@ -230,14 +230,15 @@ fn collapsed_rows(cpu: &CpuView, model: &ViewModel, width: u16, slot: Slot) -> u
 }
 
 /// The sensors line first, joined by load and tasks when both fit `width`,
-/// then the breakdown, joined by the CPU's stall pressure when both fit
-/// (D-135), and, when it did not fit, the load line.
+/// then the breakdown, joined by the CPU's stall pressure, while it has
+/// something to say (D-143), when both fit (D-135), and, when it did not
+/// fit, the load line.
 fn text_lines(cpu: &CpuView, width: u16, context: &DisplayContext) -> Vec<Line<'static>> {
     let load = load_line(cpu, context);
     let summary = fitting_summary(cpu, &load, width, context);
     let mut lines = join_if_fits(summary, load, width, context);
     let breakdown = breakdown_line(cpu, context);
-    let below_chart = match &cpu.pressure {
+    let below_chart = match telling_pressure(cpu.pressure.as_ref()) {
         Some(pressure) => join_if_fits(breakdown, pressure_line(pressure, context), width, context),
         None => vec![breakdown],
     };
@@ -256,6 +257,8 @@ fn render_utilization(frame: &mut Frame<'_>, area: Rect, cpu: &CpuView, context:
         row,
         &BarRow {
             label: "util",
+            label_width: BAR_LABEL_WIDTH,
+            label_style: context.theme.label_style(),
             ratio,
             value: &value,
             value_width: PERCENT_WIDTH,
@@ -418,6 +421,9 @@ fn gigahertz(cell: &MetricCell) -> Option<String> {
 
 /// `load 1.34 1.15 1.05 │ tasks 2/763`; on a line of its own when the
 /// panel, narrower than memory (D-40), cannot fit it beside the sensors.
+/// Each average is in the level color of that many CPUs busy (D-143): a
+/// load of half the CPUs is amber like a half-full utilization bar, one
+/// of every CPU red, where tasks begin to wait for a CPU.
 fn load_line(cpu: &CpuView, context: &DisplayContext) -> Line<'static> {
     let glance = |cell: &MetricCell| cell_spans(cell, CellDetail::GLANCE, context);
     let mut spans = vec![Span::styled("load ", context.theme.label_style())];
@@ -425,7 +431,10 @@ fn load_line(cpu: &CpuView, context: &DisplayContext) -> Line<'static> {
         if index > 0 {
             spans.push(Span::raw(" "));
         }
-        spans.extend(glance(cell));
+        spans.extend(value_styled(
+            glance(cell),
+            context.theme.load_style(cell, cpu.cores.len()),
+        ));
     }
     spans.push(separator(context));
     spans.push(Span::styled("tasks ", context.theme.label_style()));
@@ -906,6 +915,75 @@ mod tests {
         assert_eq!(narrow[2], "pressure some 1.5% 0.7% 0.2%  (10s 1m 5m)");
         assert!(!narrow[1].contains("pressure"), "{narrow:?}");
         assert!(narrow.iter().all(|line| !line.contains("full")));
+    }
+
+    /// While no task waited for a CPU, every average reads `0.0%` and the
+    /// pressure is left out (D-143): the lines are those of a kernel
+    /// without PSI.
+    #[test]
+    fn a_cpu_pressure_of_nothing_is_left_out() {
+        let context = test_fixtures::display_context();
+        let texts = |cpu: &CpuView| -> Vec<String> {
+            text_lines(cpu, 200, &context)
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect()
+                })
+                .collect()
+        };
+        let mut cpu = test_fixtures::cpu_view();
+        let without = texts(&cpu);
+        cpu.pressure = Some(test_fixtures::pressure_view([0.0, 0.0, 0.04], None));
+        assert_eq!(texts(&cpu), without);
+        cpu.pressure = Some(test_fixtures::pressure_view([0.0, 0.0, 0.05], None));
+        assert!(texts(&cpu)[1].contains("pressure some 0.0% 0.0% 0.1%"));
+    }
+
+    /// Each load average is written in the level color of that many CPUs
+    /// busy (D-143): of eight CPUs a load of four is the amber of a
+    /// half-full bar, one of eight and more red. Without a count of the
+    /// CPUs, or where it is not read, it keeps its tone.
+    #[test]
+    fn the_load_takes_the_level_color_of_that_many_cpus_busy() {
+        let context = test_fixtures::display_context();
+        let theme = &context.theme;
+        let load = |value: f64| test_fixtures::ok(value, CanonicalUnit::Count);
+        let colors = |cpu: &CpuView| -> Vec<Option<ratatui::style::Color>> {
+            let line = load_line(cpu, &context);
+            // `load `, then each average with a space between.
+            [1, 3, 5]
+                .into_iter()
+                .map(|index| line.spans[index].style.fg)
+                .collect()
+        };
+        let mut cpu = test_fixtures::cpu_view();
+        assert_eq!(cpu.cores.len(), 8);
+        cpu.load = [load(1.0), load(4.0), load(8.0)];
+        assert_eq!(
+            colors(&cpu),
+            vec![
+                Some(theme.level_color(0.125)),
+                Some(theme.gauge_mid),
+                Some(theme.gauge_high),
+            ]
+        );
+        cpu.load[0] = load(40.0);
+        assert_eq!(
+            colors(&cpu)[0],
+            Some(theme.gauge_high),
+            "more tasks than CPUs"
+        );
+        cpu.load[1] = MetricCell::missing(CanonicalUnit::Count, CellState::ReadFailed);
+        assert_eq!(
+            colors(&cpu)[1],
+            theme.tone_style(cell_tone(&cpu.load[1])).fg,
+            "a load that is not read keeps its tone"
+        );
+        cpu.cores.clear();
+        assert_eq!(colors(&cpu)[2], Some(theme.text), "no CPUs counted");
     }
 
     /// Where the package's temperature is its hottest cluster's, the CPU

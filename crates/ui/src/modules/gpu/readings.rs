@@ -16,7 +16,9 @@ use ratatui::layout::Rect;
 
 use super::facts::{has_value, reported};
 use crate::format::{display_width, format_value, pad_left, value_text};
-use crate::modules::common::{BarRow, RowCursor, render_bar_row, render_chart, under_bar};
+use crate::modules::common::{
+    BAR_LABEL_WIDTH, BarRow, RowCursor, render_bar_row, render_chart, under_bar,
+};
 use crate::registry::DisplayContext;
 use crate::theme::LevelScale;
 use crate::widgets::Gauge;
@@ -206,6 +208,8 @@ pub(super) fn render_bar(
         row,
         &BarRow {
             label: reading.label,
+            label_width: BAR_LABEL_WIDTH,
+            label_style: context.theme.label_style(),
             ratio: level,
             value: &pad_left(&reading.value, padded),
             value_width: column,

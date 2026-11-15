@@ -22,7 +22,7 @@ use super::common::{
     ColumnSpec, ManifestSpec, Output, RATE_ROWS, RateHistory, RowCursor, TableCell, build_manifest,
     cell_label, draw_colored_header, draw_line, draw_table_row, fit_columns, message,
     metric_table_cell, no_data, panel, panel_with_keys, pressure_labels, pressure_line, rate_rows,
-    render_rate_rows,
+    render_rate_rows, telling_pressure,
 };
 use super::folds::{fold_keys, render_folded};
 use crate::format::{clean, display_width, state_label_for_width, truncate_middle, value_text};
@@ -94,7 +94,7 @@ impl DisplayModule for DiskModule {
             return Some(3);
         };
         let rows = saturate_u16(table_rows(disk).len()).clamp(1, PREFERRED_TABLE_ROWS);
-        let pressure_row = u16::from(disk.pressure.is_some());
+        let pressure_row = u16::from(telling_pressure(disk.pressure.as_ref()).is_some());
         Some(2 + 1 + rows + RATE_ROWS + pressure_row)
     }
 
@@ -142,10 +142,9 @@ impl DisplayModule for DiskModule {
         }
         // Read and write histories of the charted disk (D-41) below the
         // table, which keeps every other row, then the host's I/O stall
-        // pressure on the last row once the histories have theirs (D-135).
-        let pressure = disk
-            .pressure
-            .as_ref()
+        // pressure, while it has something to say (D-143), on the last row
+        // once the histories have theirs (D-135).
+        let pressure = telling_pressure(disk.pressure.as_ref())
             .filter(|_| inner.height > MIN_ROWS_BEFORE_PRESSURE);
         let body_rows = inner.height - u16::from(pressure.is_some());
         let history_rows = rate_rows(body_rows);
@@ -509,6 +508,19 @@ mod tests {
             test_fixtures::render_text(&module, &model, (100, 2 + MIN_ROWS_BEFORE_PRESSURE));
         assert!(!short.contains("pressure"), "{short}");
         assert!(short.contains("peak"), "{short}");
+        // While no task waited for I/O the pressure has no row (D-143).
+        let mut idle = disk_view();
+        idle.pressure = Some(test_fixtures::pressure_view(
+            [0.0, 0.0, 0.0],
+            Some([0.0, 0.0, 0.0]),
+        ));
+        model.modules.disk = Some(std::sync::Arc::new(idle));
+        assert_eq!(
+            module.preferred_rows(&model, 100, Slot::Overview).unwrap(),
+            without
+        );
+        let quiet = test_fixtures::render_text(&module, &model, (100, rows));
+        assert!(!quiet.contains("pressure"), "{quiet}");
     }
 
     /// The used share is written in the level color of a gauge that full

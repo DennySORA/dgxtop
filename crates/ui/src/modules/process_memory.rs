@@ -1,7 +1,7 @@
 //! The tracked GPU processes on the memory bars, charts and legends
 //! (D-64): each process's part in its color, the GPU memory of the other
-//! processes in gray, and a `[GPU]` legend of `■ name size` entries wrapped
-//! onto the lines it may take (D-69).
+//! processes in gray, and a legend of `■ name size` entries after the lead
+//! of the row it is on, wrapped onto the lines it may take (D-69).
 
 use dgxtop_core::view::{ProcessShare, ProcessTrend};
 use ratatui::style::Style;
@@ -14,8 +14,6 @@ use crate::widgets::{Part, Segment};
 
 /// Marker of a colored part, drawn in its color.
 pub(crate) const SWATCH: &str = "■ ";
-/// Leads the GPU legend: the memory GPU processes hold.
-pub(crate) const GPU_TAG: &str = "[GPU] ";
 /// Name of the GPU processes without a color of their own.
 const OTHER: &str = "other";
 
@@ -41,12 +39,13 @@ pub(crate) fn share_segments(
     (segments, room.max(0.0) - left)
 }
 
-/// The GPU legend (D-69): `[GPU] ■ train 6.0 GiB  ■ serve 2.0 GiB …`, each
-/// share and, when `other` is above zero, `■ other …` in gray, wrapped onto
-/// at most `max_lines` lines of `width` columns, the later ones indented
-/// under the first entry; `+N` ends the last line for those left out.
+/// The GPU legend (D-69): `GPU   ■ train 6.0 GiB  ■ serve 2.0 GiB …`, the
+/// `lead` of its row, then each share and, when `other` is above zero,
+/// `■ other …` in gray, wrapped onto at most `max_lines` lines of `width`
+/// columns, the later ones indented under the first entry; `+N` ends the
+/// last line for those left out.
 pub(crate) fn legend_lines(
-    shares: &[ProcessShare],
+    (lead, shares): (Span<'static>, &[ProcessShare]),
     other: Option<u64>,
     width: usize,
     max_lines: usize,
@@ -70,19 +69,19 @@ pub(crate) fn legend_lines(
     if entries.is_empty() || max_lines == 0 {
         return Vec::new();
     }
-    let lead = display_width(GPU_TAG);
+    let lead_width = lead.width();
+    let mut lead = Some(lead);
     let gap_width = display_width(&gap(context).content);
     let entry_width = |entry: &[Span<'static>; 3]| -> usize { entry.iter().map(Span::width).sum() };
     let mut lines: Vec<Vec<Span<'static>>> = Vec::new();
     let mut index = 0;
     while index < entries.len() && lines.len() < max_lines {
         let last = lines.len() + 1 == max_lines;
-        let mut spans = vec![if lines.is_empty() {
-            Span::styled(GPU_TAG, theme.label_style())
-        } else {
-            Span::raw(" ".repeat(lead))
-        }];
-        let mut used = lead;
+        let mut spans = vec![
+            lead.take()
+                .unwrap_or_else(|| Span::raw(" ".repeat(lead_width))),
+        ];
+        let mut used = lead_width;
         let mut placed = 0;
         while index < entries.len() {
             let spacing = if placed == 0 { 0 } else { gap_width };
@@ -120,18 +119,6 @@ pub(crate) fn legend_lines(
         lines.push(spans);
     }
     lines.into_iter().map(Line::from).collect()
-}
-
-/// Lines [`legend_lines`] takes for everything at `width`, at most
-/// `max_lines`.
-pub(crate) fn legend_line_count(
-    shares: &[ProcessShare],
-    other: Option<u64>,
-    width: usize,
-    max_lines: usize,
-    context: &DisplayContext,
-) -> usize {
-    legend_lines(shares, other, width, max_lines, context).len()
 }
 
 /// `■ name size`, the marker in `color`.
@@ -240,8 +227,9 @@ mod tests {
         assert!((covered - bytes_f64(8 * GIB)).abs() < 1.0);
     }
 
-    /// The GPU legend leads with `[GPU]` once, wraps whole entries onto
-    /// its lines under the first one and counts the ones left out (D-69).
+    /// The GPU legend leads with its row's label once, in the style it
+    /// comes in, wraps whole entries onto its lines under the first one
+    /// and counts the ones left out (D-69).
     #[test]
     fn the_gpu_legend_wraps_whole_entries_and_counts_the_rest() {
         let context = crate::test_fixtures::display_context();
@@ -250,31 +238,35 @@ mod tests {
             share(1, "serve", 2),
             share(2, "notebook", 1),
         ];
+        let lead_style = Style::new().fg(context.theme.warning);
+        let lead = || Span::styled("GPU   ", lead_style);
         let lines = |width: usize, max: usize| -> Vec<String> {
-            legend_lines(&shares, Some(GIB), width, max, &context)
+            legend_lines((lead(), &shares), Some(GIB), width, max, &context)
                 .iter()
                 .map(|line| text(&line.spans))
                 .collect()
         };
         assert_eq!(
             lines(80, 3),
-            vec!["[GPU] ■ train 6.0 GiB  ■ serve 2.0 GiB  ■ notebook 1.0 GiB  ■ other 1.0 GiB"]
+            vec!["GPU   ■ train 6.0 GiB  ■ serve 2.0 GiB  ■ notebook 1.0 GiB  ■ other 1.0 GiB"]
         );
         assert_eq!(
             lines(42, 3),
             vec![
-                "[GPU] ■ train 6.0 GiB  ■ serve 2.0 GiB",
+                "GPU   ■ train 6.0 GiB  ■ serve 2.0 GiB",
                 "      ■ notebook 1.0 GiB  ■ other 1.0 GiB",
             ]
         );
         assert_eq!(
             lines(30, 2),
-            vec!["[GPU] ■ train 6.0 GiB", "      ■ serve 2.0 GiB  +2"]
+            vec!["GPU   ■ train 6.0 GiB", "      ■ serve 2.0 GiB  +2"]
         );
-        assert_eq!(lines(10, 1), vec!["[GPU] +4"]);
-        assert_eq!(legend_line_count(&shares, None, 42, 3, &context), 2);
-        assert!(legend_lines(&[], None, 80, 3, &context).is_empty());
-        let colors: Vec<_> = legend_lines(&shares, None, 80, 1, &context)[0]
+        assert_eq!(lines(10, 1), vec!["GPU   +4"]);
+        assert!(legend_lines((lead(), &[]), None, 80, 3, &context).is_empty());
+        let wrapped = legend_lines((lead(), &shares), None, 42, 3, &context);
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(wrapped[0].spans[0].style, lead_style);
+        let colors: Vec<_> = legend_lines((lead(), &shares), None, 80, 1, &context)[0]
             .spans
             .iter()
             .filter(|span| span.content == SWATCH)

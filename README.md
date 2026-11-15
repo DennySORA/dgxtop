@@ -96,7 +96,9 @@ of the whole machine.
   CPU and I/O over 10 s, 1 min and 5 min: the share of time work stood still waiting for that
   resource. With it, how many processes the kernel has killed for lack of memory since boot.
   Pressure tells whether a slowdown came from memory; it does not tell how much is left, which
-  `avail` on the Memory panel does. A host at 70 % of its RAM can read 0 % pressure.
+  `avail` on the Memory panel does. A host at 70 % of its RAM can read 0 % pressure. The
+  Overview lists a pressure only while one of its averages is above zero, and writes `avail`
+  with its share of the RAM, in the color of how little is left.
 - **Made for DGX Spark.** On the GB10's unified memory, the RAM bar splits into the system's share
   and each GPU job's share, and the GPU view shows what is still available and the memory
   pressure where other tools print a VRAM size the GPU does not have. dgxtop also reads the

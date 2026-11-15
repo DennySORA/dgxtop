@@ -123,6 +123,33 @@ const SECTION_COLORS: [(&str, Color); 10] = [
     ("Power", Color::Rgb(0x73, 0xda, 0xca)),
 ];
 
+/// What a row of the memory panel speaks of (D-143); each has a label
+/// color of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryRow {
+    /// The RAM in use and what the system holds of it.
+    Ram,
+    /// What GPU processes hold of a RAM shared with a GPU.
+    Gpu,
+    /// What is left to use: available, cache and buffers.
+    Available,
+    /// Swap and what moves in and out of it.
+    Swap,
+}
+
+/// Label colors of the memory panel's rows (D-143), the same in every
+/// theme: the title colors of the resources the rows speak of (D-74), the
+/// RAM in Memory's green, the GPU's share in the GPUs' sand, swap, which a
+/// disk holds, in Disk's violet; what is left takes Power's teal, the one
+/// title color no panel beside it uses. Bright hues, none a level color:
+/// they name a row, the figures after them say how much.
+const MEMORY_ROW_COLORS: [(MemoryRow, Color); 4] = [
+    (MemoryRow::Ram, Color::Rgb(0x9e, 0xce, 0x6a)),
+    (MemoryRow::Gpu, Color::Rgb(0xe0, 0xaf, 0x68)),
+    (MemoryRow::Available, Color::Rgb(0x73, 0xda, 0xca)),
+    (MemoryRow::Swap, Color::Rgb(0xbb, 0x9a, 0xf7)),
+];
+
 /// The color `position` (0..=1) of the way from `from` to `to`, mixed in
 /// OKLab so the steps look even; the ends are `from` and `to` exactly, and
 /// a color that is not RGB stays `from`.
@@ -423,6 +450,27 @@ impl ThemePalette {
         self.level_style(cell, LevelScale::FAN)
     }
 
+    /// The style a load average is written in (D-143): the level color of
+    /// that many of the host's `cpus` busy, as the utilization bar above it
+    /// would be colored, red from a load of every CPU on; its tone where
+    /// it is not read as it should be or the CPUs are not counted.
+    pub fn load_style(&self, cell: &MetricCell, cpus: usize) -> Style {
+        if cpus == 0 {
+            return self.tone_style(cell_tone(cell));
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let scale = LevelScale::share_of(cpus as f64);
+        self.level_style(cell, scale)
+    }
+
+    /// The label style of a row of the memory panel (D-143).
+    pub fn memory_row_style(&self, row: MemoryRow) -> Style {
+        MEMORY_ROW_COLORS
+            .iter()
+            .find(|(of, _)| *of == row)
+            .map_or_else(|| self.label_style(), |(_, color)| Style::new().fg(*color))
+    }
+
     /// The style a stall pressure is written in (D-135): green up to 1 %,
     /// then the gradient to red at 20 % ([`LevelScale::PRESSURE`]), else
     /// its tone.
@@ -639,6 +687,68 @@ mod tests {
         // A quarter is a yellow green, 80 % an orange red.
         assert_eq!(rgb(dark.level_color(0.25)), [172, 192, 95]);
         assert_eq!(rgb(dark.level_color(0.8)), [230, 119, 69]);
+    }
+
+    /// The rows of the memory panel are named in four colors (D-143), the
+    /// same in every theme, each apart from the others and from the grays
+    /// of labels and text.
+    #[test]
+    fn the_memory_rows_have_fixed_colors_of_their_own() {
+        let rows = [
+            MemoryRow::Ram,
+            MemoryRow::Gpu,
+            MemoryRow::Available,
+            MemoryRow::Swap,
+        ];
+        let dark = ThemePalette::for_theme(Theme::Dark);
+        for theme in THEMES {
+            let palette = ThemePalette::for_theme(theme);
+            for row in rows {
+                let style = palette.memory_row_style(row);
+                assert_eq!(style, dark.memory_row_style(row), "{theme:?} {row:?}");
+                let color = style.fg.unwrap();
+                assert!(
+                    delta_e(color, palette.text_dim) >= 10.0,
+                    "{theme:?} {row:?}"
+                );
+                assert!(contrast(color, palette.bar_background) >= 4.5);
+            }
+            for (index, first) in rows.iter().enumerate() {
+                for second in &rows[index + 1..] {
+                    let (first, second) = (
+                        palette.memory_row_style(*first).fg.unwrap(),
+                        palette.memory_row_style(*second).fg.unwrap(),
+                    );
+                    assert!(delta_e(first, second) >= 10.0, "{first:?} {second:?}");
+                }
+            }
+        }
+        assert_eq!(
+            rgb(dark.memory_row_style(MemoryRow::Swap).fg.unwrap()),
+            [0xbb, 0x9a, 0xf7]
+        );
+    }
+
+    /// A load average takes the level color of that many CPUs busy
+    /// (D-143); without a count of the CPUs it keeps its tone.
+    #[test]
+    fn a_load_is_colored_by_the_cpus_it_keeps_busy() {
+        let palette = ThemePalette::for_theme(Theme::Dark);
+        let load =
+            |value: f64| crate::test_fixtures::ok(value, dgxtop_core::metric::CanonicalUnit::Count);
+        assert_eq!(
+            palette.load_style(&load(10.0), 20).fg,
+            Some(palette.gauge_mid)
+        );
+        assert_eq!(
+            palette.load_style(&load(25.0), 20).fg,
+            Some(palette.gauge_high)
+        );
+        assert_eq!(
+            palette.load_style(&load(0.0), 20).fg,
+            Some(palette.gauge_low)
+        );
+        assert_eq!(palette.load_style(&load(3.0), 0).fg, Some(palette.text));
     }
 
     /// One hundred steps: a fill takes its whole percent's color, and

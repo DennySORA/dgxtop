@@ -1,12 +1,15 @@
-//! Memory module in the reference layout (D-38): the RAM line with the share
-//! GPU processes hold on unified-memory GPUs (D-36) and, of it, what each
-//! tracked process holds (D-64); the used bar, which draws each process's
-//! part in its color and the other GPU processes in gray, with the used
-//! percentage and the used chart under it, stacked the same way (D-43), a
-//! column lower than a row drawn a row high so both colors show (D-134);
-//! the memory's stall pressure, joined by the OOM kills once there are any
-//! (D-135); swap with what moves in and out of it, joined by
-//! buffers/cache/available when they fit.
+//! Memory module in the reference layout (D-38), one subject a row, each
+//! row led by its label in a column of its own and in a color of its own
+//! (D-143). `RAM`: the RAM in use and, on unified memory, what the system
+//! itself holds of it (D-36, D-69). `GPU`: what each tracked GPU process
+//! holds (D-64). `used`: the bar, which draws each process's part in its
+//! color and the other GPU processes in gray, with the used percentage and
+//! the used chart under it, stacked the same way (D-43), a column lower
+//! than a row drawn a row high so both colors show (D-134). `avail`: what
+//! is left to use and its share of the RAM, in the level color of how
+//! little that is, then cache and buffers. `swap`: the swap in use, its
+//! share, and what moves in and out of it (D-135). Last, only while they
+//! have something to say: the memory's stall pressure and the OOM kills.
 
 use dgxtop_core::view::{MemoryView, MetricCell, ViewModel};
 use ratatui::Frame;
@@ -16,20 +19,19 @@ use ratatui::text::{Line, Span};
 
 use super::ModuleBuildError;
 use super::common::{
-    BarRow, ManifestSpec, Output, RowCursor, build_manifest, cell_label, draw_line, fraction_ratio,
-    join_if_fits, labeled_cell, measuring_context, message, no_data, pack_lines, panel,
+    BarRow, ManifestSpec, Output, RowCursor, after_label, build_manifest, cell_label, draw_line,
+    flow_row, fraction_ratio, has_value, labeled_cell, measuring_context, message, no_data, panel,
     panel_with_keys, pressure_labels, pressure_line, render_bar_row, render_chart_with_parts,
-    reported, separator, under_bar,
+    reported, separator, short_pressure_line, telling_pressure,
 };
-use super::process_memory::{
-    SWATCH, legend_line_count, legend_lines, other_points, share_segments, trend_parts,
-};
+use super::process_memory::{SWATCH, legend_lines, other_points, share_segments, trend_parts};
 use crate::format::{CellDetail, clean, format_bytes, format_percent, value_text};
 use crate::num::saturate_u16;
 use crate::registry::{
     DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot,
     controls,
 };
+use crate::theme::MemoryRow;
 use crate::widgets::{Gauge, Segment, StackedBar};
 
 /// Rows of the used chart under the bar (D-43).
@@ -46,6 +48,9 @@ const SCROLL_HINT_WIDTH: usize = 8;
 const SCROLL_KEYS: &str = "[/] scroll GPU";
 /// What the system itself holds of a RAM shared with a GPU.
 const OS_LABEL: &str = "OS";
+/// The label column of the panel's rows (D-143): its widest label, `avail`,
+/// and a space. Every row's figures, the bar and its chart start after it.
+const LABEL_WIDTH: u16 = 6;
 /// Value column of the used bar (`100.0%`).
 const PERCENT_WIDTH: u16 = 6;
 
@@ -119,7 +124,12 @@ impl DisplayModule for MemoryModule {
         if let Some(row) = rows.next_row() {
             draw_line(frame.buffer_mut(), row, &ram_line(memory, context));
         }
-        let footer = footer_lines(memory, inner.width, context);
+        // The bar and its chart keep their rows and the GPU legend one;
+        // the footer wraps its rows where that leaves it the room.
+        let legend_row = usize::from(memory.gpu_resident.is_some());
+        let footer_room =
+            usize::from(rows.remaining()).saturating_sub(usize::from(1 + CHART_ROWS) + legend_row);
+        let footer = footer_within(memory, (inner.width, footer_room), context);
         // The bar, its chart and the footer rows keep their rows; the GPU
         // legend takes what is left, up to its most, and scrolls (D-70).
         let room = usize::from(rows.remaining())
@@ -157,7 +167,7 @@ impl DisplayModule for MemoryModule {
         if let Some(pressure) = &memory.pressure {
             pressure_labels(&mut output, "memory", pressure, context);
         }
-        if oom_line(memory, context).is_some() {
+        if oom_line(memory, OomKills::SinceBoot, context).is_some() {
             output.label(cell_label(
                 "processes killed by the OOM killer since boot",
                 &memory.oom_kills,
@@ -267,17 +277,8 @@ impl Shares {
 /// lines. The percentage is on the used row below.
 fn ram_line(memory: &MemoryView, context: &DisplayContext) -> Line<'static> {
     let theme = &context.theme;
-    let mut spans = vec![
-        Span::styled("RAM ", theme.label_style()),
-        Span::styled(
-            format!(
-                "{} / {}",
-                value_text(&memory.used),
-                value_text(&memory.total)
-            ),
-            theme.text_style(),
-        ),
-    ];
+    let mut spans = vec![row_label("RAM", MemoryRow::Ram, context)];
+    spans.extend(of_whole(&memory.used, &memory.total, context));
     if let Some(host) = host_bytes(memory) {
         spans.push(separator(context));
         spans.push(Span::styled(
@@ -288,6 +289,48 @@ fn ram_line(memory: &MemoryView, context: &DisplayContext) -> Line<'static> {
         spans.push(Span::styled(format_bytes(host), theme.text_style()));
     }
     Line::from(spans)
+}
+
+/// A row's label in the panel's label column, in the row's color (D-143).
+fn row_label(label: &str, row: MemoryRow, context: &DisplayContext) -> Span<'static> {
+    Span::styled(
+        format!("{label:<width$}", width = usize::from(LABEL_WIDTH)),
+        context.theme.memory_row_style(row),
+    )
+}
+
+/// `85.1 GiB / 122 GiB`: a part, then the whole it is of, set back.
+fn of_whole(part: &MetricCell, whole: &MetricCell, context: &DisplayContext) -> Vec<Span<'static>> {
+    let theme = &context.theme;
+    vec![
+        Span::styled(value_text(part), theme.text_style()),
+        Span::styled(format!(" / {}", value_text(whole)), theme.label_style()),
+    ]
+}
+
+/// ` 30.0%`: `part`'s share of `whole` after the figure it belongs to, in
+/// the level color of `level` (0 nothing to note, 1 the worst); `None`
+/// until both are read and the whole is more than nothing.
+fn share_span(
+    part: &MetricCell,
+    whole: &MetricCell,
+    level: impl Fn(f64) -> f64,
+    context: &DisplayContext,
+) -> Option<Span<'static>> {
+    if !has_value(part) || !has_value(whole) {
+        return None;
+    }
+    let whole = whole.value_f64().filter(|whole| *whole > 0.0)?;
+    let share = (part.value_f64()? / whole).clamp(0.0, 1.0);
+    Some(Span::styled(
+        format!(" {}", format_percent(share * 100.0)),
+        Style::new().fg(context.theme.level_color(level(share))),
+    ))
+}
+
+/// The lead of the GPU legend: the `GPU` row's label.
+fn gpu_label(context: &DisplayContext) -> Span<'static> {
+    row_label("GPU", MemoryRow::Gpu, context)
 }
 
 /// The visible lines of the GPU legend and whether more of it scrolls.
@@ -314,22 +357,19 @@ fn gpu_legend(
         };
     }
     let hint_width = SCROLL_HINT_WIDTH.min(usize::from(width) / 3);
-    let mut all = legend_lines(
-        &memory.gpu_processes,
-        legend_other(memory),
-        usize::from(width),
-        usize::MAX,
-        context,
-    );
-    if all.len() > shown {
-        // Leave room for the hint at the end of each line.
-        all = legend_lines(
-            &memory.gpu_processes,
+    let lines_at = |width: usize| {
+        legend_lines(
+            (gpu_label(context), &memory.gpu_processes),
             legend_other(memory),
-            usize::from(width).saturating_sub(hint_width),
+            width,
             usize::MAX,
             context,
-        );
+        )
+    };
+    let mut all = lines_at(usize::from(width));
+    if all.len() > shown {
+        // Leave room for the hint at the end of each line.
+        all = lines_at(usize::from(width).saturating_sub(hint_width));
     }
     let total = all.len();
     if total <= shown {
@@ -369,13 +409,14 @@ fn gpu_legend_rows(
     if memory.gpu_resident.is_none() {
         return 0;
     }
-    legend_line_count(
-        &memory.gpu_processes,
+    legend_lines(
+        (gpu_label(context), &memory.gpu_processes),
         legend_other(memory),
         usize::from(width),
         max_lines,
         context,
     )
+    .len()
 }
 
 /// The GPU memory no tracked process accounts for.
@@ -451,7 +492,7 @@ fn render_used(frame: &mut Frame<'_>, area: Rect, memory: &MemoryView, context: 
         }
         render_chart_with_parts(
             frame,
-            under_bar(chart),
+            after_label(chart, LABEL_WIDTH),
             &memory.used_trend.points,
             (parts, shared.then(|| theme.os_memory_color())),
             memory.total.value_f64(),
@@ -468,6 +509,8 @@ fn render_used(frame: &mut Frame<'_>, area: Rect, memory: &MemoryView, context: 
         row,
         &BarRow {
             label: "used",
+            label_width: LABEL_WIDTH,
+            label_style: theme.memory_row_style(MemoryRow::Ram),
             ratio: shares.map(|shares| shares.used_fraction()),
             value: &value,
             value_width: PERCENT_WIDTH,
@@ -485,48 +528,170 @@ fn render_used(frame: &mut Frame<'_>, area: Rect, memory: &MemoryView, context: 
     frame.render_widget(StackedBar::new(&segments, theme.gauge_track), gauge);
 }
 
-/// The lines under the used chart (D-135): the memory's stall pressure,
-/// joined by the OOM kills when both fit `width`; then swap and
-/// buffers/cache/available, led by the OOM kills that found no room above,
-/// each joined to the one before while it fits. The pressure keeps a line
-/// of its own, so it is never read as a figure of the swap.
+/// The lines under the used chart (D-143): what is left to use, then
+/// swap, each a row of its own whose items wrap under its first while the
+/// panel is narrow; last, while they have something to say, the memory's
+/// stall pressure (D-135) and the OOM kills, on one line when both fit
+/// `width`.
 fn footer_lines(memory: &MemoryView, width: u16, context: &DisplayContext) -> Vec<Line<'static>> {
-    let pressure = memory
-        .pressure
-        .as_ref()
-        .map(|pressure| pressure_line(pressure, context));
-    let mut lines = Vec::new();
-    let mut below = Vec::new();
-    match (pressure, oom_line(memory, context)) {
-        (Some(pressure), Some(kills)) => {
-            let mut joined = join_if_fits(pressure, kills, width, context);
-            below.extend(joined.drain(1..));
-            lines.extend(joined);
-        }
-        (Some(pressure), None) => lines.push(pressure),
-        (None, Some(kills)) => below.push(kills),
-        (None, None) => {}
-    }
-    below.push(swap_line(memory, context));
-    below.push(detail_line(memory, context));
-    lines.extend(pack_lines(below, width, context));
+    let mut lines = figure_rows(memory, width, context);
+    lines.extend(trouble_lines(memory, width, context));
     lines
 }
 
-/// `OOM kills 4 since boot`, in the warning color: the processes the
-/// kernel's OOM killer killed (D-135). Left out while it killed none, or
-/// where the kernel does not count them.
-fn oom_line(memory: &MemoryView, context: &DisplayContext) -> Option<Line<'static>> {
+/// [`footer_lines`] in at most `rows` lines where the panel has them; a
+/// panel too short for the wrapped rows keeps each row on one line, cut
+/// at its edge, so the lines after them still show.
+fn footer_within(
+    memory: &MemoryView,
+    (width, rows): (u16, usize),
+    context: &DisplayContext,
+) -> Vec<Line<'static>> {
+    let wrapped = footer_lines(memory, width, context);
+    if wrapped.len() <= rows {
+        return wrapped;
+    }
+    let mut lines = figure_rows(memory, u16::MAX, context);
+    lines.extend(trouble_lines(memory, width, context));
+    lines
+}
+
+/// The `avail` and `swap` rows, their items wrapped to `width`.
+fn figure_rows(memory: &MemoryView, width: u16, context: &DisplayContext) -> Vec<Line<'static>> {
+    let mut lines = flow_row(
+        row_label("avail", MemoryRow::Available, context),
+        available_items(memory, context),
+        width,
+        context,
+    );
+    lines.extend(flow_row(
+        row_label("swap", MemoryRow::Swap, context),
+        swap_items(memory, context),
+        width,
+        context,
+    ));
+    lines
+}
+
+/// The memory's stall pressure, while it has something to say (D-143),
+/// and the OOM kills, once there are any: on one line when both fit
+/// `width`, the kills without `since boot` and then the pressure without
+/// what its averages span when only that fits; else a line each. A
+/// pressure wider than `width` leaves out what its averages span instead
+/// of losing one of them.
+fn trouble_lines(memory: &MemoryView, width: u16, context: &DisplayContext) -> Vec<Line<'static>> {
+    let fits = |line: &Line<'_>| line.width() <= usize::from(width);
+    let pressures: Vec<Line<'static>> = telling_pressure(memory.pressure.as_ref())
+        .map(|pressure| {
+            vec![
+                pressure_line(pressure, context),
+                short_pressure_line(pressure, context),
+            ]
+        })
+        .unwrap_or_default();
+    let kills: Vec<Line<'static>> = [OomKills::SinceBoot, OomKills::Count]
+        .into_iter()
+        .filter_map(|form| oom_line(memory, form, context))
+        .collect();
+    let on_one_line = pressures.iter().find_map(|pressure| {
+        kills.iter().find_map(|kills| {
+            let mut spans = pressure.spans.clone();
+            spans.push(separator(context));
+            spans.extend(kills.spans.iter().cloned());
+            Some(Line::from(spans)).filter(fits)
+        })
+    });
+    if let Some(line) = on_one_line {
+        return vec![line];
+    }
+    let pressure = pressures
+        .iter()
+        .find(|line| fits(line))
+        .or(pressures.last())
+        .cloned();
+    pressure
+        .into_iter()
+        .chain(kills.into_iter().next())
+        .collect()
+}
+
+/// `36.6 GiB 30.0%`, `cache 35.3 GiB`, `buf 115 MiB`: the RAM a process
+/// can still take, its share of the RAM in the level color of how little
+/// is left (the color the used bar has at that moment), then what the
+/// kernel keeps of files and gives back when asked.
+fn available_items(memory: &MemoryView, context: &DisplayContext) -> Vec<Vec<Span<'static>>> {
+    let theme = &context.theme;
+    let mut available = vec![Span::styled(
+        value_text(&memory.available),
+        theme.text_style(),
+    )];
+    available.extend(share_span(
+        &memory.available,
+        &memory.total,
+        |left| 1.0 - left,
+        context,
+    ));
+    let plain = |label: &str, cell: &MetricCell| {
+        vec![
+            Span::styled(format!("{label} "), theme.label_style()),
+            Span::styled(value_text(cell), theme.text_style()),
+        ]
+    };
+    vec![
+        available,
+        plain("cache", &memory.cached),
+        plain("buf", &memory.buffers),
+    ]
+}
+
+/// `2.0 GiB / 100.0 GiB 2.0%`, `in 0 B/s`, `out 1.2 MiB/s`: the swap in
+/// use says what was moved out once, with its share of the swap in the
+/// level color of how full it is; the rates say whether pages move now.
+fn swap_items(memory: &MemoryView, context: &DisplayContext) -> Vec<Vec<Span<'static>>> {
+    let mut used = of_whole(&memory.swap_used, &memory.swap_total, context);
+    used.extend(share_span(
+        &memory.swap_used,
+        &memory.swap_total,
+        |full| full,
+        context,
+    ));
+    let mut items = vec![used];
+    for (label, cell) in swap_rates(memory) {
+        items.push(labeled_cell(label, cell, CellDetail::GLANCE, context));
+    }
+    items
+}
+
+/// How the OOM kills are written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OomKills {
+    /// `OOM kills 4 since boot`.
+    SinceBoot,
+    /// `OOM kills 4`, where the line has no room for more.
+    Count,
+}
+
+/// `OOM kills 4 since boot`, the count in the warning color: the
+/// processes the kernel's OOM killer killed (D-135). Left out while it
+/// killed none, or where the kernel does not count them.
+fn oom_line(
+    memory: &MemoryView,
+    form: OomKills,
+    context: &DisplayContext,
+) -> Option<Line<'static>> {
     let theme = &context.theme;
     memory.oom_kills.value_f64().filter(|kills| *kills >= 1.0)?;
-    Some(Line::from(vec![
+    let mut spans = vec![
         Span::styled("OOM kills ", theme.label_style()),
         Span::styled(
             value_text(&memory.oom_kills),
             Style::new().fg(theme.warning),
         ),
-        Span::styled(" since boot", theme.label_style()),
-    ]))
+    ];
+    if form == OomKills::SinceBoot {
+        spans.push(Span::styled(" since boot", theme.label_style()));
+    }
+    Some(Line::from(spans))
 }
 
 /// What is read back from swap (`in`) and written out to it (`out`) each
@@ -537,53 +702,14 @@ fn swap_rates(memory: &MemoryView) -> impl Iterator<Item = (&'static str, &Metri
         .filter(|(_, cell)| reported(cell))
 }
 
-/// `Swap 0 B / 8.0 GiB │ in 0 B/s │ out 1.2 MiB/s`: the swap in use says
-/// what was moved out once, the rates whether pages are moving now.
-fn swap_line(memory: &MemoryView, context: &DisplayContext) -> Line<'static> {
-    let mut spans = vec![
-        Span::styled("Swap ", context.theme.label_style()),
-        Span::styled(
-            format!(
-                "{} / {}",
-                value_text(&memory.swap_used),
-                value_text(&memory.swap_total)
-            ),
-            context.theme.text_style(),
-        ),
-    ];
-    for (label, cell) in swap_rates(memory) {
-        spans.push(separator(context));
-        spans.extend(labeled_cell(label, cell, CellDetail::GLANCE, context));
-    }
-    Line::from(spans)
-}
-
-/// `buf 1.2 GiB  cache 20.1 GiB  avail 48.0 GiB`.
-fn detail_line(memory: &MemoryView, context: &DisplayContext) -> Line<'static> {
-    let theme = &context.theme;
-    let mut spans = Vec::new();
-    for (label, cell, style) in [
-        ("buf", &memory.buffers, theme.text_style()),
-        ("cache", &memory.cached, theme.text_style()),
-        ("avail", &memory.available, Style::new().fg(theme.success)),
-    ] {
-        if !spans.is_empty() {
-            spans.push(separator(context));
-        }
-        spans.push(Span::styled(format!("{label} "), theme.label_style()));
-        spans.push(Span::styled(value_text(cell), style));
-    }
-    Line::from(spans)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use dgxtop_core::metric::CanonicalUnit;
     use dgxtop_core::view::{CellState, ProcessShare, ProcessTrend, Trend};
 
-    /// Label column of a bar row (`used`), before its gauge.
-    const BAR_LABEL: u16 = crate::modules::common::BAR_LABEL_WIDTH;
+    /// Label column of the panel's rows, before the gauge of `used`.
+    const BAR_LABEL: u16 = LABEL_WIDTH;
 
     const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
@@ -809,30 +935,33 @@ mod tests {
         };
         view.total = bytes(64.0 * GIB);
         let ram = ram_line(&view, &context);
-        assert_eq!(text(&ram), "RAM 48.0 GiB / 64.0 GiB │ ■ OS 16.0 GiB");
+        assert_eq!(text(&ram), "RAM   48.0 GiB / 64.0 GiB │ ■ OS 16.0 GiB");
         let swatch = ram
             .spans
             .iter()
             .find(|span| span.content == SWATCH)
             .unwrap();
         assert_eq!(swatch.style.fg, Some(context.theme.os_memory_color()));
-        assert_eq!(legend(&view, 120), vec!["[GPU] ■ other 32.0 GiB"]);
+        assert_eq!(legend(&view, 120), vec!["GPU   ■ other 32.0 GiB"]);
         view.gpu_processes = vec![share(0, 16.0), share(1, 8.0)];
         assert_eq!(
             legend(&view, 120),
-            vec!["[GPU] ■ job0 16.0 GiB  ■ job1 8.0 GiB  ■ other 8.0 GiB"]
+            vec!["GPU   ■ job0 16.0 GiB  ■ job1 8.0 GiB  ■ other 8.0 GiB"]
         );
         assert_eq!(
             legend(&view, 40),
             vec![
-                "[GPU] ■ job0 16.0 GiB  ■ job1 8.0 GiB",
+                "GPU   ■ job0 16.0 GiB  ■ job1 8.0 GiB",
                 "      ■ other 8.0 GiB"
             ]
         );
         assert_eq!(gpu_legend_rows(&view, 40, MAX_GPU_ROWS, &context), 2);
         // A discrete GPU's memory is not in the RAM: no OS part, no legend.
         view.gpu_resident = None;
-        assert_eq!(text(&ram_line(&view, &context)), "RAM 48.0 GiB / 64.0 GiB");
+        assert_eq!(
+            text(&ram_line(&view, &context)),
+            "RAM   48.0 GiB / 64.0 GiB"
+        );
         assert!(legend(&view, 120).is_empty());
     }
 
@@ -874,7 +1003,7 @@ mod tests {
         let mut view = memory(bytes(48.0 * GIB), Some(bytes(32.0 * GIB)));
         view.gpu_processes = vec![share(0, 16.0), share(1, 8.0)];
         view.gpu_other_bytes = Some(0);
-        assert_eq!(legend(&view), vec!["[GPU] ■ job0 16.0 GiB  ■ job1 8.0 GiB"]);
+        assert_eq!(legend(&view), vec!["GPU   ■ job0 16.0 GiB  ■ job1 8.0 GiB"]);
         assert_eq!(gpu_legend_rows(&view, 40, MAX_GPU_ROWS, &context), 1);
         assert_eq!(
             bar(&view),
@@ -892,7 +1021,7 @@ mod tests {
         assert_eq!(
             legend(&view),
             vec![
-                "[GPU] ■ job0 16.0 GiB  ■ job1 8.0 GiB",
+                "GPU   ■ job0 16.0 GiB  ■ job1 8.0 GiB",
                 "      ■ other 4.0 GiB"
             ]
         );
@@ -948,7 +1077,7 @@ mod tests {
         let (top, scrolls) = shown(0);
         assert!(scrolls);
         assert_eq!(top.len(), 2);
-        assert!(top[0].starts_with("[GPU] ■ job0 7.0 GiB"), "{top:?}");
+        assert!(top[0].starts_with("GPU   ■ job0 7.0 GiB"), "{top:?}");
         assert!(top[1].ends_with("▼2"), "{top:?}");
         let (middle, _) = shown(1);
         assert!(middle[1].ends_with("▲1 ▼1"), "{middle:?}");
@@ -977,13 +1106,15 @@ mod tests {
             .collect()
     }
 
-    /// Under the chart (D-135): the memory's stall pressure, each kind's
-    /// 10 s, 60 s and 300 s averages, then swap with what is read back
-    /// from it and written out to it each second, beside what is available,
-    /// which pressure never stands for.
+    /// Under the chart (D-143): what is left to use with its share of the
+    /// RAM, cache and buffers; then swap with its share and what is read
+    /// back from it and written out to it each second; last the memory's
+    /// stall pressure, each kind's 10 s, 60 s and 300 s averages, which
+    /// never stands for what is available.
     #[test]
-    fn the_footer_shows_the_pressure_then_swap_with_its_rates() {
+    fn the_footer_lists_what_is_left_then_swap_then_the_pressure() {
         let context = crate::test_fixtures::display_context();
+        let theme = &context.theme;
         let rate = |value: f64| crate::test_fixtures::ok(value, CanonicalUnit::BytesPerSecond);
         let mut view = memory(bytes(48.0 * GIB), None);
         view.pressure = Some(crate::test_fixtures::pressure_view(
@@ -995,19 +1126,52 @@ mod tests {
         assert_eq!(
             footer(&view, 120),
             vec![
+                "avail 51.7 GiB 80.8% │ cache 20.1 GiB │ buf 1.2 GiB",
+                "swap  0 B / 8.0 GiB 0.0% │ in 0 B/s │ out 1.2 MiB/s",
                 "pressure some 2.4% 0.9% 0.2% │ full 0.8% 0.3% 0.1%  (10s 1m 5m)",
-                "Swap 0 B / 8.0 GiB │ in 0 B/s │ out 1.2 MiB/s │ buf 1.2 GiB │ cache 20.1 GiB \
-                 │ avail 51.7 GiB",
             ]
         );
-        // A panel too narrow for one line keeps available on the next.
+        // A narrow panel wraps a row's items under its first; none is cut.
         assert_eq!(
-            footer(&view, 70),
+            footer(&view, 40),
             vec![
-                "pressure some 2.4% 0.9% 0.2% │ full 0.8% 0.3% 0.1%  (10s 1m 5m)",
-                "Swap 0 B / 8.0 GiB │ in 0 B/s │ out 1.2 MiB/s",
-                "buf 1.2 GiB │ cache 20.1 GiB │ avail 51.7 GiB",
+                "avail 51.7 GiB 80.8% │ cache 20.1 GiB",
+                "      buf 1.2 GiB",
+                "swap  0 B / 8.0 GiB 0.0% │ in 0 B/s",
+                "      out 1.2 MiB/s",
+                "pressure some 2.4% 0.9% 0.2% │ full 0.8% 0.3% 0.1%",
             ]
+        );
+        // Each row's label has its color; a share takes its level color:
+        // what is left by how little it is, the swap by how full it is.
+        let lines = footer_lines(&view, 120, &context);
+        let styled = |line: usize, text: &str| {
+            lines[line]
+                .spans
+                .iter()
+                .find(|span| span.content == text)
+                .map(|span| span.style)
+                .unwrap_or_else(|| panic!("{text} missing"))
+        };
+        assert_eq!(
+            styled(0, "avail "),
+            theme.memory_row_style(MemoryRow::Available)
+        );
+        assert_eq!(styled(1, "swap  "), theme.memory_row_style(MemoryRow::Swap));
+        assert_ne!(
+            theme.memory_row_style(MemoryRow::Available),
+            theme.memory_row_style(MemoryRow::Swap)
+        );
+        let left = 51.7 / 64.0;
+        assert_eq!(styled(0, " 80.8%").fg, Some(theme.level_color(1.0 - left)));
+        assert_eq!(styled(1, " 0.0%").fg, Some(theme.gauge_low));
+        view.available = bytes(1.6 * GIB);
+        let tight = footer_lines(&view, 120, &context);
+        assert_eq!(tight[0].spans[2].content, " 2.5%");
+        assert_eq!(
+            tight[0].spans[2].style.fg,
+            Some(theme.level_color(0.975)),
+            "little left is red"
         );
         // Each average takes its level color: green up to 1 %.
         let line = pressure_line(view.pressure.as_ref().unwrap(), &context);
@@ -1017,8 +1181,8 @@ mod tests {
                 .find(|span| span.content == text)
                 .and_then(|span| span.style.fg)
         };
-        assert_eq!(color("0.9%"), Some(context.theme.gauge_low));
-        assert_ne!(color("2.4%"), Some(context.theme.gauge_low));
+        assert_eq!(color("0.9%"), Some(theme.gauge_low));
+        assert_ne!(color("2.4%"), Some(theme.gauge_low));
         // The module asks for a row more than without the pressure.
         let module = MemoryModule::new().unwrap();
         let mut model =
@@ -1032,65 +1196,149 @@ mod tests {
         assert_eq!(rows(&view, &mut model) + 1, with_pressure);
     }
 
-    /// A kernel without PSI and the swap counters keeps the swap line as it
-    /// was; a counter still warming up says so instead of a rate.
+    /// A panel with the rows for them wraps its rows' items; one too short
+    /// keeps each row on one line, cut at its edge, so the pressure and the
+    /// OOM kills under them still show. A pressure wider than the panel
+    /// leaves out what its averages span, never an average.
     #[test]
-    fn a_kernel_without_pressure_or_swap_counters_keeps_the_swap_line() {
+    fn a_short_panel_keeps_a_line_for_each_row() {
+        let context = crate::test_fixtures::display_context();
+        let rate = |value: f64| crate::test_fixtures::ok(value, CanonicalUnit::BytesPerSecond);
         let mut view = memory(bytes(48.0 * GIB), None);
+        view.swap_in = rate(0.0);
+        view.swap_out = rate(0.0);
+        view.oom_kills = crate::test_fixtures::ok(4.0, CanonicalUnit::Count);
+        view.pressure = Some(crate::test_fixtures::pressure_view(
+            [2.4, 0.9, 0.2],
+            Some([0.8, 0.3, 0.1]),
+        ));
+        let within = |rows: usize| -> Vec<String> {
+            footer_within(&view, (56, rows), &context)
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect()
+                })
+                .collect()
+        };
+        let trouble = [
+            "pressure some 2.4% 0.9% 0.2% │ full 0.8% 0.3% 0.1%",
+            "OOM kills 4 since boot",
+        ];
+        // 40 columns: both rows wrap, six lines in all.
+        assert_eq!(footer(&view, 40).len(), 6);
+        assert_eq!(footer(&view, 56).len(), 4);
+        assert_eq!(within(4)[2..], trouble);
+        let narrow = |rows: usize| -> Vec<String> {
+            footer_within(&view, (40, rows), &context)
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect()
+                })
+                .collect()
+        };
+        assert_eq!(narrow(6), footer(&view, 40));
         assert_eq!(
-            footer(&view, 120),
-            vec!["Swap 0 B / 8.0 GiB │ buf 1.2 GiB │ cache 20.1 GiB │ avail 51.7 GiB"]
-        );
-        view.swap_in = MetricCell::missing(CanonicalUnit::BytesPerSecond, CellState::Warmup);
-        assert_eq!(
-            footer(&view, 120),
+            narrow(5),
             vec![
-                "Swap 0 B / 8.0 GiB │ in warming up │ buf 1.2 GiB │ cache 20.1 GiB \
-                 │ avail 51.7 GiB"
+                "avail 51.7 GiB 80.8% │ cache 20.1 GiB │ buf 1.2 GiB",
+                "swap  0 B / 8.0 GiB 0.0% │ in 0 B/s │ out 0 B/s",
+                trouble[0],
+                trouble[1],
             ]
         );
     }
 
-    /// Once the OOM killer killed a process, the count since boot follows
-    /// the pressure in the warning color (D-135); none killed, or a kernel
-    /// that does not count them, adds nothing.
+    /// While no task lost time waiting for memory, every average reads
+    /// `0.0%` and the pressure has no line (D-143); the first average above
+    /// that brings the line back, and the panel asks for its row.
     #[test]
-    fn oom_kills_follow_the_pressure_once_there_are_any() {
-        let context = crate::test_fixtures::display_context();
-        let count = |kills: f64| crate::test_fixtures::ok(kills, CanonicalUnit::Count);
+    fn a_pressure_of_nothing_has_no_line() {
         let mut view = memory(bytes(48.0 * GIB), None);
+        let without = footer(&view, 120);
         view.pressure = Some(crate::test_fixtures::pressure_view(
-            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.04],
             Some([0.0, 0.0, 0.0]),
         ));
-        view.oom_kills = count(0.0);
-        assert_eq!(footer(&view, 120).len(), 2);
-        assert!(oom_line(&view, &context).is_none());
-        view.oom_kills = count(4.0);
+        assert_eq!(footer(&view, 120), without);
+        view.pressure = Some(crate::test_fixtures::pressure_view(
+            [0.0, 0.0, 0.06],
+            Some([0.0, 0.0, 0.0]),
+        ));
         assert_eq!(
-            footer(&view, 120)[0],
-            "pressure some 0.0% 0.0% 0.0% │ full 0.0% 0.0% 0.0%  (10s 1m 5m) \
-             │ OOM kills 4 since boot"
+            footer(&view, 120).last().unwrap(),
+            "pressure some 0.0% 0.0% 0.1% │ full 0.0% 0.0% 0.0%  (10s 1m 5m)"
         );
-        let kills = oom_line(&view, &context).unwrap();
-        assert_eq!(kills.spans[1].style.fg, Some(context.theme.warning));
-        // Too narrow for both, the kills lead the swap line instead of
-        // taking a line of their own, and the pressure keeps its line.
-        assert_eq!(
-            footer(&view, 70),
-            vec![
-                "pressure some 0.0% 0.0% 0.0% │ full 0.0% 0.0% 0.0%  (10s 1m 5m)",
-                "OOM kills 4 since boot │ Swap 0 B / 8.0 GiB",
-                "buf 1.2 GiB │ cache 20.1 GiB │ avail 51.7 GiB",
-            ]
-        );
-        // Without PSI they lead the swap line too.
-        view.pressure = None;
+    }
+
+    /// A kernel without PSI and the swap counters shows the swap in use
+    /// alone; a counter still warming up says so instead of a rate, and a
+    /// host without swap has no share of it.
+    #[test]
+    fn a_kernel_without_pressure_or_swap_counters_keeps_the_swap_row() {
+        let mut view = memory(bytes(48.0 * GIB), None);
         assert_eq!(
             footer(&view, 120),
             vec![
-                "OOM kills 4 since boot │ Swap 0 B / 8.0 GiB │ buf 1.2 GiB │ cache 20.1 GiB \
-                 │ avail 51.7 GiB"
+                "avail 51.7 GiB 80.8% │ cache 20.1 GiB │ buf 1.2 GiB",
+                "swap  0 B / 8.0 GiB 0.0%",
+            ]
+        );
+        view.swap_in = MetricCell::missing(CanonicalUnit::BytesPerSecond, CellState::Warmup);
+        assert_eq!(
+            footer(&view, 120)[1],
+            "swap  0 B / 8.0 GiB 0.0% │ in warming up"
+        );
+        view.swap_total = bytes(0.0);
+        assert_eq!(footer(&view, 120)[1], "swap  0 B / 0 B │ in warming up");
+    }
+
+    /// Once the OOM killer killed a process, the count since boot ends the
+    /// panel in the warning color (D-135), after the pressure when both fit
+    /// a line, without `since boot` when only that fits; none killed, or a
+    /// kernel that does not count them, adds nothing.
+    #[test]
+    fn oom_kills_end_the_panel_once_there_are_any() {
+        let context = crate::test_fixtures::display_context();
+        let count = |kills: f64| crate::test_fixtures::ok(kills, CanonicalUnit::Count);
+        let mut view = memory(bytes(48.0 * GIB), None);
+        view.oom_kills = count(0.0);
+        assert_eq!(footer(&view, 120).len(), 2);
+        assert!(oom_line(&view, OomKills::SinceBoot, &context).is_none());
+        view.oom_kills = count(4.0);
+        assert_eq!(footer(&view, 120)[2], "OOM kills 4 since boot");
+        let kills = oom_line(&view, OomKills::SinceBoot, &context).unwrap();
+        assert_eq!(kills.spans[1].style.fg, Some(context.theme.warning));
+        view.pressure = Some(crate::test_fixtures::pressure_view(
+            [2.4, 0.9, 0.2],
+            Some([0.8, 0.3, 0.1]),
+        ));
+        assert_eq!(
+            footer(&view, 120)[2],
+            "pressure some 2.4% 0.9% 0.2% │ full 0.8% 0.3% 0.1%  (10s 1m 5m) \
+             │ OOM kills 4 since boot"
+        );
+        // Room for the count only.
+        assert_eq!(
+            footer(&view, 77)[2],
+            "pressure some 2.4% 0.9% 0.2% │ full 0.8% 0.3% 0.1%  (10s 1m 5m) │ OOM kills 4"
+        );
+        // Then the pressure gives up what its averages span.
+        assert_eq!(
+            footer(&view, 70)[2],
+            "pressure some 2.4% 0.9% 0.2% │ full 0.8% 0.3% 0.1% │ OOM kills 4"
+        );
+        // Room for neither on one line: a line each, the kills in full.
+        assert_eq!(
+            footer(&view, 63)[2..],
+            [
+                "pressure some 2.4% 0.9% 0.2% │ full 0.8% 0.3% 0.1%  (10s 1m 5m)",
+                "OOM kills 4 since boot",
             ]
         );
     }

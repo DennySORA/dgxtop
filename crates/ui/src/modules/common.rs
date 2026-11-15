@@ -314,7 +314,7 @@ pub(crate) fn fan_speed_spans(
 }
 
 /// `spans` with the value, their first, in `style`.
-fn value_styled(mut spans: Vec<Span<'static>>, style: Style) -> Vec<Span<'static>> {
+pub(crate) fn value_styled(mut spans: Vec<Span<'static>>, style: Style) -> Vec<Span<'static>> {
     if let Some(first) = spans.first_mut() {
         first.style = style;
     }
@@ -388,23 +388,56 @@ pub(crate) fn separator(context: &DisplayContext) -> Span<'static> {
 
 /// What the three averages of a pressure line span, written after them.
 pub(crate) const PRESSURE_SPANS: &str = "(10s 1m 5m)";
+/// The lowest average a pressure line writes above `0.0%`.
+const SHOWN_PRESSURE_PERCENT: f64 = 0.05;
+
+/// `pressure` while its line has something to say (D-143): an average
+/// that reads above `0.0%`, or one that is not read as it should be and
+/// says why. While every average reads `0.0%` no task lost time waiting,
+/// and the overview leaves the line out. The five-minute average falls
+/// slowly, so a line stays for minutes after the last stall.
+pub(crate) fn telling_pressure(pressure: Option<&PressureView>) -> Option<&PressureView> {
+    let pressure = pressure?;
+    let tells = |cell: &MetricCell| {
+        !has_value(cell)
+            || cell
+                .value_f64()
+                .is_some_and(|percent| percent >= SHOWN_PRESSURE_PERCENT)
+    };
+    let kinds = [Some(&pressure.some), pressure.full.as_ref()];
+    kinds
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(tells)
+        .then_some(pressure)
+}
 
 /// `pressure some 2.4% 0.9% 0.2% │ full 0.8% 0.3% 0.1%  (10s 1m 5m)`
 /// (D-135): the share of the last 10 s, 60 s and 300 s tasks stalled
 /// waiting for a resource, each in its level color (green up to 1 %). It is
 /// time lost waiting, not how full the resource is. The CPU has no `full`.
 pub(crate) fn pressure_line(pressure: &PressureView, context: &DisplayContext) -> Line<'static> {
-    let theme = &context.theme;
-    let mut spans = vec![Span::styled("pressure ", theme.label_style())];
+    let mut line = short_pressure_line(pressure, context);
+    line.spans.push(Span::styled(
+        format!("  {PRESSURE_SPANS}"),
+        context.theme.muted_style(),
+    ));
+    line
+}
+
+/// [`pressure_line`] without what its averages span, for a line that has
+/// no room for it: `pressure some 2.4% 0.9% 0.2% │ full 0.8% 0.3% 0.1%`.
+pub(crate) fn short_pressure_line(
+    pressure: &PressureView,
+    context: &DisplayContext,
+) -> Line<'static> {
+    let mut spans = vec![Span::styled("pressure ", context.theme.label_style())];
     spans.extend(pressure_kind_spans("some", &pressure.some, context));
     if let Some(full) = &pressure.full {
         spans.push(separator(context));
         spans.extend(pressure_kind_spans("full", full, context));
     }
-    spans.push(Span::styled(
-        format!("  {PRESSURE_SPANS}"),
-        theme.muted_style(),
-    ));
     Line::from(spans)
 }
 
@@ -535,10 +568,10 @@ pub(crate) struct BarRowAreas {
     pub value: Rect,
 }
 
-/// Splits `row` into a bar row; rows that share the value width line their
-/// gauges up.
-pub(crate) fn bar_row_areas(row: Rect, value_width: u16) -> BarRowAreas {
-    let label_width = BAR_LABEL_WIDTH.min(row.width);
+/// Splits `row` into a bar row whose label takes `label_width` columns;
+/// rows that share the label and value widths line their gauges up.
+pub(crate) fn bar_row_areas(row: Rect, label_width: u16, value_width: u16) -> BarRowAreas {
+    let label_width = label_width.min(row.width);
     let gauge_width = row
         .width
         .saturating_sub(label_width.saturating_add(1).saturating_add(value_width));
@@ -559,6 +592,12 @@ pub(crate) fn bar_row_areas(row: Rect, value_width: u16) -> BarRowAreas {
 /// One bar of the current value (D-43).
 pub(crate) struct BarRow<'a> {
     pub label: &'a str,
+    /// The label column: [`BAR_LABEL_WIDTH`], or the panel's own where its
+    /// rows share a wider one.
+    pub label_width: u16,
+    /// The label's style: the theme's label style, or the color the
+    /// panel's rows name this one in.
+    pub label_style: Style,
     /// The level the value is colored by (`None`: missing): its share of
     /// the scale, or a temperature's place on its own scale (D-126).
     pub ratio: Option<f64>,
@@ -579,13 +618,13 @@ pub(crate) fn render_bar_row(
 ) -> Rect {
     // A value wider than the shared column (a state label) is never cut.
     let value_width = bar.value_width.max(saturate_u16(display_width(bar.value)));
-    let areas = bar_row_areas(row, value_width);
+    let areas = bar_row_areas(row, bar.label_width, value_width);
     frame.buffer_mut().set_stringn(
         areas.label.x,
         areas.label.y,
         bar.label,
         usize::from(areas.label.width),
-        context.theme.label_style(),
+        bar.label_style,
     );
     let value_style = bar.ratio.map_or_else(
         || context.theme.muted_style(),
@@ -604,7 +643,12 @@ pub(crate) fn render_bar_row(
 /// The rows of `area` from the gauge's left edge on: where the chart under
 /// a bar goes.
 pub(crate) fn under_bar(area: Rect) -> Rect {
-    let indent = BAR_LABEL_WIDTH.min(area.width);
+    after_label(area, BAR_LABEL_WIDTH)
+}
+
+/// The rows of `area` after a label column of `label_width`.
+pub(crate) fn after_label(area: Rect, label_width: u16) -> Rect {
+    let indent = label_width.min(area.width);
     Rect::new(area.x + indent, area.y, area.width - indent, area.height)
 }
 
@@ -828,21 +872,42 @@ pub(crate) fn join_if_fits(
     vec![Line::from(spans)]
 }
 
-/// `lines` in order, each joined by ` │ ` to the line before it while both
-/// fit `width` ([`join_if_fits`]).
-pub(crate) fn pack_lines(
-    lines: Vec<Line<'static>>,
+/// A row of a panel whose rows share a label column: `label`, then
+/// `items` set apart by a [`separator`]. An item that does not fit `width`
+/// goes on a line of its own under the first item, so no item is cut while
+/// the panel has the rows; at least one item is on every line.
+pub(crate) fn flow_row(
+    label: Span<'static>,
+    items: Vec<Vec<Span<'static>>>,
     width: u16,
     context: &DisplayContext,
 ) -> Vec<Line<'static>> {
-    let mut packed: Vec<Line<'static>> = Vec::new();
-    for line in lines {
-        match packed.pop() {
-            Some(last) => packed.extend(join_if_fits(last, line, width, context)),
-            None => packed.push(line),
+    let width = usize::from(width);
+    let indent = label.width();
+    let separator_width = display_width(&separator(context).content);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut line = vec![label];
+    let mut used = indent;
+    let mut placed = 0;
+    for item in items {
+        let item_width: usize = item.iter().map(Span::width).sum();
+        let joined = used + separator_width + item_width;
+        if placed > 0 && joined > width {
+            let full = std::mem::replace(&mut line, vec![Span::raw(" ".repeat(indent))]);
+            lines.push(Line::from(full));
+            used = indent;
+            placed = 0;
         }
+        if placed > 0 {
+            line.push(separator(context));
+            used += separator_width;
+        }
+        line.extend(item);
+        used += item_width;
+        placed += 1;
     }
-    packed
+    lines.push(Line::from(line));
+    lines
 }
 
 /// Rows of the rate histories below the disk and network tables (D-41).
@@ -1425,6 +1490,83 @@ mod tests {
         );
     }
 
+    /// A pressure has a line while one of its averages reads above `0.0%`
+    /// or is not read as it should be (D-143); all at nothing, or a kernel
+    /// without PSI, has none.
+    #[test]
+    fn a_pressure_tells_something_above_nothing_or_unread() {
+        use crate::test_fixtures::pressure_view;
+        assert!(telling_pressure(None).is_none());
+        let nothing = pressure_view([0.0, 0.0, 0.0], Some([0.0, 0.0, 0.0]));
+        assert!(telling_pressure(Some(&nothing)).is_none());
+        let rounds_to_nothing = pressure_view([0.04, 0.0, 0.0], None);
+        assert!(telling_pressure(Some(&rounds_to_nothing)).is_none());
+        let some = pressure_view([0.0, 0.0, 0.05], None);
+        assert!(telling_pressure(Some(&some)).is_some());
+        let full_only = pressure_view([0.0, 0.0, 0.0], Some([0.0, 0.3, 0.0]));
+        assert!(telling_pressure(Some(&full_only)).is_some());
+        let mut unread = pressure_view([0.0, 0.0, 0.0], None);
+        unread.some[1] = MetricCell::missing(
+            dgxtop_core::metric::CanonicalUnit::Percent,
+            CellState::ReadFailed,
+        );
+        assert!(
+            telling_pressure(Some(&unread)).is_some(),
+            "a failed read says so"
+        );
+    }
+
+    /// A row's items follow its label on one line while they fit; one that
+    /// does not goes under the first item, whole, and a row of one long
+    /// item keeps it on the label's line.
+    #[test]
+    fn a_row_wraps_whole_items_under_its_first() {
+        let context = display_context();
+        let item = |text: &str| vec![Span::raw(text.to_owned())];
+        let rows = |width: u16| -> Vec<String> {
+            flow_row(
+                Span::raw("swap  "),
+                vec![
+                    item("2.0 GiB / 8.0 GiB"),
+                    item("in 0 B/s"),
+                    item("out 0 B/s"),
+                ],
+                width,
+                &context,
+            )
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect()
+        };
+        assert_eq!(
+            rows(80),
+            vec!["swap  2.0 GiB / 8.0 GiB │ in 0 B/s │ out 0 B/s"]
+        );
+        assert_eq!(
+            rows(46),
+            vec!["swap  2.0 GiB / 8.0 GiB │ in 0 B/s │ out 0 B/s"]
+        );
+        assert_eq!(
+            rows(45),
+            vec!["swap  2.0 GiB / 8.0 GiB │ in 0 B/s", "      out 0 B/s"]
+        );
+        assert_eq!(
+            rows(10),
+            vec![
+                "swap  2.0 GiB / 8.0 GiB",
+                "      in 0 B/s",
+                "      out 0 B/s"
+            ]
+        );
+        let alone = flow_row(Span::raw("RAM   "), Vec::new(), 40, &context);
+        assert_eq!(alone.len(), 1);
+    }
+
     #[test]
     fn a_value_wider_than_its_column_is_never_cut() {
         let context = display_context();
@@ -1434,6 +1576,8 @@ mod tests {
                 row,
                 &BarRow {
                     label: "used",
+                    label_width: BAR_LABEL_WIDTH,
+                    label_style: context.theme.label_style(),
                     ratio: None,
                     value: "12.3 GiB",
                     value_width: 6,

@@ -173,8 +173,11 @@ fn overview_follows_the_reference_layout_and_keeps_every_module_visible_when_wid
         "GPU 1 │ NVIDIA GB10 │",
         // Parts that say different things are set apart (D-66).
         "68°C │ ⚡ 45.2 W · estimated │ 3.0/3.9 GHz",
-        "RAM 12.3 GiB / 64.0 GiB │ ■ OS 2.3 GiB",
-        "[GPU] ■ other 10.0 GiB",
+        // Each row of the memory panel leads with its label (D-143).
+        "RAM   12.3 GiB / 64.0 GiB │ ■ OS 2.3 GiB",
+        "GPU   ■ other 10.0 GiB",
+        "avail 51.7 GiB 80.8% │ cache 20.1 GiB │ buf 1.2 GiB",
+        "swap  0 B / 8.0 GiB 0.0%",
         "spark-01 │ 2x GPU │",
         // Each GPU's memory row (D-40, D-41): the discrete GPU's VRAM, the
         // unified GPU's share of the system RAM.
@@ -239,7 +242,7 @@ fn overview_follows_the_reference_layout_and_keeps_every_module_visible_when_wid
     // with a GPU the GPU legend takes the row above the used bar (D-69).
     assert!(bars.starts_with("│util ▆"), "{bars}");
     assert!(
-        rendered.rows[cpu_top + 3].contains("│used ▆"),
+        rendered.rows[cpu_top + 3].contains("│used  ▆"),
         "{}",
         rendered.text()
     );
