@@ -21,9 +21,10 @@ use crate::shared::context::{self, CollectorSpec, Route, Session};
 use crate::shared::formulas::{self, Selections};
 
 /// Canonical CPU/SoC metrics published straight through arbitration.
-const PASS_THROUGH: [&str; 11] = [
+const PASS_THROUGH: [&str; 12] = [
     ids::CPU_FREQUENCY_CURRENT,
     ids::CPU_FREQUENCY_MAXIMUM,
+    ids::CPU_FREQUENCY_LIMIT,
     ids::CPU_TEMPERATURE_PACKAGE,
     ids::CPU_TEMPERATURE_CORE,
     ids::CPU_TEMPERATURE_CLUSTER,

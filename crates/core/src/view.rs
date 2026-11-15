@@ -196,6 +196,11 @@ pub struct CoreView {
 pub struct FrequencyGroup {
     /// The group's maximum frequency; missing when cpufreq reports none.
     pub maximum: MetricCell,
+    /// The highest frequency the cpufreq policy lets the group's cores run
+    /// at now (`scaling_max_freq`, D-136): the lowest of them where they
+    /// differ. It equals the maximum unless something caps the cores;
+    /// missing where the driver reports none.
+    pub limit: MetricCell,
     /// The mean current frequency of the group's cores reporting one now
     /// (derived, D-67).
     pub current: MetricCell,
@@ -222,6 +227,11 @@ pub struct CpuView {
     /// maximum; empty without cpufreq.
     pub frequencies: Vec<FrequencyGroup>,
     pub package_temperatures: Vec<LabeledCell>,
+    /// The cluster whose sensor the first package's temperature is, where
+    /// that temperature is the hottest of the package's clusters (GB10,
+    /// D-68, D-137): `cluster 0p`. `None` where a sensor reports the
+    /// package itself.
+    pub hottest_cluster: Option<String>,
     pub soc_temperatures: Vec<LabeledCell>,
     /// Each CPU package's power: the CPU line's `⚡` and the CPU's part of
     /// the host's total power (D-106).

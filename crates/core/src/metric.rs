@@ -713,6 +713,10 @@ pub mod ids {
     pub const CPU_UTILIZATION_STEAL: &str = "cpu.utilization.steal";
     pub const CPU_FREQUENCY_CURRENT: &str = "cpu.frequency.current";
     pub const CPU_FREQUENCY_MAXIMUM: &str = "cpu.frequency.maximum";
+    /// The highest frequency the cpufreq policy lets a CPU run at now
+    /// (`scaling_max_freq`, D-136): the hardware maximum unless the user,
+    /// the firmware or a thermal daemon lowered it.
+    pub const CPU_FREQUENCY_LIMIT: &str = "cpu.frequency.limit";
     pub const CPU_TEMPERATURE_PACKAGE: &str = "cpu.temperature.package";
     pub const CPU_TEMPERATURE_CORE: &str = "cpu.temperature.core";
     /// A sensor of a group of a package's cores, scope `cluster:<name>`
@@ -981,6 +985,15 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         Cpu,
         false,
         "CPU max frequency"
+    ),
+    descriptor!(
+        ids::CPU_FREQUENCY_LIMIT,
+        MHz,
+        Canonical,
+        Static,
+        Cpu,
+        false,
+        "CPU frequency limit"
     ),
     descriptor!(
         ids::CPU_TEMPERATURE_PACKAGE,

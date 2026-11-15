@@ -1,7 +1,9 @@
 //! CPU module: the CPU's model on the title (an arm64 CPU's kinds of
 //! cores, D-132); the first temperature (in the level color of its 0–100 °C
-//! scale, D-104), the first CPU package's power after `⚡` (D-106) and the
-//! current and maximum frequency of each kind of core, with load and tasks
+//! scale, D-104) with the cluster it comes from where it is the hottest of
+//! several (D-137), the first CPU package's power after `⚡` (D-106) and the
+//! current and maximum frequency of each kind of core, with the limit the
+//! cpufreq policy sets where it caps them (D-136), with load and tasks
 //! on the same line when they fit; the
 //! utilization bar with its chart under it (D-43); the usr/sys/iowait/steal
 //! breakdown, joined by the CPU's stall pressure when both fit (D-135). In the overview it starts collapsed (D-36); a click on the
@@ -23,7 +25,9 @@ use super::common::{
     pressure_labels, pressure_line, render_bar_row, render_chart, separator, temperature_spans,
     under_bar,
 };
-use crate::format::{CellDetail, cell_tone, clean, display_width, truncate_to_width, value_text};
+use crate::format::{
+    CellDetail, cell_tone, clean, display_width, fixed, truncate_to_width, value_text,
+};
 use crate::num::saturate_u16;
 use crate::registry::{
     DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot,
@@ -57,6 +61,8 @@ const COLLAPSE_KEYS: &[&str] = &["c/click collapse", "c collapse"];
 const SWATCH: &str = "■ ";
 /// A kind of core whose cores report no current frequency (idle).
 const NO_CURRENT_FREQUENCY: &str = "–";
+/// A kilohertz, the step cpufreq counts in, in the megahertz of a cell.
+const MEGAHERTZ_PER_KILOHERTZ: f64 = 0.001;
 
 pub struct CpuModule {
     manifest: DisplayModuleManifest,
@@ -227,12 +233,9 @@ fn collapsed_rows(cpu: &CpuView, model: &ViewModel, width: u16, slot: Slot) -> u
 /// then the breakdown, joined by the CPU's stall pressure when both fit
 /// (D-135), and, when it did not fit, the load line.
 fn text_lines(cpu: &CpuView, width: u16, context: &DisplayContext) -> Vec<Line<'static>> {
-    let mut lines = join_if_fits(
-        summary_line(cpu, context),
-        load_line(cpu, context),
-        width,
-        context,
-    );
+    let load = load_line(cpu, context);
+    let summary = fitting_summary(cpu, &load, width, context);
+    let mut lines = join_if_fits(summary, load, width, context);
     let breakdown = breakdown_line(cpu, context);
     let below_chart = match &cpu.pressure {
         Some(pressure) => join_if_fits(breakdown, pressure_line(pressure, context), width, context),
@@ -276,13 +279,31 @@ fn render_utilization(frame: &mut Frame<'_>, area: Rect, cpu: &CpuView, context:
 /// value (D-106) and, per kind of core, the mean frequency its cores run at
 /// now (D-67) over their maximum; the expanded panel lists every sensor.
 fn summary_line(cpu: &CpuView, context: &DisplayContext) -> Line<'static> {
-    let temperature = cpu
-        .package_temperatures
-        .first()
-        .or_else(|| cpu.soc_temperatures.first());
+    summary_with(cpu, None, context)
+}
+
+/// [`summary_line`] with the cluster its temperature comes from after it,
+/// `89°C cluster 0p` (D-137), where the package's temperature is its
+/// hottest cluster's; `None` where a sensor reports the package itself.
+fn named_summary_line(cpu: &CpuView, context: &DisplayContext) -> Option<Line<'static>> {
+    let cluster = cpu.hottest_cluster.as_deref()?;
+    Some(summary_with(cpu, Some(cluster), context))
+}
+
+/// The summary line; `origin` follows a package's temperature, muted.
+fn summary_with(cpu: &CpuView, origin: Option<&str>, context: &DisplayContext) -> Line<'static> {
+    let package = cpu.package_temperatures.first();
+    let temperature = package.or_else(|| cpu.soc_temperatures.first());
     let mut parts: Vec<Vec<Span<'static>>> = Vec::new();
     if let Some(sensor) = temperature {
-        parts.push(temperature_spans(&sensor.cell, CellDetail::GLANCE, context));
+        let mut spans = temperature_spans(&sensor.cell, CellDetail::GLANCE, context);
+        if let Some(origin) = origin.filter(|_| package.is_some() && has_value(&sensor.cell)) {
+            spans.push(Span::styled(
+                format!(" {}", clean(origin)),
+                context.theme.muted_style(),
+            ));
+        }
+        parts.push(spans);
     }
     // Shown only while it is read: a host whose CPU power cannot be read
     // has none (D-106).
@@ -308,9 +329,37 @@ fn summary_line(cpu: &CpuView, context: &DisplayContext) -> Line<'static> {
     Line::from(spans)
 }
 
+/// The summary line, naming the hottest cluster after the temperature
+/// (D-137) unless that would push `load` off its line or the line past
+/// `width`: the cluster is also on the package's row of the expanded
+/// panel, the load nowhere else.
+fn fitting_summary(
+    cpu: &CpuView,
+    load: &Line<'_>,
+    width: u16,
+    context: &DisplayContext,
+) -> Line<'static> {
+    let plain = summary_line(cpu, context);
+    let Some(named) = named_summary_line(cpu, context) else {
+        return plain;
+    };
+    let width = usize::from(width);
+    let with_load =
+        |line: &Line<'_>| line.width() + display_width(&separator(context).content) + load.width();
+    let keeps_load = with_load(&named) <= width || with_load(&plain) > width;
+    if keeps_load && named.width() <= width {
+        named
+    } else {
+        plain
+    }
+}
+
 /// `2.1/2.8 GHz · 3.4/3.9 GHz`: each kind of core's current frequency over
 /// its maximum; `–` for a kind whose cores report no current frequency
-/// (idle), and only the current one when cpufreq gives no maximum.
+/// (idle), and only the current one when cpufreq gives no maximum. A kind
+/// the cpufreq policy caps reads `2.9/3.0 (3.9) GHz` (D-136): what it runs
+/// at over the limit set for it, in the warning color, then what the
+/// hardware can do.
 fn frequency_spans(groups: &[FrequencyGroup], context: &DisplayContext) -> Vec<Span<'static>> {
     let theme = &context.theme;
     let mut spans = Vec::new();
@@ -322,12 +371,43 @@ fn frequency_spans(groups: &[FrequencyGroup], context: &DisplayContext) -> Vec<S
             Some(current) => Span::styled(current, theme.tone_style(cell_tone(&group.current))),
             None => Span::styled(NO_CURRENT_FREQUENCY, theme.muted_style()),
         });
-        if let Some(maximum) = gigahertz(&group.maximum) {
-            spans.push(Span::styled(format!("/{maximum}"), theme.label_style()));
+        match frequency_cap(group) {
+            Some((limit, maximum)) => {
+                spans.push(Span::styled("/", theme.label_style()));
+                spans.push(Span::styled(limit, Style::new().fg(theme.warning)));
+                spans.push(Span::styled(format!(" ({maximum})"), theme.label_style()));
+            }
+            None => {
+                let top = gigahertz(&group.maximum).or_else(|| gigahertz(&group.limit));
+                if let Some(top) = top {
+                    spans.push(Span::styled(format!("/{top}"), theme.label_style()));
+                }
+            }
         }
         spans.push(Span::styled(" GHz", theme.label_style()));
     }
     spans
+}
+
+/// The cap a kind of core runs under (D-136): its limit and its maximum in
+/// GHz, with as few decimals as tell them apart, while the cpufreq policy
+/// holds the cores below what the hardware can do; `None` while nothing
+/// caps them or either is not read.
+fn frequency_cap(group: &FrequencyGroup) -> Option<(String, String)> {
+    let megahertz = |cell: &MetricCell| cell.value_f64().filter(|_| cell.state.has_value());
+    let (limit, maximum) = (megahertz(&group.limit)?, megahertz(&group.maximum)?);
+    // cpufreq counts in whole kHz: anything lower than the maximum caps.
+    if limit + MEGAHERTZ_PER_KILOHERTZ / 2.0 >= maximum {
+        return None;
+    }
+    (1..=3)
+        .map(|decimals| {
+            (
+                fixed(limit / 1000.0, decimals),
+                fixed(maximum / 1000.0, decimals),
+            )
+        })
+        .find(|(limit, maximum)| limit != maximum)
 }
 
 /// A frequency cell (MHz) as GHz with one decimal; `None` without a value.
@@ -551,6 +631,15 @@ fn add_labels(output: &mut Output, cpu: &CpuView, context: &DisplayContext) {
             context,
         ));
     }
+    for group in &cpu.frequencies {
+        if frequency_cap(group).is_some() {
+            output.label(cell_label(
+                &format!("cpu frequency limit of {} cores", group.cores),
+                &group.limit,
+                context,
+            ));
+        }
+    }
     output.label(cell_label("cpu load 1m", &cpu.load[0], context));
     if let Some(pressure) = &cpu.pressure {
         pressure_labels(output, "cpu", pressure, context);
@@ -575,9 +664,15 @@ mod tests {
         }
     }
 
+    /// A kind of core nothing caps: its limit is its maximum.
     fn group(current: Option<f64>, maximum: Option<f64>) -> FrequencyGroup {
+        capped(current, maximum, maximum)
+    }
+
+    fn capped(current: Option<f64>, limit: Option<f64>, maximum: Option<f64>) -> FrequencyGroup {
         FrequencyGroup {
             maximum: megahertz(maximum),
+            limit: megahertz(limit),
             current: megahertz(current),
             cores: 10,
         }
@@ -609,6 +704,38 @@ mod tests {
         );
         assert_eq!(frequency_text(&[group(None, Some(3900.0))]), "–/3.9 GHz");
         assert_eq!(frequency_text(&[group(Some(1800.0), None)]), "1.8 GHz");
+    }
+
+    /// A kind of core the cpufreq policy caps shows the limit it runs
+    /// under, in the warning color, before what the hardware can do
+    /// (D-136); a kind nothing caps keeps `current/maximum`. A limit and a
+    /// maximum a tenth of a GHz cannot tell apart get the decimals that
+    /// do, and a driver that reports no limit changes nothing.
+    #[test]
+    fn a_capped_kind_shows_its_limit_before_the_hardware_maximum() {
+        let context = test_fixtures::display_context();
+        let groups = [
+            group(Some(2100.0), Some(2808.0)),
+            capped(Some(2900.0), Some(3000.0), Some(3900.0)),
+        ];
+        assert_eq!(frequency_text(&groups), "2.1/2.8 GHz · 2.9/3.0 (3.9) GHz");
+        let spans = frequency_spans(&groups, &context);
+        let limit = spans.iter().find(|span| span.content == "3.0").unwrap();
+        assert_eq!(limit.style.fg, Some(context.theme.warning));
+        assert_eq!(
+            frequency_text(&[capped(Some(3800.0), Some(3850.0), Some(3900.0))]),
+            "3.8/3.85 (3.90) GHz"
+        );
+        assert_eq!(
+            frequency_text(&[capped(Some(3400.0), None, Some(3900.0))]),
+            "3.4/3.9 GHz"
+        );
+        // Without a maximum the limit is the top the cores can reach.
+        assert_eq!(
+            frequency_text(&[capped(Some(1800.0), Some(2000.0), None)]),
+            "1.8/2.0 GHz"
+        );
+        assert_eq!(frequency_cap(&group(Some(3400.0), Some(3900.0))), None);
     }
 
     /// The CPU line writes its temperature in its level color (D-104) and
@@ -779,5 +906,49 @@ mod tests {
         assert_eq!(narrow[2], "pressure some 1.5% 0.7% 0.2%  (10s 1m 5m)");
         assert!(!narrow[1].contains("pressure"), "{narrow:?}");
         assert!(narrow.iter().all(|line| !line.contains("full")));
+    }
+
+    /// Where the package's temperature is its hottest cluster's, the CPU
+    /// line names that cluster after it (D-137), muted, unless that would
+    /// push the load off the line or the line past the panel; a package a
+    /// sensor reports itself, or the SoC's temperature in its place, names
+    /// none.
+    #[test]
+    fn the_cpu_line_names_the_hottest_cluster_where_it_fits() {
+        let context = test_fixtures::display_context();
+        let first = |cpu: &CpuView, width: u16| -> String {
+            text_lines(cpu, width, &context)[0]
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        };
+        let mut cpu = test_fixtures::cpu_view();
+        cpu.package_power.clear();
+        let plain = first(&cpu, 200);
+        assert!(plain.starts_with("68°C │ "), "{plain}");
+        cpu.hottest_cluster = Some("cluster 0p".to_owned());
+        let named = first(&cpu, 200);
+        assert!(named.starts_with("68°C cluster 0p │ "), "{named}");
+        assert!(named.contains("load "), "{named}");
+        let line = named_summary_line(&cpu, &context).unwrap();
+        assert_eq!(line.spans[1].content, " cluster 0p");
+        assert_eq!(line.spans[1].style, context.theme.muted_style());
+        // A width that holds the load only without the cluster keeps the
+        // load on the line.
+        let joined = u16::try_from(plain.chars().count()).unwrap();
+        let tight = first(&cpu, joined);
+        assert!(
+            tight.starts_with("68°C │ ") && tight.contains("load "),
+            "{tight}"
+        );
+        // Too narrow for the load either way: the cluster is named while
+        // the line itself fits.
+        let narrow = first(&cpu, 34);
+        assert!(narrow.starts_with("68°C cluster 0p │ "), "{narrow}");
+        assert!(!narrow.contains("load "), "{narrow}");
+        // The SoC's temperature standing in for a missing package names none.
+        cpu.package_temperatures.clear();
+        assert!(!first(&cpu, 200).contains("cluster"));
     }
 }

@@ -37,6 +37,7 @@ pub(crate) fn build_cpu_view(
     let aggregate = |metric: &str| reader.cell(metric, entity::CPU_AGGREGATE, entity::SCOPE_HOST);
     let host = |metric: &str| reader.cell(metric, entity::HOST, entity::SCOPE_HOST);
     let cores = core_views(reader);
+    let temperatures = temperature_rows(reader);
     CpuView {
         model: cpu_model(reader.catalog(), fallback_model),
         total: aggregate(ids::CPU_UTILIZATION_TOTAL),
@@ -46,7 +47,8 @@ pub(crate) fn build_cpu_view(
         steal: aggregate(ids::CPU_UTILIZATION_STEAL),
         frequencies: frequency_groups(reader, &cores),
         cores,
-        package_temperatures: temperature_rows(reader),
+        package_temperatures: temperatures.rows,
+        hottest_cluster: temperatures.hottest_cluster,
         soc_temperatures: labeled_rows(reader, ids::SOC_TEMPERATURE),
         package_power: labeled_rows(reader, ids::CPU_POWER_PACKAGE),
         power: power_rows(reader),
@@ -180,8 +182,8 @@ fn physical_core_temperature<'a>(
 fn frequency_groups(reader: &MetricReader<'_>, cores: &[CoreView]) -> Vec<FrequencyGroup> {
     let mut kinds: BTreeMap<(bool, u64), (MetricCell, Vec<&CoreView>)> = BTreeMap::new();
     for core in cores {
-        let maximum = core_maximum(reader, core);
-        let key = maximum_khz(&maximum).map_or((true, 0), |khz| (false, khz));
+        let maximum = core_frequency(reader, core, ids::CPU_FREQUENCY_MAXIMUM);
+        let key = frequency_khz(&maximum).map_or((true, 0), |khz| (false, khz));
         kinds
             .entry(key)
             .or_insert_with(|| (maximum, Vec::new()))
@@ -192,8 +194,9 @@ fn frequency_groups(reader: &MetricReader<'_>, cores: &[CoreView]) -> Vec<Freque
         .into_iter()
         .filter_map(|((unknown_maximum, _), (maximum, members))| {
             let current = mean_frequency(&members);
-            (!unknown_maximum || current.value.is_some()).then_some(FrequencyGroup {
+            (!unknown_maximum || current.value.is_some()).then(|| FrequencyGroup {
                 maximum,
+                limit: lowest_limit(reader, &members),
                 current,
                 cores: members.len(),
             })
@@ -201,24 +204,54 @@ fn frequency_groups(reader: &MetricReader<'_>, cores: &[CoreView]) -> Vec<Freque
         .collect()
 }
 
-fn core_maximum(reader: &MetricReader<'_>, core: &CoreView) -> MetricCell {
-    let Some(cpu) = core.core_id.parse::<u32>().ok() else {
-        return missing_cell(ids::CPU_FREQUENCY_MAXIMUM);
+/// The lowest limit the cpufreq policy sets among `cores` (D-136): the cap
+/// that binds their kind. Where every core reporting one agrees it is that
+/// reading; where they differ it is derived and says of how many cores it
+/// is the lowest. With none reporting, the first core's cell says why.
+fn lowest_limit(reader: &MetricReader<'_>, cores: &[&CoreView]) -> MetricCell {
+    let limits: Vec<MetricCell> = cores
+        .iter()
+        .map(|core| core_frequency(reader, core, ids::CPU_FREQUENCY_LIMIT))
+        .collect();
+    let reported: Vec<(u64, &MetricCell)> = limits
+        .iter()
+        .filter_map(|cell| Some((frequency_khz(cell)?, cell)))
+        .collect();
+    let Some((lowest_khz, lowest)) = reported.iter().min_by_key(|(khz, _)| *khz) else {
+        return limits
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| missing_cell(ids::CPU_FREQUENCY_LIMIT));
     };
-    match (entity::cpu_core(cpu), entity::scope_core(cpu)) {
-        (Ok(entity_id), Ok(scope)) => reader.cell(
-            ids::CPU_FREQUENCY_MAXIMUM,
-            entity_id.as_str(),
-            scope.as_str(),
-        ),
-        _ => missing_cell(ids::CPU_FREQUENCY_MAXIMUM),
+    if reported.iter().all(|(khz, _)| khz == lowest_khz) {
+        return (*lowest).clone();
+    }
+    MetricCell {
+        kind: SampleKind::Derived,
+        source_label: Some(format!("lowest of {} cores", reported.len())),
+        conflict: None,
+        last_good: None,
+        ..(*lowest).clone()
     }
 }
 
-/// A maximum frequency in whole kHz (the unit cpufreq reports), so cores
-/// of one kind group exactly; `None` without a value.
-fn maximum_khz(maximum: &MetricCell) -> Option<u64> {
-    let mhz = maximum.value_f64().filter(|_| maximum.state.has_value())?;
+/// A cpufreq figure of one logical CPU (its maximum or its limit).
+fn core_frequency(reader: &MetricReader<'_>, core: &CoreView, metric: &str) -> MetricCell {
+    let Some(cpu) = core.core_id.parse::<u32>().ok() else {
+        return missing_cell(metric);
+    };
+    match (entity::cpu_core(cpu), entity::scope_core(cpu)) {
+        (Ok(entity_id), Ok(scope)) => reader.cell(metric, entity_id.as_str(), scope.as_str()),
+        _ => missing_cell(metric),
+    }
+}
+
+/// A frequency in whole kHz (the unit cpufreq reports), so cores of one
+/// kind group exactly and limits compare exactly; `None` without a value.
+fn frequency_khz(frequency: &MetricCell) -> Option<u64> {
+    let mhz = frequency
+        .value_f64()
+        .filter(|_| frequency.state.has_value())?;
     // Finite, non-negative and far below u64::MAX for any real clock.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let khz = (mhz * 1000.0).round().max(0.0) as u64;
@@ -264,14 +297,67 @@ fn mean_frequency(cores: &[&CoreView]) -> MetricCell {
     }
 }
 
+/// The CPU's temperature rows and the cluster the first of them comes from.
+struct CpuTemperatures {
+    rows: Vec<LabeledCell>,
+    /// [`CpuView::hottest_cluster`].
+    hottest_cluster: Option<String>,
+}
+
 /// Package temperatures first, then the cluster sensors a package's may be
-/// derived from (GB10, D-68).
-fn temperature_rows(reader: &MetricReader<'_>) -> Vec<LabeledCell> {
-    [ids::CPU_TEMPERATURE_PACKAGE, ids::CPU_TEMPERATURE_CLUSTER]
-        .iter()
-        .flat_map(|metric| labeled_rows(reader, metric))
-        .take(MAX_LABELED_ROWS)
-        .collect()
+/// derived from (GB10, D-68). A package derived from its clusters names
+/// the hottest of them as its source (D-137), so the row says which
+/// cluster its temperature is.
+fn temperature_rows(reader: &MetricReader<'_>) -> CpuTemperatures {
+    let clusters = labeled_entries(reader, ids::CPU_TEMPERATURE_CLUSTER);
+    let mut hottest_cluster = None;
+    let mut rows: Vec<LabeledCell> = labeled_entries(reader, ids::CPU_TEMPERATURE_PACKAGE)
+        .into_iter()
+        .enumerate()
+        .map(|(position, (package, mut row))| {
+            if let Some((cluster, hottest)) = hottest_of(package, &row.cell, &clusters) {
+                row.cell.source_label = hottest.cell.source_label.clone();
+                if position == 0 {
+                    // Its own package is the CPU line's: the scope names it.
+                    hottest_cluster = Some(humanize_scope(cluster.sample.key.scope.as_str()));
+                }
+            }
+            row
+        })
+        .collect();
+    rows.extend(clusters.into_iter().map(|(_, row)| row));
+    rows.truncate(MAX_LABELED_ROWS);
+    CpuTemperatures {
+        rows,
+        hottest_cluster,
+    }
+}
+
+/// The hottest cluster of `package`, whose temperature `cell` is, when the
+/// package is derived from its clusters and has a value: the first in
+/// display order among equals. A package a sensor of its own reports has
+/// none.
+fn hottest_of<'r, 'a>(
+    package: &SnapshotEntry,
+    cell: &MetricCell,
+    clusters: &'r [(&'a SnapshotEntry, LabeledCell)],
+) -> Option<(&'a SnapshotEntry, &'r LabeledCell)> {
+    if cell.kind != SampleKind::Derived || cell.value_f64().is_none() {
+        return None;
+    }
+    let mut hottest: Option<(f64, &'a SnapshotEntry, &'r LabeledCell)> = None;
+    for (entry, row) in clusters {
+        if entry.sample.key.entity_id != package.sample.key.entity_id {
+            continue;
+        }
+        let Some(celsius) = row.cell.value_f64() else {
+            continue;
+        };
+        if hottest.is_none_or(|(highest, _, _)| celsius > highest) {
+            hottest = Some((celsius, *entry, row));
+        }
+    }
+    hottest.map(|(_, entry, row)| (entry, row))
 }
 
 /// The platform's power, then the CPU cluster components a package's may
@@ -287,6 +373,17 @@ fn power_rows(reader: &MetricReader<'_>) -> Vec<LabeledCell> {
 /// One labeled row per reported scope ("package 0", "SoC", "platform"),
 /// ordered by scope kind then numeric id; duplicates name their entity.
 fn labeled_rows(reader: &MetricReader<'_>, metric: &str) -> Vec<LabeledCell> {
+    labeled_entries(reader, metric)
+        .into_iter()
+        .map(|(_, row)| row)
+        .collect()
+}
+
+/// The rows of [`labeled_rows`], each with the entry it is of.
+fn labeled_entries<'a>(
+    reader: &MetricReader<'a>,
+    metric: &str,
+) -> Vec<(&'a SnapshotEntry, LabeledCell)> {
     let mut entries: Vec<_> = reader.index().entries_of_metric(metric).collect();
     entries.sort_by_cached_key(|entry| scope_order(entry));
     let mut scope_counts: BTreeMap<&str, usize> = BTreeMap::new();
@@ -307,10 +404,11 @@ fn labeled_rows(reader: &MetricReader<'_>, metric: &str) -> Vec<LabeledCell> {
             } else {
                 scope_label
             };
-            LabeledCell {
+            let row = LabeledCell {
                 label,
                 cell: reader.cell_of(entry),
-            }
+            };
+            (*entry, row)
         })
         .collect()
 }
@@ -472,6 +570,46 @@ mod tests {
         );
     }
 
+    /// A kind's limit is what its cores' cpufreq policies allow (D-136):
+    /// the reading they share, or the lowest where they differ, a derived
+    /// value that says of how many cores it is the lowest. A driver that
+    /// reports no limit leaves the group without one.
+    #[test]
+    fn a_kinds_limit_is_the_lowest_its_cores_report() {
+        let mut fixture = Fixture::new();
+        for core in 0..4_u32 {
+            let maximum = if core % 2 == 1 { 3900.0 } else { 2808.0 };
+            frequency(
+                &mut fixture,
+                ids::CPU_FREQUENCY_MAXIMUM,
+                core,
+                Some(maximum),
+            );
+            frequency(&mut fixture, ids::CPU_FREQUENCY_CURRENT, core, Some(2000.0));
+        }
+        let unreported = build(&fixture);
+        assert_eq!(unreported.frequencies[0].limit.value, None);
+        assert_eq!(
+            unreported.frequencies[0].limit.state,
+            CellState::Unavailable
+        );
+        for (core, limit) in [(0, 2808.0), (2, 2808.0), (1, 3200.0), (3, 3000.0)] {
+            frequency(&mut fixture, ids::CPU_FREQUENCY_LIMIT, core, Some(limit));
+        }
+        let view = build(&fixture);
+        let efficiency = &view.frequencies[0].limit;
+        assert_eq!(efficiency.value_f64(), Some(2808.0));
+        assert_eq!(efficiency.kind, SampleKind::Measured);
+        let performance = &view.frequencies[1].limit;
+        assert_eq!(performance.value_f64(), Some(3000.0));
+        assert_eq!(performance.kind, SampleKind::Derived);
+        assert_eq!(
+            performance.source_label.as_deref(),
+            Some("lowest of 2 cores")
+        );
+        assert_eq!(view.frequencies[1].maximum.value_f64(), Some(3900.0));
+    }
+
     /// One kind of core (plain x86) is one group; an idle group keeps its
     /// maximum and its first core's cell says why it has no current value.
     #[test]
@@ -532,6 +670,73 @@ mod tests {
                 ("cluster 1p", Some(87.6)),
             ]
         );
+    }
+
+    /// A package whose temperature is derived from its clusters (GB10,
+    /// D-68) names the hottest of them as its source (D-137), the first in
+    /// display order among equals, and the view names that cluster for the
+    /// CPU line. A package a sensor reports itself keeps that sensor, and
+    /// another package's clusters are never taken for its own.
+    #[test]
+    fn a_derived_package_names_its_hottest_cluster() {
+        let cluster = |fixture: &mut Fixture, package: u32, scope: &str, celsius: f64| {
+            fixture.add(
+                "cpu",
+                sample(
+                    "cpu.temperature.cluster",
+                    &format!("cpu.package.{package}"),
+                    scope,
+                )
+                .source(&format!("thermal:acpitz:{package}.{scope}"))
+                .f64(celsius),
+            );
+        };
+        let mut fixture = Fixture::new();
+        for (scope, celsius) in [
+            ("cluster:0e", 74.8),
+            ("cluster:0p", 87.6),
+            ("cluster:1e", 70.0),
+            ("cluster:1p", 87.6),
+        ] {
+            cluster(&mut fixture, 0, scope, celsius);
+        }
+        cluster(&mut fixture, 1, "cluster:0p", 99.0);
+        fixture.add(
+            "cpu",
+            sample("cpu.temperature.package", "cpu.package.0", "package:0")
+                .f64(87.6)
+                .derived(),
+        );
+        let view = build(&fixture);
+        assert_eq!(view.hottest_cluster.as_deref(), Some("cluster 0p"));
+        let package = &view.package_temperatures[0];
+        assert_eq!(package.label, "package 0");
+        let hottest = view
+            .package_temperatures
+            .iter()
+            .find(|row| row.label.starts_with("cluster 0p") && row.cell.value_f64() == Some(87.6))
+            .unwrap();
+        assert!(hottest.cell.source_label.is_some());
+        assert_eq!(package.cell.source_label, hottest.cell.source_label);
+        // A sensor of the package itself is its own source.
+        let mut measured = Fixture::new();
+        cluster(&mut measured, 0, "cluster:0p", 87.6);
+        measured.add(
+            "cpu",
+            sample("cpu.temperature.package", "cpu.package.0", "package:0").f64(87.6),
+        );
+        let view = build(&measured);
+        assert_eq!(view.hottest_cluster, None);
+        // A derived package without a value names none.
+        let mut missing = Fixture::new();
+        cluster(&mut missing, 0, "cluster:0p", 87.6);
+        missing.add(
+            "cpu",
+            sample("cpu.temperature.package", "cpu.package.0", "package:0")
+                .derived()
+                .unavailable(),
+        );
+        assert_eq!(build(&missing).hottest_cluster, None);
     }
 
     #[test]

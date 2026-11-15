@@ -166,6 +166,7 @@ pub(crate) fn cpu_view() -> CpuView {
         cores,
         frequencies: vec![FrequencyGroup {
             maximum: ok(3900.0, CanonicalUnit::MHz),
+            limit: ok(3900.0, CanonicalUnit::MHz),
             current: ok(3000.0, CanonicalUnit::MHz),
             cores: 8,
         }],
@@ -178,6 +179,7 @@ pub(crate) fn cpu_view() -> CpuView {
                 Quality::Usable,
             ),
         }],
+        hottest_cluster: None,
         soc_temperatures: vec![LabeledCell {
             label: "soc".into(),
             cell: conflict(CanonicalUnit::DegC, ("hwmon", 68.0), ("thermal", 42.0)),

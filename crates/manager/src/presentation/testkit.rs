@@ -96,6 +96,12 @@ impl SampleBuilder {
         self.state(SelectionState::Unavailable)
     }
 
+    /// A value a formula computed from other series.
+    pub(crate) fn derived(mut self) -> Self {
+        self.entry.sample.sample_kind = SampleKind::Derived;
+        self
+    }
+
     pub(crate) fn state(mut self, state: SelectionState) -> Self {
         let sample = &mut self.entry.sample;
         sample.selection_state = state;

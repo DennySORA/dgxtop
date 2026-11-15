@@ -110,6 +110,8 @@ pub(crate) enum ProcfsLocator {
     FrequencyCurrent { cpu: u32, current: CurrentFrequency },
     /// `cpuinfo_max_freq` read at discovery (cached per generation), in kHz.
     FrequencyMaximum { khz: u64 },
+    /// `scaling_max_freq` as the latest discovery read it, in kHz (D-136).
+    FrequencyLimit { khz: u64 },
     /// A `/proc/meminfo` field.
     Memory(MemField),
     /// A `/proc/vmstat` counter (D-135).

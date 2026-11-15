@@ -267,6 +267,63 @@ fn the_cached_maximum_is_served_with_each_reads_time_and_never_reread() {
     assert_eq!(maximum.quality, Quality::Verified);
 }
 
+/// The limit the cpufreq policy sets (`scaling_max_freq`, D-136) is read at
+/// every discovery, since it changes while the CPU runs: a read serves the
+/// limit of the latest discovery with its own time, and the CPU keeps its
+/// generation. A driver without the file reports the limit unsupported and
+/// keeps the CPU's other frequencies.
+#[test]
+fn the_frequency_limit_follows_each_discovery() {
+    const LIMIT_PATH: &str = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq";
+    let tree = FakeTree::new("procfs-frequency-limit");
+    standard_procfs(&tree);
+    tree.write(LIMIT_PATH, "3500000\n");
+    let clock = FakeClock::new(DISCOVERY_NS);
+    let mut adapter = procfs_with(&clock, tree.files());
+    let mut parent = ParentCatalog::default();
+    let pages = parent.sync(&mut adapter, ADAPTER);
+    let source = parent.source("procfs:cpu0:scaling_max_freq");
+    assert_eq!(source.raw_kind, RawKind::Static);
+    assert_eq!(source.native_unit.as_str(), "kHz");
+    assert_eq!(
+        source.metric.as_ref().unwrap().metric_id.as_str(),
+        ids::CPU_FREQUENCY_LIMIT
+    );
+    assert!(!parent.sources.contains_key("procfs:cpu1:scaling_max_freq"));
+    assert!(parent.sources.contains_key("procfs:cpu1:cpuinfo_max_freq"));
+    let missing = pages[0]
+        .capabilities
+        .iter()
+        .find(|capability| {
+            capability.capability_id == ids::CPU_FREQUENCY_LIMIT
+                && capability.entity_id.as_ref().map(|id| id.as_str()) == Some("cpu.core.1")
+        })
+        .unwrap();
+    assert_eq!(missing.support, Support::Unsupported);
+    assert_eq!(missing.reason.as_deref(), Some("CPUFREQ_LIMIT_NOT_PRESENT"));
+    let generation = parent.entity("cpu.core.0").generation;
+
+    let limit_of = |adapter: &mut ProcfsAdapter, cycle: u64| {
+        let records = read_group(adapter, "cpu", cycle);
+        let limit = find(&records, ids::CPU_FREQUENCY_LIMIT, "cpu.core.0").clone();
+        (u64_value(&limit), limit.read_started_boot_ns)
+    };
+    clock.advance_ms(1_000);
+    assert_eq!(limit_of(&mut adapter, 1).0, 3_500_000);
+    // The policy is lowered: reads serve the discovered limit until the
+    // next discovery reads the file again.
+    tree.write(LIMIT_PATH, "3000000\n");
+    clock.advance_ms(1_000);
+    assert_eq!(limit_of(&mut adapter, 2).0, 3_500_000);
+    parent.sync(&mut adapter, ADAPTER);
+    clock.advance_ms(1_000);
+    let read_started = clock.now_boot_ns();
+    let (limit, served) = limit_of(&mut adapter, 3);
+    assert_eq!(limit, 3_000_000);
+    assert!(served >= read_started, "served with this read's time");
+    assert_eq!(parent.entity("cpu.core.0").generation, generation);
+}
+
 #[test]
 fn missing_columns_are_unsupported_and_garbage_is_an_error() {
     let tree = FakeTree::new("procfs-columns");

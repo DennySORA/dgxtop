@@ -151,6 +151,48 @@ fn cpu_pressure_averages_pass_through() {
     );
 }
 
+/// A core's cpufreq limit (D-136) passes through beside its maximum, in
+/// MHz from the kernel's kHz, and neither is kept as history.
+#[test]
+fn the_frequency_limit_passes_through_in_megahertz() {
+    let collector = CpuCollector::new().unwrap();
+    let key = |metric: &str| metric_key("cpu.core.3", metric, "core:3");
+    let kilohertz = |metric: &str, channel: &str, khz: u64| {
+        reading(
+            &key(metric),
+            "procfs",
+            &format!("procfs:cpu3:{channel}"),
+            SECOND,
+        )
+        .unit(native::KHZ)
+        .u64(khz)
+        .build()
+    };
+    let batch = collect(
+        &collector,
+        &PlanBuilder::new("cpu")
+            .at(SECOND + 1)
+            .batch(
+                "procfs",
+                "cpu",
+                vec![
+                    kilohertz(ids::CPU_FREQUENCY_MAXIMUM, "cpuinfo_max_freq", 3_900_000),
+                    kilohertz(ids::CPU_FREQUENCY_LIMIT, "scaling_max_freq", 3_000_000),
+                ],
+            )
+            .build(),
+    );
+    let limit = value_of(&batch, &key(ids::CPU_FREQUENCY_LIMIT)).unwrap();
+    assert_eq!(limit.value.map(|value| value.to_f64_lossy()), Some(3000.0));
+    assert_eq!(limit.unit, CanonicalUnit::MHz);
+    assert_eq!(limit.selection_state, SelectionState::Selected);
+    assert!(!limit.eligible_for_history);
+    assert_eq!(
+        number(&batch, &key(ids::CPU_FREQUENCY_MAXIMUM)),
+        Some(3900.0)
+    );
+}
+
 #[test]
 fn per_core_identity_comes_from_the_entity_not_record_order() {
     let mut first = stat_line(Some(0), [0, 0, 0, 0, 0, 0, 0, 0], SECOND);

@@ -1,9 +1,11 @@
 //! `cpu` read group: `/proc/stat` time counters for the aggregate line and
 //! every logical CPU (identified by its `cpuN` label, never by line order),
-//! `/proc/loadavg`, the CPU's pressure averages (D-135) and cpufreq. `cpuinfo_max_freq` is static metadata read
-//! at discovery and cached per CPU generation, then served with each read's
-//! time; a missing or denied cpufreq is re-probed at most once per re-probe
-//! interval. The current frequency is `cpuinfo_avg_freq` where the kernel
+//! `/proc/loadavg`, the CPU's pressure averages (D-135) and cpufreq.
+//! `cpuinfo_max_freq` is static metadata read at discovery and cached per
+//! CPU generation, then served with each read's time; `scaling_max_freq`,
+//! the limit the policy sets, is read at every discovery, since it can
+//! change while the CPU runs, and served the same way (D-136). A missing or
+//! denied cpufreq is re-probed at most once per re-probe interval. The current frequency is `cpuinfo_avg_freq` where the kernel
 //! offers it, else `scaling_cur_freq` (D-67).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -44,6 +46,10 @@ const CURRENT_FREQUENCY_NOTE: &str = "SCALING_CUR_FREQ_DRIVER_DEFINED";
 /// its hardware counters.
 const AVERAGE_FREQUENCY_NOTE: &str = "CPUINFO_AVG_FREQ_COUNTERS";
 const CPU_NOT_ONLINE: &str = "CPU_NOT_ONLINE";
+/// What the hardware can run at: static for a CPU's lifetime.
+const MAXIMUM_FILE: &str = "cpuinfo_max_freq";
+/// What the cpufreq policy lets the CPU run at now (D-136).
+const LIMIT_FILE: &str = "scaling_max_freq";
 
 fn cpufreq_path(cpu: u32, file: &str) -> String {
     format!("/sys/devices/system/cpu/cpu{cpu}/cpufreq/{file}")
@@ -150,8 +156,22 @@ impl CpufreqProber<'_> {
         }
     }
 
+    /// The policy's upper limit (D-136), read at every discovery: unlike
+    /// the hardware maximum it changes while the CPU runs (`cpupower`, a
+    /// power profile, a thermal daemon). The reason when the driver offers
+    /// none or it cannot be read.
+    fn limit_khz(&self, cpu: u32) -> Result<u64, String> {
+        match self.files.read_to_string(&cpufreq_path(cpu, LIMIT_FILE)) {
+            Ok(text) => parse_u64(&text).ok_or_else(|| "CPUFREQ_LIMIT_UNPARSABLE".to_owned()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                Err("CPUFREQ_LIMIT_NOT_PRESENT".to_owned())
+            }
+            Err(error) => Err(io_failure(&error).1),
+        }
+    }
+
     fn probe(&self, cpu: u32, generation: u32) -> CpufreqState {
-        let path = cpufreq_path(cpu, "cpuinfo_max_freq");
+        let path = cpufreq_path(cpu, MAXIMUM_FILE);
         let read = timed(self.clock, || self.files.read_to_string(&path));
         let unsupported = |status: ReadStatus, reason: String| CpufreqState::Unsupported {
             generation,
@@ -265,18 +285,35 @@ fn add_core(
             current,
             ..
         } => {
+            let limit = prober.limit_khz(cpu);
+            if let Err(reason) = &limit {
+                builder.capability(core_capability(
+                    ids::CPU_FREQUENCY_LIMIT,
+                    &entity_id,
+                    Support::Unsupported,
+                    reason,
+                ));
+            }
+            let frequencies = CoreFrequencies {
+                current: *current,
+                maximum_khz: *maximum_khz,
+                limit_khz: limit.ok(),
+            };
             sources.extend(frequency_sources(
                 builder,
                 keys,
                 &entity_id,
                 &scope,
-                cpu,
-                (*current, *maximum_khz),
+                (cpu, frequencies),
             ));
             true
         }
         CpufreqState::Unsupported { reason, .. } => {
-            for metric in [ids::CPU_FREQUENCY_CURRENT, ids::CPU_FREQUENCY_MAXIMUM] {
+            for metric in [
+                ids::CPU_FREQUENCY_CURRENT,
+                ids::CPU_FREQUENCY_MAXIMUM,
+                ids::CPU_FREQUENCY_LIMIT,
+            ] {
                 builder.capability(core_capability(
                     metric,
                     &entity_id,
@@ -349,16 +386,27 @@ fn stat_sources(
         .collect()
 }
 
+/// What discovery found of one CPU's cpufreq.
+#[derive(Debug, Clone, Copy)]
+struct CoreFrequencies {
+    current: CurrentFrequency,
+    /// `cpuinfo_max_freq`: what the hardware can run at.
+    maximum_khz: u64,
+    /// `scaling_max_freq`: what the policy lets it run at now (D-136);
+    /// `None` where it cannot be read.
+    limit_khz: Option<u64>,
+}
+
 fn frequency_sources(
     builder: &SnapshotBuilder<'_, ProcfsLocator>,
     keys: &KeyContext,
     entity_id: &EntityId,
     scope: &Scope,
-    cpu: u32,
-    (current, maximum_khz): (CurrentFrequency, u64),
+    (cpu, frequencies): (u32, CoreFrequencies),
 ) -> Vec<SourceDraft<ProcfsLocator>> {
     let device = format!("cpu{cpu}");
-    let channels = [
+    let current = frequencies.current;
+    let mut channels = vec![
         (
             current.file(),
             ids::CPU_FREQUENCY_CURRENT,
@@ -366,12 +414,22 @@ fn frequency_sources(
             ProcfsLocator::FrequencyCurrent { cpu, current },
         ),
         (
-            "cpuinfo_max_freq",
+            MAXIMUM_FILE,
             ids::CPU_FREQUENCY_MAXIMUM,
             RawKind::Static,
-            ProcfsLocator::FrequencyMaximum { khz: maximum_khz },
+            ProcfsLocator::FrequencyMaximum {
+                khz: frequencies.maximum_khz,
+            },
         ),
     ];
+    if let Some(khz) = frequencies.limit_khz {
+        channels.push((
+            LIMIT_FILE,
+            ids::CPU_FREQUENCY_LIMIT,
+            RawKind::Static,
+            ProcfsLocator::FrequencyLimit { khz },
+        ));
+    }
     channels
         .into_iter()
         .filter_map(|(channel, metric_id, raw_kind, locator)| {
@@ -524,7 +582,9 @@ impl SharedCpuFiles {
             ProcfsLocator::FrequencyCurrent { cpu, current } => {
                 current_frequency_record(context, descriptor, (*cpu, *current), gate)
             }
-            ProcfsLocator::FrequencyMaximum { khz } => static_record(context, descriptor, *khz),
+            ProcfsLocator::FrequencyMaximum { khz } | ProcfsLocator::FrequencyLimit { khz } => {
+                static_record(context, descriptor, *khz)
+            }
             ProcfsLocator::Pressure { .. } => self.pressure.record(context.plan, source),
             ProcfsLocator::Memory(_) | ProcfsLocator::VmStat(_) | ProcfsLocator::Disk { .. } => {
                 None
