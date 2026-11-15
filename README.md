@@ -275,6 +275,10 @@ of its own, so it runs beside a running dgxtop, starts no process action and lea
 behind. A metric that has no value is printed as `null` with its reasons, never as 0, and command
 lines are left out. For example, `dgxtop --snapshot-json | jq '.processes'`.
 
+The snapshot is not redacted: it names the host, the GPU UUID and PCI ids, mount points, network
+interfaces, and each GPU process with its PID and login name. Remove those fields before you
+paste it anywhere public.
+
 **CPU power and total power:** run dgxtop with `sudo` to read CPU power counters that require
 root access. Linux powercap/RAPL energy counters are usually root-only; without access, CPU
 power and the CPU + GPU total stay hidden even when GPU power is available.
