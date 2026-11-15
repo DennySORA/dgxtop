@@ -23,7 +23,9 @@ use crate::shared::arbitration::{self, Candidate, CatalogMapping, Deadlines};
 use crate::shared::context::{self, CollectorSpec, Record, Route, Session};
 use crate::shared::counter_inputs::{self, Step};
 use crate::shared::formulas::{self, Selections};
-use crate::shared::gpu_processes::{self, GpuProcesses, PROCESS_GPU_METRICS};
+use crate::shared::gpu_processes::{
+    self, GpuProcesses, PROCESS_GPU_METRICS, SAMPLED_PROCESS_GPU_METRICS,
+};
 use crate::shared::reasons;
 use crate::shared::values::{self, Evidence};
 
@@ -32,7 +34,7 @@ fn accepts(metric: &MetricDescriptor) -> bool {
 }
 
 fn retains(_route: &Route<'_>, metric: &MetricDescriptor) -> bool {
-    metric.id != ids::PROCESS_GPU_UTILIZATION
+    !SAMPLED_PROCESS_GPU_METRICS.contains(&metric.id)
 }
 
 static SPEC: CollectorSpec = CollectorSpec {

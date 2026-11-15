@@ -140,6 +140,8 @@ pub(crate) fn build_processes_view(
         .iter()
         .map(|row| row_view(row, names))
         .collect();
+    let shown_gpu = gpu_filter.as_ref().map(|(gpu, _)| gpu);
+    let video_engines_busy = ordered.iter().any(|row| uses_video_engines(row, shown_gpu));
     ProcessesView {
         rows,
         window_start: u32::try_from(window.start).unwrap_or(u32::MAX),
@@ -157,7 +159,20 @@ pub(crate) fn build_processes_view(
             .as_ref()
             .filter(|key| !table.rows.iter().any(|row| &row.key == *key))
             .cloned(),
+        video_engines_busy,
     }
+}
+
+/// Whether the process is encoding or decoding video (D-139) on a GPU the
+/// table lists it for: the one of the GPU filter, else any of its GPUs. A
+/// share of 0 % or one the driver did not sample is no use of the engine.
+fn uses_video_engines(row: &ProcessRow, shown_gpu: Option<&EntityId>) -> bool {
+    row.gpu
+        .iter()
+        .filter(|link| shown_gpu.is_none_or(|gpu| &link.gpu_entity_id == gpu))
+        .flat_map(|link| [link.encoder_percent, link.decoder_percent])
+        .filter_map(finite)
+        .any(|share| share > 0.0)
 }
 
 /// The session's selected entity filters by GPU only when it names a GPU.
@@ -285,6 +300,8 @@ fn row_view(row: &ProcessRow, names: &RowNames<'_>) -> ProcessRowView {
                 gpu_label: directory.label_of(&link.gpu_entity_id),
                 usage: link.usage,
                 utilization_percent: finite(link.utilization_percent),
+                encoder_percent: finite(link.encoder_percent),
+                decoder_percent: finite(link.decoder_percent),
                 memory_bytes: link.memory_bytes,
             })
             .collect(),
@@ -407,6 +424,90 @@ mod tests {
                 pair("train", "alice")
             ]
         );
+    }
+
+    /// A row of one process with a link per `(gpu, encoder, decoder)`.
+    fn video_row(pid: i64, name: &str, links: &[(&str, Option<f64>, Option<f64>)]) -> ProcessRow {
+        let mut row = process_row(pid, name);
+        row.gpu = links
+            .iter()
+            .map(|(gpu, encoder, decoder)| {
+                let mut link = gpu_link(gpu, Some(50.0), Some(1 << 30));
+                link.encoder_percent = *encoder;
+                link.decoder_percent = *decoder;
+                link
+            })
+            .collect();
+        row
+    }
+
+    /// The video encoder's and decoder's shares travel with each GPU of a
+    /// row (D-139), and the view says whether a listed process uses those
+    /// engines: 0 %, an unread share and one that is no number say nothing.
+    #[test]
+    fn video_shares_travel_and_tell_when_an_engine_is_busy() {
+        let mut fixture = with_gpus();
+        fixture.set_processes(vec![
+            video_row(1, "train", &[(GPU_A, Some(0.0), Some(0.0))]),
+            video_row(2, "serve", &[(GPU_B, None, None)]),
+            video_row(3, "odd", &[(GPU_B, Some(f64::NAN), None)]),
+        ]);
+        let idle = build(&fixture, 10);
+        assert!(!idle.video_engines_busy);
+        let train = idle.rows.iter().find(|row| row.name == "train").unwrap();
+        assert_eq!(train.gpus[0].encoder_percent, Some(0.0), "0 % is read");
+        let odd = idle.rows.iter().find(|row| row.name == "odd").unwrap();
+        assert_eq!(odd.gpus[0].encoder_percent, None, "not a number: unread");
+
+        fixture.set_processes(vec![
+            video_row(1, "train", &[(GPU_A, Some(0.0), Some(0.0))]),
+            video_row(2, "transcode", &[(GPU_B, Some(35.0), Some(12.0))]),
+        ]);
+        let busy = build(&fixture, 10);
+        assert!(busy.video_engines_busy);
+        let transcode = busy
+            .rows
+            .iter()
+            .find(|row| row.name == "transcode")
+            .unwrap();
+        assert_eq!(transcode.gpus[0].encoder_percent, Some(35.0));
+        assert_eq!(transcode.gpus[0].decoder_percent, Some(12.0));
+        // A decoder alone is a busy engine too.
+        fixture.set_processes(vec![video_row(4, "player", &[(GPU_A, None, Some(3.0))])]);
+        assert!(build(&fixture, 10).video_engines_busy);
+    }
+
+    /// The busy engines are those of the processes and GPUs the table
+    /// lists: a filter that leaves the transcoding process or its GPU out
+    /// leaves the shares out, while the window does not (scrolling never
+    /// changes the table's columns).
+    #[test]
+    fn busy_video_engines_follow_the_filters_not_the_window() {
+        let mut fixture = with_gpus();
+        let mut rows = numbered_rows(30);
+        // On both GPUs, decoding on GPU B only.
+        rows.push(video_row(
+            99,
+            "transcode",
+            &[(GPU_A, Some(0.0), Some(0.0)), (GPU_B, None, Some(20.0))],
+        ));
+        fixture.set_processes(rows);
+        fixture.session.sort = SortKey::Pid;
+        fixture.session.ascending = true;
+        let windowed = build(&fixture, 2);
+        assert!(!windowed.rows.iter().any(|row| row.name == "transcode"));
+        assert!(windowed.video_engines_busy, "outside the window, listed");
+
+        fixture.session.selected_entity_id = Some(EntityId::new(GPU_A).unwrap());
+        let on_a = build(&fixture, 40);
+        assert!(on_a.rows.iter().any(|row| row.name == "transcode"));
+        assert!(!on_a.video_engines_busy, "it decodes on the other GPU");
+        fixture.session.selected_entity_id = Some(EntityId::new(GPU_B).unwrap());
+        assert!(build(&fixture, 40).video_engines_busy);
+
+        fixture.session.selected_entity_id = None;
+        fixture.session.filter = "worker".to_owned();
+        assert!(!build(&fixture, 40).video_engines_busy, "filtered out");
     }
 
     /// GPU processes (each has one association with GPU A).

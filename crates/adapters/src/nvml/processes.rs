@@ -9,6 +9,13 @@
 //! * `process.gpu.utilization` (percent): the newest SM sample since the last
 //!   seen driver timestamp of that GPU; no record when the driver had no new
 //!   sample for the PID, an `unsupported` record when the GPU cannot sample.
+//! * `process.gpu.encoder` and `process.gpu.decoder` (percent, D-139): the
+//!   video encoder's and decoder's share in that same sample, so they come
+//!   and go with the utilization. A failed query is told once, by the
+//!   utilization's record.
+//!
+//! A share above 100 % is a failed record (`NVML_PROCESS_SHARE_OUT_OF_RANGE`),
+//! never a figure: the driver has answered inconsistent samples.
 //!
 //! The usage kind travels as reason code `gpu_usage:<kind>` so the process
 //! collector can fill `ProcessGpuLink::usage` without a second source.
@@ -25,7 +32,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::identity::{BootId, EntityId, HostId, MetricId, MetricKey};
-use dgxtop_core::metric::{Scalar, ids};
+use dgxtop_core::metric::Scalar;
 use dgxtop_core::naming;
 use dgxtop_core::observation::{Observation, ReadPlan};
 use dgxtop_core::quality::{Quality, ReadStatus};
@@ -46,6 +53,30 @@ pub const MAX_PROCESSES_PER_GPU: usize = 1024;
 /// report (D-119).
 pub(super) const COMPUTE_LIST_KEY: &str = "process.compute";
 const GRAPHICS_LIST_KEY: &str = "process.graphics";
+/// The channels the process group serves.
+const PROCESS_CHANNELS: [Channel; 5] = [
+    Channel::ProcessMemory,
+    Channel::ProcessUtilization,
+    Channel::ProcessEncoder,
+    Channel::ProcessDecoder,
+    Channel::ProcessMemoryTotal,
+];
+/// One of a sample's shares, in percent.
+type SampleShare = fn(&ProcessUtilizationSample) -> u32;
+/// The channels one utilization sample answers and the share each reads
+/// (D-139).
+const SAMPLED_CHANNELS: [(Channel, SampleShare); 3] = [
+    (Channel::ProcessUtilization, |sample| sample.sm_percent),
+    (Channel::ProcessEncoder, |sample| sample.encoder_percent),
+    (Channel::ProcessDecoder, |sample| sample.decoder_percent),
+];
+/// The whole sample period. The driver has answered inconsistent samples
+/// with shares above it, which nvtop drops as well.
+const FULL_SHARE_PERCENT: u32 = 100;
+const SHARE_OUT_OF_RANGE: &str = "NVML_PROCESS_SHARE_OUT_OF_RANGE";
+
+/// The newest utilization sample of each PID of one GPU.
+pub type LatestSamples = BTreeMap<u32, ProcessUtilizationSample>;
 
 /// How a process uses one GPU.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,25 +167,36 @@ fn larger(left: Option<u64>, right: Option<u64>) -> Option<u64> {
     }
 }
 
-/// Newest sample per PID plus the newest timestamp seen.
-pub fn latest_samples(samples: &[ProcessUtilizationSample]) -> (BTreeMap<u32, u32>, Option<u64>) {
-    let mut newest: BTreeMap<u32, (u64, u32)> = BTreeMap::new();
+/// The newest sample of each PID plus the newest timestamp seen.
+pub fn latest_samples(samples: &[ProcessUtilizationSample]) -> (LatestSamples, Option<u64>) {
+    let mut newest = LatestSamples::new();
     for sample in samples {
-        let entry = newest
-            .entry(sample.pid)
-            .or_insert((sample.timestamp_us, sample.sm_percent));
-        if sample.timestamp_us >= entry.0 {
-            *entry = (sample.timestamp_us, sample.sm_percent);
+        let entry = newest.entry(sample.pid).or_insert(*sample);
+        if sample.timestamp_us >= entry.timestamp_us {
+            *entry = *sample;
         }
     }
     let max_timestamp = samples.iter().map(|sample| sample.timestamp_us).max();
-    (
-        newest
-            .into_iter()
-            .map(|(pid, (_, percent))| (pid, percent))
-            .collect(),
-        max_timestamp,
-    )
+    (newest, max_timestamp)
+}
+
+/// What each sampled channel reads of `sample`.
+fn sampled_shares(
+    sample: &ProcessUtilizationSample,
+) -> impl Iterator<Item = (Channel, Result<u64, (String, ReadStatus)>)> + '_ {
+    SAMPLED_CHANNELS
+        .into_iter()
+        .map(move |(channel, share)| (channel, share_of(share(sample))))
+}
+
+/// A sampled share as a record's value; one above 100 % is a failed read,
+/// never a figure.
+fn share_of(percent: u32) -> Result<u64, (String, ReadStatus)> {
+    if percent <= FULL_SHARE_PERCENT {
+        Ok(u64::from(percent))
+    } else {
+        Err((SHARE_OUT_OF_RANGE.to_owned(), ReadStatus::Error))
+    }
 }
 
 /// Per-GPU utilization windows (driver timestamps) across cycles.
@@ -287,9 +329,9 @@ impl ProcessSampler {
         uuid: &str,
         read: &mut ProcessRead<'_>,
         merged: &MergedProcesses,
-    ) -> BackendResult<BTreeMap<u32, u32>> {
+    ) -> BackendResult<LatestSamples> {
         if merged.associations.is_empty() {
-            return Ok(BTreeMap::new());
+            return Ok(LatestSamples::new());
         }
         let query_key = Channel::ProcessUtilization.query_key();
         let now = read.clock.now_boot_ns();
@@ -312,14 +354,10 @@ fn wants_device(read: &ProcessRead<'_>, uuid: &str) -> bool {
     if read.requested_slots.is_empty() {
         return true;
     }
-    [
-        Channel::ProcessMemory,
-        Channel::ProcessUtilization,
-        Channel::ProcessMemoryTotal,
-    ]
-    .into_iter()
-    .filter_map(|channel| read.published.get(uuid, channel))
-    .any(|descriptor| read.requested_slots.contains(&descriptor.slot))
+    PROCESS_CHANNELS
+        .into_iter()
+        .filter_map(|channel| read.published.get(uuid, channel))
+        .any(|descriptor| read.requested_slots.contains(&descriptor.slot))
 }
 
 fn list(
@@ -363,47 +401,37 @@ fn association_records(
     read: &ProcessRead<'_>,
     uuid: &str,
     association: &Association,
-    utilization: &BackendResult<BTreeMap<u32, u32>>,
-    (started, finished): (u64, u64),
+    utilization: &BackendResult<LatestSamples>,
+    timing: (u64, u64),
 ) -> Vec<Observation> {
-    let mut records = Vec::with_capacity(2);
     let usage = association.usage.reason_code().to_owned();
+    let record = |channel: Channel, value: Result<u64, (String, ReadStatus)>| {
+        process_record(read, uuid, association.pid, channel, value, &usage, timing)
+    };
     let memory = association.memory_bytes.ok_or_else(|| {
         (
             "NVML_PROCESS_MEMORY_UNAVAILABLE".to_owned(),
             ReadStatus::Unsupported,
         )
     });
-    if let Some(record) = process_record(
-        read,
-        uuid,
-        association.pid,
-        Channel::ProcessMemory,
-        memory,
-        &usage,
-        (started, finished),
-    ) {
-        records.push(record);
-    }
-    let sample = match utilization {
-        Ok(latest) => u32::try_from(association.pid)
-            .ok()
-            .and_then(|pid| latest.get(&pid))
-            .map(|percent| Ok(u64::from(*percent))),
-        Err(error) => Some(Err((error.reason_code(), error.read_status()))),
-    };
-    if let Some(sample) = sample
-        && let Some(record) = process_record(
-            read,
-            uuid,
-            association.pid,
+    let mut records = Vec::with_capacity(1 + SAMPLED_CHANNELS.len());
+    records.extend(record(Channel::ProcessMemory, memory));
+    match utilization {
+        Ok(latest) => {
+            // Without a new sample of the PID there is no record, never 0.
+            let sample = u32::try_from(association.pid)
+                .ok()
+                .and_then(|pid| latest.get(&pid));
+            for (channel, share) in sample.into_iter().flat_map(sampled_shares) {
+                records.extend(record(channel, share));
+            }
+        }
+        // The one query failed: its reason travels once, as the
+        // utilization's.
+        Err(error) => records.extend(record(
             Channel::ProcessUtilization,
-            sample,
-            &usage,
-            (started, finished),
-        )
-    {
-        records.push(record);
+            Err((error.reason_code(), error.read_status())),
+        )),
     }
     records
 }
@@ -491,15 +519,11 @@ fn process_key(
     channel: Channel,
 ) -> Result<MetricKey, dgxtop_core::identity::IdentityError> {
     let entity: EntityId = naming::entity::gpu_pid(uuid, pid)?;
-    let metric_id = match channel {
-        Channel::ProcessUtilization => ids::PROCESS_GPU_UTILIZATION,
-        _ => ids::PROCESS_GPU_MEMORY,
-    };
     Ok(MetricKey::new(
         read.host_id.clone(),
         read.boot_id.clone(),
         entity,
-        MetricId::new(metric_id)?,
+        MetricId::new(channel.metric_id())?,
         channel.scope(uuid)?,
     ))
 }
@@ -527,29 +551,56 @@ mod tests {
         assert_eq!(merged.associations[0].pid, 1);
     }
 
+    fn sample(pid: u32, timestamp_us: u64, shares: [u32; 3]) -> ProcessUtilizationSample {
+        let [sm_percent, encoder_percent, decoder_percent] = shares;
+        ProcessUtilizationSample {
+            pid,
+            timestamp_us,
+            sm_percent,
+            encoder_percent,
+            decoder_percent,
+        }
+    }
+
+    /// The newest sample of a PID is taken whole: its encoder and decoder
+    /// shares never come from an older sample than its utilization.
     #[test]
     fn newest_sample_per_pid_wins() {
         let samples = [
-            ProcessUtilizationSample {
-                pid: 1,
-                timestamp_us: 10,
-                sm_percent: 5,
-            },
-            ProcessUtilizationSample {
-                pid: 1,
-                timestamp_us: 30,
-                sm_percent: 50,
-            },
-            ProcessUtilizationSample {
-                pid: 2,
-                timestamp_us: 20,
-                sm_percent: 7,
-            },
+            sample(1, 10, [5, 90, 80]),
+            sample(1, 30, [50, 12, 0]),
+            sample(2, 20, [7, 0, 33]),
         ];
         let (latest, newest) = latest_samples(&samples);
-        assert_eq!(latest.get(&1), Some(&50));
-        assert_eq!(latest.get(&2), Some(&7));
+        assert_eq!(latest.get(&1), Some(&sample(1, 30, [50, 12, 0])));
+        assert_eq!(latest.get(&2), Some(&sample(2, 20, [7, 0, 33])));
         assert_eq!(newest, Some(30));
-        assert_eq!(latest_samples(&[]), (BTreeMap::new(), None));
+        assert_eq!(latest_samples(&[]), (LatestSamples::new(), None));
+    }
+
+    /// One sample answers the three sampled channels, each with its own
+    /// share; a share above the whole period is a failed read of that
+    /// channel only.
+    #[test]
+    fn a_sample_reads_each_channel_and_rejects_impossible_shares() {
+        let shares: Vec<_> = sampled_shares(&sample(1, 10, [100, 12, 0])).collect();
+        assert_eq!(
+            shares,
+            [
+                (Channel::ProcessUtilization, Ok(100)),
+                (Channel::ProcessEncoder, Ok(12)),
+                (Channel::ProcessDecoder, Ok(0)),
+            ]
+        );
+        let out_of_range = || Err((SHARE_OUT_OF_RANGE.to_owned(), ReadStatus::Error));
+        let shares: Vec<_> = sampled_shares(&sample(1, 10, [101, u32::MAX, 7])).collect();
+        assert_eq!(
+            shares,
+            [
+                (Channel::ProcessUtilization, out_of_range()),
+                (Channel::ProcessEncoder, out_of_range()),
+                (Channel::ProcessDecoder, Ok(7)),
+            ]
+        );
     }
 }

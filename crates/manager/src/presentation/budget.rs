@@ -491,6 +491,7 @@ mod tests {
                 selected: Some(test_process_key(130)),
                 selected_index: Some(130),
                 selected_missing: None,
+                video_engines_busy: false,
             })),
             ..ModuleViews::default()
         };

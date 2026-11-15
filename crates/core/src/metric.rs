@@ -893,6 +893,11 @@ pub mod ids {
     pub const PROCESS_RSS: &str = "process.rss";
     pub const PROCESS_GPU_UTILIZATION: &str = "process.gpu.utilization";
     pub const PROCESS_GPU_MEMORY: &str = "process.gpu.memory_allocated";
+    /// The share of a GPU's video encoder one process used over the
+    /// driver's last sample (D-139).
+    pub const PROCESS_GPU_ENCODER: &str = "process.gpu.encoder";
+    /// The share of a GPU's video decoder one process used (D-139).
+    pub const PROCESS_GPU_DECODER: &str = "process.gpu.decoder";
     pub const PROCESS_CPU_TICKS: &str = "process.cpu.ticks";
     /// Numeric owner uid of a process (static metadata record; name lookups
     /// never happen on the hot path).
@@ -2085,6 +2090,24 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         Process,
         false,
         "Process GPU"
+    ),
+    descriptor!(
+        ids::PROCESS_GPU_ENCODER,
+        Percent,
+        Canonical,
+        Gauge,
+        Process,
+        false,
+        "Process GPU encoder"
+    ),
+    descriptor!(
+        ids::PROCESS_GPU_DECODER,
+        Percent,
+        Canonical,
+        Gauge,
+        Process,
+        false,
+        "Process GPU decoder"
     ),
     descriptor!(
         ids::PROCESS_GPU_MEMORY,

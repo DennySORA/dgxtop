@@ -493,6 +493,8 @@ pub(crate) fn processes_view(count: usize, window_start: u32, total_rows: u32) -
                         gpu_label: "GPU 0".into(),
                         usage: GpuUsageKind::Compute,
                         utilization_percent: Some(45.0),
+                        encoder_percent: None,
+                        decoder_percent: None,
                         memory_bytes: Some(10 * 1024 * 1024 * 1024),
                     },
                     ProcessGpuView {
@@ -500,6 +502,8 @@ pub(crate) fn processes_view(count: usize, window_start: u32, total_rows: u32) -
                         gpu_label: "GPU 1".into(),
                         usage: GpuUsageKind::ComputeAndGraphics,
                         utilization_percent: None,
+                        encoder_percent: None,
+                        decoder_percent: None,
                         memory_bytes: Some(2 * 1024 * 1024 * 1024),
                     },
                 ]
@@ -509,6 +513,8 @@ pub(crate) fn processes_view(count: usize, window_start: u32, total_rows: u32) -
                     gpu_label: "GPU 0".into(),
                     usage: GpuUsageKind::Graphics,
                     utilization_percent: Some(5.0),
+                    encoder_percent: None,
+                    decoder_percent: None,
                     memory_bytes: Some(512 * 1024 * 1024),
                 }]
             };
@@ -536,6 +542,7 @@ pub(crate) fn processes_view(count: usize, window_start: u32, total_rows: u32) -
     let selected = rows.first().map(|row| row.key.clone());
     ProcessesView {
         selected_missing: None,
+        video_engines_busy: false,
         rows,
         window_start,
         total_rows,

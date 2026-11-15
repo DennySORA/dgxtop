@@ -70,6 +70,11 @@ pub enum Channel {
     FramebufferReserved,
     ProcessMemory,
     ProcessUtilization,
+    /// The share of the video encoder one process used, read from the
+    /// sample that carries its utilization (D-139).
+    ProcessEncoder,
+    /// The same of the video decoder.
+    ProcessDecoder,
     /// What the GPU's processes hold together, read only when its process
     /// lists, both read, name none: 0 bytes. Otherwise the collector sums
     /// the listed processes (D-119).
@@ -193,6 +198,9 @@ impl Channel {
             Self::ProcessMemory,
             Self::ProcessUtilization,
             Self::ProcessMemoryTotal,
+            // Last, so the channels before them keep their slots.
+            Self::ProcessEncoder,
+            Self::ProcessDecoder,
         ]);
         channels
     }
@@ -228,6 +236,8 @@ impl Channel {
             Self::FramebufferReserved => "memory.framebuffer.reserved".to_owned(),
             Self::ProcessMemory => "process.memory_allocated".to_owned(),
             Self::ProcessUtilization => "process.utilization".to_owned(),
+            Self::ProcessEncoder => "process.encoder".to_owned(),
+            Self::ProcessDecoder => "process.decoder".to_owned(),
             Self::ProcessMemoryTotal => "memory.process_allocated".to_owned(),
             Self::PerformanceState => "performance_state".to_owned(),
             Self::ThrottleReasons => "throttle_reasons".to_owned(),
@@ -265,6 +275,8 @@ impl Channel {
             Self::ProcessMemory | Self::ProcessMemoryTotal => {
                 super::processes::COMPUTE_LIST_KEY.to_owned()
             }
+            // One sample answers a process's three shares.
+            Self::ProcessEncoder | Self::ProcessDecoder => Self::ProcessUtilization.name(),
             other => other.name(),
         }
     }
@@ -299,6 +311,8 @@ impl Channel {
             Self::FramebufferReserved => ids::GPU_MEMORY_FB_RESERVED,
             Self::ProcessMemory => ids::PROCESS_GPU_MEMORY,
             Self::ProcessUtilization => ids::PROCESS_GPU_UTILIZATION,
+            Self::ProcessEncoder => ids::PROCESS_GPU_ENCODER,
+            Self::ProcessDecoder => ids::PROCESS_GPU_DECODER,
             Self::ProcessMemoryTotal => ids::GPU_MEMORY_PROCESS_ALLOCATED,
             Self::PerformanceState => ids::GPU_PERFORMANCE_STATE,
             Self::ThrottleReasons => ids::GPU_THROTTLE_REASONS,
@@ -327,7 +341,7 @@ impl Channel {
     pub fn scope(self, uuid: &str) -> Result<Scope, IdentityError> {
         let name = match self {
             Self::FanSpeed(fan) => return entity::scope_gpu_fan(fan),
-            Self::ProcessMemory | Self::ProcessUtilization => return entity::scope_gpu_of(uuid),
+            _ if self.is_per_process() => return entity::scope_gpu_of(uuid),
             Self::Ecc(_, scope) => scope.scope().name(),
             Self::MaxClock(domain) => domain.name(),
             Self::MaxPcieLink(link) => link.name(),
@@ -345,7 +359,9 @@ impl Channel {
             | Self::FanSpeed(_)
             | Self::EncoderUtilization
             | Self::DecoderUtilization
-            | Self::ProcessUtilization => native::PERCENT,
+            | Self::ProcessUtilization
+            | Self::ProcessEncoder
+            | Self::ProcessDecoder => native::PERCENT,
             Self::Temperature | Self::TemperatureThreshold(_) => native::DEG_C,
             Self::PowerDraw
             | Self::PowerInstant
@@ -415,9 +431,11 @@ impl Channel {
             | Self::FramebufferReserved
             | Self::Static(_)
             | Self::Health(_) => ChannelGroup::SlowHealth,
-            Self::ProcessMemory | Self::ProcessUtilization | Self::ProcessMemoryTotal => {
-                ChannelGroup::Process
-            }
+            Self::ProcessMemory
+            | Self::ProcessUtilization
+            | Self::ProcessEncoder
+            | Self::ProcessDecoder
+            | Self::ProcessMemoryTotal => ChannelGroup::Process,
             _ => ChannelGroup::Fast,
         }
     }
@@ -425,6 +443,18 @@ impl Channel {
     /// Static values come from the per-generation metadata cache.
     pub const fn is_static_metadata(self) -> bool {
         matches!(self.raw_kind(), RawKind::Static)
+    }
+
+    /// Whether each record names its own process (`gpupid:<UUID>:<PID>`,
+    /// scope `gpu:<UUID>`), so the catalog gives the channel no fixed key.
+    pub const fn is_per_process(self) -> bool {
+        matches!(
+            self,
+            Self::ProcessMemory
+                | Self::ProcessUtilization
+                | Self::ProcessEncoder
+                | Self::ProcessDecoder
+        )
     }
 
     /// Framebuffer channels are meaningless on unified-memory devices.
@@ -513,7 +543,48 @@ mod tests {
         assert_eq!(scope(Channel::MaxClock(ClockDomain::Sm)), "sm");
         assert_eq!(scope(Channel::ProcessMemory), "gpu:GPU-1");
         assert_eq!(scope(Channel::ProcessUtilization), "gpu:GPU-1");
+        assert_eq!(scope(Channel::ProcessEncoder), "gpu:GPU-1");
+        assert_eq!(scope(Channel::ProcessDecoder), "gpu:GPU-1");
         assert_eq!(scope(Channel::Temperature), "gpu");
+    }
+
+    /// One driver sample answers a process's utilization and its encoder
+    /// and decoder shares (D-139), so the three channels share the query's
+    /// capability state; the process memory comes from the lists.
+    #[test]
+    fn the_sampled_process_channels_share_one_query() {
+        let sampled = [
+            Channel::ProcessUtilization,
+            Channel::ProcessEncoder,
+            Channel::ProcessDecoder,
+        ];
+        for channel in sampled {
+            assert_eq!(channel.query_key(), "process.utilization", "{channel:?}");
+            assert_eq!(channel.group(), ChannelGroup::Process, "{channel:?}");
+            assert_eq!(channel.native_unit(), native::PERCENT, "{channel:?}");
+            assert!(channel.is_per_process(), "{channel:?}");
+        }
+        assert_eq!(
+            Channel::ProcessEncoder.metric_id(),
+            ids::PROCESS_GPU_ENCODER
+        );
+        assert_eq!(
+            Channel::ProcessDecoder.metric_id(),
+            ids::PROCESS_GPU_DECODER
+        );
+        assert!(Channel::ProcessMemory.is_per_process());
+        assert_ne!(
+            Channel::ProcessMemory.query_key(),
+            Channel::ProcessUtilization.query_key()
+        );
+        // The GPU's own total names the GPU, not a process.
+        assert!(!Channel::ProcessMemoryTotal.is_per_process());
+        // Appended, so every earlier channel keeps its place.
+        let channels = Channel::device_channels(1);
+        assert_eq!(
+            channels[channels.len() - 2..],
+            [Channel::ProcessEncoder, Channel::ProcessDecoder]
+        );
     }
 
     #[test]

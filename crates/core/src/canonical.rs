@@ -314,6 +314,13 @@ pub struct ProcessGpuLink {
     pub gpu_entity_id: EntityId,
     pub usage: GpuUsageKind,
     pub utilization_percent: Option<f64>,
+    /// The share of the GPU's video encoder the process used over the
+    /// driver's last sample (D-139); `None` while the driver sampled none.
+    #[serde(default)]
+    pub encoder_percent: Option<f64>,
+    /// The same of the GPU's video decoder.
+    #[serde(default)]
+    pub decoder_percent: Option<f64>,
     pub memory_bytes: Option<u64>,
 }
 

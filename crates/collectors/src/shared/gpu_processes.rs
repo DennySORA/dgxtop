@@ -3,8 +3,10 @@
 //!
 //! Adapter convention: key `gpupid:<UUID>:<PID>` with scope `gpu:<UUID>`,
 //! metrics `process.gpu.memory_allocated` (bytes; `unsupported` when the
-//! figure is unavailable) and `process.gpu.utilization` (percent; absent when
-//! not sampled), one catalog source per GPU and metric without a fixed key,
+//! figure is unavailable), `process.gpu.utilization` and, read from the same
+//! driver sample, `process.gpu.encoder` and `process.gpu.decoder` (percent;
+//! absent when not sampled), one catalog source per GPU and metric without a
+//! fixed key,
 //! and the list membership as a `gpu_usage:*` reason code (compute and
 //! graphics of one PID on one GPU already merged into one association).
 //!
@@ -23,19 +25,48 @@ use crate::shared::output::Subject;
 use crate::shared::reasons;
 
 /// Process metrics NVML reports per `(GPU, PID)`.
-pub(crate) const PROCESS_GPU_METRICS: [&str; 2] =
-    [ids::PROCESS_GPU_MEMORY, ids::PROCESS_GPU_UTILIZATION];
+pub(crate) const PROCESS_GPU_METRICS: [&str; 4] = [
+    ids::PROCESS_GPU_MEMORY,
+    ids::PROCESS_GPU_UTILIZATION,
+    ids::PROCESS_GPU_ENCODER,
+    ids::PROCESS_GPU_DECODER,
+];
+/// Those the driver samples (D-139): a list whose window held no new
+/// sample of a PID has none for it, so one from an older list is never a
+/// process's reading now.
+pub(crate) const SAMPLED_PROCESS_GPU_METRICS: [&str; 3] = [
+    ids::PROCESS_GPU_UTILIZATION,
+    ids::PROCESS_GPU_ENCODER,
+    ids::PROCESS_GPU_DECODER,
+];
 
 /// Records of one PID on one GPU, by metric.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PidRecords<'a> {
     pub memory: Vec<Record<'a>>,
     pub utilization: Vec<Record<'a>>,
+    /// The video encoder's and decoder's shares (D-139).
+    pub encoder: Vec<Record<'a>>,
+    pub decoder: Vec<Record<'a>>,
 }
 
 impl<'a> PidRecords<'a> {
     pub fn all(&self) -> impl Iterator<Item = &Record<'a>> {
-        self.memory.iter().chain(&self.utilization)
+        self.memory
+            .iter()
+            .chain(&self.utilization)
+            .chain(&self.encoder)
+            .chain(&self.decoder)
+    }
+
+    /// Where a record of `metric_id` (one of [`PROCESS_GPU_METRICS`]) goes.
+    fn of_metric(&mut self, metric_id: &str) -> &mut Vec<Record<'a>> {
+        match metric_id {
+            ids::PROCESS_GPU_MEMORY => &mut self.memory,
+            ids::PROCESS_GPU_ENCODER => &mut self.encoder,
+            ids::PROCESS_GPU_DECODER => &mut self.decoder,
+            _ => &mut self.utilization,
+        }
     }
 }
 
@@ -107,12 +138,12 @@ fn group_valid<'a>(
         if newest_cycle.get(&gpu) != Some(&record.observation.cycle_id) {
             continue;
         }
-        let records = group.by_pid.entry(pid).or_default();
-        if record.key().metric_id.as_str() == ids::PROCESS_GPU_MEMORY {
-            records.memory.push(record);
-        } else {
-            records.utilization.push(record);
-        }
+        group
+            .by_pid
+            .entry(pid)
+            .or_default()
+            .of_metric(record.key().metric_id.as_str())
+            .push(record);
     }
     (groups, invalid)
 }

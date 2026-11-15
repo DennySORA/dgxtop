@@ -352,13 +352,18 @@ pub struct GpuProcessEntry {
     pub used_memory_bytes: Option<u64>,
 }
 
-/// One per-process utilization sample.
+/// One per-process utilization sample: the shares of the sample period
+/// the process kept the GPU's engines busy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProcessUtilizationSample {
     pub pid: u32,
     /// Driver CPU timestamp in microseconds.
     pub timestamp_us: u64,
     pub sm_percent: u32,
+    /// The video encoder's share (D-139).
+    pub encoder_percent: u32,
+    /// The video decoder's share.
+    pub decoder_percent: u32,
 }
 
 /// Device enumeration and slowly changing metadata (discovery only).

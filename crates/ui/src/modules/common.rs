@@ -982,6 +982,9 @@ pub(crate) struct ColumnSpec {
     /// One space after the column before it, never a separator between
     /// them: a marker and what it marks.
     pub attached: bool,
+    /// Left out at any width: its rows hold nothing to show now. The
+    /// cells keep their places, so a table need not renumber them.
+    pub withdrawn: bool,
 }
 
 impl ColumnSpec {
@@ -994,6 +997,7 @@ impl ColumnSpec {
             flex: false,
             align: Align::Left,
             attached: false,
+            withdrawn: false,
         }
     }
 
@@ -1006,6 +1010,7 @@ impl ColumnSpec {
             flex: false,
             align: Align::Right,
             attached: false,
+            withdrawn: false,
         }
     }
 
@@ -1098,9 +1103,12 @@ fn fit_spaced_columns(specs: &[ColumnSpec], available: u16, spacing: Spacing) ->
     }
 }
 
-/// Indices (display order) of the columns whose minimum widths fit.
+/// Indices (display order) of the columns whose minimum widths fit; a
+/// withdrawn column is none of them.
 fn choose_columns(specs: &[ColumnSpec], available: u16, spacing: Spacing) -> Vec<usize> {
-    let mut by_priority: Vec<usize> = (0..specs.len()).collect();
+    let mut by_priority: Vec<usize> = (0..specs.len())
+        .filter(|index| !specs[*index].withdrawn)
+        .collect();
     by_priority.sort_by(|a, b| specs[*b].priority.cmp(&specs[*a].priority).then(a.cmp(b)));
     let mut chosen = vec![false; specs.len()];
     let mut used = 0u16;
@@ -1526,6 +1534,46 @@ mod tests {
             draw_column_separators(frame.buffer_mut(), area, &columns, Style::new());
         });
         assert_eq!(row_text(&buffer, 0), "  ab │ cde │ f      ");
+    }
+
+    /// A withdrawn column is left out however wide the table is, and the
+    /// others stand where they would without it; its cell keeps its place
+    /// among the row's cells, so the columns after it still show theirs.
+    #[test]
+    fn a_withdrawn_column_is_left_out_at_any_width() {
+        let mut specs = [
+            ColumnSpec::left("abc", 3, 80),
+            ColumnSpec::right("def", 3, 70),
+            ColumnSpec::left("g", 1, 60).flexible(),
+        ];
+        let all: Vec<usize> = fit_separated_columns(&specs, 200)
+            .iter()
+            .map(|column| column.spec)
+            .collect();
+        assert_eq!(all, vec![0, 1, 2]);
+        specs[1].withdrawn = true;
+        let columns = fit_separated_columns(&specs, 200);
+        let shown: Vec<usize> = columns.iter().map(|column| column.spec).collect();
+        assert_eq!(shown, vec![0, 2]);
+        let without = [specs[0], specs[2]];
+        let places = |columns: &[FittedColumn]| -> Vec<(u16, u16)> {
+            columns
+                .iter()
+                .map(|column| (column.x, column.width))
+                .collect()
+        };
+        assert_eq!(
+            places(&columns),
+            places(&fit_separated_columns(&without, 200))
+        );
+        let cells = ["one", "two", "three"].map(|text| TableCell::new(text, Style::new()));
+        let buffer = render_area(20, 1, |frame, area| {
+            let columns = fit_separated_columns(&specs, area.width);
+            draw_table_row(frame.buffer_mut(), area, &columns, &cells, None);
+        });
+        let row = row_text(&buffer, 0);
+        assert!(row.contains("one") && row.contains("three"), "{row:?}");
+        assert!(!row.contains("two"), "{row:?}");
     }
 
     /// A cell's tinted parts keep their colors where its column shows them,

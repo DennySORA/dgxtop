@@ -64,6 +64,33 @@ fn process_memory(
     }
 }
 
+/// The NVML process channels of a GPU and the metric each carries.
+const PROCESS_CHANNELS: [(&str, &str); 4] = [
+    ("memory_allocated", ids::PROCESS_GPU_MEMORY),
+    ("utilization", ids::PROCESS_GPU_UTILIZATION),
+    ("encoder", ids::PROCESS_GPU_ENCODER),
+    ("decoder", ids::PROCESS_GPU_DECODER),
+];
+
+/// A share the driver sampled of `pid` (its utilization or its encoder's
+/// or decoder's, D-139), in percent.
+fn process_share(uuid: &str, pid: i32, metric_id: &str, percent: u64, at: u64) -> Observation {
+    let channel = PROCESS_CHANNELS
+        .iter()
+        .find(|(_, metric)| *metric == metric_id)
+        .map_or("unknown", |(channel, _)| *channel);
+    let key = metric_key(
+        &format!("gpupid:{uuid}:{pid}"),
+        metric_id,
+        &format!("gpu:{uuid}"),
+    );
+    reading(&key, "nvml", &format!("nvml:{uuid}:process.{channel}"), at)
+        .unit(native::PERCENT)
+        .quality(Quality::Usable)
+        .u64(percent)
+        .build()
+}
+
 /// The NVML adapter's reading of a GPU whose process lists name no process
 /// (D-119): its processes hold 0 bytes.
 fn no_processes(uuid: &str, at: u64, cycle: u64) -> Observation {
@@ -85,7 +112,9 @@ fn no_processes(uuid: &str, at: u64, cycle: u64) -> Observation {
 fn nvml_catalog() -> dgxtop_core::canonical::CatalogSnapshot {
     let names: Vec<String> = [GPU_A, GPU_B]
         .iter()
-        .map(|uuid| format!("nvml:{uuid}:process.memory_allocated"))
+        .flat_map(|uuid| {
+            PROCESS_CHANNELS.map(|(channel, _)| format!("nvml:{uuid}:process.{channel}"))
+        })
         .collect();
     let placeholder = gpu_key(GPU_A, ids::PROCESS_GPU_MEMORY);
     let mut specs: Vec<SourceSpec<'_>> = names
@@ -400,6 +429,43 @@ fn process_allocations_are_summed_per_gpu_and_deduplicated_by_pid() {
     );
     let b = value_of(&batch, &gpu_key(GPU_B, ids::GPU_MEMORY_PROCESS_ALLOCATED)).unwrap();
     assert_eq!(b.value.and_then(|value| value.as_u64()), Some(7));
+}
+
+/// What the driver samples of a process (its utilization and its encoder's
+/// and decoder's shares, D-139) comes with the same list as its memory and
+/// is no memory: the GPU's sum is that of the memory alone, and no reading
+/// of the GPU's own is made of a share.
+#[test]
+fn sampled_process_shares_never_enter_the_gpu_sum() {
+    let shares = [
+        (ids::PROCESS_GPU_UTILIZATION, 90),
+        (ids::PROCESS_GPU_ENCODER, 35),
+        (ids::PROCESS_GPU_DECODER, 0),
+    ];
+    let mut records = vec![
+        process_memory(GPU_A, 10, reasons::GPU_USAGE_COMPUTE, Some(400), SECOND, 1),
+        process_memory(GPU_A, 11, reasons::GPU_USAGE_COMPUTE, Some(100), SECOND, 1),
+    ];
+    records.extend(
+        shares
+            .iter()
+            .map(|(metric_id, percent)| process_share(GPU_A, 10, metric_id, *percent, SECOND)),
+    );
+    let batch = run(vec![], records);
+    let sum = value_of(&batch, &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED)).unwrap();
+    assert_eq!(sum.value.and_then(|value| value.as_u64()), Some(500));
+    assert_eq!(sum.selection_state, SelectionState::Selected);
+    assert!(sum.reason_codes.is_empty(), "{:?}", sum.reason_codes);
+    for (metric_id, _) in shares {
+        assert!(
+            batch
+                .canonical
+                .iter()
+                .all(|value| value.key.metric_id.as_str() != metric_id),
+            "{metric_id} is the process table's, not a GPU value"
+        );
+    }
+    assert!(batch.failures.is_empty(), "{:?}", batch.failures);
 }
 
 #[test]

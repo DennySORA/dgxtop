@@ -501,6 +501,13 @@ pub struct ProcessGpuView {
     /// Compute, graphics or both contexts on the GPU (D-54).
     pub usage: GpuUsageKind,
     pub utilization_percent: Option<f64>,
+    /// The share of the GPU's video encoder the process used (D-139);
+    /// left out of the projection while the driver sampled none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoder_percent: Option<f64>,
+    /// The same of the GPU's video decoder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decoder_percent: Option<f64>,
     pub memory_bytes: Option<u64>,
 }
 
@@ -538,6 +545,11 @@ pub struct ProcessesView {
     /// exited): its values are unavailable (AT09). A selection hidden by a
     /// filter is not missing.
     pub selected_missing: Option<ProcessKey>,
+    /// A listed process is encoding or decoding video on a GPU it is
+    /// listed for (D-139): the table then shows the encoder and decoder
+    /// shares, which it leaves out while every one of them is 0 or unread.
+    #[serde(default)]
+    pub video_engines_busy: bool,
 }
 
 /// One point of a history chart on the wall clock (D-51): this run's

@@ -601,6 +601,8 @@ impl GpuProcessQueries for NvmlLibraryBackend {
                     pid: sample.pid,
                     timestamp_us: sample.timestamp,
                     sm_percent: sample.sm_util,
+                    encoder_percent: sample.enc_util,
+                    decoder_percent: sample.dec_util,
                 })
                 .collect()),
             // NVML reports "no sample newer than the timestamp" as NOT_FOUND.

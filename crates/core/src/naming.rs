@@ -18,7 +18,7 @@
 //! | powercap | `fast` | 1 s | `cpu.energy.package` / `cpu.energy.platform` (uJ counters with declared modulus); subdomains are not read (D-92) |
 //! | nvml | `fast` | 1 s | GPU utilization/temperature/power/clocks/fan/framebuffer/PCIe/encoder/decoder/process_allocated (entity `gpu:UUID`) |
 //! | nvml | `slow_health` | 5 s | `gpu.energy.total` (mJ counter), ECC, retired pages, `gpu.nvlink.active`, `gpu.power.limit`, `gpu.clock.maximum`, framebuffer total/reserved |
-//! | nvml | `process` | 1 s | `process.gpu.memory_allocated` (bytes) and `process.gpu.utilization` (percent): entity `gpupid:UUID:PID`, scope `gpu:UUID` (the PID is joined to a ProcessKey by the process collector) |
+//! | nvml | `process` | 1 s | `process.gpu.memory_allocated` (bytes), `process.gpu.utilization`, `process.gpu.encoder` and `process.gpu.decoder` (percent, the three read from one sample, D-139): entity `gpupid:UUID:PID`, scope `gpu:UUID` (the PID is joined to a ProcessKey by the process collector) |
 //! | network | `fast` | 1 s | `network.{rx,tx}.bytes` (bytes counters), `network.{rx,tx}.{packets,errors,drops}` (count counters): entity `netif:NETNS:IFINDEX`, scope `interface` |
 //! | filesystem | `capacity` | 5 s | `filesystem.{total,free,available}` (bytes): entity `fs:MNTNS:MOUNT_ID`, scope `filesystem` |
 

@@ -457,17 +457,16 @@ fn start_boot_ns(key: &ProcessKey, clk_tck: u64) -> Option<u64> {
     u64::try_from(nanos).ok()
 }
 
-/// One merged link per `(ProcessKey, GPU)`.
 fn gpu_link(session: &Session<'_>, gpu: &EntityId, records: &PidRecords<'_>) -> ProcessGpuLink {
+    let percent = |records: &[Record<'_>], metric_id: &str| {
+        largest_valid(session, records, metric_id).map(Scalar::to_f64_lossy)
+    };
     ProcessGpuLink {
         gpu_entity_id: gpu.clone(),
         usage: usage_of(records),
-        utilization_percent: largest_valid(
-            session,
-            &records.utilization,
-            ids::PROCESS_GPU_UTILIZATION,
-        )
-        .map(Scalar::to_f64_lossy),
+        utilization_percent: percent(&records.utilization, ids::PROCESS_GPU_UTILIZATION),
+        encoder_percent: percent(&records.encoder, ids::PROCESS_GPU_ENCODER),
+        decoder_percent: percent(&records.decoder, ids::PROCESS_GPU_DECODER),
         memory_bytes: largest_valid(session, &records.memory, ids::PROCESS_GPU_MEMORY)
             .and_then(Scalar::as_u64),
     }

@@ -636,6 +636,19 @@ fn capability<'a>(
         .unwrap_or_else(|| panic!("no capability {entity} {metric}"))
 }
 
+/// One driver sample of `pid`: its utilization and its encoder and decoder
+/// shares, in percent.
+fn process_sample(pid: u32, timestamp_us: u64, shares: [u32; 3]) -> ProcessUtilizationSample {
+    let [sm_percent, encoder_percent, decoder_percent] = shares;
+    ProcessUtilizationSample {
+        pid,
+        timestamp_us,
+        sm_percent,
+        encoder_percent,
+        decoder_percent,
+    }
+}
+
 fn assert_never_zero_substitute(records: &[Observation]) {
     for record in records {
         assert_eq!(
@@ -1174,32 +1187,44 @@ fn process_utilization_uses_samples_since_the_last_timestamp() {
         },
     ]);
     device.samples = Ok(vec![
-        ProcessUtilizationSample {
-            pid: 1000,
-            timestamp_us: 100,
-            sm_percent: 10,
-        },
-        ProcessUtilizationSample {
-            pid: 1000,
-            timestamp_us: 200,
-            sm_percent: 65,
-        },
+        process_sample(1000, 100, [10, 90, 80]),
+        process_sample(1000, 200, [65, 12, 0]),
     ]);
     let mut harness = Harness::new(vec![device]);
     harness.discover();
     let first = harness.read("process");
-    let utilization = find(
-        &first.records,
-        "gpupid:GPU-a:1000",
-        ids::PROCESS_GPU_UTILIZATION,
-        "gpu:GPU-a",
+    // The newest sample, whole: its encoder and decoder shares with its
+    // utilization (D-139), a decoder at rest as 0 %.
+    for (metric_id, percent) in [
+        (ids::PROCESS_GPU_UTILIZATION, 65),
+        (ids::PROCESS_GPU_ENCODER, 12),
+        (ids::PROCESS_GPU_DECODER, 0),
+    ] {
+        let share = find(&first.records, "gpupid:GPU-a:1000", metric_id, "gpu:GPU-a");
+        assert_eq!(share.value.unwrap().as_u64(), Some(percent), "{metric_id}");
+        assert_eq!(share.native_unit.as_str(), native::PERCENT, "{metric_id}");
+        assert_eq!(share.read_status, ReadStatus::Ok, "{metric_id}");
+        assert!(
+            share.reason_codes.contains(&"gpu_usage:compute".to_owned()),
+            "{metric_id}"
+        );
+    }
+    assert_eq!(
+        find(
+            &first.records,
+            "gpupid:GPU-a:1000",
+            ids::PROCESS_GPU_ENCODER,
+            "gpu:GPU-a"
+        )
+        .provenance
+        .source_id
+        .as_str(),
+        "nvml:GPU-a:process.encoder"
     );
-    assert_eq!(utilization.value.unwrap().as_u64(), Some(65));
-    assert_eq!(utilization.native_unit.as_str(), native::PERCENT);
-    // PID 1001 had no sample: no utilization record (not a fake 0 %).
+    // PID 1001 had no sample: no sampled record (not a fake 0 %).
     assert!(!first.records.iter().any(|record| {
         record.key.entity_id.as_str() == "gpupid:GPU-a:1001"
-            && record.key.metric_id.as_str() == ids::PROCESS_GPU_UTILIZATION
+            && record.key.metric_id.as_str() != ids::PROCESS_GPU_MEMORY
     }));
     harness.read("process");
     let since: Vec<u64> = harness
@@ -1231,6 +1256,46 @@ fn unsupported_process_utilization_is_reported_per_association() {
     );
     assert_eq!(utilization.read_status, ReadStatus::Unsupported);
     assert_eq!(utilization.value, None);
+    // The one query failed: the utilization's record says so, and the
+    // encoder and decoder have none of their own (D-139).
+    assert!(!batch.records.iter().any(|record| {
+        [ids::PROCESS_GPU_ENCODER, ids::PROCESS_GPU_DECODER]
+            .contains(&record.key.metric_id.as_str())
+    }));
+}
+
+/// A share above the whole sample period is no figure (the driver has
+/// answered inconsistent samples): the channel's record fails and the
+/// sample's other shares stand.
+#[test]
+fn an_impossible_process_share_is_a_failed_record() {
+    let mut device = FakeDevice::healthy("GPU-a");
+    device.compute = Ok(vec![GpuProcessEntry {
+        pid: 5,
+        used_memory_bytes: Some(3),
+    }]);
+    device.samples = Ok(vec![process_sample(5, 100, [40, u32::MAX, 101])]);
+    let mut harness = Harness::new(vec![device]);
+    harness.discover();
+    let batch = harness.read("process");
+    let record = |metric_id| find(&batch.records, "gpupid:GPU-a:5", metric_id, "gpu:GPU-a");
+    assert_eq!(
+        record(ids::PROCESS_GPU_UTILIZATION).value.unwrap().as_u64(),
+        Some(40)
+    );
+    for metric_id in [ids::PROCESS_GPU_ENCODER, ids::PROCESS_GPU_DECODER] {
+        let failed = record(metric_id);
+        assert_eq!(failed.read_status, ReadStatus::Error, "{metric_id}");
+        assert_eq!(failed.value, None, "{metric_id}");
+        assert!(
+            failed
+                .reason_codes
+                .contains(&"NVML_PROCESS_SHARE_OUT_OF_RANGE".to_owned()),
+            "{metric_id}: {:?}",
+            failed.reason_codes
+        );
+    }
+    assert_never_zero_substitute(&batch.records);
 }
 
 #[test]

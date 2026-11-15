@@ -5,7 +5,7 @@ use dgxtop_core::metric::{ids, native};
 use dgxtop_core::observation::BatchStatus;
 use dgxtop_core::observation::Observation;
 use dgxtop_core::quality::{Quality, ReadStatus, SampleKind};
-use dgxtop_core::testing::metric_key;
+use dgxtop_core::testing::{ObservationBuilder, metric_key};
 
 use super::*;
 use crate::testkit::{PlanBuilder, SECOND, catalog, collect, host_entity, limits, reading};
@@ -70,21 +70,52 @@ fn gpu_memory(uuid: &str, pid: i32, usage: &str, bytes: u64, at: u64) -> Observa
 }
 
 fn gpu_utilization(uuid: &str, pid: i32, percent: u64, at: u64) -> Observation {
+    gpu_share(uuid, pid, SampledShare::Utilization, at)
+        .u64(percent)
+        .build()
+}
+
+/// A share the driver samples per process, with its NVML channel.
+#[derive(Debug, Clone, Copy)]
+enum SampledShare {
+    Utilization,
+    Encoder,
+    Decoder,
+}
+
+impl SampledShare {
+    const fn metric_id(self) -> &'static str {
+        match self {
+            Self::Utilization => ids::PROCESS_GPU_UTILIZATION,
+            Self::Encoder => ids::PROCESS_GPU_ENCODER,
+            Self::Decoder => ids::PROCESS_GPU_DECODER,
+        }
+    }
+
+    const fn channel(self) -> &'static str {
+        match self {
+            Self::Utilization => "process.utilization",
+            Self::Encoder => "process.encoder",
+            Self::Decoder => "process.decoder",
+        }
+    }
+}
+
+/// A sampled share of `pid` on a GPU, its value still to be set.
+fn gpu_share(uuid: &str, pid: i32, share: SampledShare, at: u64) -> ObservationBuilder {
     let key = metric_key(
         &format!("gpupid:{uuid}:{pid}"),
-        ids::PROCESS_GPU_UTILIZATION,
+        share.metric_id(),
         &format!("gpu:{uuid}"),
     );
     reading(
         &key,
         "nvml",
-        &format!("nvml:{uuid}:process.utilization"),
+        &format!("nvml:{uuid}:{}", share.channel()),
         at,
     )
     .unit(native::PERCENT)
-    .u64(percent)
     .quality(Quality::Usable)
-    .build()
 }
 
 /// Per-GPU NVML process sources are catalogued without a fixed key.
@@ -93,9 +124,12 @@ fn nvml_process_sources(uuids: &[&str]) -> Vec<String> {
         .iter()
         .flat_map(|uuid| {
             [
-                format!("nvml:{uuid}:process.memory_allocated"),
-                format!("nvml:{uuid}:process.utilization"),
+                "process.memory_allocated",
+                "process.utilization",
+                "process.encoder",
+                "process.decoder",
             ]
+            .map(|channel| format!("nvml:{uuid}:{channel}"))
         })
         .collect()
 }
@@ -324,6 +358,89 @@ fn one_process_on_two_gpus_is_one_host_row_with_two_links() {
         process.gpu[1].utilization_percent, None,
         "unknown utilization is not 0"
     );
+}
+
+/// The video encoder's and decoder's shares join the link like the
+/// utilization (D-139): the driver's 0 % is 0 %, a share it sampled none of
+/// is unknown, and a failed one never reads as 0.
+#[test]
+fn encoder_and_decoder_shares_join_the_link() {
+    let at = 2 * SECOND;
+    let failed_decoder = gpu_share("GPU-b", 42, SampledShare::Decoder, at)
+        .failed(ReadStatus::Error)
+        .build();
+    let batch = two_cycles(
+        (host(42, 100, 1_000, 4096, SECOND), vec![]),
+        (
+            host(42, 100, 1_100, 4096, at),
+            vec![
+                gpu_memory("GPU-a", 42, reasons::GPU_USAGE_COMPUTE, 1 << 30, at),
+                gpu_utilization("GPU-a", 42, 60, at),
+                gpu_share("GPU-a", 42, SampledShare::Encoder, at)
+                    .u64(35)
+                    .build(),
+                gpu_share("GPU-a", 42, SampledShare::Decoder, at)
+                    .u64(0)
+                    .build(),
+                gpu_memory("GPU-b", 42, reasons::GPU_USAGE_COMPUTE, 1 << 29, at),
+                failed_decoder,
+            ],
+        ),
+    );
+    let process = row(&batch, 42);
+    let sampled = &process.gpu[0];
+    assert_eq!(sampled.utilization_percent, Some(60.0));
+    assert_eq!(sampled.encoder_percent, Some(35.0));
+    assert_eq!(
+        sampled.decoder_percent,
+        Some(0.0),
+        "the driver's 0 % is 0 %"
+    );
+    assert_eq!(sampled.memory_bytes, Some(1 << 30));
+    let unsampled = &process.gpu[1];
+    assert_eq!(unsampled.encoder_percent, None, "no sample is not 0");
+    assert_eq!(unsampled.decoder_percent, None, "a failed share is not 0");
+    assert_eq!(unsampled.memory_bytes, Some(1 << 29));
+}
+
+/// A share sampled with an older list is not the process's share now: the
+/// newest list, which had no new sample of the PID, leaves it unknown.
+#[test]
+fn a_share_of_an_older_list_is_not_carried() {
+    let collector = ProcessCollector::new().unwrap();
+    let first_at = SECOND;
+    let second_at = 2 * SECOND;
+    let warmup = collect(
+        &collector,
+        &plan(
+            host(42, 100, 1_000, 4096, first_at),
+            vec![
+                gpu_memory("GPU-a", 42, reasons::GPU_USAGE_COMPUTE, 1 << 30, first_at),
+                gpu_share("GPU-a", 42, SampledShare::Encoder, first_at)
+                    .u64(35)
+                    .build(),
+            ],
+            first_at + 1,
+        )
+        .build(),
+    );
+    assert_eq!(row(&warmup, 42).gpu[0].encoder_percent, Some(35.0));
+    let mut memory = gpu_memory("GPU-a", 42, reasons::GPU_USAGE_COMPUTE, 1 << 30, second_at);
+    memory.cycle_id = 2;
+    let next = collect(
+        &collector,
+        &plan(
+            host(42, 100, 1_100, 4096, second_at),
+            vec![memory],
+            second_at + 1,
+        )
+        .after(&warmup)
+        .cycle(2)
+        .build(),
+    );
+    let link = &row(&next, 42).gpu[0];
+    assert_eq!(link.memory_bytes, Some(1 << 30));
+    assert_eq!(link.encoder_percent, None);
 }
 
 #[test]

@@ -3,10 +3,13 @@
 //! Columns (D-66): GPU, PID, USER, TYPE (compute `C`, graphics `G` or both,
 //! as `nvidia-smi` prints them, D-54), CPU%, GPU util, GPU memory, CPU
 //! memory (the resident set), NAME, set apart by `│` and as wide as the
-//! drawn rows need. A tracked process's name follows a `■` in its color
-//! (D-64), so the table names the colors of the memory bars and charts.
-//! Rows are identified by `ProcessKey`; the selected row is marked with `▶`
-//! (not only by color) and published as the only `K` hit target.
+//! drawn rows need. While a listed process encodes or decodes video, ENC
+//! and DEC follow the GPU util: the shares of the GPU's video encoder and
+//! decoder each process used (D-139); the table is as it was without them
+//! while those engines rest. A tracked process's name follows a `■` in its
+//! color (D-64), so the table names the colors of the memory bars and
+//! charts. Rows are identified by `ProcessKey`; the selected row is marked
+//! with `▶` (not only by color) and published as the only `K` hit target.
 
 use dgxtop_core::canonical::GpuUsageKind;
 use dgxtop_core::identity::EntityId;
@@ -47,10 +50,17 @@ const COLOR_SWATCH: &str = "■";
 /// What a GPU column says of a process the GPU filter leaves no GPU of.
 const NO_GPU: &str = "none";
 
+/// Columns of the table, shown or not.
+const COLUMN_COUNT: usize = 13;
+/// `ENC` and `DEC` in [`COLUMNS`]: withdrawn while no listed process
+/// encodes or decodes video (D-139), and shown only in room the other
+/// columns do not want ([`fit_table`]).
+const VIDEO_COLUMNS: [usize; 2] = [7, 8];
+
 /// The GPU first (D-66), then identity, type and CPU use, GPU use, the
 /// memory on the CPU side and the name. Minimum widths fit one GPU's
 /// values; [`fitted_columns`] widens a column to what the rows show.
-const COLUMNS: [ColumnSpec; 11] = [
+const COLUMNS: [ColumnSpec; COLUMN_COUNT] = [
     ColumnSpec::left("", 1, 255),
     ColumnSpec::left("GPU", 3, 100).attached(),
     ColumnSpec::right("PID", 7, 98),
@@ -58,6 +68,8 @@ const COLUMNS: [ColumnSpec; 11] = [
     ColumnSpec::left("TYPE", 4, 45),
     ColumnSpec::right("CPU%", 5, 80),
     ColumnSpec::right("GPU%", 5, 85),
+    ColumnSpec::right("ENC", 5, 30),
+    ColumnSpec::right("DEC", 5, 30),
     ColumnSpec::right("GPU MEM", 8, 70),
     ColumnSpec::right("CPU MEM", 8, 60),
     ColumnSpec::left("", 1, 97),
@@ -150,7 +162,7 @@ impl DisplayModule for ProcessesModule {
         let table = TableLayout::new(inner);
         let window = DisplayWindow::new(view, table.body.height);
         let filter = view.gpu_filter.as_ref().map(|(id, _)| id);
-        let drawn: Vec<(&ProcessRowView, bool, [TableCell; 11])> = view
+        let drawn: Vec<(&ProcessRowView, bool, [TableCell; COLUMN_COUNT])> = view
             .rows
             .iter()
             .skip(window.offset)
@@ -160,8 +172,12 @@ impl DisplayModule for ProcessesModule {
                 (row, selected, row_cells(row, selected, filter, context))
             })
             .collect();
-        let specs = fitted_columns(drawn.iter().map(|(_, _, cells)| cells));
-        let columns = fit_separated_columns(&specs, table.body.width.saturating_sub(1));
+        let specs = fitted_columns(
+            drawn.iter().map(|(_, _, cells)| cells),
+            view.video_engines_busy,
+        );
+        let columns = fit_table(&specs, table.body.width.saturating_sub(1));
+        let video = shows_video(&columns);
         let buffer = frame.buffer_mut();
         draw_table_header(
             buffer,
@@ -189,7 +205,7 @@ impl DisplayModule for ProcessesModule {
                 controls::PROCESS_ROW
             };
             output.process_target(model, &self.manifest, control, rect, row.key.clone());
-            output.label(row_label(row, selected, filter));
+            output.label(row_label(row, selected, filter, video));
         }
         draw_scrollbar(frame, table.body, view, &window, context);
         if let Some(status) = table.status {
@@ -355,9 +371,16 @@ fn short_gpu_label(label: &str) -> String {
 
 /// [`COLUMNS`] with each column's preferred width grown to its title and
 /// the widest of its `rows`' cells (a process on several GPUs lists a value
-/// for each).
-fn fitted_columns<'a>(rows: impl Iterator<Item = &'a [TableCell; 11]>) -> [ColumnSpec; 11] {
+/// for each), `ENC` and `DEC` withdrawn unless a listed process uses the
+/// `video` engines (D-139).
+fn fitted_columns<'a>(
+    rows: impl Iterator<Item = &'a [TableCell; COLUMN_COUNT]>,
+    video: bool,
+) -> [ColumnSpec; COLUMN_COUNT] {
     let mut specs = COLUMNS;
+    for column in VIDEO_COLUMNS {
+        specs[column].withdrawn = !video;
+    }
     for cells in rows {
         for (spec, cell) in specs.iter_mut().zip(cells) {
             spec.preferred = spec.preferred.max(saturate_u16(display_width(&cell.text)));
@@ -369,12 +392,63 @@ fn fitted_columns<'a>(rows: impl Iterator<Item = &'a [TableCell; 11]>) -> [Colum
     specs
 }
 
+/// The columns of `specs` a table `width` wide shows. `ENC` and `DEC` take
+/// only the room no other column wants (D-139): both whole, every other
+/// column as wide as its rows need or as it is without them, else neither.
+/// The table so never loses a column or a character to them, and a share is
+/// never cut into another figure.
+fn fit_table(specs: &[ColumnSpec; COLUMN_COUNT], width: u16) -> Vec<FittedColumn> {
+    let with_video = fit_separated_columns(specs, width);
+    if !shows_video(&with_video) {
+        return with_video;
+    }
+    let mut resting = *specs;
+    for column in VIDEO_COLUMNS {
+        resting[column].withdrawn = true;
+    }
+    let without = fit_separated_columns(&resting, width);
+    if video_columns_are_free(specs, &with_video, &without) {
+        with_video
+    } else {
+        without
+    }
+}
+
+/// Whether `columns` holds `ENC` or `DEC`.
+fn shows_video(columns: &[FittedColumn]) -> bool {
+    columns
+        .iter()
+        .any(|column| VIDEO_COLUMNS.contains(&column.spec))
+}
+
+/// Whether the fit `with` the video columns shows both of them whole and
+/// costs the columns of the fit `without` them nothing they need.
+fn video_columns_are_free(
+    specs: &[ColumnSpec; COLUMN_COUNT],
+    with: &[FittedColumn],
+    without: &[FittedColumn],
+) -> bool {
+    let width_of = |spec: usize| {
+        with.iter()
+            .find(|column| column.spec == spec)
+            .map(|column| column.width)
+    };
+    let whole = VIDEO_COLUMNS
+        .iter()
+        .all(|video| width_of(*video).is_some_and(|width| width >= specs[*video].preferred));
+    let free = without.iter().all(|column| {
+        let needed = column.width.min(specs[column.spec].preferred);
+        width_of(column.spec).is_some_and(|width| width >= needed)
+    });
+    whole && free
+}
+
 fn row_cells(
     row: &ProcessRowView,
     selected: bool,
     filter: Option<&EntityId>,
     context: &DisplayContext,
-) -> [TableCell; 11] {
+) -> [TableCell; COLUMN_COUNT] {
     let palette = &context.theme;
     let gpus = gpu_entries(row, filter);
     let marker = if selected { SELECTION_MARKER } else { "" };
@@ -396,6 +470,12 @@ fn row_cells(
         numeric(format_optional_percent(row.cpu_percent)),
         numeric(joined(&gpus, |gpu| {
             format_optional_percent(gpu.utilization_percent)
+        })),
+        numeric(joined(&gpus, |gpu| {
+            format_optional_percent(gpu.encoder_percent)
+        })),
+        numeric(joined(&gpus, |gpu| {
+            format_optional_percent(gpu.decoder_percent)
         })),
         numeric(joined(&gpus, |gpu| format_optional_bytes(gpu.memory_bytes))),
         numeric(format_optional_bytes(row.rss_bytes)),
@@ -432,10 +512,26 @@ fn swatch_cell(row: &ProcessRowView, context: &DisplayContext) -> TableCell {
     }
 }
 
-fn row_label(row: &ProcessRowView, selected: bool, filter: Option<&EntityId>) -> String {
+/// The row in words; the encoder's and decoder's shares only while the
+/// table shows them (`video`).
+fn row_label(
+    row: &ProcessRowView,
+    selected: bool,
+    filter: Option<&EntityId>,
+    video: bool,
+) -> String {
     let gpus = gpu_entries(row, filter);
+    let video_shares = if video {
+        format!(
+            " enc {} dec {}",
+            joined(&gpus, |gpu| format_optional_percent(gpu.encoder_percent)),
+            joined(&gpus, |gpu| format_optional_percent(gpu.decoder_percent)),
+        )
+    } else {
+        String::new()
+    };
     format!(
-        "{}process pid {} {} gpu {} type {} gpu util {} gpu mem {} cpu {} cpu mem {}",
+        "{}process pid {} {} gpu {} type {} gpu util {}{video_shares} gpu mem {} cpu {} cpu mem {}",
         if selected { "selected " } else { "" },
         row.key.pid,
         clean(&row.name),
@@ -528,7 +624,7 @@ mod tests {
     use crate::test_fixtures;
 
     /// Position of the swatch column in [`COLUMNS`].
-    const SWATCH_COLUMN: usize = 9;
+    const SWATCH_COLUMN: usize = 11;
 
     #[test]
     fn status_reports_absolute_rows_and_missing_reasons() {
@@ -674,6 +770,11 @@ mod tests {
             .collect();
         assert!(at.windows(2).all(|pair| pair[0] < pair[1]), "{header}");
         assert!(!header.contains("RSS"), "{header}");
+        // No process encodes or decodes: no ENC or DEC column (D-139).
+        assert!(
+            !header.contains("ENC") && !header.contains("DEC"),
+            "{header}"
+        );
         assert_eq!(header.matches(" │ ").count(), 8, "{header}");
         let first = row(3);
         assert!(
@@ -700,6 +801,152 @@ mod tests {
         assert!(
             first.contains(" │   python3 "),
             "no swatch, then the name: {first}"
+        );
+    }
+
+    /// The table of `view` in a terminal `width` wide: its lines and the
+    /// labels of what it drew.
+    fn drawn_table(view: ProcessesView, width: u16) -> (Vec<String>, Vec<String>) {
+        let context = test_fixtures::display_context();
+        let mut model = test_fixtures::view_model(dgxtop_core::commands::ViewKind::Overview, 1);
+        model.modules.processes = Some(std::sync::Arc::new(view));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 7)).unwrap();
+        let mut labels = Vec::new();
+        terminal
+            .draw(|frame| {
+                let output =
+                    ProcessesModule::new()
+                        .unwrap()
+                        .render(&context, &model, frame.area(), frame);
+                labels = output.accessibility_labels;
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let lines = (0..7)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect();
+        (lines, labels)
+    }
+
+    /// The fixture's two processes with a listed process transcoding: the
+    /// first encodes on its first GPU, whose decoder rests.
+    fn transcoding_view() -> ProcessesView {
+        let mut view = test_fixtures::processes_view(2, 0, 2);
+        view.video_engines_busy = true;
+        view.rows[0].gpus[0].encoder_percent = Some(35.0);
+        view.rows[0].gpus[0].decoder_percent = Some(0.0);
+        view
+    }
+
+    /// While a listed process encodes or decodes video, each row shows the
+    /// share of the GPU's encoder and decoder it used, after its GPU util
+    /// (D-139): the driver's 0 % as 0 %, an unsampled share as `n/a`, one
+    /// value per GPU. The row's label says them too.
+    #[test]
+    fn encoder_and_decoder_shares_show_while_an_engine_is_busy() {
+        let (lines, labels) = drawn_table(transcoding_view(), 150);
+        let header = &lines[1];
+        let at: Vec<usize> = ["GPU%", "ENC", "DEC", "GPU MEM"]
+            .iter()
+            .map(|title| {
+                header
+                    .find(title)
+                    .unwrap_or_else(|| panic!("{title}: {header}"))
+            })
+            .collect();
+        assert!(at.windows(2).all(|pair| pair[0] < pair[1]), "{header}");
+        assert_eq!(header.matches(" │ ").count(), 10, "{header}");
+        let first = &lines[3];
+        assert!(
+            first.contains(" │ 45.0%,n/a │ 35.0%,n/a │ 0.0%,n/a │ 10.0 GiB,2.0 GiB │ "),
+            "{first}"
+        );
+        // A process the driver sampled nothing of.
+        let second = &lines[4];
+        assert!(
+            second.contains(" │      5.0% │       n/a │      n/a │ "),
+            "{second}"
+        );
+        assert!(
+            labels.iter().any(
+                |label| label.contains("gpu util 45.0%,n/a enc 35.0%,n/a dec 0.0%,n/a gpu mem")
+            ),
+            "{labels:?}"
+        );
+    }
+
+    /// With the video engines at rest the table and its labels are what
+    /// they were before the shares existed, whatever the rows carry.
+    #[test]
+    fn resting_video_engines_leave_the_table_as_it_was() {
+        let plain = drawn_table(test_fixtures::processes_view(2, 0, 2), 150);
+        let mut view = test_fixtures::processes_view(2, 0, 2);
+        view.rows[0].gpus[0].encoder_percent = Some(0.0);
+        view.rows[0].gpus[0].decoder_percent = Some(0.0);
+        let resting = drawn_table(view, 150);
+        assert_eq!(plain, resting);
+        assert!(
+            !plain.1.iter().any(|label| label.contains(" enc ")),
+            "{:?}",
+            plain.1
+        );
+    }
+
+    /// ENC and DEC take only the room no other column wants: at every
+    /// width they stand both whole beside columns as wide as without them,
+    /// or the table is the one of resting engines, never a cut share.
+    #[test]
+    fn the_video_columns_take_only_room_no_other_column_wants() {
+        let context = test_fixtures::display_context();
+        let view = transcoding_view();
+        let cells: Vec<[TableCell; COLUMN_COUNT]> = view
+            .rows
+            .iter()
+            .map(|row| row_cells(row, false, None, &context))
+            .collect();
+        let busy = fitted_columns(cells.iter(), true);
+        let resting = fitted_columns(cells.iter(), false);
+        let (mut shown_at, mut hidden_at) = (Vec::new(), Vec::new());
+        for width in 20..220_u16 {
+            let columns = fit_table(&busy, width);
+            let without = fit_table(&resting, width);
+            assert!(!shows_video(&without), "{width}: withdrawn at any width");
+            if !shows_video(&columns) {
+                assert_eq!(columns, without, "{width}: the table of resting engines");
+                hidden_at.push(width);
+                continue;
+            }
+            shown_at.push(width);
+            let width_of = |spec: usize| {
+                columns
+                    .iter()
+                    .find(|column| column.spec == spec)
+                    .map(|column| column.width)
+            };
+            for video in VIDEO_COLUMNS {
+                assert_eq!(width_of(video), Some(busy[video].preferred), "{width}");
+            }
+            for column in &without {
+                let needed = column.width.min(busy[column.spec].preferred);
+                assert!(
+                    width_of(column.spec).is_some_and(|with| with >= needed),
+                    "{width}: {} lost room",
+                    busy[column.spec].title
+                );
+            }
+        }
+        // Narrow tables keep their columns; wide ones add the two.
+        let narrowest = shown_at.first().copied().expect("shown on a wide table");
+        assert!(hidden_at.iter().all(|width| *width < narrowest));
+        assert!(!hidden_at.is_empty(), "{narrowest}");
+        // A terminal of 120 columns has no room for them: what it draws
+        // is the resting table, labels included.
+        let mut rested = transcoding_view();
+        rested.video_engines_busy = false;
+        assert_eq!(
+            drawn_table(transcoding_view(), 120),
+            drawn_table(rested, 120)
         );
     }
 
@@ -764,6 +1011,6 @@ mod tests {
             "G"
         );
         assert_eq!(usage_code(GpuUsageKind::Unknown), NOT_AVAILABLE);
-        assert!(row_label(&view.rows[0], false, None).contains("type C,C+G"));
+        assert!(row_label(&view.rows[0], false, None, false).contains("type C,C+G"));
     }
 }

@@ -302,6 +302,8 @@ pub fn gpu_process(pid: i64, name: &str, held: &[(&str, Option<u64>)]) -> Proces
                     .unwrap_or_else(|error| panic!("test entity: {error}")),
                 usage: GpuUsageKind::Compute,
                 utilization_percent: None,
+                encoder_percent: None,
+                decoder_percent: None,
                 memory_bytes: *bytes,
             })
             .collect(),

@@ -162,10 +162,7 @@ fn metric_key_of(
     entity_id: &EntityId,
     identity: &CatalogIdentity,
 ) -> Result<Option<MetricKey>, IdentityError> {
-    if matches!(
-        channel,
-        Channel::ProcessMemory | Channel::ProcessUtilization
-    ) {
+    if channel.is_per_process() {
         return Ok(None);
     }
     Ok(Some(MetricKey::new(

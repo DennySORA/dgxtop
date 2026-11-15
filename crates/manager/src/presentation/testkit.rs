@@ -278,6 +278,8 @@ pub(crate) fn gpu_link(gpu: &str, utilization: Option<f64>, memory: Option<u64>)
         gpu_entity_id: EntityId::new(gpu).unwrap(),
         usage: dgxtop_core::canonical::GpuUsageKind::Compute,
         utilization_percent: utilization,
+        encoder_percent: None,
+        decoder_percent: None,
         memory_bytes: memory,
     }
 }
