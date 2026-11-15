@@ -34,6 +34,7 @@ pub mod process_stat;
 pub mod quality;
 pub mod sampling;
 pub mod shared_text;
+pub mod snapshot_report;
 pub mod text;
 pub mod tiers;
 pub mod trends;

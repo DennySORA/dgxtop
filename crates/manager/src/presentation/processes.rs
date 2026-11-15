@@ -90,14 +90,6 @@ impl ProcessWindow {
     }
 }
 
-/// Whether the bound may have dropped a GPU process or link. The collector
-/// keeps GPU processes first, so a kept row without a GPU proves every GPU
-/// process was kept.
-fn gpu_rows_incomplete(table: &ProcessTable) -> bool {
-    table.gpu_links_truncated
-        || (table.truncated && table.rows.iter().all(|row| !row.gpu.is_empty()))
-}
-
 /// What a row's figures are named and colored by.
 pub(crate) struct RowNames<'a> {
     /// Each GPU's label.
@@ -146,7 +138,7 @@ pub(crate) fn build_processes_view(
         rows,
         window_start: u32::try_from(window.start).unwrap_or(u32::MAX),
         total_rows: u32::try_from(ordered.len()).unwrap_or(u32::MAX),
-        truncated: gpu_rows_incomplete(table),
+        truncated: table.gpu_rows_incomplete(),
         sort: session.sort,
         ascending: session.ascending,
         filter: filter_text(&session.filter),

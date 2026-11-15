@@ -303,3 +303,141 @@ fn import_legacy_requires_an_explicit_mode() {
     assert!(!output.status.success());
     assert!(home.files().is_empty());
 }
+
+/// `--snapshot-json` of the replay demo (D-140): standard output carries
+/// one JSON document and nothing else. It holds a rate, which only a second
+/// reading gives, the GPU by its name and the GPU processes without their
+/// command lines; the run keeps nothing, in the home or among the temporary
+/// files.
+#[test]
+fn snapshot_json_prints_one_document_and_keeps_nothing() {
+    let home = Home::new("snapshot");
+    let temporary = home.root.join("tmp");
+    std::fs::create_dir_all(&temporary).unwrap();
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../adapters/fixtures/replay/demo.json");
+    let output = Command::new(BINARY)
+        .args(["--snapshot-json", "--interval", "0.2", "--replay"])
+        .arg(&fixture)
+        .env_clear()
+        .env("HOME", &home.root)
+        .env("TMPDIR", &temporary)
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stderr(&output), "");
+    let document: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(document["format"], "dgxtop-snapshot/1");
+    assert_eq!(document["dgxtop_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(document["namespace"], "replay");
+    assert_eq!(document["interval_ms"], 200);
+    assert_eq!(document["adapters"][0]["id"], "replay");
+    assert_eq!(document["adapters"][0]["state"], "healthy");
+
+    let metrics = document["metrics"].as_array().unwrap();
+    let metric = |name: &str| {
+        metrics
+            .iter()
+            .find(|metric| metric["metric"] == name)
+            .unwrap_or_else(|| panic!("{name} missing"))
+    };
+    let read_rate = metric("disk.read.bytes_per_second");
+    assert!(read_rate["value"].as_f64().unwrap() > 0.0, "{read_rate}");
+    assert_eq!(read_rate["unit"], "bytes_per_second");
+    assert_eq!(read_rate["kind"], "simulated");
+    assert_eq!(read_rate["stale"], false);
+    let temperature = metric("gpu.temperature");
+    assert!(temperature["value"].is_number(), "{temperature}");
+    assert!(
+        temperature["entity"].as_str().unwrap().starts_with("gpu:"),
+        "{temperature}"
+    );
+    let entities = document["entities"].as_array().unwrap();
+    assert!(
+        entities
+            .iter()
+            .any(|entity| entity["kind"] == "gpu" && entity["name"] == "Demo GPU 0"),
+        "{entities:?}"
+    );
+
+    let processes = document["processes"].as_array().unwrap();
+    let mut pids: Vec<i64> = processes
+        .iter()
+        .map(|process| process["pid"].as_i64().unwrap())
+        .collect();
+    pids.sort_unstable();
+    assert_eq!(pids, vec![4242, 5150]);
+    for process in processes {
+        assert!(process.get("command").is_none(), "{process}");
+        assert!(
+            process["gpus"][0]["memory_bytes"].as_u64().unwrap() > 0,
+            "{process}"
+        );
+    }
+    assert_eq!(document["processes_truncated"], false);
+    assert!(home.files().is_empty(), "{:?}", home.files());
+    assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 0);
+}
+
+/// A snapshot is a mode of its own: with another one-shot mode or a state
+/// directory to keep it exits with status two and prints no document.
+#[test]
+fn snapshot_json_refuses_the_flags_of_a_kept_state() {
+    let home = Home::new("snapshot-flags");
+    for other in [
+        vec!["--state-dir", "/abs/state"],
+        vec!["--check-config"],
+        vec!["--diagnostics-json"],
+    ] {
+        let mut arguments = vec!["--snapshot-json"];
+        arguments.extend(&other);
+        let output = home.run(&arguments);
+        assert_eq!(output.status.code(), Some(2), "{other:?}");
+        assert_eq!(stdout(&output), "", "{other:?}");
+    }
+    assert!(home.files().is_empty());
+}
+
+/// A snapshot reads the saved configuration under the rules the monitor
+/// trusts it by: a file others can write and an invalid one end the run
+/// with status two before anything is read, told with the saved file's own
+/// path; no document is printed and no temporary state is left behind.
+#[test]
+fn snapshot_json_refuses_an_untrusted_or_invalid_saved_configuration() {
+    let home = Home::new("snapshot-config");
+    let temporary = home.root.join("tmp");
+    std::fs::create_dir_all(&temporary).unwrap();
+    let config = home.config_path();
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    let run = || {
+        Command::new(BINARY)
+            .arg("--snapshot-json")
+            .env_clear()
+            .env("HOME", &home.root)
+            .env("TMPDIR", &temporary)
+            .env("PATH", std::env::var("PATH").unwrap_or_default())
+            .output()
+            .unwrap()
+    };
+    let refused = |output: &Output, reason: &str| {
+        assert_eq!(output.status.code(), Some(2), "{}", stderr(output));
+        assert_eq!(stdout(output), "");
+        let message = stderr(output);
+        assert!(message.contains(reason), "{message}");
+        assert!(
+            message.contains(config.to_str().unwrap()),
+            "names the saved file: {message}"
+        );
+        assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 0);
+    };
+
+    std::fs::write(&config, "{\n  oops\n}").unwrap();
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).unwrap();
+    refused(&run(), "line 2");
+
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o666)).unwrap();
+    refused(&run(), "writable");
+    // The saved file is only read.
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), "{\n  oops\n}");
+}

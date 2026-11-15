@@ -12,17 +12,40 @@
 //!   catalog revision.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use dgxtop_core::canonical::CatalogSnapshot;
 use dgxtop_core::identity::{AdapterId, BootId, EntityId, HostId, SourceId};
 use dgxtop_core::observation::{
     Capability, CatalogDelta, EntityRecord, MAX_CATALOG_PAGE, SourceDescriptor, split_page,
 };
+use dgxtop_core::ports::CatalogReader;
 use dgxtop_core::quality::Availability;
 
 /// Capabilities kept per adapter.
 const MAX_CAPABILITIES_PER_ADAPTER: usize = 512;
+
+/// The catalog's latest snapshot for readers outside the control thread
+/// (D-140). The lock is held for one pointer copy, so neither side waits
+/// on the other's work.
+#[derive(Debug)]
+struct PublishedCatalog(Mutex<Arc<CatalogSnapshot>>);
+
+impl PublishedCatalog {
+    fn new(snapshot: Arc<CatalogSnapshot>) -> Self {
+        Self(Mutex::new(snapshot))
+    }
+
+    fn publish(&self, snapshot: Arc<CatalogSnapshot>) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = snapshot;
+    }
+}
+
+impl CatalogReader for PublishedCatalog {
+    fn latest(&self) -> Arc<CatalogSnapshot> {
+        Arc::clone(&self.0.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+}
 
 /// What the catalog knows about a source id seen in a batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,16 +107,18 @@ pub(crate) struct DeviceCatalog {
     tombstone_set: BTreeSet<SourceId>,
     revision: u32,
     snapshot: Arc<CatalogSnapshot>,
+    /// `snapshot`, as readers outside the control thread see it.
+    published: Arc<PublishedCatalog>,
 }
 
 impl DeviceCatalog {
     pub(crate) fn new(host_id: HostId, boot_id: BootId, max_sources: u32) -> Self {
-        let snapshot = CatalogSnapshot {
+        let snapshot = Arc::new(CatalogSnapshot {
             revision: 1,
             host_id: Some(host_id.clone()),
             boot_id: Some(boot_id.clone()),
             ..CatalogSnapshot::default()
-        };
+        });
         Self {
             host_id,
             boot_id,
@@ -102,12 +127,19 @@ impl DeviceCatalog {
             tombstones: VecDeque::new(),
             tombstone_set: BTreeSet::new(),
             revision: 1,
-            snapshot: Arc::new(snapshot),
+            published: Arc::new(PublishedCatalog::new(Arc::clone(&snapshot))),
+            snapshot,
         }
     }
 
     pub(crate) fn snapshot(&self) -> Arc<CatalogSnapshot> {
         Arc::clone(&self.snapshot)
+    }
+
+    /// The snapshot of every later moment, for a reader on another thread
+    /// (D-140).
+    pub(crate) fn reader(&self) -> Arc<dyn CatalogReader> {
+        Arc::clone(&self.published) as Arc<dyn CatalogReader>
     }
 
     pub(crate) fn revision(&self) -> u32 {
@@ -274,6 +306,7 @@ impl DeviceCatalog {
         }
         snapshot.regroup();
         self.snapshot = Arc::new(snapshot);
+        self.published.publish(Arc::clone(&self.snapshot));
     }
 }
 
@@ -399,6 +432,27 @@ mod tests {
                 "package:0",
             )),
         )
+    }
+
+    /// A reader on another thread sees the catalog as every merge leaves
+    /// it (D-140): the snapshot the control thread holds, never a copy that
+    /// lags behind it.
+    #[test]
+    fn a_reader_follows_every_rebuilt_snapshot() {
+        let mut catalog = catalog(8);
+        let reader = catalog.reader();
+        assert!(Arc::ptr_eq(&reader.latest(), &catalog.snapshot()));
+        assert!(reader.latest().sources.is_empty());
+        let first_revision = reader.latest().revision;
+
+        catalog.merge(&adapter_id("hwmon"), page(vec![temp("hwmon:a", 0)]));
+        let merged = reader.latest();
+        assert!(Arc::ptr_eq(&merged, &catalog.snapshot()));
+        assert!(merged.revision > first_revision);
+        assert!(merged.sources.contains_key(&source_id("hwmon:a")));
+        // Read from another thread, as a one-shot report does.
+        let handle = std::thread::spawn(move || reader.latest().sources.len());
+        assert_eq!(handle.join().unwrap(), 1);
     }
 
     #[test]

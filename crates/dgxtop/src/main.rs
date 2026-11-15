@@ -22,5 +22,8 @@ fn main() -> ExitCode {
     if cli.diagnostics_json {
         return diagnostics::run(&cli);
     }
+    if cli.snapshot_json {
+        return monitor::snapshot(&cli);
+    }
     monitor::run(&cli)
 }

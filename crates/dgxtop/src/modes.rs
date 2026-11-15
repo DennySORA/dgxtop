@@ -161,7 +161,7 @@ fn render_import_report(report: &LegacyImportReport) -> String {
     text
 }
 
-fn print_stdout(text: &str) -> ExitCode {
+pub(crate) fn print_stdout(text: &str) -> ExitCode {
     let mut stdout = std::io::stdout().lock();
     if stdout
         .write_all(text.as_bytes())

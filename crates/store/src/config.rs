@@ -19,6 +19,6 @@ mod document;
 mod legacy;
 mod repository;
 
-pub use document::MAX_CONFIG_FILE_BYTES;
+pub use document::{MAX_CONFIG_FILE_BYTES, copy_trusted_document};
 pub use legacy::LegacyImportError;
 pub use repository::FileConfigRepository;

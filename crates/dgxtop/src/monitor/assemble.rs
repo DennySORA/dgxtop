@@ -2,7 +2,7 @@
 //! stores, the control workers, the process history, the adapter hosts and
 //! the Manager on its own thread.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -10,7 +10,7 @@ use dgxtop_collectors::registry::default_collectors;
 use dgxtop_core::budget::{ByteLedger, Partition, QueueGate};
 use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::config::Config;
-use dgxtop_core::ports::{ConfigRepository, Logger};
+use dgxtop_core::ports::{ConfigRepository, Logger, SnapshotReader};
 use dgxtop_core::quality::Namespace;
 use dgxtop_core::users::UserNames;
 use dgxtop_manager::presentation::HostFacts;
@@ -29,7 +29,7 @@ use dgxtop_store::paths::StatePaths;
 use super::hosts::host_specs;
 use super::signals::SignalWatch;
 use super::workers::{Completions, Workers};
-use super::{Application, StartError};
+use super::{Application, LiveReaders, PrivateRoot, StartError};
 use crate::cli::Cli;
 use crate::fail_stop::FailStop;
 use crate::startup::LoadedConfiguration;
@@ -43,7 +43,8 @@ pub(super) struct AssembleInputs<'a> {
     pub(super) config_repository: FileConfigRepository,
     pub(super) lock: InstanceLock,
     pub(super) logger: Arc<FileLogger>,
-    pub(super) replay_root: Option<PathBuf>,
+    /// The state root of this run alone (a replay's or a snapshot's).
+    pub(super) private_root: PrivateRoot,
 }
 
 /// Shared pieces built before the workers.
@@ -98,7 +99,7 @@ impl Wiring {
             config_repository,
             lock,
             logger,
-            replay_root,
+            private_root,
         } = inputs;
         let effective = &loaded.effective;
         let host_id = host_identity(Path::new("/"))?;
@@ -123,6 +124,7 @@ impl Wiring {
             self.archive_on(effective),
         )
         .into_parts();
+        let snapshots: Arc<dyn SnapshotReader> = Arc::new(snapshots);
         // The state fills the trends at commit; the Manager only reads them
         // (D-99).
         let trends = Arc::new(writer.trends());
@@ -199,7 +201,7 @@ impl Wiring {
             sudo_uid: sudo_uid(),
             self_pid,
             adapters: manifests,
-            facts,
+            facts: facts.clone(),
             namespace: self.namespace,
         };
         let ports = ManagerPorts {
@@ -208,7 +210,7 @@ impl Wiring {
             collectors: Box::new(collectors),
             collector_registry,
             state: Box::new(state),
-            snapshots: Arc::new(snapshots),
+            snapshots: Arc::clone(&snapshots),
             trends,
             history: Box::new(history),
             config: Box::new(config),
@@ -221,6 +223,18 @@ impl Wiring {
         };
         let mut manager = Manager::with_channels(setup, ports, channels)?;
         let session = manager.open_session()?;
+        let readers = LiveReaders {
+            snapshots,
+            catalog: manager.catalog_reader(),
+            clock: Arc::clone(&self.clock),
+            facts,
+            namespace: self.namespace,
+            interval_ms: effective.sampling.interval_ms,
+            slow_period_ms: effective
+                .sampling
+                .capacity_interval_ms
+                .max(effective.sampling.slow_health_interval_ms),
+        };
         let trigger = manager.shutdown_trigger();
         let shutdown = trigger.clone();
         self.fail_stop
@@ -247,7 +261,8 @@ impl Wiring {
             workers,
             logger,
             fps: effective.viewer.fps,
-            replay_root,
+            readers,
+            private_root,
             _lock: lock,
         })
     }

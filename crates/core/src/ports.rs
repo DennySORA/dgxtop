@@ -46,7 +46,8 @@ use crate::action::{
 };
 use crate::budget::{BytePermit, CapacityError};
 use crate::canonical::{
-    CollectionBatch, CollectionPlan, CommitGuard, GapRecord, ImmutableSnapshot, StoreAck,
+    CatalogSnapshot, CollectionBatch, CollectionPlan, CommitGuard, GapRecord, ImmutableSnapshot,
+    StoreAck,
 };
 use crate::clock::TimeProvider;
 use crate::commands::{CommandEnvelope, CommandRejection, CommandResult};
@@ -113,6 +114,13 @@ pub trait StoreWriter: Send {
 /// Cheap access to the latest immutable snapshot.
 pub trait SnapshotReader: Send + Sync {
     fn latest(&self) -> Arc<ImmutableSnapshot>;
+}
+
+/// Cheap access to the device catalog as the Manager last built it
+/// (D-140): what names the entities of a snapshot's metrics for a reader
+/// outside the control thread.
+pub trait CatalogReader: Send + Sync {
+    fn latest(&self) -> Arc<CatalogSnapshot>;
 }
 
 /// The state's short trends (D-79, D-99): the latest points of the

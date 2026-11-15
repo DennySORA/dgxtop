@@ -11,11 +11,13 @@
 //! * [`process`]: the history's process actor with its probe and stores.
 //! * [`hosts`]: the adapter hosts of a live run or a replay.
 //! * [`signals`]: termination signals and the bounded frontend wait.
+//! * [`snapshot`]: the headless frontend of `--snapshot-json`.
 
 mod assemble;
 mod hosts;
 mod process;
 mod signals;
+mod snapshot;
 mod workers;
 
 use std::fmt;
@@ -27,22 +29,30 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::bounded;
-use dgxtop_core::ports::{LogLevel, Logger};
+use dgxtop_core::clock::TimeProvider;
+use dgxtop_core::ports::{CatalogReader, LogLevel, Logger, SessionPort, SnapshotReader};
+use dgxtop_core::quality::Namespace;
+use dgxtop_core::snapshot_report::SnapshotReport;
+use dgxtop_core::view::HostState;
+use dgxtop_manager::presentation::HostFacts;
 use dgxtop_manager::{SessionHandle, ShutdownTrigger};
 use dgxtop_runtime::clock::BootClock;
 use dgxtop_runtime::logger::FileLogger;
 use dgxtop_runtime::supervisor::SupervisorHandle;
 use dgxtop_runtime::terminal::{NonBlockingTerminal, TtyInputGate};
+use dgxtop_store::config::copy_trusted_document;
+use dgxtop_store::fs::RealFileSystem;
 use dgxtop_store::lock::InstanceLock;
 use dgxtop_store::paths::StatePaths;
 use dgxtop_store::sqlite::ensure_sqlite_version;
 
 use crate::cli::Cli;
 use crate::fail_stop::FailStop;
-use crate::modes::{EXIT_FAILURE, EXIT_INVALID, fail};
+use crate::modes::{EXIT_FAILURE, EXIT_INVALID, fail, print_stdout};
 use crate::startup;
 
 use self::assemble::{AssembleInputs, Wiring};
+use self::snapshot::{Reporting, WaitError, Waiting};
 use self::workers::Workers;
 
 /// Bound of all application-controlled waits at shutdown together, after
@@ -60,20 +70,39 @@ pub fn run(cli: &Cli) -> ExitCode {
         Err(error) => return fail(error.exit_code, &error.message),
     };
     let frontend = application.run_frontend();
-    let summary = application.shutdown();
-    // The terminal may be gone (hang-up), so stderr failures are ignored.
-    let mut stderr = std::io::stderr();
-    for warning in summary {
-        let _ = writeln!(
-            stderr,
-            "dgxtop: {}",
-            dgxtop_core::text::sanitize_message(&warning)
-        );
+    application.finish().unwrap_or(frontend)
+}
+
+/// Prints one snapshot of what the monitor reads as JSON and exits
+/// (`--snapshot-json`, D-140): the readers run headless in a private
+/// state until their readings are complete, and standard output carries
+/// the document alone.
+pub fn snapshot(cli: &Cli) -> ExitCode {
+    let mut application = match Application::start(cli) {
+        Ok(application) => application,
+        Err(error) => return fail(error.exit_code, &error.message),
+    };
+    let report = application.take_snapshot();
+    if let Some(failed) = application.finish() {
+        return failed;
     }
-    match application.fail_stop.reason() {
-        Some(reason) => fail(EXIT_FAILURE, &format!("fail-stop: {reason}")),
-        None => frontend,
+    match report.map(|report| serde_json::to_string_pretty(&report)) {
+        Ok(Ok(json)) => print_stdout(&format!("{json}\n")),
+        Ok(Err(error)) => fail(EXIT_FAILURE, &format!("snapshot: {error}")),
+        Err(error) => fail(EXIT_FAILURE, error.message()),
     }
+}
+
+/// What a headless run reads the live state through (D-140).
+struct LiveReaders {
+    snapshots: Arc<dyn SnapshotReader>,
+    catalog: Arc<dyn CatalogReader>,
+    clock: Arc<dyn TimeProvider>,
+    facts: HostFacts,
+    namespace: Namespace,
+    interval_ms: u32,
+    /// The longest period of a read group in this run.
+    slow_period_ms: u32,
 }
 
 /// A startup failure with its exit status.
@@ -120,25 +149,30 @@ struct Application {
     workers: Workers,
     logger: Arc<FileLogger>,
     fps: u32,
-    replay_root: Option<PathBuf>,
+    readers: LiveReaders,
+    /// The state root of this run alone (a replay's or a snapshot's),
+    /// removed when it ends.
+    private_root: PrivateRoot,
     _lock: InstanceLock,
 }
 
 impl Application {
     fn start(cli: &Cli) -> Result<Self, StartError> {
         let namespace = startup::namespace_of(cli);
-        let replay_root = cli
-            .replay
-            .as_ref()
-            .map(|_| replay_state_root())
-            .transpose()?;
-        let paths = resolve_paths(cli, replay_root.as_deref())?;
+        let private_root = PrivateRoot::of(cli)?;
+        let paths = resolve_paths(cli, private_root.path())?;
         let filesystem = startup::real_filesystem();
         paths.ensure_directories(filesystem.as_ref())?;
+        if cli.snapshot_json && cli.replay.is_none() {
+            copy_saved_configuration(cli, &paths)?;
+        }
         let lock = InstanceLock::acquire(&paths.state_dir)?;
-        let (loaded, config_repository) =
+        let (mut loaded, config_repository) =
             startup::load_configuration(cli, &paths, Arc::clone(&filesystem))
                 .map_err(|error| StartError::invalid(error.to_string()))?;
+        if cli.snapshot_json {
+            snapshot::read_slow_groups_soon(&mut loaded.effective.sampling);
+        }
         let clock: Arc<dyn dgxtop_core::clock::TimeProvider> = Arc::new(BootClock::new()?);
         let logger = Arc::new(FileLogger::start(
             &paths.log_file,
@@ -173,8 +207,61 @@ impl Application {
             config_repository,
             lock,
             logger,
-            replay_root,
+            private_root,
         })
+    }
+
+    /// Waits until the readings are complete (every rate, every read
+    /// group, every host) and takes the document of that moment (D-140).
+    fn take_snapshot(&self) -> Result<SnapshotReport, WaitError> {
+        let readers = &self.readers;
+        let stopped = || self.session.shutdown_requested() || self.fail_stop.reason().is_some();
+        let starting = || {
+            self.supervisor
+                .statuses()
+                .iter()
+                .any(|host| host.state == HostState::Starting)
+        };
+        let snapshot = Waiting {
+            snapshots: readers.snapshots.as_ref(),
+            clock: readers.clock.as_ref(),
+            interval_ms: readers.interval_ms,
+            slow_period_ms: readers.slow_period_ms,
+            starting: &starting,
+            stopped: &stopped,
+            pause: &mut std::thread::sleep,
+        }
+        .snapshot();
+        // No frontend is left for a termination signal to wait for.
+        self.frontend_finished.store(true, Ordering::Release);
+        let adapters = self.supervisor.statuses();
+        let reporting = Reporting {
+            catalog: readers.catalog.as_ref(),
+            clock: readers.clock.as_ref(),
+            facts: &readers.facts,
+            namespace: readers.namespace,
+            interval_ms: readers.interval_ms,
+            adapters: &adapters,
+        };
+        snapshot.map(|snapshot| reporting.report(&snapshot))
+    }
+
+    /// Stops everything within the shutdown budget and tells what was
+    /// left behind; the failure's exit status where the run fail-stopped.
+    fn finish(&mut self) -> Option<ExitCode> {
+        let summary = self.shutdown();
+        // The terminal may be gone (hang-up), so stderr failures are ignored.
+        let mut stderr = std::io::stderr();
+        for warning in summary {
+            let _ = writeln!(
+                stderr,
+                "dgxtop: {}",
+                dgxtop_core::text::sanitize_message(&warning)
+            );
+        }
+        self.fail_stop
+            .reason()
+            .map(|reason| fail(EXIT_FAILURE, &format!("fail-stop: {reason}")))
     }
 
     fn run_frontend(&mut self) -> ExitCode {
@@ -248,9 +335,7 @@ impl Application {
         }
         let _ = self.logger.flush(total.remaining(LOG_FLUSH_RESERVE));
         let _ = self.logger.stop(total.remaining(LOG_FLUSH_RESERVE));
-        if let Some(root) = self.replay_root.take() {
-            let _ = std::fs::remove_dir_all(root);
-        }
+        self.private_root.remove();
         warnings
     }
 }
@@ -293,28 +378,77 @@ fn join_within<T: Send + 'static>(
     joined
 }
 
-/// Private temporary state root for `--replay` (never the live state).
-fn replay_state_root() -> Result<PathBuf, StartError> {
+/// The private temporary state root of a replay or a snapshot (never the
+/// live state, so neither meets the monitor's lock or its files); `None`
+/// for the monitor, which keeps its state. It is removed when the run
+/// ends, and when a start fails after it was made.
+#[derive(Debug)]
+struct PrivateRoot(Option<PathBuf>);
+
+impl PrivateRoot {
+    fn of(cli: &Cli) -> Result<Self, StartError> {
+        cli.keeps_private_state()
+            .then(|| private_state_root(cli))
+            .transpose()
+            .map(Self)
+    }
+
+    fn path(&self) -> Option<&Path> {
+        self.0.as_deref()
+    }
+
+    fn remove(&mut self) {
+        if let Some(root) = self.0.take() {
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+}
+
+impl Drop for PrivateRoot {
+    fn drop(&mut self) {
+        self.remove();
+    }
+}
+
+fn private_state_root(cli: &Cli) -> Result<PathBuf, StartError> {
+    let label = if cli.replay.is_some() {
+        "replay"
+    } else {
+        "snapshot"
+    };
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_nanos())
         .unwrap_or_default();
-    let root = std::env::temp_dir().join(format!("dgxtop-replay-{}-{unique}", std::process::id()));
-    std::fs::create_dir(&root)
-        .map_err(|error| StartError::failure(format!("replay state directory: {error}")))?;
+    let root = std::env::temp_dir().join(format!("dgxtop-{label}-{}-{unique}", std::process::id()));
+    let failed =
+        |error: std::io::Error| StartError::failure(format!("{label} state directory: {error}"));
+    std::fs::create_dir(&root).map_err(failed)?;
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
-        .map_err(|error| StartError::failure(format!("replay state directory: {error}")))?;
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).map_err(failed)?;
     Ok(root)
 }
 
-fn resolve_paths(cli: &Cli, replay_root: Option<&Path>) -> Result<StatePaths, StartError> {
-    match replay_root {
+/// A snapshot samples as the saved configuration says (a host whose GPU
+/// adapter is turned off stays unread), from a copy in its private root:
+/// the owner's file is only ever read, under the rules a load trusts it
+/// by. Without a saved file the defaults stand.
+fn copy_saved_configuration(cli: &Cli, private: &StatePaths) -> Result<(), StartError> {
+    let saved = startup::resolve_paths(cli)
+        .map_err(|error| StartError::invalid(error.to_string()))?
+        .config_file;
+    copy_trusted_document(&RealFileSystem, &saved, &private.config_file)
+        .map(|_copied| ())
+        .map_err(|error| StartError::invalid(format!("configuration error: {error}")))
+}
+
+fn resolve_paths(cli: &Cli, private_root: Option<&Path>) -> Result<StatePaths, StartError> {
+    match private_root {
         Some(root) => {
-            let mut replay_cli = cli.clone();
-            replay_cli.config = Some(root.join("config/config.json"));
-            replay_cli.state_dir = Some(root.join("state"));
-            startup::resolve_paths(&replay_cli)
+            let mut private_cli = cli.clone();
+            private_cli.config = Some(root.join("config/config.json"));
+            private_cli.state_dir = Some(root.join("state"));
+            startup::resolve_paths(&private_cli)
                 .map_err(|error| StartError::invalid(error.to_string()))
         }
         None => startup::resolve_paths(cli).map_err(|error| StartError::invalid(error.to_string())),

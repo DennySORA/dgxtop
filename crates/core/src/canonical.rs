@@ -373,6 +373,16 @@ pub struct ProcessTable {
     pub cycle_id: u64,
 }
 
+impl ProcessTable {
+    /// Whether the table's bound may have dropped a GPU process or one of
+    /// its GPUs. The collector keeps GPU processes first, so a kept row
+    /// without a GPU proves every GPU process was kept.
+    pub fn gpu_rows_incomplete(&self) -> bool {
+        self.gpu_links_truncated
+            || (self.truncated && self.rows.iter().all(|row| !row.gpu.is_empty()))
+    }
+}
+
 /// Previous counter reading for exact delta computation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CounterBase {

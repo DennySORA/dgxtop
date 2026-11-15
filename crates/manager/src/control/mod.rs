@@ -21,7 +21,7 @@ use dgxtop_core::clock::{TimeProvider, ms_to_ns};
 use dgxtop_core::commands::CommandResult;
 use dgxtop_core::identity::{AdapterId, BootId, HostId, SessionId};
 use dgxtop_core::naming::{self, adapters, groups};
-use dgxtop_core::ports::{LogLevel, Logger, TrendReader};
+use dgxtop_core::ports::{CatalogReader, LogLevel, Logger, TrendReader};
 use uuid::Uuid;
 
 use crate::archive::ArchiveTracker;
@@ -282,6 +282,11 @@ impl ControlCore {
 
     pub(crate) fn shutdown_trigger(&self) -> ShutdownTrigger {
         ShutdownTrigger::new(Arc::clone(&self.shutdown))
+    }
+
+    /// The device catalog as of every later moment (D-140).
+    pub(crate) fn catalog_reader(&self) -> Arc<dyn CatalogReader> {
+        self.catalog.reader()
     }
 
     /// The control thread is gone (normally or by a panic): no session may

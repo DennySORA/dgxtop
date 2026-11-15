@@ -54,6 +54,20 @@ pub struct Cli {
     #[arg(long)]
     pub diagnostics_json: bool,
 
+    /// Print every current metric and the GPU processes as one JSON document and exit. Reads for two sampling intervals so rates have a value, in a private temporary state: it runs beside a running dgxtop, starts no process action and keeps nothing.
+    #[arg(
+        long,
+        conflicts_with_all = [
+            "state_dir",
+            "check_config",
+            "diagnostics_json",
+            "import_legacy",
+            "version",
+            "any_user",
+        ]
+    )]
+    pub snapshot_json: bool,
+
     /// Import a legacy (v1) configuration file; requires --dry-run or --apply.
     #[arg(long, value_name = "PATH", requires = "import_mode")]
     pub import_legacy: Option<PathBuf>,
@@ -132,7 +146,7 @@ impl Cli {
                     }
                 })
                 .transpose()?,
-            read_only: (self.read_only || self.replay.is_some()).then_some(true),
+            read_only: (self.read_only || self.keeps_private_state()).then_some(true),
         })
     }
 
@@ -149,6 +163,13 @@ impl Cli {
             }
         }
         Ok(())
+    }
+
+    /// Whether this run keeps its state in a private temporary root and
+    /// may start no process action: a replay's data is simulated, and a
+    /// snapshot runs beside the monitor and keeps nothing (D-140).
+    pub fn keeps_private_state(&self) -> bool {
+        self.replay.is_some() || self.snapshot_json
     }
 
     /// Parsed `--replay-slice`.
@@ -282,5 +303,33 @@ mod tests {
             .overrides()
             .unwrap();
         assert_eq!(overrides.read_only, Some(true));
+    }
+
+    /// A snapshot starts no process action and keeps a state of its own
+    /// (D-140); it takes the sampling flags and a replay's fixture, and
+    /// none of the flags of another one-shot mode or of a kept state.
+    #[test]
+    fn a_snapshot_is_read_only_in_a_private_state() {
+        let snapshot = parse(&["--snapshot-json", "--interval", "0.5", "--no-gpu"]);
+        assert!(snapshot.snapshot_json && snapshot.keeps_private_state());
+        let overrides = snapshot.overrides().unwrap();
+        assert_eq!(overrides.read_only, Some(true));
+        assert_eq!(overrides.interval_ms, Some(500));
+        assert_eq!(overrides.gpu_enabled, Some(false));
+        assert!(parse(&["--snapshot-json", "--replay", "/tmp/fixture.json"]).snapshot_json);
+        assert!(parse(&["--snapshot-json", "--config", "/abs/config.json"]).snapshot_json);
+        assert!(!parse(&[]).keeps_private_state());
+        for other in [
+            vec!["--state-dir", "/abs/state"],
+            vec!["--check-config"],
+            vec!["--diagnostics-json"],
+            vec!["--version"],
+            vec!["--any-user"],
+            vec!["--import-legacy", "/abs/legacy.json", "--dry-run"],
+        ] {
+            let mut arguments = vec!["dgxtop", "--snapshot-json"];
+            arguments.extend(&other);
+            assert!(Cli::try_parse_from(arguments).is_err(), "{other:?}");
+        }
     }
 }

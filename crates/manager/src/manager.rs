@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Select, Sender, bounded};
 use dgxtop_core::clock::until;
-use dgxtop_core::ports::{ControlCompletion, IngestionCompletion};
+use dgxtop_core::ports::{CatalogReader, ControlCompletion, IngestionCompletion};
 
 use crate::control::{ControlCore, QueueLevels};
 use crate::error::ManagerError;
@@ -169,6 +169,13 @@ impl Manager {
     /// Clonable, thread-safe shutdown request (e.g. for a signal watcher).
     pub fn shutdown_trigger(&self) -> ShutdownTrigger {
         self.core.shutdown_trigger()
+    }
+
+    /// The device catalog as the Manager builds it from now on, readable
+    /// from another thread (D-140): with the state's snapshots, what a
+    /// one-shot report is made of.
+    pub fn catalog_reader(&self) -> Arc<dyn CatalogReader> {
+        self.core.catalog_reader()
     }
 
     /// Runs the control loop on the calling thread until the bounded
