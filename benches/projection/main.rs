@@ -395,6 +395,7 @@ impl StaticInputs {
                 namespace_label: Some("replay (simulated data)".to_owned()),
                 utc_offset_s: 0,
                 any_user: false,
+                users: Default::default(),
             },
             first_gpu: catalog
                 .entities

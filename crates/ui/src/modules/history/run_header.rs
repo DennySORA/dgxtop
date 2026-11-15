@@ -46,33 +46,45 @@ pub(super) fn header_lines(
     context: &DisplayContext,
 ) -> Vec<Line<'static>> {
     let info = detail.map(|detail| &detail.info);
-    let mut lines = vec![identity_line(run, info, context)];
+    let mut lines = vec![identity_line(run, detail, context)];
     let left = time_fields(run, info, offset_s, context);
     let right = place_fields(info, context);
     lines.extend(Grid { left, right }.lines(usize::from(width), context));
     lines
 }
 
-/// `■ python │ PID 4242 │ uid 1000 │ nice 0 │ GPU 0 · GB10 │ running`; the user
-/// and the niceness left out while unread.
+/// `user alice`: the login name the host's passwd file gives the run's
+/// owner (D-138), else `uid 1000`; no value while the owner is unread.
+fn owner_field(detail: Option<&RunDetailView>) -> (&'static str, Option<String>) {
+    let Some(detail) = detail else {
+        return ("uid", None);
+    };
+    match &detail.user {
+        Some(name) => ("user", Some(clean(name))),
+        None => ("uid", detail.info.uid.map(|uid| uid.to_string())),
+    }
+}
+
+/// `■ python │ PID 4242 │ user alice │ nice 0 │ GPU 0 · GB10 │ running`; the
+/// owner and the niceness left out while unread.
 fn identity_line(
     run: &RunRowView,
-    info: Option<&RunInfo>,
+    detail: Option<&RunDetailView>,
     context: &DisplayContext,
 ) -> Line<'static> {
     let theme = &context.theme;
+    let info = detail.map(|detail| &detail.info);
     let swatch = run.slot.map_or_else(
         || Span::raw(" ".repeat(INDENT)),
         |slot| Span::styled("■ ", Style::new().fg(theme.process_color(slot))),
     );
     let mut spans = vec![swatch, Span::styled(clean(&run.name), theme.title_style())];
-    let uid = info.and_then(|info| info.uid).map(|uid| uid.to_string());
     let nice = info
         .and_then(|info| info.details.nice)
         .map(|nice| nice.to_string());
     let labeled = [
         ("PID", Some(run.key.pid.to_string())),
-        ("uid", uid),
+        owner_field(detail),
         ("nice", nice),
     ];
     for (label, value) in labeled {
@@ -442,6 +454,23 @@ mod tests {
             "{header:?}"
         );
         assert!(value_x.iter().all(|x| *x <= 9), "{value_x:?}");
+    }
+
+    /// The owner is named where the host's passwd file names its uid
+    /// (D-138), and is its uid elsewhere.
+    #[test]
+    fn the_identity_line_names_the_owner_or_its_uid() {
+        let context = crate::test_fixtures::display_context();
+        let view = crate::test_fixtures::process_history_view();
+        let mut detail = view.opened.clone().unwrap();
+        let identity = |detail: &RunDetailView| {
+            header_lines(&view.runs[0], Some(detail), 0, 135, &context)[0].to_string()
+        };
+        assert!(identity(&detail).contains("│ uid 1000 │"));
+        detail.user = Some("alice".to_owned());
+        let named = identity(&detail);
+        assert!(named.contains("│ user alice │"), "{named}");
+        assert!(!named.contains("uid"), "{named}");
     }
 
     /// What was not read shows as a dim `n/a`, and the identity line

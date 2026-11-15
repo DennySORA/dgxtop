@@ -10,6 +10,7 @@ use dgxtop_core::commands::SortKey;
 use dgxtop_core::identity::EntityId;
 use dgxtop_core::process_model::ProcessHistoryModel;
 use dgxtop_core::text::{MAX_BASENAME_BYTES, sanitize_display};
+use dgxtop_core::users::UserNames;
 use dgxtop_core::view::{
     ProcessGpuView, ProcessRowView, ProcessesView, SessionState, overview_gpus_rows,
 };
@@ -97,13 +98,23 @@ fn gpu_rows_incomplete(table: &ProcessTable) -> bool {
         || (table.truncated && table.rows.iter().all(|row| !row.gpu.is_empty()))
 }
 
+/// What a row's figures are named and colored by.
+pub(crate) struct RowNames<'a> {
+    /// Each GPU's label.
+    pub(crate) directory: &'a GpuDirectory<'a>,
+    /// The tracked processes' colors.
+    pub(crate) colors: &'a ProcessHistoryModel,
+    /// The login names of the host's users (D-138).
+    pub(crate) users: &'a UserNames,
+}
+
 pub(crate) fn build_processes_view(
     table: &ProcessTable,
     session: &SessionState,
-    directory: &GpuDirectory<'_>,
-    colors: &ProcessHistoryModel,
+    names: &RowNames<'_>,
     visible_rows: usize,
 ) -> ProcessesView {
+    let directory = names.directory;
     let gpu_filter = gpu_filter(session, directory);
     let text_filter = TextNeedle::new(&session.filter);
     let mut ordered: Vec<&ProcessRow> = table
@@ -127,7 +138,7 @@ pub(crate) fn build_processes_view(
         .get(window.start..window.end)
         .unwrap_or_default()
         .iter()
-        .map(|row| row_view(row, directory, colors))
+        .map(|row| row_view(row, names))
         .collect();
     ProcessesView {
         rows,
@@ -243,17 +254,24 @@ pub(crate) fn display_name(name: &str) -> String {
     }
 }
 
-fn row_view(
-    row: &ProcessRow,
-    directory: &GpuDirectory<'_>,
-    colors: &ProcessHistoryModel,
-) -> ProcessRowView {
+/// A process's owner as the table writes it (D-138): the login name the
+/// host's passwd file gives its uid, else the uid itself; `unknown` while
+/// the owner is unread.
+fn user_text(uid: Option<u32>, users: &UserNames) -> String {
+    let Some(uid) = uid else {
+        return UNKNOWN_USER.to_owned();
+    };
+    users
+        .name_of(uid)
+        .map_or_else(|| uid.to_string(), str::to_owned)
+}
+
+fn row_view(row: &ProcessRow, names: &RowNames<'_>) -> ProcessRowView {
+    let (directory, colors) = (names.directory, names.colors);
     ProcessRowView {
         key: row.key.clone(),
         name: display_name(&row.name),
-        user: row
-            .uid
-            .map_or_else(|| UNKNOWN_USER.to_owned(), |uid| uid.to_string()),
+        user: user_text(row.uid, names.users),
         state: row.state.filter(char::is_ascii_graphic),
         cpu_percent: finite(row.cpu_percent),
         rss_bytes: row.rss_bytes,
@@ -293,8 +311,11 @@ mod tests {
         build_processes_view(
             &fixture.snapshot.process_table,
             &fixture.session,
-            &directory,
-            &fixture.processes,
+            &RowNames {
+                directory: &directory,
+                colors: &fixture.processes,
+                users: &fixture.facts.users,
+            },
             visible,
         )
     }
@@ -339,6 +360,53 @@ mod tests {
             .map(|row| (row.name.as_str(), row.color_slot))
             .collect();
         assert_eq!(slots, vec![("train", Some(3)), ("idle", None)]);
+    }
+
+    /// A process's owner is the login name the host's passwd file gives
+    /// its uid (D-138); a uid the file does not list keeps its number, and
+    /// an owner that was never read stays `unknown`.
+    #[test]
+    fn owners_are_named_by_the_hosts_passwd_or_keep_their_uid() {
+        let mut fixture = with_gpus();
+        let on_gpu = |pid: i64, name: &str, uid: Option<u32>| {
+            let mut row = process_row(pid, name);
+            row.uid = uid;
+            row.gpu = vec![gpu_link(GPU_A, None, Some(1 << 30))];
+            row
+        };
+        fixture.set_processes(vec![
+            on_gpu(1, "train", Some(1000)),
+            on_gpu(2, "serve", Some(4242)),
+            on_gpu(3, "probe", None),
+        ]);
+        let owners = |fixture: &Fixture| -> Vec<(String, String)> {
+            let mut owners: Vec<(String, String)> = build(fixture, 10)
+                .rows
+                .iter()
+                .map(|row| (row.name.clone(), row.user.clone()))
+                .collect();
+            owners.sort();
+            owners
+        };
+        let pair = |name: &str, user: &str| (name.to_owned(), user.to_owned());
+        assert_eq!(
+            owners(&fixture),
+            vec![
+                pair("probe", "unknown"),
+                pair("serve", "4242"),
+                pair("train", "1000")
+            ],
+            "no passwd file read: every owner keeps its uid"
+        );
+        fixture.facts.users = UserNames::from_passwd("alice:x:1000:1000::/home/alice:/bin/sh\n");
+        assert_eq!(
+            owners(&fixture),
+            vec![
+                pair("probe", "unknown"),
+                pair("serve", "4242"),
+                pair("train", "alice")
+            ]
+        );
     }
 
     /// GPU processes (each has one association with GPU A).

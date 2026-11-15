@@ -12,6 +12,7 @@ use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::config::Config;
 use dgxtop_core::ports::{ConfigRepository, Logger};
 use dgxtop_core::quality::Namespace;
+use dgxtop_core::users::UserNames;
 use dgxtop_manager::presentation::HostFacts;
 use dgxtop_manager::{Manager, ManagerChannels, ManagerPorts, ManagerSetup};
 use dgxtop_runtime::clock::{
@@ -20,6 +21,7 @@ use dgxtop_runtime::clock::{
 use dgxtop_runtime::logger::FileLogger;
 use dgxtop_runtime::supervisor::{Supervisor, SupervisorConfig};
 use dgxtop_runtime::timezone::local_utc_offset_s;
+use dgxtop_runtime::users::local_user_names;
 use dgxtop_store::config::FileConfigRepository;
 use dgxtop_store::lock::InstanceLock;
 use dgxtop_store::paths::StatePaths;
@@ -261,5 +263,11 @@ fn host_facts(namespace: Namespace, any_user: bool) -> HostFacts {
             .then(|| "replay (simulated data)".to_owned()),
         utc_offset_s: local_utc_offset_s(),
         any_user,
+        // A replay's owners are simulated: this host's names are not theirs.
+        users: if namespace == Namespace::Replay {
+            UserNames::default()
+        } else {
+            local_user_names()
+        },
     }
 }

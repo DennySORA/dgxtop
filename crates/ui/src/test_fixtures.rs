@@ -1036,6 +1036,8 @@ pub(crate) fn process_history_view() -> dgxtop_core::view::ProcessHistoryView {
                 nice: Some(0),
             },
         },
+        // A host whose passwd file does not name uid 1000.
+        user: None,
         live: false,
         slot: None,
         bar: BarSize::OneMinute,

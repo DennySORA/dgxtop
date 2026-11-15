@@ -12,6 +12,7 @@ use dgxtop_core::metric::CanonicalUnit;
 use dgxtop_core::process_history::{RunBucket, RunInfo, RunMetric};
 use dgxtop_core::process_model::{ProcessHistoryModel, RunBars, RunDetail, RunRequest, RunRow};
 use dgxtop_core::tiers::BarSize;
+use dgxtop_core::users::UserNames;
 use dgxtop_core::view::{
     HistoryPointView, MAX_RUN_ROWS, ProcessHistoryView, RunChartView, RunDetailView, RunRowView,
     SessionState,
@@ -37,6 +38,9 @@ pub(crate) struct RunHistoryInputs<'a> {
     pub(crate) scales: &'a RunScales,
     /// Each GPU's model now by its label ([`gpu_names`]).
     pub(crate) gpu_names: &'a BTreeMap<String, String>,
+    /// The login names of the host's users, which name an opened run's
+    /// owner (D-138).
+    pub(crate) users: &'a UserNames,
     /// The session's filter: a run's name or PID holding it (D-113).
     pub(crate) filter: &'a str,
 }
@@ -219,6 +223,10 @@ fn detail_view(detail: &RunDetail, inputs: &RunHistoryInputs<'_>) -> RunDetailVi
     let window = bars.map_or((0, 0), |bars| bars.window);
     RunDetailView {
         info: info.clone(),
+        user: info
+            .uid
+            .and_then(|uid| inputs.users.name_of(uid))
+            .map(str::to_owned),
         live: detail.live,
         slot: inputs.model.slot_of(&info.key),
         bar: bars.map_or(inputs.bar, |bars| bars.bar),

@@ -735,6 +735,9 @@ pub struct RunRowView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunDetailView {
     pub info: RunInfo,
+    /// The login name of the run's owner, where the host's passwd file
+    /// names its uid now (D-138); the run itself keeps the uid.
+    pub user: Option<String>,
     pub live: bool,
     pub slot: Option<u8>,
     /// The bar size drawn: the session's, or the one `Auto` chose.

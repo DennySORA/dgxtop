@@ -50,6 +50,7 @@ use dgxtop_core::metric::ids;
 use dgxtop_core::naming::{adapters, entity};
 use dgxtop_core::ports::TrendReader;
 use dgxtop_core::process_model::ProcessHistoryModel;
+use dgxtop_core::users::UserNames;
 use dgxtop_core::view::{
     ActionsView, GpuView, HeaderView, HistoryView, HostStatus, IntervalView, ModuleViews,
     OverloadState, SessionState, ViewModel,
@@ -77,6 +78,9 @@ pub struct HostFacts {
     /// Process actions reach every user's processes this run
     /// (`--any-user`, D-127), which the header says.
     pub any_user: bool,
+    /// The login names of the host's users, by which process owners are
+    /// named (D-138); empty where none is read, and owners keep their uids.
+    pub users: UserNames,
 }
 
 /// Settings presentation inputs.
@@ -263,8 +267,11 @@ fn build_modules(
         modules.processes = Some(Arc::new(processes::build_processes_view(
             &context.snapshot.process_table,
             context.session,
-            inputs.directory,
-            inputs.processes,
+            &processes::RowNames {
+                directory: inputs.directory,
+                colors: inputs.processes,
+                users: &context.facts.users,
+            },
             inputs.visible_process_rows,
         )));
     }
@@ -281,6 +288,7 @@ fn build_modules(
                 bar: context.session.process_bar,
                 scales: &run_history::RunScales::read(reader, inputs.directory),
                 gpu_names: &run_history::gpu_names(inputs.directory),
+                users: &context.facts.users,
                 filter: &context.session.filter,
             },
         )));

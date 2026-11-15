@@ -120,6 +120,17 @@ fn filtered(
     opened: Option<&RunRequest>,
     filter: &str,
 ) -> ProcessHistoryView {
+    named(model, opened, (filter, &UserNames::from_passwd(PASSWD)))
+}
+
+/// The host's passwd file: it names the uid of the tests' runs.
+const PASSWD: &str = "root:x:0:0::/root:/bin/sh\nalice:x:1000:1000::/home/alice:/bin/sh\n";
+
+fn named(
+    model: &ProcessHistoryModel,
+    opened: Option<&RunRequest>,
+    (filter, users): (&str, &UserNames),
+) -> ProcessHistoryView {
     build_process_history_view(&RunHistoryInputs {
         model,
         opened,
@@ -127,8 +138,28 @@ fn filtered(
         bar: BarSize::Auto,
         scales: &scales(),
         gpu_names: &BTreeMap::from([("GPU 0".to_owned(), "NVIDIA GeForce RTX 5080".to_owned())]),
+        users,
         filter,
     })
+}
+
+/// An opened run names its owner by the login name the host's passwd file
+/// gives the run's uid now (D-138); a uid the file does not list, or a run
+/// whose owner was never read, names none and keeps the uid.
+#[test]
+fn an_opened_run_names_its_owner_from_the_hosts_passwd() {
+    let request = request(1, BarSize::Auto);
+    let opened = |model: &ProcessHistoryModel, users: &UserNames| {
+        named(model, Some(&request), ("", users)).opened.unwrap()
+    };
+    let users = UserNames::from_passwd(PASSWD);
+    let detail = opened(&model(), &users);
+    assert_eq!(detail.user.as_deref(), Some("alice"));
+    assert_eq!(detail.info.uid, Some(1000), "the run keeps the uid");
+    assert_eq!(opened(&model(), &UserNames::default()).user, None);
+    let mut unread = model();
+    unread.details[0].info.uid = None;
+    assert_eq!(opened(&unread, &users).user, None);
 }
 
 /// The session's filter keeps the runs whose name or PID hold it, any

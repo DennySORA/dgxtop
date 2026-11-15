@@ -413,6 +413,7 @@ mod tests {
                         last_seen_utc_ns: 0,
                         end: None,
                     },
+                    user: None,
                     live: true,
                     slot: None,
                     bar: BarSize::OneMinute,

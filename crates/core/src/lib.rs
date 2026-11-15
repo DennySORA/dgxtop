@@ -37,6 +37,7 @@ pub mod shared_text;
 pub mod text;
 pub mod tiers;
 pub mod trends;
+pub mod users;
 pub mod view;
 pub mod wire;
 
