@@ -376,8 +376,89 @@ fn snapshot_json_prints_one_document_and_keeps_nothing() {
         );
     }
     assert_eq!(document["processes_truncated"], false);
+    assert_eq!(document["redacted"], false);
     assert!(home.files().is_empty(), "{:?}", home.files());
     assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 0);
+}
+
+/// `--snapshot-json --redact` of the replay demo (D-145): the document
+/// says it is redacted and holds neither the GPU's UUID, nor the name of
+/// an interface, a process or the host; a metric and a process still name
+/// their GPU's entity, by its stand-in, and every figure is there. Without
+/// `--snapshot-json` the flag is refused.
+#[test]
+fn snapshot_json_redact_leaves_out_what_names_the_host() {
+    let home = Home::new("snapshot-redact");
+    let temporary = home.root.join("tmp");
+    std::fs::create_dir_all(&temporary).unwrap();
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../adapters/fixtures/replay/demo.json");
+    let run = |redact: bool| {
+        let mut command = Command::new(BINARY);
+        command.args(["--snapshot-json", "--interval", "0.2", "--replay"]);
+        command.arg(&fixture);
+        if redact {
+            command.arg("--redact");
+        }
+        let output = command
+            .env_clear()
+            .env("HOME", &home.root)
+            .env("TMPDIR", &temporary)
+            .env("PATH", std::env::var("PATH").unwrap_or_default())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        stdout(&output)
+    };
+    let plain = run(false);
+    let text = run(true);
+    let named = [
+        "5e1d0a2c-0000-4000-8000-000000000001",
+        "eno1",
+        "python3",
+        "torchrun",
+    ];
+    for name in named {
+        assert!(plain.contains(name), "the demo holds {name}");
+        assert!(!text.contains(name), "{name} is left");
+    }
+    let document: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(document["redacted"], true);
+    assert_eq!(document["host"]["name"], "redacted");
+    assert!(document["host"]["id"].is_null());
+    let gpu = "gpu:GPU-redacted-0";
+    let entities = document["entities"].as_array().unwrap();
+    assert!(
+        entities
+            .iter()
+            .any(|entity| entity["id"] == gpu && entity["name"] == "Demo GPU 0"),
+        "{entities:?}"
+    );
+    let metrics = document["metrics"].as_array().unwrap();
+    let temperature = metrics
+        .iter()
+        .find(|metric| metric["metric"] == "gpu.temperature")
+        .unwrap();
+    assert_eq!(temperature["entity"], gpu);
+    assert!(temperature["value"].is_number(), "{temperature}");
+    let processes = document["processes"].as_array().unwrap();
+    assert_eq!(processes.len(), 2);
+    for process in processes {
+        assert_eq!(process["name"], "redacted");
+        assert!(process["user"].is_null());
+        assert_eq!(process["gpus"][0]["gpu"], gpu);
+        assert!(process["gpus"][0]["memory_bytes"].as_u64().unwrap() > 0);
+    }
+    let plain: serde_json::Value = serde_json::from_str(&plain).unwrap();
+    assert_eq!(
+        plain["metrics"].as_array().unwrap().len(),
+        metrics.len(),
+        "every metric is kept"
+    );
+
+    let alone = home.run(&["--redact"]);
+    assert_eq!(alone.status.code(), Some(2));
+    assert_eq!(stdout(&alone), "");
 }
 
 /// A snapshot is a mode of its own: with another one-shot mode or a state

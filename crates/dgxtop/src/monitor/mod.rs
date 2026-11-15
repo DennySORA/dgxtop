@@ -76,7 +76,8 @@ pub fn run(cli: &Cli) -> ExitCode {
 /// Prints one snapshot of what the monitor reads as JSON and exits
 /// (`--snapshot-json`, D-140): the readers run headless in a private
 /// state until their readings are complete, and standard output carries
-/// the document alone.
+/// the document alone, without what names the host, its hardware and its
+/// users where `--redact` asks so (D-145).
 pub fn snapshot(cli: &Cli) -> ExitCode {
     let mut application = match Application::start(cli) {
         Ok(application) => application,
@@ -86,6 +87,13 @@ pub fn snapshot(cli: &Cli) -> ExitCode {
     if let Some(failed) = application.finish() {
         return failed;
     }
+    let report = report.map(|report| {
+        if cli.redact {
+            report.redacted()
+        } else {
+            report
+        }
+    });
     match report.map(|report| serde_json::to_string_pretty(&report)) {
         Ok(Ok(json)) => print_stdout(&format!("{json}\n")),
         Ok(Err(error)) => fail(EXIT_FAILURE, &format!("snapshot: {error}")),

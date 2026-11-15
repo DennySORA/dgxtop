@@ -9,7 +9,13 @@
 //! so it never differs from what a panel would draw of the same moment. A
 //! metric without a value keeps its row and says why (`reasons`): a missing
 //! reading is never 0. Command lines are left out: they may hold secrets,
-//! and a snapshot is made to be piped and pasted.
+//! and a snapshot is made to be piped and pasted. What names the host, its
+//! hardware and its users stays unless the document is asked for without
+//! it ([`SnapshotReport::redacted`], D-145).
+
+mod redact;
+
+pub use redact::REDACTED;
 
 use std::collections::BTreeMap;
 
@@ -73,6 +79,9 @@ pub struct SnapshotReport {
     /// The process table's bound may have dropped a GPU process or one of
     /// its GPUs.
     pub processes_truncated: bool,
+    /// What names the host, its hardware and its users was taken out
+    /// (`--redact`, D-145).
+    pub redacted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -198,6 +207,7 @@ impl SnapshotReport {
             metrics: metrics_of(snapshot, context.now_boot_ns),
             processes: gpu_processes(table, context.users),
             processes_truncated: table.gpu_rows_incomplete(),
+            redacted: false,
         }
     }
 }

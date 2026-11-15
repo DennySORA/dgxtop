@@ -173,13 +173,14 @@ dgxtop --replay fixture.json # シミュレーションデータのみ、読み�
 dgxtop --check-config        # 設定を検証し、保存値と適用中の値を表示
 dgxtop --diagnostics-json    # バージョン、SQLite、機能、ヘルスを JSON で出力
 dgxtop --snapshot-json       # 現在のすべての指標と GPU プロセスを JSON で出力して終了
+dgxtop --snapshot-json --redact   # 同じ内容を共有できる形で：ホスト、ハードウェア、ユーザーの名前を含みません
 dgxtop --import-legacy ~/.config/dgxtop/config.json --dry-run   # v1 → v2 の対応を表示
 dgxtop --version --verbose   # バージョン、commit、ツールチェーン、ターゲット、SQLite ランタイム
 ```
 
 **スクリプト向けのスナップショット：** `--snapshot-json` は、レートに値が付くよう約 3 秒読み取り、標準出力に JSON を 1 つ出力して終了します。専用の一時フォルダーを使うため、実行中の dgxtop と並行して動かせ、プロセスには何も操作せず、終了後に何も残しません。値のない指標は 0 ではなく `null` と理由を出力し、コマンドラインは出力しません。例：`dgxtop --snapshot-json | jq '.processes'`。
 
-スナップショットは伏せ字にされません。ホスト名、GPU の UUID と PCI ID、マウントポイント、ネットワークインターフェース、各 GPU プロセスの PID とログイン名が含まれます。公開の場に貼り付ける前に、これらの項目を取り除いてください。
+スナップショットには、ホスト名、GPU の UUID、マウントポイント、ネットワークインターフェース、各 GPU プロセスの名前と所有者のログイン名が含まれます。issue やチャットに貼り付けるときは `--redact` を付けてください。ホストの名前と id、GPU の UUID とシリアル番号、マウントポイントなどのパス、インターフェース名、プロセス名とログイン名が取り除かれ、数値はすべて残ります。GPU は名前が出てくるすべての箇所で `GPU-redacted-0` になるため、各指標と各プロセスは自分の GPU を指したままです。ドキュメントには `"redacted": true` と記されます。
 
 **CPU 電力と合計電力：** root 権限が必要な CPU 電力データを読むには、`sudo` で dgxtop を起動してください。Linux の powercap/RAPL エネルギーカウンターは通常 root だけが読み取れます。権限がない場合、GPU 電力が取得できても、CPU 電力と CPU＋GPU の合計電力は表示されません。
 

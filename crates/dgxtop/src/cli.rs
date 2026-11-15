@@ -68,6 +68,10 @@ pub struct Cli {
     )]
     pub snapshot_json: bool,
 
+    /// With --snapshot-json: leave out what names the host, its hardware and its users, so the document can be shared: the host's name, GPU UUIDs and serial numbers, mount points and other paths, interface names, and the names and owners' login names of the GPU processes.
+    #[arg(long, requires = "snapshot_json")]
+    pub redact: bool,
+
     /// Import a legacy (v1) configuration file; requires --dry-run or --apply.
     #[arg(long, value_name = "PATH", requires = "import_mode")]
     pub import_legacy: Option<PathBuf>,
@@ -319,6 +323,11 @@ mod tests {
         assert!(parse(&["--snapshot-json", "--replay", "/tmp/fixture.json"]).snapshot_json);
         assert!(parse(&["--snapshot-json", "--config", "/abs/config.json"]).snapshot_json);
         assert!(!parse(&[]).keeps_private_state());
+        // A redacted document is a snapshot's (D-145): the flag alone is
+        // refused.
+        assert!(!snapshot.redact);
+        assert!(parse(&["--snapshot-json", "--redact"]).redact);
+        assert!(Cli::try_parse_from(["dgxtop", "--redact"]).is_err());
         for other in [
             vec!["--state-dir", "/abs/state"],
             vec!["--check-config"],

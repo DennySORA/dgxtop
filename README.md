@@ -268,6 +268,7 @@ dgxtop --replay fixture.json # simulated data only, read-only, separate temporar
 dgxtop --check-config        # validate the configuration and print its saved and effective values
 dgxtop --diagnostics-json    # versions, SQLite, capabilities and health as JSON
 dgxtop --snapshot-json       # every current metric and the GPU processes as JSON, then exit
+dgxtop --snapshot-json --redact   # the same, fit to share: no host, hardware or user names
 dgxtop --import-legacy ~/.config/dgxtop/config.json --dry-run   # show the v1 → v2 mapping
 dgxtop --version --verbose   # version, commit, toolchain, target, SQLite runtime
 ```
@@ -278,9 +279,12 @@ of its own, so it runs beside a running dgxtop, starts no process action and lea
 behind. A metric that has no value is printed as `null` with its reasons, never as 0, and command
 lines are left out. For example, `dgxtop --snapshot-json | jq '.processes'`.
 
-The snapshot is not redacted: it names the host, the GPU UUID and PCI ids, mount points, network
-interfaces, and each GPU process with its PID and login name. Remove those fields before you
-paste it anywhere public.
+A snapshot names the host, the GPU's UUID, mount points, network interfaces, and each GPU process
+with its name and its owner's login name. To paste one into an issue or a chat, add `--redact`:
+the host's name and id, GPU UUIDs and serial numbers, mount points and other paths, interface
+names, and the processes' names and login names are taken out, and every figure stays. A GPU is
+then `GPU-redacted-0` wherever it was named, so each metric and process still points at its GPU;
+the document says `"redacted": true`.
 
 **CPU power and total power:** run dgxtop with `sudo` to read CPU power counters that require
 root access. Linux powercap/RAPL energy counters are usually root-only; without access, CPU

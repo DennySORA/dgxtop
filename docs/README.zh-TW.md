@@ -173,13 +173,14 @@ dgxtop --replay fixture.json # 只用模擬資料、唯讀、使用獨立的暫�
 dgxtop --check-config        # 驗證設定並列出儲存值與生效值
 dgxtop --diagnostics-json    # 以 JSON 輸出版本、SQLite、能力與健康狀態
 dgxtop --snapshot-json       # 以 JSON 輸出目前所有指標與 GPU 程序後結束
+dgxtop --snapshot-json --redact   # 同上，但可以分享：不含主機、硬體與使用者的名稱
 dgxtop --import-legacy ~/.config/dgxtop/config.json --dry-run   # 顯示 v1 → v2 的對應
 dgxtop --version --verbose   # 版本、commit、工具鏈、target、SQLite runtime
 ```
 
 **給腳本用的快照：** `--snapshot-json` 會讀取約三秒（讓速率有值），在標準輸出印出一份 JSON 後結束。它使用自己的暫存資料夾，所以可以和執行中的 dgxtop 同時跑，不會動到任何程序，結束後不留下檔案。沒有數值的指標會印成 `null` 並附上原因，不會印成 0；程序的命令列不會輸出。例如：`dgxtop --snapshot-json | jq '.processes'`。
 
-快照沒有遮蔽：裡面有主機名稱、GPU 的 UUID 與 PCI 識別碼、掛載點、網路介面，以及每個 GPU 程序的 PID 與登入名稱。貼到公開的地方之前，請先移除這些欄位。
+快照裡有主機名稱、GPU 的 UUID、掛載點、網路介面，以及每個 GPU 程序的名稱與擁有者的登入名稱。要貼到 issue 或聊天室時，請加上 `--redact`：主機名稱與 id、GPU 的 UUID 與序號、掛載點與其他路徑、介面名稱、程序名稱與登入名稱都會被拿掉，所有數值照舊。GPU 在每個出現的地方都改寫成 `GPU-redacted-0`，所以每項指標與每個程序仍然對得上自己的 GPU；文件會標示 `"redacted": true`。
 
 **CPU 功率與總功率：** 請以 `sudo` 啟動 dgxtop，以讀取需要 root 權限的 CPU 功率資料。Linux 的 powercap/RAPL 能量計數器通常只允許 root 讀取；缺少權限時，即使 GPU 功率正常，CPU 功率與 CPU＋GPU 總功率仍會隱藏。
 
