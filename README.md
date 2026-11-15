@@ -70,8 +70,8 @@ of the whole machine.
   stopped from dgxtop, most likely the OOM killer, or still running. Open a run for its full
   command line, working folder and charts of its CPU, memory, GPU, threads, open files, disk and
   network. Delete the runs you no longer need, marked one by one or all at once.
-- **Overview History.** CPU, memory, each GPU's utilization, memory, temperature and power, disks
-  and network as bars of 1 minute to 24 hours on the local clock, with now, average and maximum on
+- **Overview History.** CPU, memory and its stall pressure, each GPU's utilization, memory,
+  temperature and power, the CPU's and the SoC's temperature, disks and network as bars of 1 minute to 24 hours on the local clock, with now, average and maximum on
   every chart and the energy on the power charts. With several GPUs the GPU charts show one GPU at
   a time. Where the CPU's power can be read, the power charts start with the total of the CPU and
   the GPUs and the CPU's own, each with its energy.
@@ -84,14 +84,24 @@ of the whole machine.
 
   A value the GPU does not report gets no row.
 - **The whole machine.** CPU usage per core, CPU temperature and power and the current and maximum
-  frequency of each kind of core; memory, swap, buffers and cache; disks with free space, IOPS,
-  latency and drive temperature; network throughput, errors and drops. Where the CPU's power can be
+  frequency of each kind of core, with the cpufreq limit where one caps it; memory, swap with
+  what moves in and out of it, buffers and cache; disks with free space, IOPS, latency and drive
+  temperature; network throughput, errors and drops. Processes are listed with their owner's
+  login name (read from `/etc/passwd` only) and, while one encodes or decodes video, each one's
+  share of the GPU's encoder and decoder. Where the CPU's power can be
   read (powercap, or the GB10's power sensors), the header shows what the CPU and the GPUs draw
   together; that is not the power at the wall socket, and it is left out while a part cannot be
   read.
+- **Memory pressure, not a made-up VRAM figure.** The kernel's stall pressure (PSI) of memory,
+  CPU and I/O over 10 s, 1 min and 5 min: the share of time work stood still waiting for that
+  resource. With it, how many processes the kernel has killed for lack of memory since boot.
+  Pressure tells whether a slowdown came from memory; it does not tell how much is left, which
+  `avail` on the Memory panel does. A host at 70 % of its RAM can read 0 % pressure.
 - **Made for DGX Spark.** On the GB10's unified memory, the RAM bar splits into the system's share
-  and each GPU job's share. dgxtop also reads the GB10's CPU cluster temperatures and its
-  NVLink-C2C links, and ships a native aarch64 build.
+  and each GPU job's share, and the GPU view shows what is still available and the memory
+  pressure where other tools print a VRAM size the GPU does not have. dgxtop also reads the
+  GB10's CPU cluster temperatures, naming the hottest cluster, and its NVLink-C2C links, and
+  ships a native aarch64 build.
 - **Settings in the app.** Change the sampling interval and the display modules, and see each data
   source's state. Every setting shows its saved and effective value, where it came from, and
   whether it applies now or after a restart.
@@ -254,9 +264,16 @@ sudo -H dgxtop --any-user    # K / F9 reach every user's processes, as htop does
 dgxtop --replay fixture.json # simulated data only, read-only, separate temporary state
 dgxtop --check-config        # validate the configuration and print its saved and effective values
 dgxtop --diagnostics-json    # versions, SQLite, capabilities and health as JSON
+dgxtop --snapshot-json       # every current metric and the GPU processes as JSON, then exit
 dgxtop --import-legacy ~/.config/dgxtop/config.json --dry-run   # show the v1 → v2 mapping
 dgxtop --version --verbose   # version, commit, toolchain, target, SQLite runtime
 ```
+
+**Snapshot for scripts:** `--snapshot-json` reads for about three seconds, so rates have a value,
+prints one JSON document on standard output and exits. It keeps its state in a temporary folder
+of its own, so it runs beside a running dgxtop, starts no process action and leaves nothing
+behind. A metric that has no value is printed as `null` with its reasons, never as 0, and command
+lines are left out. For example, `dgxtop --snapshot-json | jq '.processes'`.
 
 **CPU power and total power:** run dgxtop with `sudo` to read CPU power counters that require
 root access. Linux powercap/RAPL energy counters are usually root-only; without access, CPU

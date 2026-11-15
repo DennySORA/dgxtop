@@ -48,7 +48,7 @@ htop 以 CPU 為主，nvtop 和 nvidia-smi 只在你盯著的時候顯示 GPU。
 - **用實際執行的程式命名。** `python -m vllm.entrypoints.openai.api_server` 顯示為 `vllm.api_server`，在 `ComfyUI` 資料夾執行的 `python main.py` 顯示為 `ComfyUI/main`，而不是 `python3`。
 - **GPU 程序。** 所有使用 GPU 的程序，以及所在的 GPU、類型（運算或圖形）、GPU 使用率、GPU 記憶體、CPU 與 RAM。可依任一欄排序、依 GPU 或名稱篩選，確認後用 `K`（SIGTERM）或 `F9`（SIGKILL）結束程序。`F9` 後立刻按 `y` 也算數，程序一結束就會從列表消失。
 - **程序歷史（Process History）。** 每個 GPU 程序從開始到結束都記錄成一次執行：執行時間、GPU 記憶體與 RAM 峰值、GPU 與 CPU 使用率，以及結束方式：以結束碼結束、被訊號終止、從 dgxtop 結束、很可能是 OOM killer，或仍在執行。打開一次執行，可以看到完整命令列、工作目錄，以及 CPU、記憶體、GPU、執行緒、開啟的檔案、磁碟與網路的圖表。不再需要的執行可以刪除，可逐筆勾選或一次全選。
-- **總覽歷史（Overview History）。** CPU、記憶體、每張 GPU 的使用率、記憶體、溫度與功耗、磁碟與網路，以 1 分鐘到 24 小時、對齊本地時間的長條呈現；每張圖都有目前值、平均與最大值，功耗圖附耗電量。有多張 GPU 時，GPU 圖表一次顯示一張。讀得到 CPU 功耗時，功耗圖會先列 CPU 加所有 GPU 的總功耗與 CPU 功耗，各附耗電量。
+- **總覽歷史（Overview History）。** CPU、記憶體與記憶體壓力、每張 GPU 的使用率、記憶體、溫度與功耗、CPU 與 SoC 溫度、磁碟與網路，以 1 分鐘到 24 小時、對齊本地時間的長條呈現；每張圖都有目前值、平均與最大值，功耗圖附耗電量。有多張 GPU 時，GPU 圖表一次顯示一張。讀得到 CPU 功耗時，功耗圖會先列 CPU 加所有 GPU 的總功耗與 CPU 功耗，各附耗電量。
 - **完整的 GPU 細節。** 一次看一張 GPU：
   - 效能狀態、降頻原因與降頻時間、時脈；
   - 記憶體與記憶體匯流排、PCIe 連線與流量、NVLink-C2C；
@@ -57,8 +57,9 @@ htop 以 CPU 為主，nvtop 和 nvidia-smi 只在你盯著的時候顯示 GPU。
   - 裝置、PCI 與韌體、NUMA 與 CPU 親和性、P2P 路徑。
 
   GPU 不回報的值不會佔一行。
-- **整台機器。** 每顆核心的 CPU 使用率、CPU 溫度與功耗，以及每種核心目前與最高的頻率；記憶體、swap、緩衝區與快取；磁碟的可用空間、IOPS、延遲與硬碟溫度；網路流量、錯誤與丟包。讀得到 CPU 功耗時（powercap，或 GB10 的功耗感測器），頂端標題列會顯示 CPU 與所有 GPU 的總功耗；這不是插座端的整機功耗，任一部分讀不到時就不顯示。
-- **為 DGX Spark 打造。** 在 GB10 的統一記憶體上，RAM 長條會分出系統佔用與每個 GPU 工作佔用的部分。dgxtop 也會讀取 GB10 的 CPU 叢集溫度與 NVLink-C2C 連線，並提供原生 aarch64 版本。
+- **整台機器。** 每顆核心的 CPU 使用率、CPU 溫度與功耗，以及每種核心目前與最高的頻率（被 cpufreq 限制時一併顯示上限）；記憶體、swap 與其換入／換出速率、緩衝區與快取；磁碟的可用空間、IOPS、延遲與硬碟溫度；網路流量、錯誤與丟包。程序會列出擁有者的登入名稱（只讀本機的 `/etc/passwd`）；有程序在編碼或解碼影片時，還會列出每個程序佔用 GPU 編碼器與解碼器的比例。讀得到 CPU 功耗時（powercap，或 GB10 的功耗感測器），頂端標題列會顯示 CPU 與所有 GPU 的總功耗；這不是插座端的整機功耗，任一部分讀不到時就不顯示。
+- **記憶體壓力，而不是虛構的 VRAM 數字。** 顯示核心回報的記憶體、CPU 與 I/O 壓力（PSI）在 10 秒、1 分鐘、5 分鐘內的數值：工作因為等待該資源而停頓的時間比例；另外顯示開機以來核心因記憶體不足而終止的程序數。壓力能回答「剛才變慢是不是記憶體造成的」，不能回答「還剩多少空間」；剩多少要看 Memory 面板的 `avail`。RAM 用了七成的機器，壓力仍可能是 0 %。
+- **為 DGX Spark 打造。** 在 GB10 的統一記憶體上，RAM 長條會分出系統佔用與每個 GPU 工作佔用的部分；GPU 畫面顯示還可用的記憶體與記憶體壓力，而不是一個 GPU 實際上沒有的 VRAM 容量。dgxtop 也會讀取 GB10 的 CPU 叢集溫度（並標出最熱的叢集）與 NVLink-C2C 連線，並提供原生 aarch64 版本。
 - **程式內設定。** 調整採樣間隔與顯示模組，並查看每個資料來源的狀態。每項設定都顯示儲存值與生效值、來源，以及是立即生效還是重開後生效。
 
 ## 畫面
@@ -171,9 +172,12 @@ sudo -H dgxtop --any-user    # K／F9 可結束任何使用者的程序，如同
 dgxtop --replay fixture.json # 只用模擬資料、唯讀、使用獨立的暫存狀態
 dgxtop --check-config        # 驗證設定並列出儲存值與生效值
 dgxtop --diagnostics-json    # 以 JSON 輸出版本、SQLite、能力與健康狀態
+dgxtop --snapshot-json       # 以 JSON 輸出目前所有指標與 GPU 程序後結束
 dgxtop --import-legacy ~/.config/dgxtop/config.json --dry-run   # 顯示 v1 → v2 的對應
 dgxtop --version --verbose   # 版本、commit、工具鏈、target、SQLite runtime
 ```
+
+**給腳本用的快照：** `--snapshot-json` 會讀取約三秒（讓速率有值），在標準輸出印出一份 JSON 後結束。它使用自己的暫存資料夾，所以可以和執行中的 dgxtop 同時跑，不會動到任何程序，結束後不留下檔案。沒有數值的指標會印成 `null` 並附上原因，不會印成 0；程序的命令列不會輸出。例如：`dgxtop --snapshot-json | jq '.processes'`。
 
 **CPU 功率與總功率：** 請以 `sudo` 啟動 dgxtop，以讀取需要 root 權限的 CPU 功率資料。Linux 的 powercap/RAPL 能量計數器通常只允許 root 讀取；缺少權限時，即使 GPU 功率正常，CPU 功率與 CPU＋GPU 總功率仍會隱藏。
 
