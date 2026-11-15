@@ -246,7 +246,7 @@ fn build_modules(
         modules.memory = Some(Arc::new(memory::build_memory_view(
             reader,
             inputs.directory,
-            &inputs.processes.tracked,
+            inputs.processes,
             layout.chart_points(),
         )));
     }

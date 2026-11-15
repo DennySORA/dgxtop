@@ -6,6 +6,7 @@
 use std::collections::VecDeque;
 
 use dgxtop_compression::bars_of;
+use dgxtop_core::identity::EntityId;
 use dgxtop_core::process_history::MAX_LISTED_RUNS;
 use dgxtop_core::process_model::{
     ProcessHistoryModel, RunBars, RunDetail, RunRequest, RunRow, TrackedProcess, WriteProgress,
@@ -42,8 +43,30 @@ pub(super) struct ModelBuilder {
     details: Vec<(u64, RunDetail)>,
     /// The rows, the runs beyond them, and the book revision they show.
     rows: Option<(u64, Vec<RunRow>, usize)>,
-    /// The tracked processes and the memory revision they show.
-    tracked: Option<(u64, Vec<TrackedProcess>)>,
+    /// What the GPU processes hold now, as of the memory record's last
+    /// revision.
+    holders: Option<Holders>,
+}
+
+/// What the GPU processes hold in the newest table.
+#[derive(Debug, Clone)]
+struct Holders {
+    /// The memory record's revision they are of.
+    revision: u64,
+    /// The processes holding a color, in color order.
+    tracked: Vec<TrackedProcess>,
+    /// What the processes without a color hold on each GPU.
+    other: Vec<(EntityId, u64)>,
+}
+
+impl Holders {
+    fn of(memory: &ProcessMemoryBook) -> Self {
+        Self {
+            revision: memory.revision(),
+            tracked: tracked_of(memory),
+            other: memory.other().to_vec(),
+        }
+    }
 }
 
 /// What a model is built from.
@@ -85,6 +108,7 @@ impl ModelBuilder {
         self.revision += 1;
         let (runs, more_runs) = self.rows(inputs.book);
         self.refresh_details(inputs.book);
+        let holders = self.holders(inputs.memory).clone();
         Some(ProcessHistoryModel {
             revision: self.revision,
             runs,
@@ -95,7 +119,8 @@ impl ModelBuilder {
                 .iter()
                 .map(|(_, detail)| detail.clone())
                 .collect(),
-            tracked: self.tracked(inputs.memory),
+            tracked: holders.tracked,
+            other_gpu_bytes: holders.other,
             writes: inputs.writes,
         })
     }
@@ -134,15 +159,13 @@ impl ModelBuilder {
         self.details = details;
     }
 
-    /// The processes holding a color, taken again only when the memory
+    /// What the GPU processes hold, taken again only when the memory
     /// record moved.
-    fn tracked(&mut self, memory: &ProcessMemoryBook) -> Vec<TrackedProcess> {
-        let revision = memory.revision();
-        let (_, tracked) = match self.tracked.take() {
-            Some(tracked) if tracked.0 == revision => self.tracked.insert(tracked),
-            _ => self.tracked.insert((revision, tracked_of(memory))),
-        };
-        tracked.clone()
+    fn holders(&mut self, memory: &ProcessMemoryBook) -> &Holders {
+        match self.holders.take() {
+            Some(holders) if holders.revision == memory.revision() => self.holders.insert(holders),
+            _ => self.holders.insert(Holders::of(memory)),
+        }
     }
 }
 

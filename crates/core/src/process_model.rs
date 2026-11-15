@@ -146,10 +146,28 @@ pub struct ProcessHistoryModel {
     pub details: Vec<RunDetail>,
     /// The processes holding a color, in color order.
     pub tracked: Vec<TrackedProcess>,
+    /// What the GPU processes without a color hold on each GPU, in GPU
+    /// order: what the GPU's process list holds in all less what the
+    /// processes holding a color hold of it, both of the table
+    /// [`TrackedProcess::current`] is of, so the difference is never the
+    /// time between two reads. A GPU whose list that table does not carry
+    /// has no entry.
+    pub other_gpu_bytes: Vec<(EntityId, u64)>,
     pub writes: WriteProgress,
 }
 
 impl ProcessHistoryModel {
+    /// What the GPU processes without a color hold on the GPUs `include`
+    /// accepts; `None` while the newest table carries the process list of
+    /// none of them.
+    pub fn other_bytes_on(&self, include: impl Fn(&EntityId) -> bool) -> Option<u64> {
+        self.other_gpu_bytes
+            .iter()
+            .filter(|(gpu, _)| include(gpu))
+            .map(|(_, bytes)| *bytes)
+            .reduce(u64::saturating_add)
+    }
+
     /// The color of `key` while it holds one.
     pub fn slot_of(&self, key: &ProcessKey) -> Option<u8> {
         self.tracked
@@ -268,17 +286,21 @@ mod tests {
             key: key(9),
             pid: 9,
             name: "train".to_owned(),
-            current: vec![(gpu.clone(), 3), (other, 4)],
+            current: vec![(gpu.clone(), 3), (other.clone(), 4)],
         };
         assert_eq!(tracked.bytes_on(|id| *id == gpu), 3);
         assert_eq!(tracked.bytes_on(|_| true), 7);
         assert!(tracked.is_listed());
         let model = ProcessHistoryModel {
             tracked: vec![tracked],
+            other_gpu_bytes: vec![(gpu.clone(), 5), (other.clone(), 6)],
             ..ProcessHistoryModel::default()
         };
         assert_eq!(model.slot_of(&key(9)), Some(2));
         assert_eq!(model.slot_of(&key(1)), None);
+        assert_eq!(model.other_bytes_on(|id| *id == other), Some(6));
+        assert_eq!(model.other_bytes_on(|_| true), Some(11));
+        assert_eq!(model.other_bytes_on(|_| false), None, "no list of these");
     }
 
     /// The shutdown waits until the flush it asked for was handled and

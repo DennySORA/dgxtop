@@ -11,7 +11,10 @@
 //! graphics entries of one PID on one GPU merge into one link, and a PID is
 //! only linked to the process instance that already existed when the GPU
 //! list was read (PID-reuse guard; a replay's starts are on another host's
-//! clock and are not compared). Each GPU process's descendants are
+//! clock and are not compared). The table keeps what each GPU's list holds
+//! in all beside the rows ([`ProcessTable::gpu_listed_bytes`]), so what the
+//! rows do not carry is counted from the list they were joined from. Each
+//! GPU process's descendants are
 //! summed from the tree of every scanned process ([`ProcessTree`]) before
 //! the table is bounded with a stable priority; process metrics never
 //! become history series.
@@ -38,7 +41,7 @@ use crate::shared::arbitration::{self, check_namespace};
 use crate::shared::context::{self, CollectorSpec, Record, Route, Session};
 use crate::shared::counter::{self, CounterReading};
 use crate::shared::counter_inputs;
-use crate::shared::gpu_processes::{self, PidRecords};
+use crate::shared::gpu_processes::{self, GpuProcesses, PidRecords};
 use crate::shared::output::Subject;
 use crate::shared::reasons;
 use crate::shared::state_bounds::PROCESS_BASES_PER_ROW;
@@ -113,11 +116,11 @@ fn collect_processes(session: &mut Session<'_>) {
         }
         rows.push(row);
     }
-    attach_gpu_links(session, &mut rows, clk_tck);
+    let gpu_listed_bytes = attach_gpu_links(session, &mut rows, clk_tck);
     attach_descendants(session, &mut rows, &tree, clk_tck);
     rows.sort_by(priority);
     prune_bases(session, &rows);
-    let table = bounded_table(session, rows);
+    let table = bounded_table(session, rows, gpu_listed_bytes);
     session.set_process_table(table);
 }
 
@@ -385,10 +388,18 @@ fn descendants_of(
 
 // ----- GPU links ------------------------------------------------------------
 
-fn attach_gpu_links(session: &mut Session<'_>, rows: &mut [ProcessRow], clk_tck: Option<u64>) {
+/// Joins the GPU lists to `rows`; what each list holds in all
+/// ([`ProcessTable::gpu_listed_bytes`]), whether its entries found a row or
+/// not.
+fn attach_gpu_links(
+    session: &mut Session<'_>,
+    rows: &mut [ProcessRow],
+    clk_tck: Option<u64>,
+) -> Vec<(EntityId, u64)> {
     let groups = gpu_processes::group_by_gpu(session);
+    let listed = listed_bytes(session, &groups);
     if groups.values().all(|group| group.by_pid.is_empty()) {
-        return;
+        return listed;
     }
     let Some(clk_tck) = clk_tck else {
         // Without CLK_TCK the PID-reuse guard cannot run: no unsafe joins.
@@ -397,7 +408,7 @@ fn attach_gpu_links(session: &mut Session<'_>, rows: &mut [ProcessRow], clk_tck:
             "GPU process links skipped: clk_tck unknown, PID reuse cannot be excluded",
             Subject::none(),
         );
-        return;
+        return listed;
     };
     for group in groups.values().filter(|group| group.incomplete) {
         session.failure(
@@ -430,6 +441,32 @@ fn attach_gpu_links(session: &mut Session<'_>, rows: &mut [ProcessRow], clk_tck:
         row.gpu
             .sort_by(|left, right| left.gpu_entity_id.cmp(&right.gpu_entity_id));
     }
+    listed
+}
+
+/// The known memory of every entry of each GPU's list, in GPU order; a
+/// GPU whose list has no entry is left out.
+fn listed_bytes(
+    session: &Session<'_>,
+    groups: &BTreeMap<EntityId, GpuProcesses<'_>>,
+) -> Vec<(EntityId, u64)> {
+    groups
+        .values()
+        .filter(|group| !group.by_pid.is_empty())
+        .map(|group| {
+            let bytes = group
+                .by_pid
+                .values()
+                .filter_map(|records| memory_bytes(session, records))
+                .fold(0u64, u64::saturating_add);
+            (group.gpu_entity.clone(), bytes)
+        })
+        .collect()
+}
+
+/// What the entries of one PID on one GPU hold; `None` while unknown.
+fn memory_bytes(session: &Session<'_>, records: &PidRecords<'_>) -> Option<u64> {
+    largest_valid(session, &records.memory, ids::PROCESS_GPU_MEMORY).and_then(Scalar::as_u64)
 }
 
 /// The clock a process's start ticks count on, against the boot clock
@@ -502,8 +539,7 @@ fn gpu_link(session: &Session<'_>, gpu: &EntityId, records: &PidRecords<'_>) -> 
         utilization_percent: percent(&records.utilization, ids::PROCESS_GPU_UTILIZATION),
         encoder_percent: percent(&records.encoder, ids::PROCESS_GPU_ENCODER),
         decoder_percent: percent(&records.decoder, ids::PROCESS_GPU_DECODER),
-        memory_bytes: largest_valid(session, &records.memory, ids::PROCESS_GPU_MEMORY)
-            .and_then(Scalar::as_u64),
+        memory_bytes: memory_bytes(session, records),
     }
 }
 
@@ -609,7 +645,13 @@ fn prune_bases(session: &mut Session<'_>, rows: &[ProcessRow]) {
     }
 }
 
-fn bounded_table(session: &Session<'_>, mut rows: Vec<ProcessRow>) -> ProcessTable {
+/// The table of the rows the limits keep, with what the GPU lists hold in
+/// all: a row the bound drops stays counted there.
+fn bounded_table(
+    session: &Session<'_>,
+    mut rows: Vec<ProcessRow>,
+    gpu_listed_bytes: Vec<(EntityId, u64)>,
+) -> ProcessTable {
     let limits = session.plan().limits;
     let max_rows = usize::try_from(limits.max_processes).unwrap_or(usize::MAX);
     let max_links = usize::try_from(limits.max_process_gpu_links).unwrap_or(usize::MAX);
@@ -637,6 +679,7 @@ fn bounded_table(session: &Session<'_>, mut rows: Vec<ProcessRow>) -> ProcessTab
         gpu_links_truncated,
         total_seen,
         cycle_id: session.plan().cycle_id,
+        gpu_listed_bytes,
     }
 }
 

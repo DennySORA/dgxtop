@@ -505,6 +505,66 @@ fn unavailable_gpu_memory_is_none_not_zero() {
     assert_eq!(link.usage, GpuUsageKind::Compute);
 }
 
+/// The table keeps what each GPU's list holds in all, by the list its
+/// rows' links come from: an entry no row carries (a PID procfs does not
+/// show) and one the bound drops are counted there, an entry of unknown
+/// memory is not, and a GPU without an entry is left out.
+#[test]
+fn the_table_keeps_what_each_gpus_list_holds_in_all() {
+    let at = 2 * SECOND;
+    let listed = |batch: &CollectionBatch| -> Vec<(String, u64)> {
+        batch
+            .process_table
+            .as_ref()
+            .unwrap()
+            .gpu_listed_bytes
+            .iter()
+            .map(|(gpu, bytes)| (gpu.as_str().to_owned(), *bytes))
+            .collect()
+    };
+    let unknown = {
+        let key = metric_key("gpupid:GPU-b:9", ids::PROCESS_GPU_MEMORY, "gpu:GPU-b");
+        reading(&key, "nvml", "nvml:GPU-b:process.memory_allocated", at)
+            .unit(native::BYTES)
+            .failed(ReadStatus::Unsupported)
+            .reason(reasons::GPU_USAGE_COMPUTE)
+            .build()
+    };
+    let nvml = vec![
+        gpu_memory("GPU-a", 9, reasons::GPU_USAGE_COMPUTE, 300, at),
+        // No process row has this PID.
+        gpu_memory("GPU-a", 77, reasons::GPU_USAGE_COMPUTE, 50, at),
+        unknown,
+    ];
+    let collector = ProcessCollector::new().unwrap();
+    let batch = collect(
+        &collector,
+        &plan(host(9, 100, 10, 10, at), nvml.clone(), at + 1).build(),
+    );
+    assert_eq!(row(&batch, 9).gpu[0].memory_bytes, Some(300));
+    assert_eq!(
+        listed(&batch),
+        vec![("gpu:GPU-a".to_owned(), 350), ("gpu:GPU-b".to_owned(), 0)]
+    );
+
+    // A bound that keeps no row drops the link, never the list's total.
+    let bounded = collect(
+        &collector,
+        &plan(host(9, 100, 10, 10, at), nvml, at + 1)
+            .limits(table_limits(0, 0))
+            .build(),
+    );
+    assert!(rows(&bounded).is_empty());
+    assert_eq!(listed(&bounded)[0], ("gpu:GPU-a".to_owned(), 350));
+
+    // No GPU list: nothing is listed.
+    let alone = collect(
+        &collector,
+        &plan(host(9, 100, 10, 10, at), vec![], at + 1).build(),
+    );
+    assert!(listed(&alone).is_empty());
+}
+
 #[test]
 fn gpu_entry_of_an_older_instance_is_not_linked_to_a_reused_pid() {
     // The new instance started 50 s after boot; the GPU list was read at 2 s.

@@ -371,6 +371,13 @@ pub struct ProcessTable {
     pub total_seen: u32,
     pub read_finished_boot_ns: u64,
     pub cycle_id: u64,
+    /// What each GPU's process list holds in all, by the list the rows'
+    /// links were joined from: the known memory of every entry, also of a
+    /// PID no row carries. In GPU order; a GPU whose list has no entry is
+    /// left out. What a row's links hold is part of it, so the two never
+    /// differ by the time between two reads.
+    #[serde(default)]
+    pub gpu_listed_bytes: Vec<(EntityId, u64)>,
 }
 
 impl ProcessTable {

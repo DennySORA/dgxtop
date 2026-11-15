@@ -17,6 +17,11 @@
 //! line up with the bars they stack on. A table's read time is placed on
 //! the wall clock by the offset the actor read with it.
 //!
+//! What the processes without a color hold now is counted from the same
+//! table: what its GPU lists hold in all less the tracked processes' part
+//! ([`ProcessMemoryBook::other`]), so it never is the time between the
+//! read of a GPU's total and the read of its processes.
+//!
 //! Bounded: [`tracking::MAX_TRACKED_PROCESSES`] processes, each series at
 //! most the compression's buckets of every size, recorded while dgxtop
 //! runs (process memory never becomes a store series). An
@@ -80,6 +85,8 @@ struct NewestTable {
     /// The read time on the wall clock.
     read_utc_ns: i64,
     held: BTreeMap<ProcessKey, Vec<(EntityId, u64)>>,
+    /// What the table's GPU lists hold beyond `held`, per GPU.
+    other: Vec<(EntityId, u64)>,
 }
 
 /// The process memory record (module docs).
@@ -148,7 +155,7 @@ impl ProcessMemoryBook {
             self.processes.remove(&key);
         }
         let read_utc_ns = i128::from(now).saturating_add(boot_to_utc_ns);
-        self.update_records(listed, (now, utc_i64(read_utc_ns)));
+        self.update_records(listed, &table.gpu_listed_bytes, (now, utc_i64(read_utc_ns)));
     }
 
     /// Records the newest table's values over the time until `now` (boot
@@ -182,8 +189,14 @@ impl ProcessMemoryBook {
     }
 
     /// The tracked processes' values in `listed`, read at `read` (boot and
-    /// wall clock), held until the next table.
-    fn update_records(&mut self, listed: Vec<Listed<'_>>, (read_boot_ns, read_utc_ns): (u64, i64)) {
+    /// wall clock), held until the next table, and what the table's GPU
+    /// lists (`gpu_listed_bytes`) hold beyond them.
+    fn update_records(
+        &mut self,
+        listed: Vec<Listed<'_>>,
+        gpu_listed_bytes: &[(EntityId, u64)],
+        (read_boot_ns, read_utc_ns): (u64, i64),
+    ) {
         let mut held = BTreeMap::new();
         for Listed { row, gpus } in listed {
             if self.tracking.color_of(&row.key).is_none() {
@@ -200,11 +213,21 @@ impl ProcessMemoryBook {
             record.name.clone_from(&row.name);
             held.insert(row.key.clone(), gpus);
         }
+        let other = other_bytes(gpu_listed_bytes, &held);
         self.newest = Some(NewestTable {
             read_boot_ns,
             read_utc_ns,
             held,
+            other,
         });
+    }
+
+    /// What the GPU processes without a color hold on each GPU whose list
+    /// the newest table carries (module docs), in GPU order.
+    pub(crate) fn other(&self) -> &[(EntityId, u64)] {
+        self.newest
+            .as_ref()
+            .map_or(&[], |newest| newest.other.as_slice())
     }
 
     /// What `key` holds on each GPU in the newest table; empty when it is
@@ -343,6 +366,25 @@ impl<'a> Listed<'a> {
             .collect();
         (!gpus.is_empty()).then_some(Self { row, gpus })
     }
+}
+
+/// What each GPU's list holds (`gpu_listed_bytes`) less what the tracked
+/// processes hold of it (`held`).
+fn other_bytes(
+    gpu_listed_bytes: &[(EntityId, u64)],
+    held: &BTreeMap<ProcessKey, Vec<(EntityId, u64)>>,
+) -> Vec<(EntityId, u64)> {
+    gpu_listed_bytes
+        .iter()
+        .map(|(gpu, listed)| {
+            let tracked = held
+                .values()
+                .flatten()
+                .filter(|(held_on, _)| held_on == gpu)
+                .fold(0u64, |sum, (_, bytes)| sum.saturating_add(*bytes));
+            (gpu.clone(), listed.saturating_sub(tracked))
+        })
+        .collect()
 }
 
 fn total(gpus: &[(EntityId, u64)]) -> u64 {

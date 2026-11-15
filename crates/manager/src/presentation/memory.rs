@@ -6,7 +6,7 @@
 use dgxtop_core::metric::{Scalar, ids};
 use dgxtop_core::naming::entity;
 use dgxtop_core::pressure::PressureResource;
-use dgxtop_core::process_model::TrackedProcess;
+use dgxtop_core::process_model::{ProcessHistoryModel, TrackedProcess};
 use dgxtop_core::quality::SampleKind;
 use dgxtop_core::view::{CellState, MemoryView, MetricCell, ProcessShare, ProcessTrend, Trend};
 
@@ -22,9 +22,10 @@ const GPU_RESIDENT_SOURCE: &str = "GPU processes visible to the driver";
 pub(crate) fn build_memory_view(
     reader: &MetricReader<'_>,
     directory: &GpuDirectory<'_>,
-    processes: &[TrackedProcess],
+    processes: &ProcessHistoryModel,
     trend_width: usize,
 ) -> MemoryView {
+    let tracked = processes.tracked.as_slice();
     let cell = |metric: &str| reader.cell(metric, entity::MEMORY, entity::SCOPE_SYSTEM);
     MemoryView {
         total: cell(ids::MEMORY_TOTAL),
@@ -51,9 +52,21 @@ pub(crate) fn build_memory_view(
             trend_width,
         ),
         gpu_resident_trend: gpu_resident_trend(reader, directory, trend_width),
-        gpu_processes: unified_process_shares(directory, processes),
-        gpu_process_trends: process_trends(reader, directory, processes, trend_width),
+        gpu_processes: unified_process_shares(directory, tracked),
+        gpu_other_bytes: unified_other_bytes(directory, processes),
+        gpu_process_trends: process_trends(reader, directory, tracked, trend_width),
     }
+}
+
+/// What the GPU processes without a color hold on the unified-memory GPUs
+/// (D-142); `None` without such a GPU and while the process history knows
+/// the process list of none of them.
+fn unified_other_bytes(
+    directory: &GpuDirectory<'_>,
+    processes: &ProcessHistoryModel,
+) -> Option<u64> {
+    let unified = directory.unified_gpus();
+    processes.other_bytes_on(|gpu| unified.contains(gpu))
 }
 
 /// What each tracked process holds on the unified-memory GPUs now; none
@@ -205,7 +218,7 @@ mod tests {
             .with_trends(&fixture.trends);
         let index = SnapshotLookup::new(&fixture.snapshot);
         let directory = GpuDirectory::new(&fixture.catalog, &index);
-        build_memory_view(&reader, &directory, &fixture.processes.tracked, 30).gpu_resident
+        build_memory_view(&reader, &directory, &fixture.processes, 30).gpu_resident
     }
 
     #[test]
@@ -258,7 +271,7 @@ mod tests {
             .with_trends(&fixture.trends);
         let index = SnapshotLookup::new(&fixture.snapshot);
         let directory = GpuDirectory::new(&fixture.catalog, &index);
-        let view = build_memory_view(&reader, &directory, &fixture.processes.tracked, 30);
+        let view = build_memory_view(&reader, &directory, &fixture.processes, 30);
         assert_eq!(view.used_trend.points, vec![Some(8.0)]);
         assert_eq!(view.gpu_resident_trend.points, vec![Some(6.0)]);
         // Without a unified GPU the chart has no share.
@@ -268,7 +281,7 @@ mod tests {
         let index = SnapshotLookup::new(&plain.snapshot);
         let directory = GpuDirectory::new(&plain.catalog, &index);
         assert!(
-            build_memory_view(&reader, &directory, &plain.processes.tracked, 30)
+            build_memory_view(&reader, &directory, &plain.processes, 30)
                 .gpu_resident_trend
                 .points
                 .is_empty()
@@ -328,13 +341,24 @@ mod tests {
             .with_trends(&fixture.trends);
         let index = SnapshotLookup::new(&fixture.snapshot);
         let directory = GpuDirectory::new(&fixture.catalog, &index);
-        let view = build_memory_view(&reader, &directory, &fixture.processes.tracked, 30);
+        let view = build_memory_view(&reader, &directory, &fixture.processes, 30);
         let shares: Vec<(u8, &str, u64)> = view
             .gpu_processes
             .iter()
             .map(|share| (share.slot, share.name.as_str(), share.bytes))
             .collect();
         assert_eq!(shares, vec![(TRAIN, "train", 6 << 30)]);
+        // Until the process history knows the unified GPU's list, nothing
+        // is said of the processes without a color.
+        assert_eq!(view.gpu_other_bytes, None);
+        // Then it is what that list holds beyond the tracked, on the
+        // unified GPU only (D-142).
+        fixture.processes.other_gpu_bytes = vec![(gpu(UNIFIED_A), 2 << 30), (gpu(DISCRETE), 9)];
+        let listed = build_memory_view(&reader, &directory, &fixture.processes, 30);
+        assert_eq!(listed.gpu_other_bytes, Some(2 << 30));
+        fixture.processes.other_gpu_bytes = vec![(gpu(DISCRETE), 9)];
+        let discrete_only = build_memory_view(&reader, &directory, &fixture.processes, 30);
+        assert_eq!(discrete_only.gpu_other_bytes, None);
         let parts: Vec<(u8, Vec<Option<f64>>)> = view
             .gpu_process_trends
             .iter()
@@ -384,7 +408,7 @@ mod tests {
             .with_trends(&fixture.trends);
         let index = SnapshotLookup::new(&fixture.snapshot);
         let directory = GpuDirectory::new(&fixture.catalog, &index);
-        let view = build_memory_view(&reader, &directory, &fixture.processes.tracked, 30);
+        let view = build_memory_view(&reader, &directory, &fixture.processes, 30);
         assert_eq!(view.total.value.unwrap().as_u64(), Some(128 << 30));
         assert_eq!(view.swap_total.value_f64(), Some(0.0));
         assert_eq!(view.cached.state, CellState::ReadFailed);

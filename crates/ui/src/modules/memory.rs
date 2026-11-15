@@ -237,8 +237,13 @@ impl Shares {
         let room = self.gpu.unwrap_or(self.used);
         let (mut segments, tracked) =
             share_segments(&memory.gpu_processes, self.total, room, context);
-        // In whole bytes, as the legend's `other` is.
-        let other = (self.gpu.unwrap_or(0.0) - tracked).max(0.0).round();
+        // In whole bytes, as the legend's `other` is, and within what the
+        // bar shows of GPU memory.
+        let other = match (other_bytes(memory), self.gpu) {
+            (Some(other), _) => bytes_f64(other).min((room - tracked).max(0.0)),
+            (None, Some(gpu)) => (gpu - tracked).max(0.0).round(),
+            (None, None) => 0.0,
+        };
         segments.push(Segment {
             fraction: other / self.total,
             color: theme.other_processes_color(),
@@ -378,6 +383,12 @@ fn legend_other(memory: &MemoryView) -> Option<u64> {
     other_bytes(memory)
 }
 
+fn bytes_f64(bytes: u64) -> f64 {
+    #[allow(clippy::cast_precision_loss)]
+    let value = bytes as f64;
+    value
+}
+
 /// What the CPU side holds of the used RAM: the used RAM less the GPU share
 /// (display arithmetic).
 fn host_bytes(memory: &MemoryView) -> Option<u64> {
@@ -389,9 +400,19 @@ fn host_bytes(memory: &MemoryView) -> Option<u64> {
     Some(bytes)
 }
 
-/// What the GPU processes without a color hold: the GPU share less the
-/// tracked processes (display arithmetic).
+/// What the GPU processes without a color hold: as their process lists
+/// count it (D-142), which does not move while a tracked process's memory
+/// does; until those lists are known, the GPU share less the tracked
+/// processes (display arithmetic), read at another moment than they.
 fn other_bytes(memory: &MemoryView) -> Option<u64> {
+    memory.gpu_resident.as_ref()?;
+    memory
+        .gpu_other_bytes
+        .or_else(|| share_beyond_tracked(memory))
+}
+
+/// The GPU share less the tracked processes (display arithmetic).
+fn share_beyond_tracked(memory: &MemoryView) -> Option<u64> {
     let gpu = memory.gpu_resident.as_ref()?.value_f64()?;
     #[allow(clippy::cast_precision_loss)]
     let tracked: f64 = memory
@@ -813,6 +834,93 @@ mod tests {
         view.gpu_resident = None;
         assert_eq!(text(&ram_line(&view, &context)), "RAM 48.0 GiB / 64.0 GiB");
         assert!(legend(&view, 120).is_empty());
+    }
+
+    /// The GPU share is read at another moment than its processes: while a
+    /// job's memory grows, the share is ahead of what the legend lists for
+    /// the jobs (D-142). The legend and the bar take the other processes
+    /// from the processes' own lists, so no `other` comes and goes with
+    /// that difference and the legend keeps its lines; what the share is
+    /// ahead by is drawn with the system until the next list.
+    #[test]
+    fn a_share_read_ahead_of_its_processes_is_no_other_process() {
+        let context = crate::test_fixtures::display_context();
+        let theme = &context.theme;
+        let legend = |view: &MemoryView| -> Vec<String> {
+            gpu_legend(view, 40, (MAX_GPU_ROWS, 0), &context)
+                .lines
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect()
+                })
+                .collect()
+        };
+        let bar = |view: &MemoryView| -> Vec<ratatui::style::Color> {
+            let buffer = draw_used(view, (BAR_LABEL + 64 + 1 + 6, 5));
+            (BAR_LABEL..BAR_LABEL + 64)
+                .map(|x| buffer[(x, 0)].fg)
+                .collect()
+        };
+        let colors = |parts: &[(ratatui::style::Color, usize)]| -> Vec<ratatui::style::Color> {
+            parts
+                .iter()
+                .flat_map(|(color, columns)| std::iter::repeat_n(*color, *columns))
+                .collect()
+        };
+        // The jobs hold 24 GiB by their lists; the share read 32 GiB.
+        let mut view = memory(bytes(48.0 * GIB), Some(bytes(32.0 * GIB)));
+        view.gpu_processes = vec![share(0, 16.0), share(1, 8.0)];
+        view.gpu_other_bytes = Some(0);
+        assert_eq!(legend(&view), vec!["[GPU] ■ job0 16.0 GiB  ■ job1 8.0 GiB"]);
+        assert_eq!(gpu_legend_rows(&view, 40, MAX_GPU_ROWS, &context), 1);
+        assert_eq!(
+            bar(&view),
+            colors(&[
+                (theme.process_color(0), 16),
+                (theme.process_color(1), 8),
+                (theme.os_memory_color(), 24),
+                (theme.gauge_track, 16),
+            ])
+        );
+        // What the lists count for processes without a color is shown.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let four_gib = (4.0 * GIB) as u64;
+        view.gpu_other_bytes = Some(four_gib);
+        assert_eq!(
+            legend(&view),
+            vec![
+                "[GPU] ■ job0 16.0 GiB  ■ job1 8.0 GiB",
+                "      ■ other 4.0 GiB"
+            ]
+        );
+        assert_eq!(
+            bar(&view),
+            colors(&[
+                (theme.process_color(0), 16),
+                (theme.process_color(1), 8),
+                (theme.other_processes_color(), 4),
+                (theme.os_memory_color(), 20),
+                (theme.gauge_track, 16),
+            ])
+        );
+        // A share behind its processes leaves the others no room.
+        view.gpu_resident = Some(bytes(24.0 * GIB));
+        assert_eq!(
+            bar(&view),
+            colors(&[
+                (theme.process_color(0), 16),
+                (theme.process_color(1), 8),
+                (theme.os_memory_color(), 24),
+                (theme.gauge_track, 16),
+            ])
+        );
+        // Until the lists are known the rest of the share stands for them.
+        view.gpu_resident = Some(bytes(32.0 * GIB));
+        view.gpu_other_bytes = None;
+        assert_eq!(legend(&view)[1], "      ■ other 8.0 GiB");
     }
 
     /// Beyond its most lines the GPU legend scrolls: the lines from the

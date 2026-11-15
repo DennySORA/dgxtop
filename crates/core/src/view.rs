@@ -416,6 +416,13 @@ pub struct MemoryView {
     /// What each tracked process holds of `gpu_resident` now, in slot order
     /// (D-64); the rest of `gpu_resident` is other GPU processes.
     pub gpu_processes: Vec<ProcessShare>,
+    /// What the GPU processes without a color hold of the RAM, counted from
+    /// the process lists `gpu_processes` are read from (D-142): unlike the
+    /// rest of `gpu_resident`, which is read at another moment, it does not
+    /// move while a tracked process's memory does. `None` while those lists
+    /// are not known; the rest of `gpu_resident` then stands for it.
+    #[serde(default)]
+    pub gpu_other_bytes: Option<u64>,
     /// Each tracked process's part of the points of `used_trend`.
     pub gpu_process_trends: Vec<ProcessTrend>,
 }

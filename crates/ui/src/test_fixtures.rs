@@ -410,6 +410,7 @@ pub(crate) fn memory_view() -> MemoryView {
         used_trend: trend(vec![Some(12.0 * GIB), Some(12.3 * GIB)]),
         gpu_resident_trend: trend(vec![Some(9.5 * GIB), Some(10.0 * GIB)]),
         gpu_processes: Vec::new(),
+        gpu_other_bytes: None,
         gpu_process_trends: Vec::new(),
     }
 }

@@ -98,6 +98,50 @@ fn close(left: Option<f64>, right: f64) -> bool {
     left.is_some_and(|left| (left - right).abs() < 1.0)
 }
 
+/// What the processes without a color hold is what the table's GPU lists
+/// hold in all less the tracked processes' part of the same table: nothing
+/// while the tracked processes account for the whole list, however their
+/// memory moved since the last table; the rest of a list whose other
+/// entries no row carries; no entry for a GPU without a list.
+#[test]
+fn other_processes_hold_what_the_lists_hold_beyond_the_tracked() {
+    let listing = |a: u64, b: u64| vec![(gpu(GPU_A), a), (gpu(GPU_B), b)];
+    let other = |book: &ProcessMemoryBook| -> Vec<(String, u64)> {
+        book.other()
+            .iter()
+            .map(|(gpu, bytes)| (gpu.as_str().to_owned(), *bytes))
+            .collect()
+    };
+    let mut book = ProcessMemoryBook::new(1000, 0);
+    assert!(other(&book).is_empty(), "no table yet");
+
+    let held = |a: u64| vec![row(9, "python", &[(GPU_A, Some(a)), (GPU_B, Some(GIB))])];
+    let mut first = table(1, 1, held(4 * GIB));
+    first.gpu_listed_bytes = listing(4 * GIB, GIB);
+    book.record_table(&first);
+    let none = vec![(GPU_A.to_owned(), 0), (GPU_B.to_owned(), 0)];
+    assert_eq!(other(&book), none, "the tracked hold all of both lists");
+
+    // The process grew by 5 GiB and its list with it: still nothing else.
+    let mut grown = table(2, 2, held(9 * GIB));
+    grown.gpu_listed_bytes = listing(9 * GIB, GIB);
+    book.record_table(&grown);
+    assert_eq!(other(&book), none);
+
+    // The list of GPU A holds 2 GiB no row carries.
+    let mut shared = table(3, 3, held(9 * GIB));
+    shared.gpu_listed_bytes = listing(11 * GIB, GIB);
+    book.record_table(&shared);
+    assert_eq!(
+        other(&book),
+        vec![(GPU_A.to_owned(), 2 * GIB), (GPU_B.to_owned(), 0)]
+    );
+
+    // A table without lists (no GPU read) says nothing of the others.
+    book.record_table(&table(4, 4, held(9 * GIB)));
+    assert!(other(&book).is_empty());
+}
+
 /// A table's values hold until the next table, but never beyond three
 /// sampling periods: a stalled read leaves a gap, not a stretched value.
 #[test]

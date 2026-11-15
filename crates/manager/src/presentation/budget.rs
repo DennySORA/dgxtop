@@ -541,6 +541,7 @@ mod tests {
             used_trend: trend(64),
             gpu_resident_trend: trend(64),
             gpu_processes: Vec::new(),
+            gpu_other_bytes: None,
             gpu_process_trends: vec![ProcessTrend {
                 slot: 0,
                 trend: trend(64),
