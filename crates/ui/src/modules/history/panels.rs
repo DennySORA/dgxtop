@@ -2,7 +2,8 @@
 //! a title over one strip per series, all on the window's time axis. The
 //! CPU and the memory (one strip each, against 100 % and the RAM total),
 //! the memory's also with its stall pressure, `some` and `full`, where the
-//! kernel reports it (D-135); the GPUs' utilization, memory in use,
+//! kernel reports it (D-135), unless a key of their own folded those two
+//! strips away (D-144); the GPUs' utilization, memory in use,
 //! temperature and power (each against its own scale), for one GPU at a
 //! time on a host of several (D-107), the power panel also leading with
 //! the host's total and each CPU package's power once the CPU's is read
@@ -10,6 +11,8 @@
 //! temperature (D-137); the disk's read and
 //! write and the interface's receive and transmit rates (two strips on one
 //! scale, the tallest column of the pair, so their heights compare).
+
+use std::collections::BTreeSet;
 
 use dgxtop_core::identity::EntityId;
 use dgxtop_core::metric::CanonicalUnit;
@@ -19,6 +22,7 @@ use dgxtop_core::view::{
 
 use super::nanos_to_seconds;
 use crate::format::{clean, format_value, gpu_with_model};
+use crate::modules::folds::MEMORY_PRESSURE_STRIPS;
 
 /// How a strip colors its columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,9 +134,38 @@ pub(super) struct Panel<'a> {
     /// The id that folds the panel away (`view::FOLDABLE_PANELS`, D-114);
     /// none for a panel that stays.
     pub(super) fold: Option<&'static str>,
+    /// The strips a key of their own folds away (D-144); none for a panel
+    /// whose strips all stay.
+    pub(super) strips_fold: Option<StripsFold<'a>>,
+}
+
+/// Strips of a panel a key of their own folds away (D-144), and what the
+/// panel is without them.
+#[derive(Debug, Clone)]
+pub(super) struct StripsFold<'a> {
+    /// The id that folds them (`view::FOLDABLE_PANELS`).
+    pub(super) id: &'static str,
+    /// The panel's title without them.
+    title: String,
+    /// The strips that stay.
+    strips: Vec<Strip<'a>>,
 }
 
 impl Panel<'_> {
+    /// The panel as `folded` leaves it: without the strips a key of their
+    /// own folded away (D-144), under the title it has without them.
+    pub(super) fn with_strips_folded(mut self, folded: &BTreeSet<String>) -> Self {
+        let fold = self
+            .strips_fold
+            .as_mut()
+            .filter(|fold| folded.contains(fold.id));
+        if let Some(fold) = fold {
+            std::mem::swap(&mut self.title, &mut fold.title);
+            std::mem::swap(&mut self.strips, &mut fold.strips);
+        }
+        self
+    }
+
     /// The panel titled by `parts`, which name GPUs (D-123).
     pub(super) fn titled_by(self, parts: Vec<(String, Option<String>)>) -> Self {
         Self {
@@ -309,6 +342,7 @@ pub(super) fn panels<'a>(history: &'a HistoryView, gpu: Option<&EntityId>) -> Ve
                 title_parts: Vec::new(),
                 strips,
                 fold: Some(fold),
+                strips_fold: None,
             });
         }
     }
@@ -323,7 +357,8 @@ pub(super) fn panels<'a>(history: &'a HistoryView, gpu: Option<&EntityId>) -> Ve
 /// The memory panel: the RAM in use against the RAM total, alone until the
 /// kernel reports the memory's stall pressure, then with the strips `some`
 /// and `full` under it (D-135), each scaled to its peak (1 % at least) and
-/// colored by how much time was lost.
+/// colored by how much time was lost. A key of their own folds those two
+/// away (D-144): the panel is then the one a kernel without PSI has.
 fn memory_panel<'a>(history: &'a HistoryView, used: &'a HistoryChartView) -> Panel<'a> {
     let total = used
         .scale_max
@@ -339,12 +374,13 @@ fn memory_panel<'a>(history: &'a HistoryView, used: &'a HistoryChartView) -> Pan
         Some(pressure_strip(label, chart))
     })
     .collect();
+    let alone = single(
+        format!("Memory used{total}"),
+        Series::of_chart(used),
+        used.scale_max,
+    );
     if pressure.is_empty() {
-        return single(
-            format!("Memory used{total}"),
-            Series::of_chart(used),
-            used.scale_max,
-        );
+        return alone;
     }
     let mut strips = vec![level_strip("used".to_owned(), used)];
     strips.extend(pressure);
@@ -353,6 +389,11 @@ fn memory_panel<'a>(history: &'a HistoryView, used: &'a HistoryChartView) -> Pan
         title_parts: Vec::new(),
         strips,
         fold: None,
+        strips_fold: Some(StripsFold {
+            id: MEMORY_PRESSURE_STRIPS,
+            title: alone.title,
+            strips: alone.strips,
+        }),
     }
 }
 
@@ -459,6 +500,7 @@ pub(super) fn single(title: String, series: Series<'_>, scale: Option<f64>) -> P
             gpu: None,
         }],
         fold: None,
+        strips_fold: None,
     }
 }
 
@@ -501,6 +543,7 @@ fn rate_panel<'a>(history: &'a HistoryView, pair: [Rate; 2], title: &str) -> Opt
         title_parts: Vec::new(),
         strips,
         fold: None,
+        strips_fold: None,
     })
 }
 
@@ -777,12 +820,49 @@ mod tests {
             ]
         );
         assert!(!memory.is_rate());
+        // A key of their own folds the two away (D-144): what is left is
+        // the panel of a kernel without PSI, which still names that key.
+        let folded =
+            |ids: &[&str]| -> BTreeSet<String> { ids.iter().map(|id| (*id).to_owned()).collect() };
+        let alone = super::panels(&history, None)
+            .swap_remove(1)
+            .with_strips_folded(&folded(&[MEMORY_PRESSURE_STRIPS]));
+        assert_eq!(alone.title, "Memory used · 64.0 GiB");
+        let labels: Vec<&str> = alone
+            .strips
+            .iter()
+            .map(|strip| strip.label.as_str())
+            .collect();
+        assert_eq!(labels, vec![""], "one strip needs no label");
+        assert_eq!(alone.fold, Some("history.memory"));
+        assert_eq!(
+            alone.strips_fold.as_ref().map(|fold| fold.id),
+            Some(MEMORY_PRESSURE_STRIPS)
+        );
+        // Another panel's fold leaves it whole, and no other panel has
+        // strips to fold.
+        let whole = super::panels(&history, None)
+            .swap_remove(1)
+            .with_strips_folded(&folded(&["history.cpu", "history.memory"]));
+        assert_eq!(whole.strips.len(), 3);
+        assert_eq!(
+            super::panels(&history, None)
+                .iter()
+                .filter(|panel| panel.strips_fold.is_some())
+                .count(),
+            1
+        );
         // Only `some` reported: its strip alone follows the RAM in use.
         history
             .charts
             .retain(|chart| chart.kind != HistoryChartKind::MemoryPressureFull);
         let panels = super::panels(&history, None);
         assert_eq!(panels[1].strips.len(), 2);
+        // A kernel without PSI has nothing to fold.
+        history
+            .charts
+            .retain(|chart| chart.kind != HistoryChartKind::MemoryPressureSome);
+        assert!(super::panels(&history, None)[1].strips_fold.is_none());
     }
 
     /// Where the CPU's and the SoC's temperature are read they lead the

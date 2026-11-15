@@ -820,6 +820,7 @@ impl<'a> RunCharts<'a> {
             title_parts: Vec::new(),
             strips: shown,
             fold: None,
+            strips_fold: None,
         })
     }
 }

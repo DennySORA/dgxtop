@@ -1,7 +1,8 @@
 //! The panels a key folds (D-114): the key each names on its title, and
 //! the one row a folded panel keeps, `▸ Disk I/O ───── (i unfold)`, which a
-//! click unfolds too. The keymap binds the same keys (its tests check
-//! them).
+//! click unfolds too. A key may also fold some of a panel's strips away
+//! (D-144): the panel stays and names that key beside its own. The keymap
+//! binds the same keys (its tests check them).
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -13,56 +14,48 @@ use crate::registry::{DisplayContext, DisplayModuleManifest, controls};
 use dgxtop_core::identity::EntityId;
 use dgxtop_core::view::ViewModel;
 
-/// One foldable panel.
+/// One foldable panel, or the strips of a panel a key folds away.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Fold {
     /// Its id in `view::FOLDABLE_PANELS`.
     pub(crate) panel: &'static str,
     pub(crate) key: char,
+    /// What the key is named for on the panel's title: `fold` for a
+    /// panel, what they show for strips.
+    pub(crate) names: &'static str,
+}
+
+/// What a key that folds a whole panel is named for.
+const FOLDS_PANEL: &str = "fold";
+/// The memory panel's stall pressure strips (D-144).
+pub(crate) const MEMORY_PRESSURE_STRIPS: &str = "history.memory_pressure";
+
+/// A panel `key` folds away.
+const fn panel(panel: &'static str, key: char) -> Fold {
+    Fold {
+        panel,
+        key,
+        names: FOLDS_PANEL,
+    }
 }
 
 /// Every foldable panel, in the order of `view::FOLDABLE_PANELS`.
-pub(crate) const FOLDS: [Fold; 10] = [
+pub(crate) const FOLDS: [Fold; 11] = [
+    panel("disk", 'i'),
+    panel("network", 'n'),
+    panel("history.cpu", 'c'),
+    panel("history.memory", 'm'),
     Fold {
-        panel: "disk",
-        key: 'i',
+        panel: MEMORY_PRESSURE_STRIPS,
+        key: 's',
+        names: "pressure",
     },
-    Fold {
-        panel: "network",
-        key: 'n',
-    },
-    Fold {
-        panel: "history.cpu",
-        key: 'c',
-    },
-    Fold {
-        panel: "history.memory",
-        key: 'm',
-    },
-    Fold {
-        panel: "history.gpu_utilization",
-        key: 'u',
-    },
-    Fold {
-        panel: "history.gpu_memory",
-        key: 'v',
-    },
-    Fold {
-        panel: "history.gpu_temperature",
-        key: 't',
-    },
-    Fold {
-        panel: "history.power",
-        key: 'p',
-    },
-    Fold {
-        panel: "history.disk",
-        key: 'i',
-    },
-    Fold {
-        panel: "history.network",
-        key: 'n',
-    },
+    panel("history.gpu_utilization", 'u'),
+    panel("history.gpu_memory", 'v'),
+    panel("history.gpu_temperature", 't'),
+    panel("history.power", 'p'),
+    panel("history.disk", 'i'),
+    panel("history.network", 'n'),
 ];
 
 /// The fold of `panel`.
@@ -70,9 +63,10 @@ pub(crate) fn fold_of(panel: &str) -> Option<Fold> {
     FOLDS.iter().copied().find(|fold| fold.panel == panel)
 }
 
-/// `i fold`: the keys a foldable panel names at the right of its title.
+/// `i fold`: the keys a foldable panel names at the right of its title;
+/// `s pressure` for strips a key folds away.
 pub(crate) fn fold_keys(panel: &str) -> String {
-    fold_of(panel).map_or_else(String::new, |fold| format!("{} fold", fold.key))
+    fold_of(panel).map_or_else(String::new, |fold| format!("{} {}", fold.key, fold.names))
 }
 
 /// `▸ Disk I/O ────── (i unfold)`: the row of a folded panel, `width`
@@ -139,6 +133,7 @@ mod tests {
         let panels: Vec<&str> = FOLDS.iter().map(|fold| fold.panel).collect();
         assert_eq!(panels, FOLDABLE_PANELS);
         assert_eq!(fold_keys("history.power"), "p fold");
+        assert_eq!(fold_keys(MEMORY_PRESSURE_STRIPS), "s pressure");
         assert_eq!(fold_keys("processes"), "");
         let context = crate::test_fixtures::display_context();
         let text = |width: u16| -> String {

@@ -819,6 +819,65 @@ fn folded_panels_keep_a_row_and_give_the_others_the_rest() {
     }
 }
 
+/// The Overview History's memory panel names the key that folds its stall
+/// pressure strips away beside its own (D-144). Folded, the panel is the
+/// RAM in use alone under the title it has without pressure, still naming
+/// the key, and the strips are gone.
+#[test]
+fn a_key_folds_the_memory_pressure_strips_of_the_history() {
+    use dgxtop_core::metric::CanonicalUnit;
+    use dgxtop_core::view::HistoryChartKind;
+    let mut history = history_model();
+    {
+        let view = Arc::make_mut(history.modules.history.as_mut().unwrap());
+        let used = view
+            .charts
+            .iter()
+            .find(|chart| chart.kind == HistoryChartKind::MemoryUsed)
+            .unwrap()
+            .clone();
+        for kind in [
+            HistoryChartKind::MemoryPressureSome,
+            HistoryChartKind::MemoryPressureFull,
+        ] {
+            let mut chart = used.clone();
+            chart.kind = kind;
+            chart.unit = CanonicalUnit::Percent;
+            chart.scale_max = None;
+            chart.peak = Some(2.0);
+            for point in &mut chart.points {
+                point.mean = point.mean.map(|_| 1.5);
+                point.max = point.max.map(|_| 2.0);
+                point.min = point.min.map(|_| 1.0);
+            }
+            view.charts.push(chart);
+        }
+    }
+    let size = (213, 41);
+    let shown = render_with(
+        &Viewer::builtin(),
+        Some(&history),
+        &UiState::default(),
+        size,
+    );
+    let title = &shown.rows[row_index(&shown, "Memory used and pressure")];
+    assert!(title.contains("(m fold · s pressure)"), "{title}");
+    let folded = render_with(
+        &Viewer::builtin(),
+        Some(&history),
+        &UiState {
+            folded: Arc::new(["history.memory_pressure".to_owned()].into()),
+            ..UiState::default()
+        },
+        size,
+    );
+    let text = folded.text();
+    assert!(!text.contains("Memory used and pressure"), "{text}");
+    let title = &folded.rows[row_index(&folded, "Memory used ·")];
+    assert!(title.contains("(m fold · s pressure)"), "{title}");
+    assert!(!title.starts_with('▸'), "the panel stays open: {title}");
+}
+
 /// `z` shows the GPU processes alone on the Overview (D-121): the table
 /// takes every row under the header, its title naming `z back`; the other
 /// panels wait.

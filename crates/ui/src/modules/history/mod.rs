@@ -172,6 +172,7 @@ fn render_history(
     // their rows; the others pair up as if they were not there (D-114).
     let (folded, open): (Vec<Panel<'_>>, Vec<Panel<'_>>) = panels(history, gpu)
         .into_iter()
+        .map(|panel| panel.with_strips_folded(&context.folded))
         .partition(|panel| is_folded(panel, context));
     let folded_count = folded.len();
     let panels: Vec<Panel<'_>> = folded.into_iter().chain(open).collect();
@@ -412,8 +413,9 @@ fn strip_shares(rows: u16, strips: usize) -> Vec<u16> {
 }
 
 /// `GPU power ────── (p fold)`: the title, why a query failed, a rule to
-/// the panel's edge and the key folding the panel away (D-114), left out
-/// when the row has no room for it.
+/// the panel's edge and the key folding the panel away (D-114), with the
+/// key that folds some of its strips away (D-144, `m fold · s pressure`),
+/// left out when the row has no room for them.
 fn title_rule(
     panel: &Panel<'_>,
     error: Option<&str>,
@@ -429,8 +431,12 @@ fn title_rule(
             theme.tone_style(CellTone::Conflict),
         ));
     }
-    let keys = panel.fold.map(fold_keys).filter(|keys| !keys.is_empty());
-    let mut tail = keys.map_or_else(Vec::new, |keys| key_spans(&keys, context));
+    let keys = panel_keys(panel);
+    let mut tail = if keys.is_empty() {
+        Vec::new()
+    } else {
+        key_spans(&keys, context)
+    };
     let used: usize = spans.iter().chain(&tail).map(Span::width).sum();
     if used + 4 > usize::from(width) {
         tail.clear();
@@ -461,6 +467,20 @@ fn title_spans(panel: &Panel<'_>, context: &DisplayContext) -> Vec<Span<'static>
             Span::styled(clean(text), style)
         })
         .collect()
+}
+
+/// `m fold · s pressure`: the keys a panel names on its title, the one
+/// that folds it away (D-114) and the one that folds some of its strips
+/// away (D-144).
+fn panel_keys(panel: &Panel<'_>) -> String {
+    let strips = panel.strips_fold.as_ref().map(|fold| fold.id);
+    let keys: Vec<String> = [panel.fold, strips]
+        .into_iter()
+        .flatten()
+        .map(fold_keys)
+        .filter(|keys| !keys.is_empty())
+        .collect();
+    keys.join(" · ")
 }
 
 /// Whether the user folded `panel` (D-114).

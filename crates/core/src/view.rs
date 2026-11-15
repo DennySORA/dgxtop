@@ -679,12 +679,14 @@ pub struct HistoryPart {
 
 /// The panels a frontend may fold away (D-114), saved in `viewer.folded`:
 /// the Overview's disk I/O and network modules, then the Overview
-/// History's panels.
-pub const FOLDABLE_PANELS: [&str; 10] = [
+/// History's panels, the memory panel's stall pressure strips among them
+/// (D-144): folded, they leave the memory panel its `used` strip.
+pub const FOLDABLE_PANELS: [&str; 11] = [
     "disk",
     "network",
     "history.cpu",
     "history.memory",
+    "history.memory_pressure",
     "history.gpu_utilization",
     "history.gpu_memory",
     "history.gpu_temperature",

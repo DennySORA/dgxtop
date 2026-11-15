@@ -145,7 +145,8 @@ when the charts do not all fit, a line under the bar sizes says how many are abo
 `PgUp` / `PgDn` scroll them. To give the charts you watch more room,
 fold the others to their title row, first on the page, with the key each panel names on its title: `c` CPU, `m` memory, `u` GPU
 utilization, `v` GPU memory, `t` temperature, `p` power, `i` disk, `n` network; `o` unfolds them all,
-and folds stay after a restart.
+and folds stay after a restart. `s` hides the memory panel's two pressure strips, `some` and
+`full`, and leaves the RAM in use; `s` again, or `o`, brings them back.
 
 <img src="docs/images/screenshots/workstation-overview-history.png" alt="Overview History of a two-GPU workstation in 1-minute bars: CPU, memory, GPU utilization, GPU memory, GPU temperature, GPU power with energy, disk and network, and a table of each GPU's average and peak" width="100%">
 
@@ -326,6 +327,7 @@ keyboard without arrow keys, `h` / `j` / `k` / `l` stand in for `←` / `↓` / 
 | `PgUp`/`PgDn`, `Ctrl-U`/`Ctrl-D` | Previous / next page in the GPU view and of an opened run's charts; scroll the Overview History's charts when they do not all fit |
 | `g`/`Home`/`<`, `G`/`End`/`>` | Top / end of the Process History list; first / last page of an opened run's charts and in the GPU view; first / last charts in Overview History |
 | `c`/`m`/`u`/`v`/`t`/`p`/`i`/`n`, `o` | Fold an Overview History panel to its title row (CPU, memory, GPU utilization, GPU memory, temperature, power, disk, network), or unfold them all (kept after a restart) |
+| `s` | Hide / show the pressure strips (`some`, `full`) of the Overview History's memory panel (kept after a restart) |
 | `Enter` | Open or close the selected run in Process History |
 | `e` / `y` | Show the whole command line of the opened run / copy it (OSC 52) |
 | `Space` | Mark or unmark the selected run in Process History; turn the selected display module on or off in Settings |

@@ -373,13 +373,14 @@
         "folded": {
           "type": "array",
           "uniqueItems": true,
-          "maxItems": 10,
+          "maxItems": 11,
           "items": {
             "enum": [
               "disk",
               "network",
               "history.cpu",
               "history.memory",
+              "history.memory_pressure",
               "history.gpu_utilization",
               "history.gpu_memory",
               "history.gpu_temperature",
