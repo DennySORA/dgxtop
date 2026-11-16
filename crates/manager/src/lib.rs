@@ -33,6 +33,7 @@ mod scheduler;
 mod session;
 mod setup;
 mod shutdown;
+mod slowdown;
 #[cfg(test)]
 mod test_support;
 #[cfg(any(test, feature = "test-support"))]

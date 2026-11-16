@@ -695,6 +695,15 @@ pub const FOLDABLE_PANELS: [&str; 11] = [
     "history.network",
 ];
 
+/// The panels folded until the user says otherwise (D-146): the Overview
+/// History opens on what is watched most, the memory panel's stall
+/// pressure strips, the temperature and the power a key away.
+pub const DEFAULT_FOLDED_PANELS: [&str; 3] = [
+    "history.memory_pressure",
+    "history.gpu_temperature",
+    "history.power",
+];
+
 /// Whether `panels` are distinct foldable panels (D-114).
 pub fn are_foldable(panels: &[String]) -> bool {
     let mut seen = std::collections::BTreeSet::new();

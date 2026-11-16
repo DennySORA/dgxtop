@@ -274,6 +274,14 @@ impl Theme {
     }
 }
 
+/// The folds of a configuration that names none (D-146).
+fn default_folded() -> Vec<String> {
+    crate::view::DEFAULT_FOLDED_PANELS
+        .iter()
+        .map(|panel| (*panel).to_owned())
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ViewerConfig {
@@ -282,8 +290,10 @@ pub struct ViewerConfig {
     pub theme: Theme,
     pub enabled_modules: Vec<String>,
     pub network_max_visible: u32,
-    /// The panels folded away (D-114); absent means none.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// The panels folded away (D-114). A file without it has the default
+    /// ones folded (`view::DEFAULT_FOLDED_PANELS`, D-146); an empty list
+    /// says none is, so it is always written.
+    #[serde(default = "default_folded")]
     pub folded: Vec<String>,
     /// Retired (D-105): level colors run from green at 0 % to red at
     /// 100 % (D-104), so no fill turns them red early.
@@ -1296,14 +1306,22 @@ mod tests {
         assert_eq!(original, reencoded);
     }
 
-    /// `viewer.folded` (D-114): absent means none and none is not
-    /// written, so files without it stay as they were; it holds distinct
-    /// foldable panels.
+    /// `viewer.folded` (D-114, D-146): the defaults fold the Overview
+    /// History's pressure strips, temperature and power; a file without
+    /// the list has those folded, and an empty list, which says none is,
+    /// is written and read back as none. It holds distinct foldable panels.
     #[test]
-    fn folds_are_optional_and_only_foldable_panels() {
+    fn folds_default_to_three_history_panels_and_none_is_kept() {
         let mut config = defaults();
-        assert!(config.viewer.folded.is_empty());
-        assert!(!config.to_pretty_json().unwrap().contains("folded"));
+        assert_eq!(config.viewer.folded, crate::view::DEFAULT_FOLDED_PANELS);
+        let mut without: serde_json::Value = serde_json::from_str(REFERENCE_CONFIG_JSON).unwrap();
+        without["viewer"].as_object_mut().unwrap().remove("folded");
+        let read = Config::from_json(&without.to_string()).unwrap();
+        assert_eq!(read.viewer.folded, crate::view::DEFAULT_FOLDED_PANELS);
+        config.viewer.folded.clear();
+        let none = config.to_pretty_json().unwrap();
+        assert!(none.contains("\"folded\": []"), "{none}");
+        assert!(Config::from_json(&none).unwrap().viewer.folded.is_empty());
         config.viewer.folded = vec!["network".into(), "history.power".into()];
         let text = config.to_pretty_json().unwrap();
         assert_eq!(Config::from_json(&text).unwrap(), config);

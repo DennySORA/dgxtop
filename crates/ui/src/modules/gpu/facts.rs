@@ -3,10 +3,13 @@
 //! colors, and the driver's attributes. A value the device does not report
 //! is left out, so no row lists one; the card's note names it once.
 
-use dgxtop_core::gpu_state::{ThrottleSeverity, throttle_reasons, throttle_severity};
+use dgxtop_core::gpu_state::{
+    ThrottleSeverity, slowing_reasons, throttle_reasons, throttle_severity,
+};
 use dgxtop_core::metric::ScalarView;
 use dgxtop_core::view::{GpuCard, GpuDetails, MetricCell};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::Span;
 
 use crate::format::clean;
 use crate::registry::DisplayContext;
@@ -38,6 +41,28 @@ pub(super) fn throttle_text(bits: u64) -> String {
         reasons.join(", ")
     }
 }
+
+/// `▼ thermal slowdown`: what holds the GPU below its clocks right now,
+/// bold in the color of the worst reason (D-146), for the lines read at a
+/// glance. Only what slows work down: heat, a hardware signal, a power
+/// cap; idle and set clocks say nothing, nor does a GPU that reports no
+/// reasons.
+pub(super) fn slowdown_spans(reasons: &MetricCell, context: &DisplayContext) -> Vec<Span<'static>> {
+    let Some(bits) = exact_count(reasons) else {
+        return Vec::new();
+    };
+    let slowing = slowing_reasons(bits);
+    if slowing == 0 {
+        return Vec::new();
+    }
+    vec![Span::styled(
+        format!(" {SLOWED} {}", throttle_text(slowing)),
+        throttle_style(slowing, context).add_modifier(Modifier::BOLD),
+    )]
+}
+
+/// Leads a slowdown on a line read at a glance.
+const SLOWED: &str = "▼";
 
 /// The color of the worst reason set in `bits`: a slowdown from heat or a
 /// hardware signal is critical, a power cap a warning, idle and set clocks

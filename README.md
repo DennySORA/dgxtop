@@ -99,6 +99,11 @@ of the whole machine.
   `avail` on the Memory panel does. A host at 70 % of its RAM can read 0 % pressure. The
   Overview lists a pressure only while one of its averages is above zero, and writes `avail`
   with its share of the RAM, in the color of how little is left.
+- **A slowed GPU says so.** When the driver holds a GPU's clocks down for heat, a hardware
+  signal or a power cap, a banner on every view names the GPU, the reason and the clock it runs
+  at against its maximum (`GPU 0 slowed down by its driver: thermal slowdown · clock 1976 of
+  3003 MHz, 34% below its maximum`), and the GPU's line shows `▼` with the reason beside its
+  temperature. The banner stays ten seconds past the last such reading, so it does not flicker.
 - **Made for DGX Spark.** On the GB10's unified memory, the RAM bar splits into the system's share
   and each GPU job's share, and the GPU view shows what is still available and the memory
   pressure where other tools print a VRAM size the GPU does not have. dgxtop also reads the

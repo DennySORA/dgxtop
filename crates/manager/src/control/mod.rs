@@ -44,6 +44,7 @@ use crate::scheduler::SamplingScheduler;
 use crate::session::{CommandInbox, SessionHandle, SessionShared};
 use crate::setup::{ManagerPorts, ManagerSetup};
 use crate::shutdown::{ShutdownSignal, ShutdownTrigger};
+use crate::slowdown::GpuSlowdowns;
 use crate::views::ViewSessionService;
 
 /// Total time the shutdown waits for config/audit/action completions.
@@ -105,6 +106,8 @@ pub(crate) struct ControlCore {
     presentation: PresentationService,
     archive: ArchiveTracker,
     overload: OverloadController,
+    /// The GPUs their driver slows down, held past each reading (D-146).
+    slowdowns: GpuSlowdowns,
     results: ResultCache,
     /// The session each accepted command's single result goes to.
     routes: BTreeMap<Uuid, SessionId>,
@@ -200,6 +203,7 @@ impl ControlCore {
             ),
             archive: ArchiveTracker::default(),
             overload: OverloadController::new(&effective.runtime, now),
+            slowdowns: GpuSlowdowns::default(),
             results: ResultCache::new(
                 usize::try_from(effective.runtime.result_cache_entries).unwrap_or(128),
                 ms_to_ns(u64::from(effective.runtime.result_cache_ttl_ms)),

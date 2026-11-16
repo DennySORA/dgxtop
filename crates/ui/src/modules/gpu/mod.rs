@@ -17,7 +17,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use self::facts::reported;
+use self::facts::{reported, slowdown_spans};
 use self::readings::{OVERVIEW_READINGS, overview_readings, render_bar};
 use super::ModuleBuildError;
 use super::common::{
@@ -321,7 +321,8 @@ impl ReadingWidths {
 }
 
 /// `GPU 0 │ NVIDIA GB10 │ 71°C │ ⚡120 W / 250 W │ 1980 MHz │ fan 45%`
-/// (D-66).
+/// (D-66); `96°C ▼ thermal slowdown` while the driver holds the GPU's
+/// clocks down (D-146).
 fn overview_headline(card: &GpuCard, context: &DisplayContext) -> Line<'static> {
     let mut spans = Vec::from(identity_spans(card, context));
     spans.push(separator(context));
@@ -330,6 +331,7 @@ fn overview_headline(card: &GpuCard, context: &DisplayContext) -> Line<'static> 
         CellDetail::GLANCE,
         context,
     ));
+    spans.extend(slowdown_spans(&card.throttle_reasons, context));
     spans.push(separator(context));
     spans.push(power_icon(context));
     spans.extend(power_spans(card, context));
@@ -456,6 +458,7 @@ fn card_headline(card: &GpuCard, context: &DisplayContext) -> Line<'static> {
         CellDetail::GLANCE,
         context,
     ));
+    spans.extend(slowdown_spans(&card.throttle_reasons, context));
     spans.push(separator(context));
     spans.extend(power_spans(card, context));
     spans.extend(fan_spans(card, context));
@@ -651,6 +654,53 @@ mod tests {
         let short = draw(rows - 1);
         let (first, second) = (headline(&short, "GPU 0"), headline(&short, "GPU 1"));
         assert_eq!(second, first + usize::from(OVERVIEW_GPU_ROWS), "no line");
+    }
+
+    /// While the driver holds the GPU's clocks down, the line read at a
+    /// glance says so right after the temperature (D-146): heat in the
+    /// danger color, a power cap in the warning color, both bold. Idle and
+    /// set clocks, no reason, or a GPU that reports none add nothing.
+    #[test]
+    fn a_headline_says_when_the_gpu_is_slowed_down() {
+        let context = display_context();
+        let theme = &context.theme;
+        let mut card = gpu_view().cards.remove(0);
+        let bits = |bits: u64| crate::test_fixtures::exact(bits, CanonicalUnit::Count);
+        let notice = |card: &GpuCard| -> Option<(String, Style)> {
+            overview_headline(card, &context)
+                .spans
+                .iter()
+                .find(|span| span.content.contains('▼'))
+                .map(|span| (span.content.to_string(), span.style))
+        };
+        card.throttle_reasons = bits(0x20 | 0x1);
+        let (words, style) = notice(&card).unwrap();
+        assert_eq!(words, " ▼ thermal slowdown");
+        assert_eq!(style.fg, Some(theme.danger));
+        assert!(style.add_modifier.contains(ratatui::style::Modifier::BOLD));
+        let headline = text(&overview_headline(&card, &context));
+        assert!(headline.contains("°C ▼ thermal slowdown │ "), "{headline}");
+        assert!(
+            text(&card_headline(&card, &context)).contains("▼ thermal slowdown"),
+            "the GPU view's cards say it too"
+        );
+        card.throttle_reasons = bits(0x4);
+        let (words, style) = notice(&card).unwrap();
+        assert_eq!(words, " ▼ power cap");
+        assert_eq!(style.fg, Some(theme.warning));
+        card.throttle_reasons = bits(0x4 | 0x40);
+        assert_eq!(
+            notice(&card).unwrap().0,
+            " ▼ power cap, hardware thermal slowdown"
+        );
+        for quiet in [
+            bits(0),
+            bits(0x1 | 0x2),
+            missing(CanonicalUnit::Count, CellState::Unsupported),
+        ] {
+            card.throttle_reasons = quiet;
+            assert!(notice(&card).is_none());
+        }
     }
 
     /// A value that failed to read is still shown with its state: only what

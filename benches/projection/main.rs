@@ -458,6 +458,7 @@ impl StaticInputs {
             facts: &self.facts,
             enabled_modules: &self.config.viewer.enabled_modules,
             archive: None,
+            slowdowns: &[],
         }
     }
 }

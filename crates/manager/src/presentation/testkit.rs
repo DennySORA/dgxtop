@@ -356,6 +356,7 @@ pub(crate) struct Fixture {
     pub(crate) hosts: Vec<HostStatus>,
     pub(crate) intervals: Vec<IntervalView>,
     pub(crate) overload: OverloadState,
+    pub(crate) slowdowns: Vec<crate::slowdown::GpuSlowdown>,
     pub(crate) actions: Arc<ActionsView>,
     pub(crate) history: Arc<HistoryView>,
     pub(crate) trends: TrendBook,
@@ -405,6 +406,7 @@ impl Fixture {
             hosts: Vec::new(),
             intervals: Vec::new(),
             overload: OverloadState::Normal,
+            slowdowns: Vec::new(),
             actions: Arc::new(empty_actions()),
             history: Arc::new(empty_history()),
             trends: TrendBook::new(120),
@@ -446,6 +448,7 @@ impl Fixture {
             facts: &self.facts,
             enabled_modules: &self.enabled_modules,
             archive: self.archive_status.as_ref(),
+            slowdowns: &self.slowdowns,
         }
     }
 

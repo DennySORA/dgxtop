@@ -68,6 +68,11 @@
       "actions"
     ],
     "network_max_visible": 3,
+    "folded": [
+      "history.memory_pressure",
+      "history.gpu_temperature",
+      "history.power"
+    ],
     "redline_threshold_percent": 80.0
   },
   "queues": {

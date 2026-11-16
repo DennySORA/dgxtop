@@ -20,6 +20,7 @@ use crate::presentation::{
 use crate::process::Now;
 use crate::projection::PublishOutcome;
 use crate::scheduler::{DispatchContext, RequestKind, TickReport};
+use crate::slowdown::GpuSlowdown;
 
 /// Inputs shared by every frame built in one pass.
 struct FrameInputs {
@@ -30,6 +31,8 @@ struct FrameInputs {
     enabled_modules: Vec<String>,
     /// What the history's process actor published last.
     processes: Arc<ProcessHistoryModel>,
+    /// The GPUs their driver slows down now or did a moment ago (D-146).
+    slowdowns: Vec<GpuSlowdown>,
 }
 
 impl ControlCore {
@@ -214,8 +217,11 @@ impl ControlCore {
         if due.is_empty() {
             return;
         }
+        let snapshot = self.ingestion.snapshots().latest();
+        let slowdowns = self.slowdowns.observe(&snapshot, now_ns);
         let inputs = FrameInputs {
-            snapshot: self.ingestion.snapshots().latest(),
+            snapshot,
+            slowdowns,
             catalog: self.catalog.snapshot(),
             hosts: self.hosts.statuses(),
             intervals: self.scheduler.intervals(),
@@ -303,6 +309,7 @@ impl ControlCore {
             facts: &self.facts,
             enabled_modules: &inputs.enabled_modules,
             archive: self.archive.status(),
+            slowdowns: &inputs.slowdowns,
         };
         Some(build_view_model_measured(&context))
     }

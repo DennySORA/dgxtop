@@ -52,6 +52,15 @@ pub fn throttle_reasons(bits: u64) -> impl Iterator<Item = &'static ThrottleReas
 }
 
 /// The most serious severity among `bits`; `None` when no reason is set.
+/// The bits of `bits` whose reasons slow work down (D-146): heat, a
+/// hardware signal, a power cap. Idle and set clocks hold a GPU's clocks
+/// down too, and nobody waits for them.
+pub fn slowing_reasons(bits: u64) -> u64 {
+    throttle_reasons(bits)
+        .filter(|reason| reason.severity > ThrottleSeverity::Benign)
+        .fold(0, |slowing, reason| slowing | reason.bit)
+}
+
 pub fn throttle_severity(bits: u64) -> Option<ThrottleSeverity> {
     throttle_reasons(bits).map(|reason| reason.severity).max()
 }
@@ -275,6 +284,8 @@ mod tests {
 
     #[test]
     fn the_worst_reason_sets_the_severity() {
+        assert_eq!(slowing_reasons(0x1 | 0x2 | 0x10 | 0x100), 0);
+        assert_eq!(slowing_reasons(0x1 | 0x4 | 0x20 | 0x1000), 0x4 | 0x20);
         assert_eq!(throttle_severity(0), None);
         assert_eq!(throttle_severity(0x1), Some(ThrottleSeverity::Benign));
         assert_eq!(throttle_severity(0x1 | 0x4), Some(ThrottleSeverity::Notice));

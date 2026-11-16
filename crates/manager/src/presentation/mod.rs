@@ -32,6 +32,7 @@ mod testkit;
 #[cfg(test)]
 mod tests;
 
+pub use crate::slowdown::GpuSlowdown;
 pub use cell::build_metric_cell;
 pub(crate) use history_charts::history_charts;
 pub use plan::visible_modules;
@@ -123,6 +124,8 @@ pub struct PresentationContext<'a> {
     pub enabled_modules: &'a [String],
     /// Status of the optional history archive (`None` until it reports).
     pub archive: Option<&'a PersistenceStatus>,
+    /// The GPUs their driver slows down now or did a moment ago (D-146).
+    pub slowdowns: &'a [GpuSlowdown],
 }
 
 /// Builds the header shown on every view.
