@@ -562,10 +562,12 @@ fn figure_rows(memory: &MemoryView, width: u16, context: &DisplayContext) -> Vec
 
 /// The memory's stall pressure, while it has something to say (D-143),
 /// and the OOM kills, once there are any: on one line when both fit
-/// `width`, the kills without `since boot` and then the pressure without
-/// what its averages span when only that fits; else a line each. A
-/// pressure wider than `width` leaves out what its averages span instead
-/// of losing one of them.
+/// `width`, the pressure without what its averages span (`(10s 1m 5m)`,
+/// which the CPU's line beside it says) and then the kills without `since
+/// boot` when only that fits; else a line each. The kills never lose their
+/// words to keep those of the pressure: `OOM kills 4` against the panel's
+/// edge read as a line cut short. A pressure wider than `width` leaves out
+/// what its averages span instead of losing one of them.
 fn trouble_lines(memory: &MemoryView, width: u16, context: &DisplayContext) -> Vec<Line<'static>> {
     let fits = |line: &Line<'_>| line.width() <= usize::from(width);
     let pressures: Vec<Line<'static>> = telling_pressure(memory.pressure.as_ref())
@@ -580,14 +582,16 @@ fn trouble_lines(memory: &MemoryView, width: u16, context: &DisplayContext) -> V
         .into_iter()
         .filter_map(|form| oom_line(memory, form, context))
         .collect();
-    let on_one_line = pressures.iter().find_map(|pressure| {
-        kills.iter().find_map(|kills| {
-            let mut spans = pressure.spans.clone();
-            spans.push(separator(context));
-            spans.extend(kills.spans.iter().cloned());
-            Some(Line::from(spans)).filter(fits)
-        })
-    });
+    // Full and full, short pressure and full kills, short and short.
+    let on_one_line =
+        [(0, 0), (1, 0), (1, 1)]
+            .into_iter()
+            .find_map(|(pressure_form, kills_form)| {
+                let mut spans = pressures.get(pressure_form)?.spans.clone();
+                spans.push(separator(context));
+                spans.extend(kills.get(kills_form)?.spans.iter().cloned());
+                Some(Line::from(spans)).filter(fits)
+            });
     if let Some(line) = on_one_line {
         return vec![line];
     }
@@ -1310,12 +1314,14 @@ mod tests {
             "pressure some 2.4% 0.9% 0.2% │ full 0.8% 0.3% 0.1%  (10s 1m 5m) \
              │ OOM kills 4 since boot"
         );
-        // Room for the count only.
+        // Too narrow for both in full, the pressure gives up what its
+        // averages span and the kills keep their words: the line never
+        // ends in a bare count against the panel's edge.
         assert_eq!(
             footer(&view, 77)[2],
-            "pressure some 2.4% 0.9% 0.2% │ full 0.8% 0.3% 0.1%  (10s 1m 5m) │ OOM kills 4"
+            "pressure some 2.4% 0.9% 0.2% │ full 0.8% 0.3% 0.1% │ OOM kills 4 since boot"
         );
-        // Then the pressure gives up what its averages span.
+        // Then the kills give up `since boot`.
         assert_eq!(
             footer(&view, 70)[2],
             "pressure some 2.4% 0.9% 0.2% │ full 0.8% 0.3% 0.1% │ OOM kills 4"
