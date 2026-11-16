@@ -27,6 +27,7 @@ mod processes;
 mod reader;
 mod run_history;
 mod settings;
+mod slowdown_banner;
 #[cfg(test)]
 mod testkit;
 #[cfg(test)]

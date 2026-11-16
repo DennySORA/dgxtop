@@ -23,8 +23,11 @@ pub struct ThrottleReason {
     pub severity: ThrottleSeverity,
 }
 
-/// Every reason NVML reports, in bit order.
-pub const THROTTLE_REASONS: [ThrottleReason; 9] = [
+/// Every reason NVML reports, in bit order. The board limit and the
+/// reliability (voltage) limit came with later drivers (D-147); a GPU
+/// under full load commonly runs at its voltage limit, which is the top
+/// of its boost, not a fault.
+pub const THROTTLE_REASONS: [ThrottleReason; 11] = [
     reason(0x1, "idle", ThrottleSeverity::Benign),
     reason(0x2, "application clocks", ThrottleSeverity::Benign),
     reason(0x4, "power cap", ThrottleSeverity::Notice),
@@ -34,6 +37,8 @@ pub const THROTTLE_REASONS: [ThrottleReason; 9] = [
     reason(0x40, "hardware thermal slowdown", ThrottleSeverity::Alert),
     reason(0x80, "power brake", ThrottleSeverity::Alert),
     reason(0x100, "display clocks", ThrottleSeverity::Benign),
+    reason(0x200, "board limit", ThrottleSeverity::Notice),
+    reason(0x400, "voltage limit", ThrottleSeverity::Notice),
 ];
 
 const fn reason(bit: u64, label: &'static str, severity: ThrottleSeverity) -> ThrottleReason {
@@ -279,13 +284,21 @@ mod tests {
         assert_eq!(throttle_reasons(0).count(), 0);
         let mut bits: Vec<u64> = THROTTLE_REASONS.iter().map(|reason| reason.bit).collect();
         bits.dedup();
-        assert_eq!(bits.len(), 9, "every reason has its own bit");
+        assert_eq!(bits.len(), 11, "every reason has its own bit");
+        let labels: Vec<&str> = throttle_reasons(0x200 | 0x400)
+            .map(|reason| reason.label)
+            .collect();
+        assert_eq!(labels, vec!["board limit", "voltage limit"]);
     }
 
     #[test]
     fn the_worst_reason_sets_the_severity() {
         assert_eq!(slowing_reasons(0x1 | 0x2 | 0x10 | 0x100), 0);
         assert_eq!(slowing_reasons(0x1 | 0x4 | 0x20 | 0x1000), 0x4 | 0x20);
+        // The voltage limit holds the clocks below their maximum, as the
+        // driver reported on an RTX 5080 under load (D-147).
+        assert_eq!(slowing_reasons(0x1 | 0x400), 0x400);
+        assert_eq!(throttle_severity(0x400), Some(ThrottleSeverity::Notice));
         assert_eq!(throttle_severity(0), None);
         assert_eq!(throttle_severity(0x1), Some(ThrottleSeverity::Benign));
         assert_eq!(throttle_severity(0x1 | 0x4), Some(ThrottleSeverity::Notice));

@@ -957,6 +957,32 @@ pub enum BannerLevel {
 pub struct Banner {
     pub level: BannerLevel,
     pub text: String,
+    /// What the banner tells about, for a banner the user may hide once it
+    /// is known (`Esc`); `None` for one that stays until its cause ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic: Option<BannerTopic>,
+}
+
+impl Banner {
+    /// A banner that stays until its cause ends.
+    pub fn new(level: BannerLevel, text: impl Into<String>) -> Self {
+        Self {
+            level,
+            text: text.into(),
+            topic: None,
+        }
+    }
+}
+
+/// The subject of a banner the user may hide and the causes it told
+/// (D-147): hidden causes stay hidden, and a cause not hidden yet shows
+/// the banner again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BannerTopic {
+    /// Stable within a run, e.g. `gpu-slowdown:gpu:GPU-…`.
+    pub subject: String,
+    /// The causes told, one bit each (for a GPU slowdown, its reasons).
+    pub causes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

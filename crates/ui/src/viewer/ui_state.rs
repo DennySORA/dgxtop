@@ -67,6 +67,8 @@ pub struct UiState {
     pub picks: BTreeMap<ModuleId, EntityId>,
     /// The panels folded away (D-114).
     pub folded: Arc<BTreeSet<String>>,
+    /// The banners the user hid with `Esc` (D-147).
+    pub hidden_banners: Arc<super::HiddenBanners>,
 }
 
 impl UiState {

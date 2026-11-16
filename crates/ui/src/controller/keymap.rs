@@ -208,7 +208,7 @@ const fn binding(
 pub static KEYMAP: &[KeyBinding] = &[
     binding("q", "quit (in filter input q is text)", Some("quit"), ModeSet::NOT_FILTER, ViewScope::All, &[KeyPattern::char('q')], KeyAction::Quit),
     binding("Ctrl-C", "quit from any mode, including filter input", None, ModeSet::ALL, ViewScope::All, &[KeyPattern::ctrl('c')], KeyAction::Quit),
-    binding("Esc", "dismiss notices and the Process History's marks; with neither, the Overview's other panels again after z", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::key(KeyCode::Esc)], KeyAction::DismissNotices),
+    binding("Esc", "dismiss notices, hide the banners that may be hidden (a slowed GPU) and the Process History's marks; with none, the Overview's other panels again after z", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::key(KeyCode::Esc)], KeyAction::DismissNotices),
     binding("+/-", "faster / slower sampling (SetSamplingInterval with the settings revision)", Some("interval"), ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('+'), KeyPattern::char('=')], KeyAction::FasterInterval),
     binding("-", "slower sampling", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('-')], KeyAction::SlowerInterval),
     binding("Tab", "next view", Some("view"), ModeSet::NORMAL, ViewScope::All, &[KeyPattern::key(KeyCode::Tab)], KeyAction::NextView),

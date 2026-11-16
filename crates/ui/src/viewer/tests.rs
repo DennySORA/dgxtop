@@ -521,10 +521,7 @@ fn retired_views_render_a_note() {
 fn confirmation_banner_is_visible_and_never_clipped_at_40x10() {
     let mut model = model(ViewKind::Overview);
     model.modules.actions = Some(Arc::new(test_fixtures::actions_view(true)));
-    model.banners = vec![Banner {
-        level: BannerLevel::Info,
-        text: "informational banner".into(),
-    }];
+    model.banners = vec![Banner::new(BannerLevel::Info, "informational banner")];
     let ui = UiState {
         mode: ModeView::Confirm {
             target: process_key(4242, 90_100),
@@ -569,10 +566,10 @@ fn shed_trends_and_lists_render_text_not_blank() {
     let mut network = test_fixtures::network_view();
     network.interfaces.clear();
     model.modules.network = Some(Arc::new(network));
-    model.banners = vec![Banner {
-        level: BannerLevel::Warning,
-        text: "projection shortened to stay under the byte budget".into(),
-    }];
+    model.banners = vec![Banner::new(
+        BannerLevel::Warning,
+        "projection shortened to stay under the byte budget",
+    )];
     let rendered = render_with(
         &Viewer::builtin(),
         Some(&model),

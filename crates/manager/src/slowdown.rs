@@ -31,6 +31,12 @@ pub struct GpuSlowdown {
     /// The shader clock read with the last slowdown and its maximum, MHz;
     /// `None` where either is not read.
     pub clock_mhz: Option<(f64, f64)>,
+    /// The power limit in force and the highest one the board allows, W,
+    /// so a power cap names the limit it runs at; `None` where not read.
+    pub power_limit_w: Option<f64>,
+    pub power_limit_maximum_w: Option<f64>,
+    /// The GPU's temperature read with the last slowdown, °C.
+    pub temperature_c: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -85,7 +91,13 @@ impl GpuSlowdowns {
             if slowing == 0 {
                 continue;
             }
-            let clock_mhz = clock_of(snapshot, &key.entity_id);
+            let gpu = &key.entity_id;
+            let read = |metric: &str, scope: &str| reading(snapshot, gpu, metric, scope);
+            let clock_mhz = read(ids::GPU_CLOCK_SM, entity::SCOPE_GPU)
+                .zip(read(ids::GPU_CLOCK_MAXIMUM, CLOCK_DOMAIN));
+            let power_limit_w = read(ids::GPU_POWER_LIMIT, entity::SCOPE_GPU);
+            let power_limit_maximum_w = read(ids::GPU_POWER_LIMIT_MAXIMUM, entity::SCOPE_GPU);
+            let temperature_c = read(ids::GPU_TEMPERATURE, entity::SCOPE_GPU);
             let expired = self
                 .held
                 .get(&key.entity_id)
@@ -104,6 +116,9 @@ impl GpuSlowdowns {
                         gpu: key.entity_id.clone(),
                         reasons: earlier | slowing,
                         clock_mhz,
+                        power_limit_w,
+                        power_limit_maximum_w,
+                        temperature_c,
                     },
                     last_seen_boot_ns: now_boot_ns,
                 },
@@ -120,27 +135,19 @@ fn current(entry: &SnapshotEntry) -> Option<Scalar> {
         .filter(|_| entry.sample.selection_state.has_value())
 }
 
-/// The shader clock of `gpu` and its maximum, where both are read.
-fn clock_of(snapshot: &ImmutableSnapshot, gpu: &EntityId) -> Option<(f64, f64)> {
-    let read = |metric: &str, scope: &str| -> Option<f64> {
-        snapshot
-            .domains
-            .values()
-            .flat_map(|domain| domain.samples.values())
-            .find(|entry| {
-                let key = &entry.sample.key;
-                key.entity_id == *gpu
-                    && key.metric_id.as_str() == metric
-                    && key.scope.as_str() == scope
-            })
-            .and_then(|entry| current(entry))
-            .map(Scalar::to_f64_lossy)
-            .filter(|mhz| mhz.is_finite() && *mhz > 0.0)
-    };
-    Some((
-        read(ids::GPU_CLOCK_SM, entity::SCOPE_GPU)?,
-        read(ids::GPU_CLOCK_MAXIMUM, CLOCK_DOMAIN)?,
-    ))
+/// The current, positive reading of `metric` in `scope` of `gpu`.
+fn reading(snapshot: &ImmutableSnapshot, gpu: &EntityId, metric: &str, scope: &str) -> Option<f64> {
+    snapshot
+        .domains
+        .values()
+        .flat_map(|domain| domain.samples.values())
+        .find(|entry| {
+            let key = &entry.sample.key;
+            key.entity_id == *gpu && key.metric_id.as_str() == metric && key.scope.as_str() == scope
+        })
+        .and_then(|entry| current(entry))
+        .map(Scalar::to_f64_lossy)
+        .filter(|value| value.is_finite() && *value > 0.0)
 }
 
 #[cfg(test)]

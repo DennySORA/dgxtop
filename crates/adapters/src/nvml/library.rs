@@ -8,13 +8,14 @@
 //! reload; the lookup is an in-process table scan.
 
 use dgxtop_core::gpu_state::{GpuLink, PeerAccess};
+use nvml_wrapper::bitmasks::device::ThrottleReasons;
 use nvml_wrapper::enum_wrappers::device::{
     Brand, Clock, ComputeMode, EccCounter, MemoryError, P2pCapabilitiesIndex, P2pStatus,
     PcieUtilCounter, PerformancePolicy, PerformanceState, RetirementCause, TemperatureSensor,
     TemperatureThreshold, TopologyLevel,
 };
 use nvml_wrapper::enums::device::{DeviceArchitecture, SampleValue, UsedGpuMemory};
-use nvml_wrapper::error::NvmlError;
+use nvml_wrapper::error::{Bits, NvmlError};
 use nvml_wrapper::struct_wrappers::device::PciInfo;
 use nvml_wrapper::structs::device::FieldId;
 use nvml_wrapper::sys_exports::field_id::{
@@ -134,6 +135,17 @@ fn error_name(error: &NvmlError) -> &'static str {
         NvmlError::NoData => "NO_DATA",
         NvmlError::VgpuEccNotSupported => "VGPU_ECC_NOT_SUPPORTED",
         NvmlError::Unknown => "UNKNOWN",
+    }
+}
+
+/// Every bit the driver set, also those the binding has no flag for:
+/// newer drivers report the board and reliability (voltage) limits (D-147),
+/// which the lenient call would silently drop.
+fn every_reason_bit(reasons: Result<ThrottleReasons, NvmlError>) -> Result<u64, NvmlError> {
+    match reasons {
+        Ok(reasons) => Ok(reasons.bits()),
+        Err(NvmlError::IncorrectBits(Bits::U64(bits))) => Ok(bits),
+        Err(error) => Err(error),
     }
 }
 
@@ -545,7 +557,9 @@ impl GpuTelemetry for NvmlLibraryBackend {
     }
 
     fn throttle_reasons(&self, uuid: &str) -> BackendResult<u64> {
-        Ok(query(self.device(uuid)?.current_throttle_reasons())?.bits())
+        query(every_reason_bit(
+            self.device(uuid)?.current_throttle_reasons_strict(),
+        ))
     }
 
     fn pcie_link(&self, uuid: &str, link: PcieLink) -> BackendResult<u32> {
@@ -615,6 +629,29 @@ impl GpuProcessQueries for NvmlLibraryBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The voltage limit (0x400) that an RTX 5080 under load reports, which
+    /// the binding has no flag for, reaches the Viewer with the known bits
+    /// (D-147); other errors stay errors.
+    #[test]
+    fn reason_bits_the_binding_does_not_know_are_kept() {
+        assert_eq!(
+            every_reason_bit(Ok(ThrottleReasons::SW_POWER_CAP)).unwrap(),
+            0x4
+        );
+        assert_eq!(
+            every_reason_bit(Err(NvmlError::IncorrectBits(Bits::U64(0x404)))).unwrap(),
+            0x404
+        );
+        assert!(matches!(
+            every_reason_bit(Err(NvmlError::IncorrectBits(Bits::U32(0x400)))),
+            Err(NvmlError::IncorrectBits(_))
+        ));
+        assert!(matches!(
+            every_reason_bit(Err(NvmlError::NotSupported)),
+            Err(NvmlError::NotSupported)
+        ));
+    }
 
     #[test]
     fn capability_gaps_are_not_faults() {

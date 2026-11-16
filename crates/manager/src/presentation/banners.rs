@@ -11,12 +11,11 @@ use dgxtop_core::view::{
     OverloadState,
 };
 
-use dgxtop_core::gpu_state::{ThrottleSeverity, throttle_reasons, throttle_severity};
-
 use super::PresentationContext;
 use super::gpu_directory::GpuDirectory;
 use super::index::SnapshotLookup;
 use super::labels::{bounded_list, host_state_text, label_text, note_text};
+use super::slowdown_banner::slowdown_banner;
 
 /// Banners kept per projection; the confirmation always sorts first.
 pub(crate) const MAX_BANNERS: usize = 8;
@@ -91,10 +90,8 @@ pub(crate) fn build_banners(
     order_and_bound(banners)
 }
 
-/// `GPU 0 slowed down by its driver: thermal slowdown · clock 1976 of 3003
-/// MHz, 34% below its maximum` (D-146), on every view: an error for heat
-/// or a hardware signal, a warning for a power cap. The clock is the one
-/// read with the slowdown; a GPU that reports none names the reason alone.
+/// A banner on every view for each GPU its driver slows down (D-146),
+/// in words the owner can act on and hide once known (D-147).
 fn slowdown_banners(context: &PresentationContext<'_>, banners: &mut Vec<Banner>) {
     if context.slowdowns.is_empty() {
         return;
@@ -102,28 +99,8 @@ fn slowdown_banners(context: &PresentationContext<'_>, banners: &mut Vec<Banner>
     let index = SnapshotLookup::new(context.snapshot);
     let directory = GpuDirectory::new(context.catalog, &index);
     for slowdown in context.slowdowns {
-        let reasons: Vec<&str> = throttle_reasons(slowdown.reasons)
-            .map(|reason| reason.label)
-            .collect();
-        let level = match throttle_severity(slowdown.reasons) {
-            Some(ThrottleSeverity::Alert) => BannerLevel::Error,
-            _ => BannerLevel::Warning,
-        };
-        let clock = slowdown
-            .clock_mhz
-            .map_or_else(String::new, |(now, maximum)| {
-                let below = ((1.0 - now / maximum) * 100.0).clamp(0.0, 100.0);
-                format!(" · clock {now:.0} of {maximum:.0} MHz, {below:.0}% below its maximum")
-            });
-        push(
-            banners,
-            level,
-            note_text(&format!(
-                "{} slowed down by its driver: {}{clock}",
-                directory.label_of(&slowdown.gpu),
-                reasons.join(", ")
-            )),
-        );
+        let label = label_text(&directory.label_of(&slowdown.gpu));
+        banners.push(slowdown_banner(&label, slowdown));
     }
 }
 
@@ -135,7 +112,7 @@ pub(crate) fn order_and_bound(mut banners: Vec<Banner>) -> Vec<Banner> {
 }
 
 pub(crate) fn push(banners: &mut Vec<Banner>, level: BannerLevel, text: String) {
-    banners.push(Banner { level, text });
+    banners.push(Banner::new(level, text));
 }
 
 /// Safety text is never truncated; only the untrusted basename is sanitized.
@@ -356,47 +333,48 @@ mod tests {
         assert_eq!(banners[7].text, "restart required to apply: queues");
     }
 
-    /// A GPU its driver slows down is told on every view (D-146): the
-    /// reasons, the clock read with the slowdown and how far that is below
-    /// its maximum; heat is an error, a power cap a warning, and a GPU
-    /// without a clock reading names the reason alone.
+    /// A GPU its driver slows down is told on every view (D-146, D-147):
+    /// each GPU once, heat as an error before a power cap's warning, and
+    /// each banner carries the topic `Esc` hides it by.
     #[test]
-    fn a_slowed_gpu_is_told_with_its_reason_and_clock() {
+    fn a_slowed_gpu_is_told_on_every_view_and_can_be_hidden() {
         use crate::slowdown::GpuSlowdown;
         let gpu = |id: &str| dgxtop_core::identity::EntityId::new(id).unwrap();
+        let slowed = |id: &str, reasons| GpuSlowdown {
+            gpu: gpu(id),
+            reasons,
+            clock_mhz: None,
+            power_limit_w: None,
+            power_limit_maximum_w: None,
+            temperature_c: None,
+        };
         let mut fixture = Fixture::new();
         fixture.slowdowns = vec![
-            GpuSlowdown {
-                gpu: gpu("gpu:GPU-aaaa1111"),
-                reasons: 0x4,
-                clock_mhz: None,
-            },
-            GpuSlowdown {
-                gpu: gpu("gpu:GPU-bbbb2222"),
-                reasons: 0x20 | 0x4,
-                clock_mhz: Some((1976.0, 3003.0)),
-            },
+            slowed("gpu:GPU-aaaa1111", 0x4),
+            slowed("gpu:GPU-bbbb2222", 0x20 | 0x4),
         ];
         let banners = build(&fixture, &NO_FACTS);
         assert_eq!(banners.len(), 2);
         assert_eq!(banners[0].level, BannerLevel::Error);
         assert!(
-            banners[0].text.ends_with(
-                " slowed down by its driver: power cap, thermal slowdown \
-                 · clock 1976 of 3003 MHz, 34% below its maximum"
-            ),
+            banners[0]
+                .text
+                .contains(" slowed down: at its power limit; too hot, the driver lowers the clock"),
             "{}",
             banners[0].text
         );
         assert_eq!(banners[1].level, BannerLevel::Warning);
+        assert!(banners[1].text.starts_with("GPU"), "{}", banners[1].text);
         assert!(
-            banners[1]
-                .text
-                .ends_with(" slowed down by its driver: power cap"),
+            banners[1].text.ends_with(" · Esc hides"),
             "{}",
             banners[1].text
         );
-        assert!(banners[1].text.starts_with("GPU"), "{}", banners[1].text);
+        let topic = banners[1].topic.as_ref().expect("a slowdown can be hidden");
+        assert_eq!(
+            (topic.subject.as_str(), topic.causes),
+            ("gpu-slowdown:gpu:GPU-aaaa1111", 0x4)
+        );
     }
 
     #[test]

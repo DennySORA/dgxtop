@@ -7,6 +7,7 @@
 
 mod banners;
 mod chrome;
+mod hidden_banners;
 mod hitmap;
 mod isolation;
 pub mod layout;
@@ -20,6 +21,7 @@ use ratatui::Frame;
 use ratatui::widgets::Clear;
 
 pub use banners::{BannerBlock, wrap_words};
+pub use hidden_banners::HiddenBanners;
 pub use hitmap::{HitMap, MAX_HIT_TARGETS};
 pub use isolation::in_isolated_render;
 pub use layout::{MIN_COLUMNS, MIN_ROWS, SizeTier, size_tier};

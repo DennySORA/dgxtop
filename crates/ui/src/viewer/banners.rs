@@ -97,7 +97,7 @@ pub fn collect(
         blocks.push(confirmation);
     }
     for banner in &model.banners {
-        if banner.level != BannerLevel::Confirmation {
+        if banner.level != BannerLevel::Confirmation && ui.hidden_banners.shows(banner) {
             blocks.push(BannerBlock::single(banner.level, clean(&banner.text)));
         }
     }
@@ -308,14 +308,8 @@ mod tests {
         let mut model = test_fixtures::view_model(ViewKind::Overview, 1);
         model.modules.actions = Some(Arc::new(test_fixtures::actions_view(true)));
         model.banners = vec![
-            Banner {
-                level: BannerLevel::Info,
-                text: "info".into(),
-            },
-            Banner {
-                level: BannerLevel::Error,
-                text: "audit failed".into(),
-            },
+            Banner::new(BannerLevel::Info, "info"),
+            Banner::new(BannerLevel::Error, "audit failed"),
         ];
         model.header.overload = OverloadState::Throttled;
         let ui = UiState {
@@ -345,6 +339,36 @@ mod tests {
                 .iter()
                 .any(|block| block.lines[0].contains("overload throttled"))
         );
+    }
+
+    /// A banner the user hid (D-147) takes no rows; one not hidden does.
+    #[test]
+    fn a_hidden_banner_is_left_out() {
+        use dgxtop_core::view::BannerTopic;
+        let mut model = test_fixtures::view_model(ViewKind::Overview, 1);
+        let slowdown = Banner {
+            level: BannerLevel::Warning,
+            text: "GPU 0 slowed down".into(),
+            topic: Some(BannerTopic {
+                subject: "gpu-slowdown:gpu:GPU-a".into(),
+                causes: 0x4,
+            }),
+        };
+        model.banners = vec![slowdown.clone(), Banner::new(BannerLevel::Info, "info")];
+        let mut hidden = crate::viewer::HiddenBanners::default();
+        let texts = |hidden: &crate::viewer::HiddenBanners| {
+            let ui = UiState {
+                hidden_banners: Arc::new(hidden.clone()),
+                ..UiState::default()
+            };
+            collect(&model, &ui, &[], 0, 120)
+                .into_iter()
+                .map(|block| block.lines.join(" "))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(texts(&hidden), ["GPU 0 slowed down", "info"]);
+        assert!(hidden.hide_all(&[slowdown]));
+        assert_eq!(texts(&hidden), ["info"]);
     }
 
     #[test]
@@ -434,10 +458,10 @@ mod tests {
     #[test]
     fn manager_confirmation_text_is_a_fallback_only() {
         let mut model = test_fixtures::view_model(ViewKind::Overview, 1);
-        model.banners = vec![Banner {
-            level: BannerLevel::Confirmation,
-            text: "Confirm SIGTERM for pid 4242".into(),
-        }];
+        model.banners = vec![Banner::new(
+            BannerLevel::Confirmation,
+            "Confirm SIGTERM for pid 4242",
+        )];
         model.modules.actions = Some(Arc::new(test_fixtures::actions_view(true)));
         let with_view = collect(&model, &UiState::default(), &[], 0, 120);
         assert_eq!(with_view.len(), 1);

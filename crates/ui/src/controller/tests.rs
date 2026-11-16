@@ -2028,3 +2028,35 @@ fn saved_folds_show_at_start_and_history_panels_fold_on_their_page() {
     harness.keys(&[key('3'), key('o')]);
     assert!(folded_now(&harness).is_empty());
 }
+
+/// `Esc` hides a slowed GPU's banner once it is known (D-147), before the
+/// panels come back; the banner shows again for a cause not hidden yet,
+/// and a banner that may not be hidden stays. Nothing is sent.
+#[test]
+fn esc_hides_a_known_slowdown_until_a_new_cause_appears() {
+    use dgxtop_core::view::{Banner, BannerTopic};
+    let slowdown = |causes| Banner {
+        level: BannerLevel::Warning,
+        text: "GPU 0 slowed down: at its voltage limit".into(),
+        topic: Some(BannerTopic {
+            subject: "gpu-slowdown:gpu:GPU-a".into(),
+            causes,
+        }),
+    };
+    let lasting = Banner::new(BannerLevel::Error, "action audit unavailable");
+    let mut model = test_fixtures::view_model(ViewKind::Overview, 5);
+    model.banners = vec![slowdown(0x400), lasting.clone()];
+    let mut harness = Harness::with_model(model);
+    let processes = ModuleId::new(crate::modules::PROCESSES_MODULE_ID).unwrap();
+    harness.keys(&[key('z'), code(KeyCode::Esc)]);
+    let state = harness.controller.ui_state(harness.now);
+    assert!(!state.hidden_banners.shows(&slowdown(0x400)));
+    assert!(state.hidden_banners.shows(&lasting));
+    assert!(state.expanded.contains(&processes), "the banner went first");
+    assert!(harness.submitted().is_empty(), "{:?}", harness.submitted());
+    let state = harness.controller.ui_state(harness.now);
+    assert!(
+        state.hidden_banners.shows(&slowdown(0x400 | 0x20)),
+        "heat is new"
+    );
+}

@@ -55,7 +55,7 @@ use crate::modules::{
 };
 use crate::registry::controls;
 pub use crate::viewer::UiState;
-use crate::viewer::{HitMap, ModeView};
+use crate::viewer::{HiddenBanners, HitMap, ModeView};
 use crate::views;
 
 /// Lines a module's scrollable part may be scrolled past its start.
@@ -156,6 +156,8 @@ pub struct Controller {
     folds: folds::Folds,
     /// A command line to copy with the next frame (D-76).
     clipboard: Option<String>,
+    /// The banners hidden with `Esc` once known (D-147).
+    hidden_banners: HiddenBanners,
 }
 
 impl Default for Controller {
@@ -210,6 +212,7 @@ impl Controller {
             picks: BTreeMap::new(),
             deletion: None,
             folds: folds::Folds::default(),
+            hidden_banners: HiddenBanners::default(),
         }
     }
 
@@ -291,6 +294,7 @@ impl Controller {
             marked: std::sync::Arc::new(self.marked.clone()),
             picks: self.picks.clone(),
             folded: std::sync::Arc::new(self.folds.shown().clone()),
+            hidden_banners: std::sync::Arc::new(self.hidden_banners.clone()),
         }
     }
 
@@ -392,10 +396,13 @@ impl Controller {
             }
             KeyAction::DismissNotices => {
                 let dismissed = self.notices.clear();
+                let hidden = context
+                    .model
+                    .is_some_and(|model| self.hidden_banners.hide_all(&model.banners));
                 let unmarked = self.clear_marks();
                 // With nothing else to dismiss, `Esc` brings the
                 // Overview's panels back (D-121).
-                if dismissed || unmarked || self.unzoom_processes() {
+                if dismissed || hidden || unmarked || self.unzoom_processes() {
                     self.bump();
                 }
             }
