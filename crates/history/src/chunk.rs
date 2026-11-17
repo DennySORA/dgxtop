@@ -175,7 +175,7 @@ impl<'a, T: TimeSpan> Slices<'a, T> {
         self.end()
     }
 
-    fn end(&self) -> Position {
+    const fn end(&self) -> Position {
         Position {
             part: self.parts.len(),
             index: 0,

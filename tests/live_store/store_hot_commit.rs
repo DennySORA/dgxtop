@@ -1,6 +1,11 @@
 //! AT05 (atomic single-writer commit handshake) and AT06 (partitions visible,
 //! archive independent of the live state).
 
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
+
+#[expect(dead_code, reason = "each suite uses its part of the shared helpers")]
 #[path = "store_hot_support.rs"]
 mod support;
 
@@ -314,7 +319,7 @@ fn keys_are_owned_by_one_collector_and_process_tables_are_replaced() {
     harness.commit(vec![gauge(&key, 50.0, SECOND)], vec![], SECOND);
     let other = CollectorId::new("gpu").unwrap();
     let mut batch = harness.batch(vec![gauge(&key, 50.0, 2 * SECOND)], vec![]);
-    batch.collector_id = other.clone();
+    batch.collector_id = other;
     batch.state_base_revision = 0;
     let ack = harness.commit_batch(batch, 2 * SECOND);
     assert_eq!(ack.status, AckStatus::RejectedInvalid);
@@ -422,6 +427,10 @@ fn at06_archive_disabled_does_not_affect_the_hot_store() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one scenario walked from start to end: its steps share their state"
+)]
 fn at06_archive_enabled_gets_finished_rows_and_at27_keys_sort_numerically() {
     let mut harness = Harness::unpaired(
         support::config(),
@@ -441,7 +450,7 @@ fn at06_archive_enabled_gets_finished_rows_and_at27_keys_sort_numerically() {
         assert_eq!(ack.archive, ArchiveState::Pending);
     }
     harness.writer.record_gap(GapRecord {
-        key: Some(key.clone()),
+        key: Some(key),
         adapter_id: None,
         start_boot_ns: 10 * SECOND,
         end_boot_ns: 11 * SECOND,
@@ -518,7 +527,10 @@ fn at06_archive_enabled_gets_finished_rows_and_at27_keys_sort_numerically() {
     );
     assert!(harness.writer.take_archive_journal(8 << 20).is_none());
     let reserve_with_journal = harness.ledger.used(Partition::Reserve);
-    let journal_bytes = journal.permit.as_ref().map_or(0, |permit| permit.bytes());
+    let journal_bytes = journal
+        .permit
+        .as_ref()
+        .map_or(0, dgxtop_core::budget::BytePermit::bytes);
     assert!(journal_bytes > 0);
     drop(journal);
     assert_eq!(

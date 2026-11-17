@@ -1,4 +1,4 @@
-//! PresentationService: frame intervals and byte accounting of projections
+//! `PresentationService`: frame intervals and byte accounting of projections
 //! (AT13).
 //!
 //! The view models themselves are built by `crate::presentation`;
@@ -47,7 +47,7 @@ impl PresentationService {
     }
 
     /// Next global frame revision (monotonic, never reused).
-    pub(crate) fn next_frame_revision(&mut self) -> u64 {
+    pub(crate) const fn next_frame_revision(&mut self) -> u64 {
         self.frame_counter = self.frame_counter.saturating_add(1);
         self.frame_counter
     }
@@ -61,7 +61,7 @@ impl PresentationService {
         session.discard_pending_projection();
         self.ledger
             .try_reserve(Partition::Presentation, self.max_projection_bytes)
-            .map_err(|_| PublishOutcome::LedgerFull {
+            .map_err(|_cause| PublishOutcome::LedgerFull {
                 bytes: self.max_projection_bytes,
             })
     }

@@ -28,7 +28,8 @@ pub struct StackedBar<'a> {
 }
 
 impl<'a> StackedBar<'a> {
-    pub fn new(segments: &'a [Segment], track: Color) -> Self {
+    #[must_use]
+    pub const fn new(segments: &'a [Segment], track: Color) -> Self {
         Self { segments, track }
     }
 
@@ -67,7 +68,7 @@ impl<'a> StackedBar<'a> {
 
 /// A segment's share of the bar, clamped to `0.0..=1.0` (non-finite
 /// counts as 0).
-fn share(segment: &Segment) -> f64 {
+const fn share(segment: &Segment) -> f64 {
     if segment.fraction.is_finite() {
         segment.fraction.clamp(0.0, 1.0)
     } else {
@@ -86,7 +87,11 @@ fn widest_to_spare(widths: &[u16]) -> Option<usize> {
         .map(|(index, _)| index)
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "clamped to 0..=width first, so the cast is exact"
+)]
 fn cells(fraction: f64, width: u16) -> u16 {
     (fraction * f64::from(width))
         .round()

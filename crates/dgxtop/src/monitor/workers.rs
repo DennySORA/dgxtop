@@ -89,7 +89,7 @@ impl Workers {
         &mut self,
         name: &str,
         (threads, capacity): (u32, u32),
-        handler: Arc<dyn Fn(J) + Send + Sync>,
+        handler: impl Fn(J) + Send + Sync + 'static,
     ) -> Result<PoolHandle<J>, StartError> {
         let handle = spawn_pool(
             name,
@@ -300,14 +300,13 @@ impl Wiring {
                 effective.runtime.history_workers,
                 effective.queues.history_requests,
             ),
-            Arc::new(move |job: HistoryJob| {
+            move |job: HistoryJob| {
                 completions.control(run_history_job(history.as_ref(), job, clock.as_ref()));
-            }),
+            },
         )
     }
 
     pub(super) fn spawn_collectors(
-        &self,
         effective: &Config,
         registry: Vec<Arc<dyn Collector>>,
         completions: Completions,
@@ -319,14 +318,13 @@ impl Wiring {
                 effective.runtime.compute_workers,
                 effective.queues.collector_jobs,
             ),
-            Arc::new(move |plan: CollectionPlan| {
+            move |plan: CollectionPlan| {
                 completions.ingestion(run_collection(&registry, &plan));
-            }),
+            },
         )
     }
 
     pub(super) fn spawn_config(
-        &self,
         repository: FileConfigRepository,
         completions: Completions,
         workers: &mut Workers,
@@ -497,7 +495,7 @@ mod tests {
             deletion_failure: None,
         };
         log_archive_deletion_failure(&logger, &receipt);
-        assert!(logger.records().is_empty());
+        assert_eq!(logger.records(), [] as [(LogLevel, &str, String); 0]);
         receipt.deletion_failure = Some(dgxtop_core::errors::InfraError::Database(
             "archive.maintenance: locked".to_owned(),
         ));
@@ -520,7 +518,7 @@ mod tests {
         let logger = dgxtop_core::testing::MemoryLogger::default();
         let path = Path::new("/state/acme/history.sqlite3");
         log_recreated(&logger, path, None);
-        assert!(logger.records().is_empty());
+        assert_eq!(logger.records(), [] as [(LogLevel, &str, String); 0]);
         log_recreated(&logger, path, Some("no dgxtop format version"));
         let records = logger.records();
         assert_eq!(records.len(), 1);
@@ -539,11 +537,9 @@ mod tests {
     fn every_spawned_worker_is_stopped_at_shutdown() {
         let mut workers = Workers::default();
         let actor = workers
-            .actor("acme-actor", 2, (), |_: &mut (), _: u8| {})
+            .actor("acme-actor", 2, (), |(): &mut (), _: u8| {})
             .unwrap();
-        let pool = workers
-            .pool("acme-pool", (1, 2), Arc::new(|_: u8| {}))
-            .unwrap();
+        let pool = workers.pool("acme-pool", (1, 2), |_: u8| {}).unwrap();
         let asked = AtomicUsize::new(0);
         let warnings = workers.stop_each(|| {
             asked.fetch_add(1, Ordering::SeqCst);
@@ -562,15 +558,15 @@ mod tests {
         let (started, running) = crossbeam_channel::bounded(1);
         let (release, wait) = crossbeam_channel::bounded::<()>(1);
         let actor = workers
-            .actor("acme-busy", 2, (), move |_: &mut (), _: u8| {
-                let _ = started.send(());
-                let _ = wait.recv();
+            .actor("acme-busy", 2, (), move |(): &mut (), _: u8| {
+                started.send(()).unwrap_or_default();
+                wait.recv().unwrap_or_default();
             })
             .unwrap();
         actor.try_dispatch(1).unwrap();
         running.recv().unwrap();
         let warnings = workers.stop_each(|| Duration::from_millis(20));
-        let _ = release.send(());
+        release.send(()).unwrap_or_default();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("acme-busy"), "{warnings:?}");
     }

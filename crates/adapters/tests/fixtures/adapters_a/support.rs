@@ -2,10 +2,6 @@
 //! trees in per-test directories, request builders, a mirror of the parent
 //! catalog that applies deltas like the Manager would, a fault-injecting
 //! file layer and a fake statvfs probe. Nothing touches real drivers.
-// Each test crate uses a subset of the helpers, and a broken fixture must
-// abort the test loudly, hence unwrap in these non-#[test] helpers.
-#![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
-
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
@@ -41,7 +37,7 @@ impl FakeTree {
             "adapters-a-{label}-{}-{unique}",
             std::process::id()
         ));
-        let _ = fs::remove_dir_all(&root);
+        fs::remove_dir_all(&root).unwrap_or_default();
         fs::create_dir_all(&root).unwrap();
         Self { root }
     }
@@ -76,7 +72,7 @@ impl FakeTree {
     pub fn symlink(&self, path: &str, target: &str) {
         let full = self.path(path);
         fs::create_dir_all(full.parent().unwrap()).unwrap();
-        let _ = fs::remove_file(&full);
+        fs::remove_file(&full).unwrap_or_default();
         std::os::unix::fs::symlink(target, full).unwrap();
     }
 
@@ -99,7 +95,7 @@ impl FakeTree {
 
 impl Drop for FakeTree {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
+        fs::remove_dir_all(&self.root).unwrap_or_default();
     }
 }
 
@@ -187,10 +183,10 @@ pub fn write_process(
     start: u64,
     rss_pages: &str,
 ) {
-    let stat = format!(
+    let stat_line = format!(
         "{pid} ({comm}) S 1 {pid} {pid} 0 -1 4194560 100 0 0 0 {utime} {stime} 0 0 20 0 1 0 {start} 1234567 {rss_pages} 18446744073709551615 1 1 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0\n"
     );
-    tree.write(&format!("/proc/{pid}/stat"), &stat);
+    tree.write(&format!("/proc/{pid}/stat"), &stat_line);
 }
 
 pub fn discover_request(adapter: &str, previous_generation: u32, page: u32) -> DiscoverRequest {
@@ -286,11 +282,11 @@ pub fn find<'a>(records: &'a [Observation], metric: &str, entity: &str) -> &'a O
         .unwrap_or_else(|| panic!("no record {metric} on {entity}"))
 }
 
-pub fn u64_value(record: &Observation) -> u64 {
+pub const fn u64_value(record: &Observation) -> u64 {
     record.value.unwrap().as_u64().unwrap()
 }
 
-pub fn f64_value(record: &Observation) -> f64 {
+pub const fn f64_value(record: &Observation) -> f64 {
     record.value.unwrap().to_f64_lossy()
 }
 
@@ -361,7 +357,7 @@ pub struct FaultyFiles {
 }
 
 impl FaultyFiles {
-    pub fn new(inner: RootedFiles) -> Self {
+    pub const fn new(inner: RootedFiles) -> Self {
         Self {
             inner,
             faults: Mutex::new(BTreeMap::new()),
@@ -399,15 +395,11 @@ impl FaultyFiles {
             .unwrap_or_else(PoisonError::into_inner)
             .entry(path.to_owned())
             .or_insert(0) += 1;
-        match self
-            .faults
+        self.faults
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(path)
-        {
-            Some(errno) => Err(io::Error::from_raw_os_error(*errno)),
-            None => Ok(()),
-        }
+            .map_or(Ok(()), |errno| Err(io::Error::from_raw_os_error(*errno)))
     }
 }
 

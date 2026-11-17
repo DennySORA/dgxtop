@@ -50,6 +50,10 @@ pub enum CatalogError {
 
 /// Identity context shared by every record of this adapter.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "each field is an identifier, named as it is everywhere else"
+)]
 pub struct CatalogIdentity {
     pub host_id: HostId,
     pub boot_id: BootId,
@@ -141,7 +145,7 @@ fn source_descriptor(
         api_version: driver_version.map(|version| sanitize_display(version, 64)),
         device_path: device_path(device),
         native_unit: NativeUnit::new(channel.native_unit())
-            .map_err(|_| CatalogError::NativeUnit(channel.native_unit()))?,
+            .map_err(|_cause| CatalogError::NativeUnit(channel.native_unit()))?,
         raw_kind: channel.raw_kind(),
         sample_kind: SampleKind::Measured,
         read_group: ReadGroup::new(channel.group().name())?,

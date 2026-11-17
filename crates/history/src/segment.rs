@@ -83,7 +83,7 @@ impl SegmentTable {
         }
         let ordinal = self
             .first_ordinal
-            .checked_add(u32::try_from(self.segments.len()).map_err(|_| SegmentError::Limit)?)
+            .checked_add(u32::try_from(self.segments.len()).map_err(|_cause| SegmentError::Limit)?)
             .ok_or(SegmentError::Limit)?;
         self.account
             .try_grow(SEGMENT_BYTES)

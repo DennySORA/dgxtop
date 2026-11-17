@@ -1,7 +1,8 @@
 //! Small custom widgets: labeled gauge (with `n/a` when missing), gap-aware
 //! block sparkline (level colors, stacked parts) for every chart, and a
-//! segmented bar for shares of one whole. Bars stand three quarters of a
-//! row high (D-52).
+//! segmented bar for shares of one whole.
+//!
+//! Bars stand three quarters of a row high (D-52).
 
 mod bar;
 mod gauge;

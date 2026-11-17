@@ -119,6 +119,7 @@ impl Failure {
 
 impl SqliteArchiveReader {
     /// A reader of the archive at `path`; nothing is opened before a read.
+    #[must_use]
     pub fn new(path: &Path) -> Self {
         Self {
             path: path.to_path_buf(),

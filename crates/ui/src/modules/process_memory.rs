@@ -11,6 +11,7 @@ use super::common::gap;
 use crate::format::{clean, display_width, format_bytes};
 use crate::registry::DisplayContext;
 use crate::widgets::{Part, Segment};
+use dgxtop_core::num::ToF64Lossy;
 
 /// Marker of a colored part, drawn in its color.
 pub(crate) const SWATCH: &str = "■ ";
@@ -177,9 +178,7 @@ pub(crate) fn other_points(whole: &[Option<f64>], trends: &[ProcessTrend]) -> Ve
 
 /// `bytes` as the bars and charts count: a float, exact up to 8 PiB.
 pub(crate) fn bytes_f64(bytes: u64) -> f64 {
-    #[allow(clippy::cast_precision_loss)]
-    let value = bytes as f64;
-    value
+    bytes.to_f64_lossy()
 }
 
 #[cfg(test)]
@@ -263,7 +262,7 @@ mod tests {
             vec!["GPU   ■ train 6.0 GiB", "      ■ serve 2.0 GiB  +2"]
         );
         assert_eq!(lines(10, 1), vec!["GPU   +4"]);
-        assert!(legend_lines((lead(), &[]), None, 80, 3, &context).is_empty());
+        assert_eq!(legend_lines((lead(), &[]), None, 80, 3, &context).len(), 0);
         let wrapped = legend_lines((lead(), &shares), None, 42, 3, &context);
         assert_eq!(wrapped.len(), 2);
         assert_eq!(wrapped[0].spans[0].style, lead_style);

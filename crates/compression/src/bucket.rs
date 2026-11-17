@@ -22,8 +22,10 @@ pub trait Bucket: Copy {
 
 /// A bucket whose samples can be cut by time: a window that cuts a bucket
 /// takes the share of it that falls inside (D-97), its samples assumed
-/// spread evenly over the bucket's time. Only a bucket that integrates
-/// over time cuts without bias; one that counts samples does not.
+/// spread evenly over the bucket's time.
+///
+/// Only a bucket that integrates over time cuts without bias; one that
+/// counts samples does not.
 pub trait Divisible: Bucket {
     /// The share `fraction` (in `(0, 1)`) of this bucket's time holds.
     #[must_use]
@@ -32,7 +34,7 @@ pub trait Divisible: Bucket {
 
 impl Bucket for RunBucket {
     fn new(start_utc_ns: i64) -> Self {
-        RunBucket::new(start_utc_ns)
+        Self::new(start_utc_ns)
     }
 
     fn start_utc_ns(&self) -> i64 {
@@ -40,17 +42,17 @@ impl Bucket for RunBucket {
     }
 
     fn merge(&mut self, other: &Self) {
-        RunBucket::merge(self, other);
+        Self::merge(self, other);
     }
 
     fn is_empty(&self) -> bool {
-        RunBucket::is_empty(self)
+        Self::is_empty(self)
     }
 }
 
 impl Bucket for OverviewBucket {
     fn new(start_utc_ns: i64) -> Self {
-        OverviewBucket::new(start_utc_ns)
+        Self::new(start_utc_ns)
     }
 
     fn start_utc_ns(&self) -> i64 {
@@ -58,11 +60,11 @@ impl Bucket for OverviewBucket {
     }
 
     fn merge(&mut self, other: &Self) {
-        OverviewBucket::merge(self, other);
+        Self::merge(self, other);
     }
 
     fn is_empty(&self) -> bool {
-        OverviewBucket::is_empty(self)
+        Self::is_empty(self)
     }
 }
 

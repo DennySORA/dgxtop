@@ -1,6 +1,8 @@
-//! Adapter-side contracts: catalog (entities, sources, capabilities), read
-//! plans, raw observations, observation batches and the adapter-host IPC
-//! envelopes (`observation*.schema.json`, `ipc-request.schema.json`,
+//! Adapter-side contracts.
+//!
+//! Catalog (entities, sources, capabilities), read plans, raw
+//! observations, observation batches and the adapter-host IPC envelopes
+//! (`observation*.schema.json`, `ipc-request.schema.json`,
 //! `adapter-manifest.schema.json`).
 
 use serde::{Deserialize, Serialize};
@@ -56,6 +58,7 @@ pub struct Provenance {
 }
 
 impl Provenance {
+    #[must_use]
     pub fn origin(&self) -> OriginIdentity {
         OriginIdentity {
             origin_id: self.origin_id.clone(),
@@ -63,6 +66,10 @@ impl Provenance {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns a `ContractError` when the value breaks the adapter output
+    /// contract.
     pub fn validate(&self) -> Result<(), ContractError> {
         let bounded = |name: &str, value: &str, max: usize| {
             if value.is_empty() || value.len() > max {
@@ -117,6 +124,10 @@ pub struct Observation {
 }
 
 impl Observation {
+    /// # Errors
+    ///
+    /// Returns a `ContractError` when the value breaks the adapter output
+    /// contract.
     pub fn validate(&self) -> Result<(), ContractError> {
         if self.schema_version != OBSERVATION_SCHEMA_VERSION {
             return Err(invalid("observation schema_version must be 1"));
@@ -191,6 +202,11 @@ pub struct ObservationBatch {
 
 impl ObservationBatch {
     /// Validates shape and consistency with the plan that requested it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ContractError` when the value breaks the adapter output
+    /// contract.
     pub fn validate_against(
         &self,
         plan: &ReadPlan,
@@ -240,6 +256,7 @@ impl ObservationBatch {
     }
 
     /// Whether more pages of this read group follow.
+    #[must_use]
     pub fn continues(&self) -> bool {
         self.status == BatchStatus::Partial && self.error_code.as_deref() == Some(PAGE_CONTINUES)
     }
@@ -323,6 +340,7 @@ pub struct EntityRecord {
 }
 
 impl EntityRecord {
+    #[must_use]
     pub fn attribute(&self, key: &str) -> Option<&str> {
         self.attributes
             .iter()
@@ -330,6 +348,10 @@ impl EntityRecord {
             .map(|attribute| attribute.value.as_str())
     }
 
+    /// # Errors
+    ///
+    /// Returns a `ContractError` when the value breaks the adapter output
+    /// contract.
     pub fn validate(&self) -> Result<(), ContractError> {
         if self.attributes.len() > MAX_ATTRIBUTES {
             return Err(invalid("too many entity attributes"));
@@ -346,7 +368,7 @@ impl EntityRecord {
     }
 }
 
-/// One discovered source channel: identity, origin, units and the MetricKey it
+/// One discovered source channel: identity, origin, units and the `MetricKey` it
 /// is a candidate for. `metric` is `None` when the purpose is unproven; such a
 /// source is shown in diagnostics only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -375,13 +397,17 @@ pub struct SourceDescriptor {
     pub profile_rank: u16,
     /// Driver label if any (e.g. hwmon `temp1_label`), sanitized.
     pub label: Option<String>,
-    /// Counter modulus when the driver declares one (e.g. powercap max_energy_range_uj).
+    /// Counter modulus when the driver declares one (e.g. powercap `max_energy_range_uj`).
     pub counter_modulus: Option<u64>,
 }
 
 /// Capability of one metric/action on one scope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capability {
+    #[expect(
+        clippy::struct_field_names,
+        reason = "the field is a key of the wire contract"
+    )]
     pub capability_id: String,
     pub entity_id: Option<EntityId>,
     pub support: Support,
@@ -392,7 +418,7 @@ pub struct Capability {
 /// One catalog change page from discovery. A page never deletes sources that
 /// it did not report; removals are explicit and only committed with
 /// `complete == true` together with the generation.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct CatalogDelta {
     pub request_id: Option<Uuid>,
     pub adapter_id: Option<AdapterId>,
@@ -409,6 +435,10 @@ pub struct CatalogDelta {
 }
 
 impl CatalogDelta {
+    /// # Errors
+    ///
+    /// Returns a `ContractError` when the value breaks the adapter output
+    /// contract.
     pub fn validate(&self, max_page: usize) -> Result<(), ContractError> {
         let upserts = self.entities.len() + self.sources.len();
         if upserts > max_page.min(MAX_CATALOG_PAGE) {
@@ -456,6 +486,10 @@ pub enum AdapterOperation {
 }
 
 impl AdapterManifest {
+    /// # Errors
+    ///
+    /// Returns a `ContractError` when the value breaks the adapter output
+    /// contract.
     pub fn validate(&self) -> Result<(), ContractError> {
         if self.api_version != 1 {
             return Err(invalid("adapter api_version must be 1"));
@@ -518,6 +552,10 @@ pub struct IpcRequest {
 }
 
 impl IpcRequest {
+    /// # Errors
+    ///
+    /// Returns a `ContractError` when the value breaks the adapter output
+    /// contract.
     pub fn validate(&self) -> Result<(), ContractError> {
         if self.protocol_version != IPC_PROTOCOL_VERSION {
             return Err(invalid("unsupported protocol_version"));
@@ -539,23 +577,25 @@ impl IpcRequest {
     }
 
     /// Page index encoded in the read group (`process`, `process:1`, ...).
+    #[must_use]
     pub fn page(&self) -> u32 {
         split_page(self.read_group.as_str()).1
     }
 }
 
 /// Splits `group:page` into (`group`, page); a bare group is page 0.
+#[must_use]
 pub fn split_page(read_group: &str) -> (&str, u32) {
     match read_group.rsplit_once(':') {
-        Some((group, page)) => match page.parse::<u32>() {
-            Ok(index) => (group, index),
-            Err(_) => (read_group, 0),
-        },
+        Some((group, page)) => page
+            .parse::<u32>()
+            .map_or((read_group, 0), |index| (group, index)),
         None => (read_group, 0),
     }
 }
 
 /// Encodes `group:page` (page 0 stays the bare group name).
+#[must_use]
 pub fn paged_group(group: &str, page: u32) -> String {
     if page == 0 {
         group.to_owned()
@@ -585,7 +625,7 @@ pub enum HelloTag {
 }
 
 /// Host -> parent reply to `discover`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogReply {
     #[serde(rename = "type")]

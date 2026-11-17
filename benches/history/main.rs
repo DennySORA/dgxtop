@@ -5,7 +5,7 @@
 //!   intervals that bridge minute boundaries) followed by the per-second
 //!   maintenance the Manager requests, back to back;
 //! * reads: two concurrent clients (`history_workers = 2`) issuing the
-//!   HistoryService's mix through `OverviewReader::read` (D-82, D-90): the
+//!   `HistoryService`'s mix through `OverviewReader::read` (D-82, D-90): the
 //!   160 bars of a chart in every bar size from 1 m to 24 h, and the
 //!   1/6/12/24 h window statistics, over the Overview series, while a
 //!   writer keeps committing at the live 1 Hz cadence.
@@ -14,6 +14,7 @@
 //! `bench/budgets.json`. Append and maintenance have no budget entry of
 //! their own and are reported as raw stage timings.
 
+#[expect(dead_code, reason = "each bench uses its part of the shared helpers")]
 #[path = "../common/mod.rs"]
 mod common;
 
@@ -60,7 +61,7 @@ const READS_PER_STATS: usize = 4;
 const PRELOAD_END_NS: u64 = 48 * 3_600 * NANOS_PER_SECOND;
 
 /// Each client issues one read per interval (far above the
-/// HistoryService's rate, so every run collects enough samples while the
+/// `HistoryService`'s rate, so every run collects enough samples while the
 /// writer's commits overlap the reads).
 const QUERY_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -129,7 +130,7 @@ impl TimeProvider for BenchClock {
     }
 }
 
-/// One read of the HistoryService mix.
+/// One read of the `HistoryService` mix.
 struct PlannedQuery {
     window: &'static str,
     purpose: &'static str,
@@ -203,15 +204,18 @@ struct RunSamples {
 }
 
 fn main() -> ExitCode {
-    common::run_bench(BENCH, run)
+    common::run_bench(BENCH, false, run)
 }
 
-fn run() -> BenchResult<PathBuf> {
-    let args = common::parse_args(BENCH, false)?;
+#[expect(
+    clippy::too_many_lines,
+    reason = "one bench from its inputs to its report, in the order it runs"
+)]
+fn run(args: &common::BenchArgs) -> BenchResult<PathBuf> {
     let inputs = common::load_inputs()?;
     let config = common::reference_config()?;
     let sizes = sizes(args.mode);
-    let paths = common::output_paths(BENCH, &args);
+    let paths = common::output_paths(BENCH, args);
     let environment = common::environment(
         "none (history store only; no viewer)",
         "2 query client threads + 1 writer thread at 1 Hz during queries",
@@ -321,7 +325,7 @@ fn run() -> BenchResult<PathBuf> {
         ],
     };
     common::finish(
-        outcome,
+        &outcome,
         &inputs,
         &config,
         environment,
@@ -423,7 +427,8 @@ fn query_under_writes(
     let phase_end = started + phase;
     let (results, appends) = std::thread::scope(|scope| {
         let writer_thread = scope.spawn(|| paced_writer(feeder, writer, clock, &finished));
-        let clients: Vec<_> = (0..QUERY_CLIENTS)
+
+        let results: Vec<QuerySample> = (0..QUERY_CLIENTS)
             .map(|client| {
                 scope.spawn(move || {
                     paced_client(client, phase_end, |index| {
@@ -431,9 +436,6 @@ fn query_under_writes(
                     })
                 })
             })
-            .collect();
-        let results: Vec<QuerySample> = clients
-            .into_iter()
             .flat_map(|client| client.join().unwrap_or_default())
             .collect();
         finished.store(true, Ordering::Release);

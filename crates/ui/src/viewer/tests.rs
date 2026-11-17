@@ -1,6 +1,6 @@
 //! Ratatui `TestBackend` render tests: every view and module at 160×50,
 //! 100×30, 80×24, 40×10 and 20×5, plus semantics (missing states, conflicts,
-//! tags, banners, registry extension, panic isolation, HitMap).
+//! tags, banners, registry extension, panic isolation, `HitMap`).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -154,6 +154,10 @@ fn row_index(rendered: &Rendered, needle: &str) -> usize {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one scenario walked from start to end: its steps share their state"
+)]
 fn overview_follows_the_reference_layout_and_keeps_every_module_visible_when_wide() {
     let rendered = render(&model(ViewKind::Overview), (160, 50));
     for module in ["cpu", "gpu", "memory", "disk", "network", "processes"] {
@@ -218,7 +222,7 @@ fn overview_follows_the_reference_layout_and_keeps_every_module_visible_when_wid
     assert_eq!(cpu_top, row_index(&rendered, "Memory · shared with GPU"));
     // Memory is the wider of the two (D-40).
     let top = &rendered.rows[cpu_top];
-    let memory_x = top[..top.find("╭ Memory").unwrap()].chars().count();
+    let memory_x = top.split_once("╭ Memory").unwrap().0.chars().count();
     assert!(memory_x < top.chars().count() / 2, "{top}");
     let gpu_top = row_index(&rendered, "GPUs  2x");
     let disk_top = row_index(&rendered, "Disk I/O [nvme0n1]");
@@ -274,7 +278,7 @@ fn overview_follows_the_reference_layout_and_keeps_every_module_visible_when_wid
     // on one column.
     let end_column = |value: &str| {
         let row = rendered.row_with(value).unwrap();
-        row[..row.find(value).unwrap()].chars().count() + value.chars().count()
+        row.split_once(value).unwrap().0.chars().count() + value.chars().count()
     };
     assert_eq!(end_column("90.0%"), end_column("70.0%"));
     let gpu_zero = rendered.row_with("90.0%").unwrap();
@@ -579,7 +583,7 @@ fn retired_views_render_a_note() {
                 "{view:?} {size:?}\n{}",
                 rendered.text()
             );
-            assert!(rendered.report.module_errors.is_empty());
+            assert_eq!(rendered.report.module_errors.len(), 0);
         }
     }
 }
@@ -757,7 +761,7 @@ fn missing_topics_render_no_data_instead_of_zero() {
         rendered.text()
     );
     let mut empty = test_fixtures::view_model(ViewKind::Overview, 3);
-    empty.modules = dgxtop_core::view::ModuleViews::default();
+    empty.modules = ModuleViews::default();
     let rendered = render(&empty, (160, 50));
     assert!(
         rendered.contains("no cpu data in this projection"),
@@ -783,7 +787,7 @@ fn gpu_view_shows_the_host_kernel_in_the_driver_block() {
         .row_with("Linux kernel")
         .unwrap_or_else(|| panic!("{}", narrow.text()));
     assert!(line.contains("6.12"), "{line}");
-    assert!(narrow.report.module_errors.is_empty());
+    assert_eq!(narrow.report.module_errors.len(), 0);
     let mut unknown = model;
     unknown.header.kernel = None;
     assert!(!render(&unknown, (200, 60)).contains("Linux kernel"));
@@ -796,6 +800,10 @@ fn gpu_view_shows_the_host_kernel_in_the_driver_block() {
 /// folded panels keep their title row, first, and the others grow. Each
 /// row names the key unfolding it; a click on it unfolds too.
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one scenario walked from start to end: its steps share their state"
+)]
 fn folded_panels_keep_a_row_and_give_the_others_the_rest() {
     let overview = model(ViewKind::Overview);
     let folding = |panels: &[&str]| UiState {
@@ -975,7 +983,7 @@ fn the_expanded_process_table_takes_the_whole_overview() {
     let zoomed = render_with(
         &Viewer::builtin(),
         Some(&model),
-        &expanded(crate::modules::PROCESSES_MODULE_ID),
+        &expanded(PROCESSES_MODULE_ID),
         size,
     );
     let text = zoomed.text();

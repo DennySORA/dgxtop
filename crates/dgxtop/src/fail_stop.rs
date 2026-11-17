@@ -1,10 +1,11 @@
 //! Fail-stop for unrecoverable invariant failures of the Manager and the hot
-//! store (AT39). A panic on either thread is
-//! caught at the thread boundary: process actions stop sending, shutdown is
-//! requested so the frontend restores the terminal, and the process exits
-//! with a failure status. Nothing keeps sending signals with unknown state.
-//! Driver aborts, aborting UI modules and host OOM are outside what
-//! `catch_unwind` can guarantee.
+//! store (AT39).
+//!
+//! A panic on either thread is caught at the thread boundary: process
+//! actions stop sending, shutdown is requested so the frontend restores the
+//! terminal, and the process exits with a failure status. Nothing keeps
+//! sending signals with unknown state. Driver aborts, aborting UI modules
+//! and host OOM are outside what `catch_unwind` can guarantee.
 
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -20,6 +21,12 @@ type ShutdownHook = Box<dyn Fn(&str) + Send + Sync>;
 #[derive(Clone)]
 pub struct FailStop {
     inner: Arc<Inner>,
+}
+
+impl std::fmt::Debug for FailStop {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("FailStop").finish_non_exhaustive()
+    }
 }
 
 struct Inner {
@@ -43,7 +50,10 @@ impl FailStop {
     /// that happened before (e.g. in the state) requests it at once.
     pub fn connect(&self, request_shutdown: impl Fn(&str) + Send + Sync + 'static) {
         // The first connection wins; later ones are ignored.
-        let _ = self.inner.shutdown.set(Box::new(request_shutdown));
+        self.inner
+            .shutdown
+            .set(Box::new(request_shutdown))
+            .unwrap_or_default();
         if let Some(reason) = self.reason() {
             self.request_shutdown(&reason);
         }
@@ -84,6 +94,7 @@ impl FailStop {
             .clone()
     }
 
+    #[must_use]
     pub fn is_halted(&self) -> bool {
         self.reason().is_some()
     }

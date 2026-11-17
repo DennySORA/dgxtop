@@ -23,16 +23,19 @@ impl DurationSamples {
         self.samples.push_back(sample);
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.samples.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.samples.is_empty()
     }
 
     /// Nearest-rank percentile in permille (`950` = p95): the sample at
     /// `ceil(p × N) − 1` of the sorted samples.
+    #[must_use]
     pub fn percentile_permille(&self, permille: u32) -> Option<Duration> {
         if self.samples.is_empty() {
             return None;
@@ -45,18 +48,22 @@ impl DurationSamples {
         sorted.get(rank - 1).copied()
     }
 
+    #[must_use]
     pub fn p50(&self) -> Option<Duration> {
         self.percentile_permille(500)
     }
 
+    #[must_use]
     pub fn p95(&self) -> Option<Duration> {
         self.percentile_permille(950)
     }
 
+    #[must_use]
     pub fn p99(&self) -> Option<Duration> {
         self.percentile_permille(990)
     }
 
+    #[must_use]
     pub fn max(&self) -> Option<Duration> {
         self.samples.iter().copied().max()
     }
@@ -99,6 +106,7 @@ pub struct FrameStatsSummary {
 }
 
 impl FrameStats {
+    #[must_use]
     pub fn summary(&self) -> FrameStatsSummary {
         FrameStatsSummary {
             frames_drawn: self.frames_drawn,

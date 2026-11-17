@@ -23,6 +23,7 @@ pub enum ManagerError {
 
 impl ManagerError {
     /// Wire error code used when the failure is surfaced to a frontend.
+    #[must_use]
     pub const fn code(&self) -> ErrorCode {
         match self {
             Self::InvalidSetup(_) => ErrorCode::ValidationFailed,

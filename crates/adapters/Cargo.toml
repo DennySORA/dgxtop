@@ -10,12 +10,13 @@ publish = false
 
 [features]
 # Test aids: the read-counting file system and catalog bookkeeping sizes.
-test-support = []
+testing = []
 
 [dependencies]
 dgxtop-core.workspace = true
 libc.workspace = true
 nix.workspace = true
+rustix.workspace = true
 nvml-wrapper.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -23,9 +24,9 @@ thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-dgxtop-core = { workspace = true, features = ["test-support"] }
+dgxtop-core = { workspace = true, features = ["testing"] }
 # The crate's own integration tests use its test aids.
-dgxtop-adapters = { path = ".", features = ["test-support"] }
+dgxtop-adapters = { path = ".", features = ["testing"] }
 
 [lints]
 workspace = true

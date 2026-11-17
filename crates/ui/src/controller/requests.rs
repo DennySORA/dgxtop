@@ -78,7 +78,7 @@ impl PendingRequests {
         }
     }
 
-    /// Whether a SetSamplingInterval is still unresolved (a second one
+    /// Whether a `SetSamplingInterval` is still unresolved (a second one
     /// would only conflict on the stale config revision).
     pub fn has_pending_interval(&self) -> bool {
         self.entries
@@ -138,7 +138,7 @@ fn delete_notice(result: &CommandResult) -> Option<(BannerLevel, String)> {
     }
 }
 
-fn code_text(code: ResultCode) -> &'static str {
+const fn code_text(code: ResultCode) -> &'static str {
     code.as_str()
 }
 
@@ -156,7 +156,7 @@ pub fn notice_for(
         Some(RequestKind::Prepare { .. }) => prepare_notice(result),
         Some(RequestKind::Confirm { target }) => confirm_notice(target, result),
         Some(RequestKind::Cancel) => cancel_notice(result),
-        Some(RequestKind::Interval { interval_ms }) => interval_notice(*interval_ms, result),
+        Some(RequestKind::Interval { interval_ms }) => Some(interval_notice(*interval_ms, result)),
         Some(RequestKind::ModuleToggle { module_id, enabled }) => {
             module_notice(module_id, *enabled, result)
         }
@@ -239,7 +239,7 @@ fn cancel_notice(result: &CommandResult) -> Option<(BannerLevel, String)> {
     }
 }
 
-fn interval_notice(interval_ms: u32, result: &CommandResult) -> Option<(BannerLevel, String)> {
+fn interval_notice(interval_ms: u32, result: &CommandResult) -> (BannerLevel, String) {
     match (result.status, result.code) {
         (CommandStatus::Completed, _) => {
             let effective = result
@@ -248,50 +248,45 @@ fn interval_notice(interval_ms: u32, result: &CommandResult) -> Option<(BannerLe
             let revision = result
                 .config_revision
                 .map_or_else(String::new, |revision| format!(" (revision {revision})"));
-            Some((
+            (
                 BannerLevel::Info,
                 format!(
                     "sampling interval: configured {}, effective {effective}{revision}",
                     format_interval_ms(interval_ms)
                 ),
-            ))
+            )
         }
-        (CommandStatus::Rejected, ResultCode::Error(ErrorCode::Conflict)) => Some((
+        (CommandStatus::Rejected, ResultCode::Error(ErrorCode::Conflict)) => (
             BannerLevel::Warning,
             "settings changed elsewhere (revision conflict); press +/- again".to_owned(),
-        )),
-        (CommandStatus::Rejected | CommandStatus::Unknown, _) if result.commit_uncertain() => {
-            Some((
-                BannerLevel::Warning,
-                uncertain_notice("interval change", result),
-            ))
-        }
-        (CommandStatus::Rejected | CommandStatus::Unknown, _) => Some((
+        ),
+        (CommandStatus::Rejected | CommandStatus::Unknown, _) if result.commit_uncertain() => (
+            BannerLevel::Warning,
+            uncertain_notice("interval change", result),
+        ),
+        (CommandStatus::Rejected | CommandStatus::Unknown, _) => (
             BannerLevel::Error,
             format!("interval not changed: {}", failure(result)),
-        )),
-        (CommandStatus::Accepted | CommandStatus::InProgress, _) => Some((
+        ),
+        (CommandStatus::Accepted | CommandStatus::InProgress, _) => (
             BannerLevel::Info,
             format!(
                 "interval change to {} pending",
                 format_interval_ms(interval_ms)
             ),
-        )),
+        ),
     }
 }
 
 /// An uncertain persistent write: what is known about the on-disk settings.
 fn uncertain_notice(change: &str, result: &CommandResult) -> String {
-    match result.config_revision {
-        Some(revision) => format!(
-            "{change} outcome uncertain; the on-disk settings (revision {revision}) were adopted: {}",
-            failure(result)
-        ),
-        None => format!(
+    result.config_revision.map_or_else(|| format!(
             "{change} outcome uncertain; the on-disk settings are unknown: {}",
             failure(result)
-        ),
-    }
+        ), |revision| format!(
+            "{change} outcome uncertain; the on-disk settings (revision {revision}) were adopted: {}",
+            failure(result)
+        ))
 }
 
 fn module_notice(

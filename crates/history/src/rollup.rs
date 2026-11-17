@@ -127,7 +127,11 @@ mod tests {
     fn step(start_s: f64, end_s: f64, value: f64, segment: u32) -> Step {
         let to_ns = |seconds: f64| {
             let nanos = seconds * 1e9;
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "a test step's seconds: small and never negative"
+            )]
             let nanos = nanos as u64;
             nanos
         };
@@ -246,7 +250,7 @@ mod tests {
         // An interval ending exactly on a boundary belongs to the bucket before.
         let edge = [interval(59_000, 60_000, 9)];
         let rollup = counter_rollup(edge.iter(), span(0, 60 * SECOND, MinuteGrid::BOOT_CLOCK));
-        assert!(rollup.bridges.is_empty());
+        assert_eq!(rollup.bridges.len(), 0);
         assert_eq!(rollup.buckets[0].start_ns, 0);
         // Intervals outside (from, to] are left for another pass.
         assert_eq!(

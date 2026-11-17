@@ -9,7 +9,7 @@
 //! and mode 0600, directories with mode 0700, and never follows a symlink in
 //! the final path component when reading or creating.
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 mod failpoint;
 
 use std::ffi::OsString;
@@ -23,7 +23,7 @@ use nix::errno::Errno;
 use nix::fcntl::{Flock, FlockArg};
 use thiserror::Error;
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 pub use failpoint::{Failpoint, FailpointFileSystem, Trigger};
 
 /// Mode of every file the persistence layer creates.
@@ -55,6 +55,7 @@ pub struct FileFacts {
 
 impl FileFacts {
     /// Extracts the facts from metadata obtained by `lstat`/`fstat`.
+    #[must_use]
     pub fn from_metadata(metadata: &Metadata) -> Self {
         let file_type = metadata.file_type();
         let kind = if file_type.is_symlink() {
@@ -74,6 +75,7 @@ impl FileFacts {
         }
     }
 
+    #[must_use]
     pub const fn is_group_or_world_writable(&self) -> bool {
         self.permissions & GROUP_OR_WORLD_WRITABLE != 0
     }
@@ -86,6 +88,7 @@ pub struct PrivateFile {
 }
 
 impl PrivateFile {
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -133,29 +136,76 @@ pub struct DirectoryLock {
 /// checks and the SQLite pre-creation and recreation steps.
 pub trait FileSystemOps: Send + Sync + fmt::Debug {
     /// Creates `path` with `O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC`, mode 0600.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn create_private_file(&self, path: &Path) -> io::Result<PrivateFile>;
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn write_all(&self, file: &mut PrivateFile, bytes: &[u8]) -> io::Result<()>;
     /// `fsync` of the file data and metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn sync_file(&self, file: &PrivateFile) -> io::Result<()>;
     /// Atomic replace of `to` by `from` (same directory).
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
     /// Publishes `existing` under `new_path` only if `new_path` does not exist
     /// (hard link; fails with `AlreadyExists` otherwise).
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn link_new(&self, existing: &Path, new_path: &Path) -> io::Result<()>;
     /// `fsync` of a directory so a rename inside it becomes durable.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn sync_directory(&self, directory: &Path) -> io::Result<()>;
     /// Reads at most `max_bytes` from a regular file without following a
     /// final symlink and without blocking on FIFOs.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ReadLimitedError` when the file is missing, a symlink, not a
+    /// regular file, over the limit or cannot be read.
     fn read_limited(&self, path: &Path, max_bytes: u64) -> Result<LimitedRead, ReadLimitedError>;
     /// `lstat`: facts about the path itself, never its symlink target.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn symlink_metadata(&self, path: &Path) -> io::Result<FileFacts>;
     /// At most `max_entries` names of `directory` (unordered).
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn list_directory(&self, directory: &Path, max_entries: usize) -> io::Result<Vec<OsString>>;
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn remove_file(&self, path: &Path) -> io::Result<()>;
     /// Creates one directory with mode exactly 0700 (independent of umask).
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn create_private_dir(&self, path: &Path) -> io::Result<()>;
     /// Non-blocking exclusive `flock` on a directory; `Ok(None)` when another
     /// holder has it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn try_lock_directory(&self, directory: &Path) -> io::Result<Option<DirectoryLock>>;
     /// Effective uid that must own every file and directory we trust.
     fn effective_uid(&self) -> u32;
@@ -166,6 +216,7 @@ pub trait FileSystemOps: Send + Sync + fmt::Debug {
 pub struct RealFileSystem;
 
 impl RealFileSystem {
+    #[must_use]
     pub const fn new() -> Self {
         Self
     }

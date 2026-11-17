@@ -31,10 +31,10 @@ use crate::common::SystemFiles;
 pub(crate) const MAX_NAME_CHARS: usize = 24;
 /// Shortest the folder of a long name is cut to.
 const MIN_FOLDER_CHARS: usize = 6;
-/// `comm` is cut to this many bytes (TASK_COMM_LEN − 1).
+/// `comm` is cut to this many bytes (`TASK_COMM_LEN` − 1).
 const COMM_LIMIT: usize = 15;
 /// Thread names runtimes give a program's main thread, which `comm` shows
-/// instead of the program (PyTorch, Python, Node).
+/// instead of the program (`PyTorch`, Python, Node).
 const THREAD_NAMES: [&str; 3] = ["pt_main_thread", "MainThread", "node-MainThread"];
 
 /// Program names that say nothing without their folder.
@@ -158,7 +158,7 @@ pub(crate) fn command_text(argv: &[String], max_bytes: usize) -> String {
     while !cleaned.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}…", &cleaned[..end])
+    format!("{}…", cleaned.get(..end).unwrap_or_default())
 }
 
 /// Whether `comm` alone may say too little, so the command line is read:
@@ -270,7 +270,7 @@ fn python_program(args: &[String]) -> Option<Program> {
             return Some(Program::Script(argument.clone()));
         };
         for (position, flag) in flags.char_indices() {
-            let value = &flags[position + flag.len_utf8()..];
+            let value = flags.get(position + flag.len_utf8()..).unwrap_or_default();
             match flag {
                 'c' => return None,
                 'm' => {
@@ -371,7 +371,13 @@ fn java_program(args: &[String]) -> Option<Program> {
                 rest.next();
             }
             option if option.starts_with('-') || option.starts_with('@') => {}
-            source if source.ends_with(".java") => return Some(Program::Script(source.to_owned())),
+            source
+                if Path::new(source)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("java")) =>
+            {
+                return Some(Program::Script(source.to_owned()));
+            }
             class => return Some(Program::Class(last_part(class).to_owned())),
         }
     }
@@ -471,10 +477,11 @@ fn module_name(module: &str) -> String {
 /// The script's file name without its directory and script extension.
 fn script_name(path: &str) -> String {
     let base = path.rsplit('/').next().unwrap_or(path);
-    match extension_of(base) {
-        Some(extension) => base[..base.len() - extension.len() - 1].to_owned(),
-        None => base.to_owned(),
-    }
+    // The extension matched whatever its case, so it is cut by its length.
+    extension_of(base)
+        .and_then(|extension| base.get(..base.len() - extension.len() - 1))
+        .unwrap_or(base)
+        .to_owned()
 }
 
 /// `com.example.Trainer` → `Trainer`.
@@ -532,10 +539,7 @@ fn in_folder(
     script: Option<&str>,
     cwd: &mut Folder<impl FnOnce() -> Option<String>>,
 ) -> String {
-    match folder_of(script, cwd) {
-        Some(folder) => cap(name, &folder),
-        None => cap(name, ""),
-    }
+    folder_of(script, cwd).map_or_else(|| cap(name, ""), |folder| cap(name, &folder))
 }
 
 /// The nearest folder of the script (or of the working folder for a
@@ -609,7 +613,7 @@ struct Folder<F: FnOnce() -> Option<String>> {
 }
 
 impl<F: FnOnce() -> Option<String>> Folder<F> {
-    fn lazy(read: F) -> Self {
+    const fn lazy(read: F) -> Self {
         Self {
             read: Some(read),
             value: None,

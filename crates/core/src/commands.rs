@@ -34,16 +34,17 @@ pub enum ViewKind {
 }
 
 impl ViewKind {
-    pub const ALL: [ViewKind; 7] = [
-        ViewKind::Overview,
-        ViewKind::GpuDetail,
-        ViewKind::Processes,
-        ViewKind::History,
-        ViewKind::Sources,
-        ViewKind::Settings,
-        ViewKind::Actions,
+    pub const ALL: [Self; 7] = [
+        Self::Overview,
+        Self::GpuDetail,
+        Self::Processes,
+        Self::History,
+        Self::Sources,
+        Self::Settings,
+        Self::Actions,
     ];
 
+    #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
             Self::Overview => "Overview",
@@ -57,12 +58,14 @@ impl ViewKind {
     }
 
     /// Next view in Tab order (wraps).
+    #[must_use]
     pub fn next(self) -> Self {
         let index = Self::ALL.iter().position(|view| *view == self).unwrap_or(0);
         Self::ALL[(index + 1) % Self::ALL.len()]
     }
 
     /// Previous view in Shift-Tab order (wraps).
+    #[must_use]
     pub fn previous(self) -> Self {
         let index = Self::ALL.iter().position(|view| *view == self).unwrap_or(0);
         Self::ALL[(index + Self::ALL.len() - 1) % Self::ALL.len()]
@@ -81,6 +84,7 @@ pub enum SortKey {
 }
 
 impl SortKey {
+    #[must_use]
     pub const fn next(self) -> Self {
         match self {
             Self::GpuMemory => Self::GpuUtil,
@@ -91,6 +95,7 @@ impl SortKey {
         }
     }
 
+    #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::GpuMemory => "GPU memory",
@@ -178,6 +183,7 @@ pub enum CommandBody {
 }
 
 impl CommandBody {
+    #[must_use]
     pub const fn name(&self) -> &'static str {
         match self {
             Self::SetSamplingInterval { .. } => "SetSamplingInterval",
@@ -227,6 +233,7 @@ pub enum CommandSyntaxError {
 }
 
 impl CommandEnvelope {
+    #[must_use]
     pub fn new(session_id: SessionId, body: CommandBody) -> Self {
         Self {
             schema_version: COMMAND_SCHEMA_VERSION,
@@ -237,6 +244,11 @@ impl CommandEnvelope {
     }
 
     /// Schema-level checks (the Manager re-validates semantics).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `CommandSyntaxError` when a field of the command is out of its
+    /// bounds.
     pub fn validate_syntax(&self) -> Result<(), CommandSyntaxError> {
         if self.schema_version != COMMAND_SCHEMA_VERSION {
             return Err(CommandSyntaxError::Version);
@@ -294,12 +306,14 @@ impl CommandEnvelope {
         Ok(())
     }
 
-    /// Payload digest for "same request_id, different payload" detection.
+    /// Payload digest for "same `request_id`, different payload" detection.
+    #[must_use]
     pub fn payload_digest(&self) -> String {
         crate::digest::sha256_json(&(&self.session_id, &self.body)).unwrap_or_default()
     }
 
     /// Serialized size, used for the per-command byte cap.
+    #[must_use]
     pub fn encoded_len(&self) -> u64 {
         encoded_len(self)
     }
@@ -307,16 +321,19 @@ impl CommandEnvelope {
 
 /// Bytes of `value` as JSON on the wire.
 fn encoded_len(value: &impl Serialize) -> u64 {
-    serde_json::to_vec(value)
-        .map(|bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX))
-        .unwrap_or(u64::MAX)
+    serde_json::to_vec(value).map_or(u64::MAX, |bytes| {
+        u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+    })
 }
 
 /// `runs` in the run lists of [`CommandBody::DeleteRuns`] commands for
-/// `session_id`, in order (D-108): each command's envelope stays within
-/// `max_bytes` (every Manager takes [`crate::config::MIN_COMMAND_BYTES`])
-/// and holds at most [`MAX_DELETE_RUNS`] runs. A run too long for any
-/// command still gets one of its own, which the session then refuses.
+/// `session_id`, in order (D-108).
+///
+/// Each command's envelope stays within `max_bytes` (every Manager takes
+/// [`crate::config::MIN_COMMAND_BYTES`]) and holds at most
+/// [`MAX_DELETE_RUNS`] runs. A run too long for any command still gets
+/// one of its own, which the session then refuses.
+#[must_use]
 pub fn delete_run_batches(
     session_id: &SessionId,
     runs: &[ProcessKey],
@@ -395,6 +412,7 @@ impl CommandResult {
         }
     }
 
+    #[must_use]
     pub fn completed(request_id: Uuid, message: &str) -> Self {
         Self::base(
             request_id,
@@ -404,6 +422,7 @@ impl CommandResult {
         )
     }
 
+    #[must_use]
     pub fn accepted(request_id: Uuid) -> Self {
         Self::base(
             request_id,
@@ -413,6 +432,7 @@ impl CommandResult {
         )
     }
 
+    #[must_use]
     pub fn in_progress(request_id: Uuid, message: &str) -> Self {
         Self::base(
             request_id,
@@ -422,6 +442,7 @@ impl CommandResult {
         )
     }
 
+    #[must_use]
     pub fn rejected(request_id: Uuid, code: ErrorCode, message: &str) -> Self {
         Self::base(
             request_id,
@@ -431,6 +452,7 @@ impl CommandResult {
         )
     }
 
+    #[must_use]
     pub fn unknown(request_id: Uuid, message: &str) -> Self {
         Self::base(
             request_id,
@@ -440,6 +462,7 @@ impl CommandResult {
         )
     }
 
+    #[must_use]
     pub fn from_error(request_id: Uuid, error: &ErrorDetail) -> Self {
         if error.commit_uncertain && !error.message.contains(COMMIT_UNCERTAIN_MARKER) {
             let message = format!("{} {COMMIT_UNCERTAIN_MARKER}", error.message);
@@ -451,12 +474,14 @@ impl CommandResult {
     /// The outcome of a persistent write could not be determined (the result
     /// schema is closed, so the marker travels in the message): never report
     /// such a change as "not made".
+    #[must_use]
     pub fn commit_uncertain(&self) -> bool {
         self.message.contains(COMMIT_UNCERTAIN_MARKER)
     }
 
     /// Action state projected onto the result enum.
-    pub fn with_action_state(mut self, state: ActionState) -> Self {
+    #[must_use]
+    pub const fn with_action_state(mut self, state: ActionState) -> Self {
         self.action_state = Some(state.result_state());
         self
     }
@@ -597,7 +622,7 @@ mod tests {
             roomy.iter().map(Vec::len).collect::<Vec<_>>(),
             [MAX_DELETE_RUNS, MAX_DELETE_RUNS, 600 - 2 * MAX_DELETE_RUNS]
         );
-        assert!(delete_run_batches(&session, &[], cap).is_empty());
+        assert_eq!(delete_run_batches(&session, &[], cap).len(), 0);
         let tiny = delete_run_batches(&session, &runs[..3], 1);
         assert_eq!(tiny.len(), 3, "a run too long for any command goes alone");
     }

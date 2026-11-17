@@ -1,9 +1,10 @@
 //! The one-shot snapshot (`--snapshot-json`, D-140): what the monitor knows
-//! at one moment, as one JSON document for scripts. It holds every
-//! committed metric under the name the naming contract gives it (metric id,
-//! entity, scope) with its value in the canonical unit and the evidence the
-//! panels show beside it, the entities those metrics belong to, and the GPU
-//! processes.
+//! at one moment, as one JSON document for scripts.
+//!
+//! It holds every committed metric under the name the naming contract gives
+//! it (metric id, entity, scope) with its value in the canonical unit and
+//! the evidence the panels show beside it, the entities those metrics
+//! belong to, and the GPU processes.
 //!
 //! The document is built from the committed snapshot and the catalog alone,
 //! so it never differs from what a panel would draw of the same moment. A
@@ -598,7 +599,7 @@ mod tests {
         assert_eq!(kills["kind"], "measured");
         assert_eq!(json["entities"][0]["kind"], "gpu");
         assert_eq!(json["entities"][0]["attributes"]["nvml_index"], "0");
-        assert!(json["processes"].as_array().unwrap().is_empty());
+        assert_eq!(json["processes"].as_array().unwrap().len(), 0);
         assert_eq!(json["processes_truncated"], false);
     }
 }

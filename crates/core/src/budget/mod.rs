@@ -10,6 +10,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+use crate::num::ToF64Lossy;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -39,17 +40,18 @@ pub enum Partition {
 }
 
 impl Partition {
-    pub const ALL: [Partition; 7] = [
-        Partition::Catalog,
-        Partition::HotState,
-        Partition::RawHistory,
-        Partition::Aggregates,
-        Partition::Ingress,
-        Partition::Presentation,
-        Partition::Reserve,
+    pub const ALL: [Self; 7] = [
+        Self::Catalog,
+        Self::HotState,
+        Self::RawHistory,
+        Self::Aggregates,
+        Self::Ingress,
+        Self::Presentation,
+        Self::Reserve,
     ];
 
     /// MiB share at the 256 MiB reference budget.
+    #[must_use]
     pub const fn reference_mib(self) -> u64 {
         match self {
             Self::Catalog => 24,
@@ -80,6 +82,7 @@ impl Partition {
         }
     }
 
+    #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Catalog => "catalog",
@@ -101,6 +104,7 @@ pub struct PartitionLimits {
 
 impl PartitionLimits {
     /// Limits for a total budget of `memory_limit_mib` MiB.
+    #[must_use]
     pub fn for_memory_limit_mib(memory_limit_mib: u64) -> Self {
         let mut limits = [0u64; Partition::ALL.len()];
         for partition in Partition::ALL {
@@ -113,10 +117,12 @@ impl PartitionLimits {
         Self { limits }
     }
 
+    #[must_use]
     pub const fn limit(&self, partition: Partition) -> u64 {
         self.limits[partition.index()]
     }
 
+    #[must_use]
     pub fn total(&self) -> u64 {
         self.limits
             .iter()
@@ -226,6 +232,7 @@ impl fmt::Debug for ByteLedger {
 }
 
 impl ByteLedger {
+    #[must_use]
     pub fn new(limits: PartitionLimits) -> Self {
         Self {
             inner: Arc::new(LedgerInner {
@@ -236,11 +243,16 @@ impl ByteLedger {
     }
 
     /// Ledger sized for `memory_limit_mib`.
+    #[must_use]
     pub fn for_memory_limit_mib(memory_limit_mib: u64) -> Self {
         Self::new(PartitionLimits::for_memory_limit_mib(memory_limit_mib))
     }
 
     /// Reserves `bytes` before the caller allocates. Never over-commits.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `CapacityError` when the byte or item budget has no room left.
     pub fn try_reserve(
         &self,
         partition: Partition,
@@ -254,11 +266,13 @@ impl ByteLedger {
         })
     }
 
+    #[must_use]
     pub fn limits(&self) -> PartitionLimits {
         self.inner.limits
     }
 
     /// Current usage of one partition.
+    #[must_use]
     pub fn used(&self, partition: Partition) -> u64 {
         self.inner.counters[partition.index()]
             .used
@@ -266,17 +280,17 @@ impl ByteLedger {
     }
 
     /// Fraction in `[0, 1]` of one partition currently used.
-    #[allow(clippy::cast_precision_loss)]
+    #[must_use]
     pub fn utilization(&self, partition: Partition) -> f64 {
         let limit = self.inner.limits.limit(partition);
         if limit == 0 {
             return 1.0;
         }
-        self.used(partition) as f64 / limit as f64
+        self.used(partition).to_f64_lossy() / limit.to_f64_lossy()
     }
 
     /// Fraction of the whole budget currently used.
-    #[allow(clippy::cast_precision_loss)]
+    #[must_use]
     pub fn total_utilization(&self) -> f64 {
         let total = self.inner.limits.total();
         if total == 0 {
@@ -286,9 +300,10 @@ impl ByteLedger {
             .iter()
             .map(|partition| self.used(*partition))
             .sum();
-        used as f64 / total as f64
+        used.to_f64_lossy() / total.to_f64_lossy()
     }
 
+    #[must_use]
     pub fn snapshot(&self) -> LedgerSnapshot {
         let partitions = Partition::ALL
             .iter()
@@ -325,20 +340,26 @@ impl fmt::Debug for BytePermit {
             .debug_struct("BytePermit")
             .field("partition", &self.partition)
             .field("bytes", &self.bytes)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl BytePermit {
+    #[must_use]
     pub const fn bytes(&self) -> u64 {
         self.bytes
     }
 
+    #[must_use]
     pub const fn partition(&self) -> Partition {
         self.partition
     }
 
     /// Grows the reservation in place, failing without side effects.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `CapacityError` when the byte or item budget has no room left.
     pub fn try_grow(&mut self, additional: u64) -> Result<(), CapacityError> {
         self.ledger.try_take(self.partition, additional)?;
         self.bytes = self.bytes.saturating_add(additional);
@@ -354,12 +375,12 @@ impl BytePermit {
     }
 
     /// Splits `bytes` off into a new permit owned by another holder.
-    pub fn split_off(&mut self, bytes: u64) -> Option<BytePermit> {
+    pub fn split_off(&mut self, bytes: u64) -> Option<Self> {
         if bytes > self.bytes {
             return None;
         }
         self.bytes -= bytes;
-        Some(BytePermit {
+        Some(Self {
             ledger: Arc::clone(&self.ledger),
             partition: self.partition,
             bytes,
@@ -367,7 +388,12 @@ impl BytePermit {
     }
 
     /// Absorbs another permit of the same partition and ledger.
-    pub fn merge(&mut self, mut other: BytePermit) -> Result<(), BytePermit> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `other` unchanged when it is of another ledger or partition:
+    /// the two cannot be one permit.
+    pub fn merge(&mut self, mut other: Self) -> Result<(), Self> {
         if other.partition != self.partition || !Arc::ptr_eq(&other.ledger, &self.ledger) {
             return Err(other);
         }
@@ -425,13 +451,14 @@ impl fmt::Debug for QueueGate {
             .field("item_limit", &self.item_limit)
             .field("bytes", &self.bytes_in_queue.load(Ordering::Relaxed))
             .field("byte_limit", &self.byte_limit)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl QueueGate {
     /// `byte_limit` is the queue's own cap (e.g. 8 MiB ingress); the partition
     /// ledger is checked as well so the global budget always holds.
+    #[must_use]
     pub fn new(
         name: &'static str,
         item_limit: usize,
@@ -451,6 +478,10 @@ impl QueueGate {
     }
 
     /// Admits one item of `bytes`, or rejects without side effects.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `CapacityError` when the byte or item budget has no room left.
     pub fn try_admit(&self, bytes: u64) -> Result<QueueTicket, CapacityError> {
         let mut current = self.items.load(Ordering::Acquire);
         loop {
@@ -510,34 +541,38 @@ impl QueueGate {
         }
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.items.load(Ordering::Acquire)
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    #[must_use]
     pub fn queued_bytes(&self) -> u64 {
         self.bytes_in_queue.load(Ordering::Acquire)
     }
 
     /// Max of item and byte utilization in `[0, 1]`.
-    #[allow(clippy::cast_precision_loss)]
+    #[must_use]
     pub fn utilization(&self) -> f64 {
         let items = if self.item_limit == 0 {
             1.0
         } else {
-            self.len() as f64 / self.item_limit as f64
+            self.len().to_f64_lossy() / self.item_limit.to_f64_lossy()
         };
         let bytes = if self.byte_limit == 0 {
             1.0
         } else {
-            self.queued_bytes() as f64 / self.byte_limit as f64
+            self.queued_bytes().to_f64_lossy() / self.byte_limit.to_f64_lossy()
         };
         items.max(bytes)
     }
 
+    #[must_use]
     pub const fn name(&self) -> &'static str {
         self.name
     }
@@ -557,16 +592,18 @@ impl fmt::Debug for QueueTicket {
         formatter
             .debug_struct("QueueTicket")
             .field("bytes", &self.queued_bytes)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl QueueTicket {
+    #[must_use]
     pub const fn bytes(&self) -> u64 {
         self.queued_bytes
     }
 
     /// Leaves the queue but keeps the bytes accounted (ownership moved on).
+    #[must_use]
     pub fn into_permit(mut self) -> BytePermit {
         self.release_queue_slot();
         let permit = BytePermit {

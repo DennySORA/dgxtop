@@ -35,7 +35,7 @@ pub(crate) struct GapEntry {
 }
 
 impl GapEntry {
-    fn mergeable_with(&self, other: &GapEntry, tolerance_ns: u64) -> bool {
+    fn mergeable_with(&self, other: &Self, tolerance_ns: u64) -> bool {
         !self.settled
             && self.key == other.key
             && self.adapter_id == other.adapter_id
@@ -239,7 +239,7 @@ mod tests {
         let mut list = GapList::new(&ledger, 2);
         list.insert(gap(0, 10, "drop", &mut interner), 0);
         assert_eq!(list.settle_before(11).len(), 1);
-        assert!(list.settle_before(11).is_empty());
+        assert_eq!(list.settle_before(11).len(), 0);
         assert!(matches!(
             list.insert(gap(10, 20, "drop", &mut interner), 0),
             GapInsert::Added { .. }

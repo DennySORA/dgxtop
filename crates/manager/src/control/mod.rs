@@ -19,6 +19,7 @@ use dgxtop_core::budget::{ByteLedger, QueueGate};
 use dgxtop_core::canonical::GapRecord;
 use dgxtop_core::clock::{TimeProvider, ms_to_ns};
 use dgxtop_core::commands::CommandResult;
+use dgxtop_core::config::Config;
 use dgxtop_core::identity::{AdapterId, BootId, HostId, SessionId};
 use dgxtop_core::naming::{self, adapters, groups};
 use dgxtop_core::ports::{CatalogReader, LogLevel, Logger, TrendReader};
@@ -121,6 +122,42 @@ pub(crate) struct ControlCore {
     slice: Duration,
 }
 
+/// What the ingestion keeps to: this host's identity, the collection
+/// limits and how long a job may take.
+fn ingestion_settings(setup: &ManagerSetup, effective: &Config, fast_ms: u32) -> IngestionSettings {
+    IngestionSettings {
+        host_id: setup.host_id.clone(),
+        boot_id: setup.boot_id.clone(),
+        limits: collection_limits(effective),
+        max_pending_per_collector: usize::try_from(effective.queues.collection_batches)
+            .unwrap_or(1),
+        job_timeout_ns: ms_to_ns(u64::from(fast_ms)).saturating_mul(JOB_TIMEOUT_PERIODS),
+    }
+}
+
+/// The history reads' bounds, from the configuration in effect.
+fn history_settings(setup: &ManagerSetup, effective: &Config) -> HistorySettings {
+    HistorySettings {
+        max_inflight: usize::try_from(effective.queues.history_requests).unwrap_or(1),
+        deadline_ms: effective.runtime.history_deadline_ms,
+        max_points: effective.store.max_history_points,
+        utc_offset_s: setup.facts.utc_offset_s,
+        kept_on_disk: effective.store.archive_enabled,
+    }
+}
+
+/// Who acts when a process action is asked from this session.
+fn action_identity(setup: &ManagerSetup) -> ActionIdentity {
+    ActionIdentity {
+        host_id: setup.host_id.clone(),
+        boot_id: setup.boot_id.clone(),
+        pid_namespace: setup.pid_namespace.clone(),
+        acting_uid: acting_uid(setup.euid, setup.sudo_uid),
+        any_user: setup.facts.any_user,
+        self_pid: setup.self_pid,
+    }
+}
+
 impl ControlCore {
     pub(crate) fn new(
         setup: ManagerSetup,
@@ -133,7 +170,7 @@ impl ControlCore {
         let scheduler = SamplingScheduler::new(ports.adapters, &setup.adapters, &effective, now);
         let fast_ms = scheduler.effective_fast_interval_ms();
         let periods = scheduler.effective_periods();
-        let process_ms = process_list_period_ms(&periods).unwrap_or(u64::from(fast_ms));
+        let process_ms = process_list_period_ms(&periods).unwrap_or_else(|| u64::from(fast_ms));
         let policy = QualityPolicyService::new(&effective, periods, setup.namespace);
         let ingestion = IngestionService::new(
             IngestionPorts {
@@ -142,25 +179,12 @@ impl ControlCore {
                 snapshots: ports.snapshots,
                 registry: ports.collector_registry,
             },
-            IngestionSettings {
-                host_id: setup.host_id.clone(),
-                boot_id: setup.boot_id.clone(),
-                limits: collection_limits(&effective),
-                max_pending_per_collector: usize::try_from(effective.queues.collection_batches)
-                    .unwrap_or(1),
-                job_timeout_ns: ms_to_ns(u64::from(fast_ms)).saturating_mul(JOB_TIMEOUT_PERIODS),
-            },
+            ingestion_settings(&setup, &effective, fast_ms),
         );
         let history = HistoryService::new(
             ports.history,
             Arc::clone(&ports.clock),
-            HistorySettings {
-                max_inflight: usize::try_from(effective.queues.history_requests).unwrap_or(1),
-                deadline_ms: effective.runtime.history_deadline_ms,
-                max_points: effective.store.max_history_points,
-                utc_offset_s: setup.facts.utc_offset_s,
-                kept_on_disk: effective.store.archive_enabled,
-            },
+            &history_settings(&setup, &effective),
             fast_ms,
         );
         let process = ProcessService::new(
@@ -168,14 +192,7 @@ impl ControlCore {
                 audit: ports.audit,
                 actions: ports.actions,
             },
-            ActionIdentity {
-                host_id: setup.host_id.clone(),
-                boot_id: setup.boot_id.clone(),
-                pid_namespace: setup.pid_namespace.clone(),
-                acting_uid: acting_uid(setup.euid, setup.sudo_uid),
-                any_user: setup.facts.any_user,
-                self_pid: setup.self_pid,
-            },
+            action_identity(&setup),
             &effective,
         );
         let process_history = ProcessHistoryLink::new(ports.process_history);
@@ -236,7 +253,7 @@ impl ControlCore {
     }
 
     /// Per-iteration CPU budget of the control thread.
-    pub(crate) fn slice(&self) -> Duration {
+    pub(crate) const fn slice(&self) -> Duration {
         self.slice
     }
 
@@ -251,11 +268,11 @@ impl ControlCore {
         }
     }
 
-    pub(crate) fn is_running(&self) -> bool {
+    pub(crate) const fn is_running(&self) -> bool {
         matches!(self.phase, Phase::Running)
     }
 
-    pub(crate) fn is_finished(&self) -> bool {
+    pub(crate) const fn is_finished(&self) -> bool {
         matches!(self.phase, Phase::Finished)
     }
 
@@ -392,7 +409,7 @@ impl ControlCore {
     }
 
     /// Records a visible gap in the state.
-    fn record_gap(&mut self, gap: GapRecord) {
+    fn record_gap(&self, gap: GapRecord) {
         if self.ingestion.record_gap(gap).is_err() {
             self.logger.log(
                 LogLevel::Warn,

@@ -6,6 +6,7 @@ use dgxtop_core::tiers::Tier;
 use super::buckets::Held;
 use super::tracking::preferred_color;
 use super::*;
+use dgxtop_core::num::ToF64Lossy;
 
 /// What the tests read of a tracked process.
 impl TrackedProcess<'_> {
@@ -49,8 +50,7 @@ impl ProcessMemoryBook {
     pub(crate) fn gpus_of(&self, key: &ProcessKey) -> Vec<&EntityId> {
         self.processes
             .get(key)
-            .map(|record| record.gpus.keys().collect())
-            .unwrap_or_default()
+            .map_or_default(|record| record.gpus.keys().collect())
     }
 
     /// What `key` held on `gpu` over `window` (wall clock): its mean over
@@ -59,8 +59,7 @@ impl ProcessMemoryBook {
         self.processes
             .get(key)
             .and_then(|record| record.gpus.get(gpu))
-            .map(|series| cells_between(series, utc_window(window), 1)[0])
-            .unwrap_or_default()
+            .map_or_default(|series| cells_between(series, utc_window(window), 1)[0])
     }
 }
 
@@ -89,9 +88,8 @@ fn on_a(id: &EntityId) -> bool {
     id.as_str() == GPU_A
 }
 
-#[allow(clippy::cast_precision_loss)]
 fn gib(value: f64) -> f64 {
-    value * GIB as f64
+    value * GIB.to_f64_lossy()
 }
 
 fn close(left: Option<f64>, right: f64) -> bool {
@@ -139,7 +137,7 @@ fn other_processes_hold_what_the_lists_hold_beyond_the_tracked() {
 
     // A table without lists (no GPU read) says nothing of the others.
     book.record_table(&table(4, 4, held(9 * GIB)));
-    assert!(other(&book).is_empty());
+    assert_eq!(other(&book).len(), 0);
 }
 
 /// A table's values hold until the next table, but never beyond three
@@ -405,9 +403,10 @@ fn parts_follow_the_gpus_asked_for_in_color_order() {
     ];
     both.sort_by_key(|(slot, _)| *slot);
     assert_eq!(parts(&[GPU_A, GPU_B]), both);
-    assert!(
+    assert_eq!(
         book.parts(&BTreeSet::from([gpu(GPU_A)]), (0, 5 * SECOND), 2)
-            .is_empty()
+            .len(),
+        0
     );
 }
 
@@ -451,10 +450,8 @@ fn reference_means(
                 let start = (from_s + index * every_s) * SECOND;
                 let end = start + every_s * SECOND;
                 let overlap = end.min(*cell_end).saturating_sub(start.max(*cell_start));
-                #[allow(clippy::cast_precision_loss)]
-                let overlap = overlap as f64;
-                #[allow(clippy::cast_precision_loss)]
-                let bytes = train_bytes(index) as f64;
+                let overlap = overlap.to_f64_lossy();
+                let bytes = train_bytes(index).to_f64_lossy();
                 integral += bytes * overlap;
                 listed += overlap;
             }
@@ -556,10 +553,8 @@ fn parts_of_cells_off_the_bars_are_within_the_cut_buckets() {
     let window = (MINUTE + 7 * SECOND, MINUTE + 7 * SECOND + HOUR);
     let means = train_parts(&book, window, 13);
     let expected = reference_means(feed, &even_edges(window, 13));
-    #[allow(clippy::cast_precision_loss)]
-    let spread = (36 * 64 * MIB) as f64;
-    #[allow(clippy::cast_precision_loss)]
-    let tolerance = spread * 2.0 * MINUTE as f64 / (HOUR as f64 / 13.0);
+    let spread = (36 * 64 * MIB).to_f64_lossy();
+    let tolerance = spread * 2.0 * MINUTE.to_f64_lossy() / (HOUR.to_f64_lossy() / 13.0);
     assert_within(&means, &expected, tolerance);
     let whole = train_parts(&book, window, 1);
     assert_within(
@@ -610,7 +605,7 @@ fn a_gpu_removed_from_the_tables_has_no_part_after() {
     assert!(close(both[0], gib(1.0)) && close(both[1], gib(1.0)));
     assert!(close(both[2], 0.0) && close(both[3], 0.0));
     let after = BTreeSet::from([gpu(GPU_B)]);
-    assert!(book.parts(&after, (3 * MINUTE, 5 * MINUTE), 2).is_empty());
+    assert_eq!(book.parts(&after, (3 * MINUTE, 5 * MINUTE), 2).len(), 0);
     let a = book.part_means(&key(5), on_a, (MINUTE, 5 * MINUTE), 4);
     assert!(a.iter().all(|mean| close(*mean, gib(2.0))));
 }

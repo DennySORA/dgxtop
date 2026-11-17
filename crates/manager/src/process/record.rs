@@ -8,6 +8,7 @@ use dgxtop_core::clock::ns_to_ms;
 use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::identity::{ProcessKey, SessionId};
 use dgxtop_core::view::ConfirmationView;
+use std::fmt::Write as _;
 use uuid::Uuid;
 
 /// Non-terminal actions at once.
@@ -53,7 +54,7 @@ pub(crate) struct ConfirmContext {
     pub(crate) intent_dispatched: bool,
     /// The audit worker answered the intent (durable or not).
     pub(crate) intent_answered: bool,
-    /// The ConfirmSignal command already has its result.
+    /// The `ConfirmSignal` command already has its result.
     pub(crate) answered: bool,
 }
 
@@ -82,7 +83,7 @@ pub(crate) struct ActionRecord {
     pub(crate) prepared: Option<PreparedProcess>,
     pub(crate) handle_held: bool,
     pub(crate) release_wanted: bool,
-    /// The PrepareSignal command is still waiting for the worker.
+    /// The `PrepareSignal` command is still waiting for the worker.
     pub(crate) prepare_deadline_ns: Option<u64>,
     pub(crate) confirm: Option<ConfirmContext>,
     /// Local deadline after which a missing `Sent` means "outcome unknown".
@@ -105,7 +106,7 @@ impl ActionRecord {
     }
 
     /// A confirmation that has not yet reached `sending`.
-    pub(crate) fn is_revocable(&self) -> bool {
+    pub(crate) const fn is_revocable(&self) -> bool {
         matches!(
             self.state,
             ActionState::Requested
@@ -147,9 +148,11 @@ pub(crate) fn irreversible_warning(signal: Signal, unknown_outcomes: u32) -> Str
         warning.push_str(" SIGKILL gives the process no chance to clean up.");
     }
     if unknown_outcomes > 0 {
-        warning.push_str(&format!(
+        write!(
+            warning,
             " {unknown_outcomes} earlier action(s) have unknown outcomes and were not retried."
-        ));
+        )
+        .unwrap_or_default();
     }
     warning
 }
@@ -174,7 +177,7 @@ impl ActionRegistry {
         self.records.get(index)
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub(crate) const fn len(&self) -> usize {
         self.records.len()
     }
 

@@ -1,6 +1,8 @@
-//! Terminal runner: the terminal main-thread loop with injectable input and
-//! clock, dirty-only rendering capped by fps, and bounded (1 MiB),
-//! frame-atomic output flushed non-blockingly through the injected
+//! Terminal runner.
+//!
+//! The terminal main-thread loop with injectable input and clock,
+//! dirty-only rendering capped by fps, and bounded (1 MiB), frame-atomic
+//! output flushed non-blockingly through the injected
 //! [`TerminalTransport`](dgxtop_core::ports::TerminalTransport).
 
 mod backend;

@@ -97,7 +97,7 @@ fn slowdown_banners(context: &PresentationContext<'_>, banners: &mut Vec<Banner>
         return;
     }
     let index = SnapshotLookup::new(context.snapshot);
-    let directory = GpuDirectory::new(context.catalog, &index);
+    let directory = GpuDirectory::new(context.catalog, index);
     for slowdown in context.slowdowns {
         let label = label_text(&directory.label_of(&slowdown.gpu));
         banners.push(slowdown_banner(&label, slowdown));
@@ -130,8 +130,7 @@ fn persistence_banner(status: &PersistenceStatus, banners: &mut Vec<Banner>) {
     let detail = status
         .detail
         .as_deref()
-        .map(|detail| format!(": {detail}"))
-        .unwrap_or_default();
+        .map_or_default(|detail| format!(": {detail}"));
     let (level, text) = match (status.state, status.kind) {
         (PersistenceState::Failed, PersistenceKind::Config) => (
             BannerLevel::Error,
@@ -399,7 +398,7 @@ mod tests {
     #[test]
     fn a_failed_history_archive_is_visible_and_live_monitoring_continues() {
         let mut fixture = Fixture::new();
-        assert!(build(&fixture, &NO_FACTS).is_empty());
+        assert_eq!(build(&fixture, &NO_FACTS).len(), 0);
         fixture.archive_status = Some(PersistenceStatus {
             state: PersistenceState::Failed,
             detail: Some("free disk below 64 MiB".into()),
@@ -427,7 +426,7 @@ mod tests {
             "adapter nvml unavailable: no driver"
         );
         fixture.effective.sampling.gpu_enabled = false;
-        assert!(build(&fixture, &NO_FACTS).is_empty());
+        assert_eq!(build(&fixture, &NO_FACTS).len(), 0);
         fixture.hosts = (0..20)
             .map(|index| host_status(&format!("host{index}"), HostState::Degraded, None))
             .collect();

@@ -141,18 +141,19 @@ fn code(value: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     fn cpuinfo(cores: &[(&str, &str)]) -> String {
-        cores
-            .iter()
-            .enumerate()
-            .map(|(cpu, (implementer, part))| {
-                format!(
-                    "processor\t: {cpu}\nCPU implementer\t: {implementer}\n\
-                     CPU architecture: 8\nCPU part\t: {part}\n\n"
-                )
-            })
-            .collect()
+        let mut text = String::new();
+        for (cpu, (implementer, part)) in cores.iter().enumerate() {
+            write!(
+                text,
+                "processor\t: {cpu}\nCPU implementer\t: {implementer}\n\
+                 CPU architecture: 8\nCPU part\t: {part}\n\n"
+            )
+            .unwrap();
+        }
+        text
     }
 
     /// One kind of core reads as that kind with its count.

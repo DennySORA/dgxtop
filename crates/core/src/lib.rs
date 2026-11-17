@@ -23,6 +23,7 @@ pub mod identity;
 pub mod json_size;
 pub mod metric;
 pub mod naming;
+pub mod num;
 pub mod observation;
 pub mod overview_history;
 pub mod ports;
@@ -42,7 +43,7 @@ pub mod users;
 pub mod view;
 pub mod wire;
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
 /// Package version shared by every crate of the workspace.

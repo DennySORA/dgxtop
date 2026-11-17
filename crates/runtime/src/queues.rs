@@ -127,6 +127,11 @@ impl<J: Send> PoolHandle<J> {
     /// for a worker handing its result to an actor that never waits on it,
     /// so a momentarily full queue does not lose the result. Never for the
     /// Manager, which must not block.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `DispatchError` when the worker is busy or closed, or its
+    /// queue is full.
     pub fn dispatch_within(&self, job: J, timeout: Duration) -> Result<(), DispatchError> {
         if self.shared.stopped.load(Ordering::Acquire) {
             return Err(DispatchError::Closed);
@@ -146,15 +151,18 @@ impl<J: Send> PoolHandle<J> {
 }
 
 impl<J> PoolHandle<J> {
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.shared.name
     }
 
     /// Jobs waiting in the queue.
+    #[must_use]
     pub fn queued(&self) -> usize {
         self.shared.jobs.len()
     }
 
+    #[must_use]
     pub fn stats(&self) -> PoolStats {
         let counters = &self.shared.counters;
         PoolStats {
@@ -192,12 +200,13 @@ impl<J> PoolHandle<J> {
             if worker.is_finished() {
                 // A finished worker's join cannot block; its panics were
                 // already caught per job.
-                let _ = worker.join();
+                worker.join().unwrap_or_default();
                 joined += 1;
             } else {
                 detached += 1;
             }
         }
+        drop(workers);
         StopReport {
             joined,
             detached,
@@ -217,24 +226,36 @@ fn drain<J>(receiver: &Receiver<J>) -> usize {
 }
 
 /// Spawns `threads` fixed workers sharing one bounded queue of `capacity`.
+///
+/// # Errors
+///
+/// Returns an `InfraError` when the system underneath fails: the filesystem, a
+/// pipe, the database or a driver, or when it does not answer in time.
 pub fn spawn_pool<J: Send + 'static>(
     name: &str,
     threads: usize,
     capacity: usize,
-    handler: Arc<dyn Fn(J) + Send + Sync>,
+    handler: impl Fn(J) + Send + Sync + 'static,
 ) -> Result<PoolHandle<J>, InfraError> {
-    spawn_pool_with(name, threads, capacity, handler, PoolOptions::default())
+    spawn_pool_with(name, threads, capacity, handler, &PoolOptions::default())
 }
 
 /// [`spawn_pool`] with options (panic reporting).
+///
+/// # Errors
+///
+/// Returns an `InfraError` when the system underneath fails: the filesystem, a
+/// pipe, the database or a driver, or when it does not answer in time.
 pub fn spawn_pool_with<J: Send + 'static>(
     name: &str,
     threads: usize,
     capacity: usize,
-    handler: Arc<dyn Fn(J) + Send + Sync>,
-    options: PoolOptions,
+    handler: impl Fn(J) + Send + Sync + 'static,
+    options: &PoolOptions,
 ) -> Result<PoolHandle<J>, InfraError> {
     let threads = threads.clamp(1, MAX_POOL_THREADS);
+    // One handler for every worker of the pool.
+    let handler = Arc::new(handler);
     let workers = (0..threads)
         .map(|_| {
             let handler = Arc::clone(&handler);
@@ -245,6 +266,11 @@ pub fn spawn_pool_with<J: Send + 'static>(
 }
 
 /// Spawns one thread that owns `state` and applies `handler` to each job.
+///
+/// # Errors
+///
+/// Returns an `InfraError` when the system underneath fails: the filesystem, a
+/// pipe, the database or a driver, or when it does not answer in time.
 pub fn spawn_actor<S, J, H>(
     name: &str,
     capacity: usize,
@@ -256,17 +282,22 @@ where
     J: Send + 'static,
     H: FnMut(&mut S, J) + Send + 'static,
 {
-    spawn_actor_with(name, capacity, state, handler, PoolOptions::default())
+    spawn_actor_with(name, capacity, state, handler, &PoolOptions::default())
 }
 
 /// [`spawn_actor`] with options. After a panicking job the state is kept as
 /// the handler left it; handlers must keep it consistent across unwinding.
+///
+/// # Errors
+///
+/// Returns an `InfraError` when the system underneath fails: the filesystem, a
+/// pipe, the database or a driver, or when it does not answer in time.
 pub fn spawn_actor_with<S, J, H>(
     name: &str,
     capacity: usize,
     state: S,
     handler: H,
-    options: PoolOptions,
+    options: &PoolOptions,
 ) -> Result<PoolHandle<J>, InfraError>
 where
     S: Send + 'static,
@@ -282,7 +313,7 @@ where
 fn spawn_workers<J, W>(
     name: &str,
     capacity: usize,
-    options: PoolOptions,
+    options: &PoolOptions,
     workers: Vec<W>,
 ) -> Result<PoolHandle<J>, InfraError>
 where
@@ -389,6 +420,10 @@ mod tests {
     }
 
     impl Gate {
+        #[expect(
+            clippy::significant_drop_tightening,
+            reason = "a condition variable takes the guard and hands it back until the gate opens"
+        )]
         fn wait(&self) {
             let mut open = self.open.lock().unwrap();
             while !*open {
@@ -417,15 +452,10 @@ mod tests {
         let pool = {
             let gate = Arc::clone(&gate);
             let started = Arc::clone(&started);
-            spawn_pool(
-                "busy",
-                1,
-                2,
-                Arc::new(move |_: u32| {
-                    started.fetch_add(1, Ordering::SeqCst);
-                    gate.wait();
-                }),
-            )
+            spawn_pool("busy", 1, 2, move |_: u32| {
+                started.fetch_add(1, Ordering::SeqCst);
+                gate.wait();
+            })
             .unwrap()
         };
         pool.try_dispatch(1).unwrap();
@@ -492,14 +522,9 @@ mod tests {
         let seen = Arc::new(Mutex::new(HashSet::new()));
         let pool = {
             let seen = Arc::clone(&seen);
-            spawn_pool(
-                "fixed",
-                3,
-                64,
-                Arc::new(move |_: u32| {
-                    seen.lock().unwrap().insert(std::thread::current().id());
-                }),
-            )
+            spawn_pool("fixed", 3, 64, move |_: u32| {
+                seen.lock().unwrap().insert(std::thread::current().id());
+            })
             .unwrap()
         };
         let mut submitted = 0;
@@ -524,14 +549,15 @@ mod tests {
                 reports.lock().unwrap().push(format!("{pool}: {message}"));
             })
         };
+        let handler = |job: u32| {
+            assert!(job != 2, "job two\u{1b}[31m exploded");
+        };
         let pool = spawn_pool_with(
             "panicky",
             1,
             8,
-            Arc::new(|job: u32| {
-                assert!(job != 2, "job two\u{1b}[31m exploded");
-            }),
-            PoolOptions {
+            handler,
+            &PoolOptions {
                 on_panic: Some(hook),
             },
         )
@@ -555,15 +581,10 @@ mod tests {
         let pool = {
             let gate = Arc::clone(&gate);
             let started = Arc::clone(&started);
-            spawn_pool(
-                "stuck",
-                1,
-                4,
-                Arc::new(move |_: u32| {
-                    started.fetch_add(1, Ordering::SeqCst);
-                    gate.wait();
-                }),
-            )
+            spawn_pool("stuck", 1, 4, move |_: u32| {
+                started.fetch_add(1, Ordering::SeqCst);
+                gate.wait();
+            })
             .unwrap()
         };
         pool.try_dispatch(1).unwrap();
@@ -587,7 +608,7 @@ mod tests {
 
     #[test]
     fn actor_owns_its_state_and_survives_panics() {
-        let (results, collected) = crossbeam_channel::bounded::<u64>(16);
+        let (results, collected) = bounded::<u64>(16);
         let actor = spawn_actor("actor", 8, 0u64, move |total: &mut u64, job: u64| {
             assert!(job != 99, "poison job");
             *total += job;

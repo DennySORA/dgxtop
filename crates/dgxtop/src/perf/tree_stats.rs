@@ -35,7 +35,7 @@ pub struct PidSample {
 }
 
 impl PidSample {
-    fn empty(pid: i32) -> Self {
+    const fn empty(pid: i32) -> Self {
         Self {
             pid,
             rss_bytes: None,
@@ -46,7 +46,7 @@ impl PidSample {
         }
     }
 
-    fn is_complete(&self) -> bool {
+    const fn is_complete(&self) -> bool {
         self.missing.is_empty()
     }
 }
@@ -69,6 +69,7 @@ pub struct ProcessTreeStats;
 
 impl ProcessTreeStats {
     /// Samples `pids` from `/proc`.
+    #[must_use]
     pub fn sample(pids: &[i32]) -> TreeSample {
         Self::sample_at(Path::new("/proc"), pids)
     }
@@ -169,7 +170,11 @@ fn parse_cpu_ticks(text: &str) -> Result<u64, String> {
     let close = text
         .rfind(')')
         .ok_or_else(|| "missing command terminator".to_owned())?;
-    let fields: Vec<&str> = text[close + 1..].split_whitespace().collect();
+    let fields: Vec<&str> = text
+        .get(close + 1..)
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect();
     let tick = |offset: usize| -> Result<u64, String> {
         let field = fields
             .get(STAT_UTIME_INDEX + offset)
@@ -177,8 +182,8 @@ fn parse_cpu_ticks(text: &str) -> Result<u64, String> {
         // cutime/cstime are signed in the kernel ABI; negative is corrupt.
         let value: i64 = field
             .parse()
-            .map_err(|_| format!("non-numeric tick field {offset}"))?;
-        u64::try_from(value).map_err(|_| format!("negative tick field {offset}"))
+            .map_err(|_cause| format!("non-numeric tick field {offset}"))?;
+        u64::try_from(value).map_err(|_cause| format!("negative tick field {offset}"))
     };
     (0..4).try_fold(
         0u64,
@@ -189,7 +194,7 @@ fn parse_cpu_ticks(text: &str) -> Result<u64, String> {
 fn count_entries(directory: &Path) -> Result<u64, String> {
     let entries = fs::read_dir(directory).map_err(|error| sanitize_message(&error.to_string()))?;
     let count = entries.take(MAX_COUNTED_ENTRIES).count();
-    u64::try_from(count).map_err(|_| "entry count overflow".to_owned())
+    u64::try_from(count).map_err(|_cause| "entry count overflow".to_owned())
 }
 
 fn read_bounded(path: &PathBuf) -> Result<String, String> {
@@ -236,7 +241,7 @@ mod tests {
 
     impl Drop for FakeProc {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            fs::remove_dir_all(&self.0).unwrap_or_default();
         }
     }
 
@@ -250,7 +255,7 @@ mod tests {
         for missing in &sample.per_pid[1..] {
             assert!(missing.rss_bytes.is_none());
             assert!(missing.cpu_ticks.is_none());
-            assert!(!missing.missing.is_empty());
+            assert_ne!(missing.missing, [] as [String; 0]);
         }
         // Totals only include what was read (RSS may move a little).
         assert!(sample.rss_bytes >= own.rss_bytes / 2);
@@ -277,7 +282,7 @@ mod tests {
         assert_eq!(worker.threads, Some(7));
         assert_eq!(worker.open_fds, Some(3));
         assert_eq!(worker.cpu_ticks, Some(37));
-        assert!(worker.missing.is_empty());
+        assert_eq!(worker.missing, [] as [String; 0]);
         let zombie = &sample.per_pid[1];
         assert_eq!(zombie.rss_bytes, None);
         assert!(zombie.missing.iter().any(|reason| reason.contains("VmRSS")));

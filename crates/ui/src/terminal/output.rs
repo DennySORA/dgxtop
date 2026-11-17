@@ -43,7 +43,7 @@ struct BufferState {
 }
 
 impl BufferState {
-    fn frame_limit(&self) -> usize {
+    const fn frame_limit(&self) -> usize {
         self.capacity.saturating_sub(CONTROL_RESERVE)
     }
 
@@ -116,6 +116,7 @@ impl Write for FrameWriter {
         let limit = state.frame_limit();
         if state.overflowed || !state.append(data, limit) {
             state.overflowed = true;
+            drop(state);
             return Err(io::Error::other(
                 "frame exceeds the terminal output buffer (1 MiB)",
             ));
@@ -173,7 +174,7 @@ impl std::fmt::Debug for OutputPipeline {
             .field("pending", &self.pending_len())
             .field("bytes_written", &self.bytes_written)
             .field("blocked", &self.blocked)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -204,7 +205,7 @@ impl OutputPipeline {
     }
 
     /// The last write attempt would have blocked.
-    pub fn is_blocked(&self) -> bool {
+    pub const fn is_blocked(&self) -> bool {
         self.blocked
     }
 
@@ -217,7 +218,7 @@ impl OutputPipeline {
         self.buffer.lock().peak
     }
 
-    pub fn bytes_written(&self) -> u64 {
+    pub const fn bytes_written(&self) -> u64 {
         self.bytes_written
     }
 
@@ -254,7 +255,7 @@ impl OutputPipeline {
     }
 
     /// Drops an encoded but unsent frame (a failed draw).
-    pub fn discard_unsent(&mut self) {
+    pub fn discard_unsent(&self) {
         let mut state = self.buffer.lock();
         if state.flushed == 0 {
             state.reset();
@@ -392,6 +393,7 @@ mod tests {
                 .per_call
                 .map_or(bytes.len(), |limit| limit.min(bytes.len()));
             recorder.accepted.extend_from_slice(&bytes[..accepted]);
+            drop(recorder);
             Ok(accepted)
         }
 
@@ -474,7 +476,7 @@ mod tests {
         assert_eq!(output.begin_frame(Duration::ZERO), Err(FrameOverflow));
         assert!(!output.has_pending());
         assert!(output.peak_bytes() <= capacity);
-        assert!(recorder.lock().unwrap().accepted.is_empty());
+        assert_eq!(recorder.lock().unwrap().accepted.len(), 0);
         writer.write_all(b"next frame").unwrap();
         assert_eq!(output.begin_frame(Duration::ZERO), Ok(10));
     }

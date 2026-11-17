@@ -30,7 +30,7 @@ impl<'a> MetricReader<'a> {
         now_boot_ns: u64,
     ) -> Self {
         let index = SnapshotLookup::new(snapshot);
-        let keys = KeyResolver::new(catalog, &index);
+        let keys = KeyResolver::new(catalog, index);
         Self {
             index,
             keys,
@@ -49,18 +49,16 @@ impl<'a> MetricReader<'a> {
         }
     }
 
-    pub(crate) fn index(&self) -> &SnapshotLookup<'a> {
+    pub(crate) const fn index(&self) -> &SnapshotLookup<'a> {
         &self.index
     }
 
-    pub(crate) fn catalog(&self) -> &'a CatalogSnapshot {
+    pub(crate) const fn catalog(&self) -> &'a CatalogSnapshot {
         self.catalog
     }
 
     pub(crate) fn explanation(&self, key: &MetricKey) -> Option<&'a Explanation> {
-        self.snapshot
-            .explanation(key)
-            .map(|explanation| explanation.as_ref())
+        self.snapshot.explanation(key).map(AsRef::as_ref)
     }
 
     pub(crate) fn cell_of(&self, entry: &SnapshotEntry) -> MetricCell {

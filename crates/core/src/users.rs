@@ -1,9 +1,11 @@
 //! The names of the host's users (D-138): uid to login name, as the host's
-//! own `passwd(5)` file lists them. The composition root reads the file
-//! once at startup; the Manager names a process's owner from the table and
-//! falls back to the uid. Only the local file is ever consulted: a name
-//! service that would ask the network (LDAP, SSSD) is never called, so a
-//! user known only there keeps its number.
+//! own `passwd(5)` file lists them.
+//!
+//! The composition root reads the file once at startup; the Manager names
+//! a process's owner from the table and falls back to the uid. Only the
+//! local file is ever consulted: a name service that would ask the network
+//! (LDAP, SSSD) is never called, so a user known only there keeps its
+//! number.
 
 use std::collections::BTreeMap;
 
@@ -29,6 +31,7 @@ impl UserNames {
     /// uid names it, as `getpwuid` answers; comments, malformed lines,
     /// names that do not survive sanitizing or are too long, and entries
     /// past [`MAX_USERS`] are left out.
+    #[must_use]
     pub fn from_passwd(text: &str) -> Self {
         let mut names = BTreeMap::new();
         for line in text.lines() {
@@ -48,10 +51,12 @@ impl UserNames {
         self.names.get(&uid).map(String::as_str)
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.names.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.names.is_empty()
     }
@@ -75,6 +80,7 @@ fn passwd_entry(line: &str) -> Option<(u32, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     const PASSWD: &str = "\
 root:x:0:0:root:/root:/bin/bash
@@ -124,9 +130,10 @@ bob:x:1001:1001::/home/bob:/bin/bash
 
     #[test]
     fn the_table_is_bounded() {
-        let text: String = (0..MAX_USERS + 50)
-            .map(|uid| format!("user{uid}:x:{uid}:{uid}::/:/bin/sh\n"))
-            .collect();
+        let text = (0..MAX_USERS + 50).fold(String::new(), |mut text, uid| {
+            writeln!(text, "user{uid}:x:{uid}:{uid}::/:/bin/sh").unwrap();
+            text
+        });
         let users = UserNames::from_passwd(&text);
         assert_eq!(users.len(), MAX_USERS);
         assert_eq!(users.name_of(0), Some("user0"));

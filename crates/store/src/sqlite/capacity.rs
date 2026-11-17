@@ -27,11 +27,13 @@ fn sibling_with_suffix(database_path: &Path, suffix: &str) -> PathBuf {
 }
 
 /// `<database>-wal`.
+#[must_use]
 pub fn wal_path(database_path: &Path) -> PathBuf {
     sibling_with_suffix(database_path, "-wal")
 }
 
 /// `<database>-shm`.
+#[must_use]
 pub fn shm_path(database_path: &Path) -> PathBuf {
     sibling_with_suffix(database_path, "-shm")
 }
@@ -46,6 +48,10 @@ fn size_or_zero(path: &Path) -> io::Result<u64> {
 
 /// On-disk bytes of one SQLite database.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "every quantity is named with its unit"
+)]
 pub struct StorageFootprint {
     pub database_bytes: u64,
     pub wal_bytes: u64,
@@ -54,6 +60,10 @@ pub struct StorageFootprint {
 
 impl StorageFootprint {
     /// Sizes of the main file, `-wal` and `-shm` (missing files count 0).
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     pub fn measure(database_path: &Path) -> io::Result<Self> {
         Ok(Self {
             database_bytes: size_or_zero(database_path)?,
@@ -63,7 +73,8 @@ impl StorageFootprint {
     }
 
     /// db + wal + shm.
-    pub fn total(&self) -> u64 {
+    #[must_use]
+    pub const fn total(&self) -> u64 {
         self.database_bytes
             .saturating_add(self.wal_bytes)
             .saturating_add(self.shm_bytes)
@@ -95,7 +106,7 @@ impl PageUsage {
     }
 
     /// Pages holding data (free pages are reused before the file grows).
-    pub(crate) fn used_pages(&self) -> u64 {
+    pub(crate) const fn used_pages(&self) -> u64 {
         self.page_count.saturating_sub(self.freelist_count)
     }
 }
@@ -109,7 +120,7 @@ pub(crate) struct CheckpointProgress {
 
 impl CheckpointProgress {
     /// WAL content not yet copied into the main file (pinned by readers).
-    pub(crate) fn backlog_bytes(&self, page_size: u64) -> u64 {
+    pub(crate) const fn backlog_bytes(&self, page_size: u64) -> u64 {
         self.log_frames
             .saturating_sub(self.checkpointed_frames)
             .saturating_mul(page_size.saturating_add(WAL_FRAME_HEADER_BYTES))
@@ -225,6 +236,10 @@ impl std::fmt::Display for Refusal {
 
 /// Byte budget of one partition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "every quantity is named with its unit"
+)]
 pub(crate) struct CapacityPolicy {
     pub limit_bytes: u64,
     /// Kept free for outcomes of committed intents (0 for the archive).
@@ -319,7 +334,7 @@ impl CapacityPolicy {
         }
     }
 
-    fn admit_new_record(&self, view: &CapacityView, wal_after: u64) -> Result<(), Refusal> {
+    const fn admit_new_record(&self, view: &CapacityView, wal_after: u64) -> Result<(), Refusal> {
         if view.free_disk_bytes < self.min_free_disk_bytes {
             return Err(Refusal::LowDisk {
                 available: view.free_disk_bytes,
@@ -348,7 +363,7 @@ impl CapacityPolicy {
     /// The WAL counts by the frames readers keep from the checkpoint, not
     /// by its file, which a restart leaves at `journal_size_limit` (the
     /// checkpoint threshold) even when everything was copied.
-    pub(crate) fn is_near_limits(&self, view: &CapacityView) -> bool {
+    pub(crate) const fn is_near_limits(&self, view: &CapacityView) -> bool {
         let used_bytes = view
             .pages
             .used_pages()
@@ -356,7 +371,8 @@ impl CapacityPolicy {
             .saturating_add(view.footprint.wal_bytes)
             .saturating_add(view.footprint.shm_bytes);
         let ninety_percent = self.limit_bytes / 10 * 9;
-        view.wal_backlog_bytes >= self.wal_checkpoint_bytes
+        let checkpoint_due = view.wal_backlog_bytes >= self.wal_checkpoint_bytes;
+        checkpoint_due
             || used_bytes >= ninety_percent
             || view.free_disk_bytes < self.min_free_disk_bytes.saturating_mul(2)
     }

@@ -45,15 +45,13 @@ impl StackFiles for SystemFiles {
     }
 
     fn entries(&self, path: &Path, limit: usize) -> Vec<String> {
-        std::fs::read_dir(path)
-            .map(|entries| {
-                entries
-                    .filter_map(Result::ok)
-                    .take(limit)
-                    .filter_map(|entry| entry.file_name().into_string().ok())
-                    .collect()
-            })
-            .unwrap_or_default()
+        std::fs::read_dir(path).map_or_default(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .take(limit)
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .collect()
+        })
     }
 
     fn is_file(&self, path: &Path) -> bool {
@@ -143,10 +141,10 @@ fn kernel_module(text: &str) -> Option<String> {
         .find_map(|line| line.split_once("gcc version "))
         .and_then(|(_, rest)| rest.split_whitespace().next())
         .map(|version| format!("gcc {version}"));
-    Some(match compiler {
-        Some(compiler) => format!("{flavor} · {compiler}"),
-        None => flavor.to_owned(),
-    })
+    Some(compiler.map_or_else(
+        || flavor.to_owned(),
+        |compiler| format!("{flavor} · {compiler}"),
+    ))
 }
 
 /// Toolkit directories: `/usr/local/cuda*` and `/opt/cuda`, each once.
@@ -325,7 +323,7 @@ mod tests {
     fn nothing_installed_is_an_empty_stack() {
         assert_eq!(read_stack(&NoFiles), NvidiaStack::default());
         let broken = Tree::default().file("/usr/local/cuda-13.4/version.json", "{not json");
-        assert!(read_stack(&broken).toolkits.is_empty());
+        assert_eq!(read_stack(&broken).toolkits.len(), 0);
         assert_eq!(version_key("13.10"), vec![13, 10]);
         assert!(version_key("13.10") > version_key("13.4"));
         assert_eq!(

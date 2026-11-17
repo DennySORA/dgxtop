@@ -21,7 +21,7 @@ pub(crate) struct ShutdownSignal {
 }
 
 impl ShutdownSignal {
-    pub(crate) fn new(wake: Sender<()>) -> Self {
+    pub(crate) const fn new(wake: Sender<()>) -> Self {
         Self {
             requested: AtomicBool::new(false),
             reason: Mutex::new(None),
@@ -54,7 +54,7 @@ impl ShutdownSignal {
 
     /// Wakes the control loop; a full slot already guarantees a wake-up.
     pub(crate) fn wake(&self) {
-        let _ = self.wake.try_send(());
+        self.wake.try_send(()).unwrap_or_default();
     }
 }
 
@@ -65,7 +65,7 @@ pub struct ShutdownTrigger {
 }
 
 impl ShutdownTrigger {
-    pub(crate) fn new(signal: Arc<ShutdownSignal>) -> Self {
+    pub(crate) const fn new(signal: Arc<ShutdownSignal>) -> Self {
         Self { signal }
     }
 
@@ -74,6 +74,7 @@ impl ShutdownTrigger {
         self.signal.request(reason);
     }
 
+    #[must_use]
     pub fn is_triggered(&self) -> bool {
         self.signal.is_requested()
     }

@@ -27,7 +27,8 @@ pub struct Gauge<'a> {
 
 impl<'a> Gauge<'a> {
     /// `ratio` is the 0..=1 fill; `None` means the value is missing.
-    pub fn new(ratio: Option<f64>, label: &'a str, palette: &'a ThemePalette) -> Self {
+    #[must_use]
+    pub const fn new(ratio: Option<f64>, label: &'a str, palette: &'a ThemePalette) -> Self {
         Self {
             ratio,
             level: None,
@@ -39,17 +40,19 @@ impl<'a> Gauge<'a> {
 
     /// Colors the fill by `level` rather than by its share of the bar: a
     /// temperature stays green up to 50 °C (D-126).
-    pub fn level(mut self, level: Option<f64>) -> Self {
+    #[must_use]
+    pub const fn level(mut self, level: Option<f64>) -> Self {
         self.level = level;
         self
     }
 
-    pub fn label_style(mut self, style: Style) -> Self {
+    #[must_use]
+    pub const fn label_style(mut self, style: Style) -> Self {
         self.label_style = Some(style);
         self
     }
 
-    fn effective_label(&self) -> &'a str {
+    const fn effective_label(&self) -> &'a str {
         if self.ratio.is_none() && self.label.is_empty() {
             NOT_AVAILABLE
         } else {
@@ -58,25 +61,22 @@ impl<'a> Gauge<'a> {
     }
 
     fn render_bar(&self, bar: Rect, buf: &mut Buffer) {
-        match self.ratio.filter(|ratio| ratio.is_finite()) {
-            Some(ratio) => {
-                let clamped = ratio.clamp(0.0, 1.0);
-                let level = self.level.unwrap_or(clamped);
-                let fill = Style::new().fg(self.palette.level_color(level));
-                let track = Style::new().fg(self.palette.gauge_track);
-                // Whole cells: a half cell of a bar lower than its row would
-                // leave a notch in the track.
-                let filled = scaled_round(clamped * f64::from(bar.width), bar.width);
-                for offset in 0..bar.width {
-                    let style = if offset < filled { fill } else { track };
-                    buf.set_string(bar.x + offset, bar.y, BAR, style);
-                }
+        if let Some(ratio) = self.ratio.filter(|ratio| ratio.is_finite()) {
+            let clamped = ratio.clamp(0.0, 1.0);
+            let level = self.level.unwrap_or(clamped);
+            let fill = Style::new().fg(self.palette.level_color(level));
+            let track = Style::new().fg(self.palette.gauge_track);
+            // Whole cells: a half cell of a bar lower than its row would
+            // leave a notch in the track.
+            let filled = scaled_round(clamped * f64::from(bar.width), bar.width);
+            for offset in 0..bar.width {
+                let style = if offset < filled { fill } else { track };
+                buf.set_string(bar.x + offset, bar.y, BAR, style);
             }
-            None => {
-                let style = self.palette.muted_style();
-                for offset in 0..bar.width {
-                    buf.set_string(bar.x + offset, bar.y, "·", style);
-                }
+        } else {
+            let style = self.palette.muted_style();
+            for offset in 0..bar.width {
+                buf.set_string(bar.x + offset, bar.y, "·", style);
             }
         }
     }

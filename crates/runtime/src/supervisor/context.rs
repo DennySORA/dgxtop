@@ -23,6 +23,10 @@ const SHUTDOWN_MARGIN_NS: u64 = 10_000_000;
 
 /// Durations of the stop sequence stages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "every quantity is named with its unit"
+)]
 pub(crate) struct StopDurations {
     pub grace_ns: u64,
     pub term_ns: u64,

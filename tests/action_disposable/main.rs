@@ -18,8 +18,9 @@
 //! real code unchanged); the child's own exit status; and the audit
 //! database read back through the store's public API.
 
-// Test helpers may unwrap: a broken fixture must fail loudly.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
 mod at10;
 mod at32;

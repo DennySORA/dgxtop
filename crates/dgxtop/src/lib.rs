@@ -15,7 +15,8 @@ pub mod host_mode;
 pub mod live_store;
 pub mod modes;
 pub mod monitor;
-#[cfg(any(test, feature = "bench-support"))]
+pub mod output;
+#[cfg(any(test, feature = "benchmarks"))]
 pub mod perf;
 #[cfg(test)]
 mod provenance;

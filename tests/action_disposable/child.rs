@@ -106,9 +106,9 @@ impl DisposableChild {
 impl Drop for DisposableChild {
     fn drop(&mut self) {
         if matches!(self.child.try_wait(), Ok(None)) {
-            let _ = self.child.kill();
+            self.child.kill().unwrap_or_default();
         }
-        let _ = self.child.wait();
+        self.child.wait().unwrap_or_default();
     }
 }
 

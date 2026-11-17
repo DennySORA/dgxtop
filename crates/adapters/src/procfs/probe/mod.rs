@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use dgxtop_core::clock::{NANOS_PER_SECOND, TimeProvider};
 use dgxtop_core::identity::{PidNamespace, ProcessKey};
@@ -40,10 +40,18 @@ pub(crate) const OPEN_FILES_EVERY_NS: u64 = 10 * NANOS_PER_SECOND;
 pub struct ProcfsProcessProbe {
     files: Arc<dyn SystemFiles>,
     clock: Arc<dyn TimeProvider>,
-    /// Ours, read on the first probe; a key of another namespace is not
-    /// a process this probe can see.
-    namespace: Option<Option<PidNamespace>>,
+    /// Ours, read on the first probe (`None` when it cannot be read); a
+    /// key of another namespace is not a process this probe can see.
+    namespace: OnceLock<Option<PidNamespace>>,
     open_files: OpenFileCounts,
+}
+
+impl std::fmt::Debug for ProcfsProcessProbe {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProcfsProcessProbe")
+            .finish_non_exhaustive()
+    }
 }
 
 impl ProcfsProcessProbe {
@@ -51,16 +59,15 @@ impl ProcfsProcessProbe {
         Self {
             files,
             clock,
-            namespace: None,
+            namespace: OnceLock::new(),
             open_files: OpenFileCounts::default(),
         }
     }
 
-    fn own_namespace(&mut self) -> Option<&PidNamespace> {
-        let files = &*self.files;
+    fn own_namespace(&self) -> Option<&PidNamespace> {
         self.namespace
-            .get_or_insert_with(|| {
-                namespace_link(files, PID_NAMESPACE_PATH)
+            .get_or_init(|| {
+                namespace_link(&*self.files, PID_NAMESPACE_PATH)
                     .and_then(|namespace| PidNamespace::new(namespace).ok())
             })
             .as_ref()
@@ -113,8 +120,7 @@ impl ProcfsProcessProbe {
                     .read_to_string(&format!("/proc/{ppid}/comm"))
                     .ok()
             })
-            .map(|comm| sanitize_display(comm.trim_end(), MAX_PROBE_TEXT_BYTES))
-            .unwrap_or_default();
+            .map_or_default(|comm| sanitize_display(comm.trim_end(), MAX_PROBE_TEXT_BYTES));
         let pid = key.pid;
         RunDetails {
             parent_pid,

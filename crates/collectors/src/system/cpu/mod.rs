@@ -1,8 +1,10 @@
-//! CPU collector: utilization breakdown from `/proc/stat` tick counters,
-//! frequency/load/task/pressure pass-through, arbitrated temperatures (package, core,
-//! cluster and SoC are distinct keys; GB10's package from its clusters),
-//! CPU package/platform power from energy counters, hwmon power channels
-//! and the GB10 cluster formula, and the host's total power: the CPU
+//! CPU collector.
+//!
+//! Utilization breakdown from `/proc/stat` tick counters,
+//! frequency/load/task/pressure pass-through, arbitrated temperatures (package,
+//! core, cluster and `SoC` are distinct keys; GB10's package from its
+//! clusters), CPU package/platform power from energy counters, hwmon power
+//! channels and the GB10 cluster formula, and the host's total power: the CPU
 //! packages' and the GPUs' together (D-106).
 
 mod power;
@@ -76,6 +78,10 @@ pub struct CpuCollector {
 }
 
 impl CpuCollector {
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn new() -> Result<Self, IdentityError> {
         Ok(Self {
             id: CollectorId::new(naming::collectors::CPU)?,

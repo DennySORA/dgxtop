@@ -38,7 +38,7 @@ pub(crate) fn adapter_prefix(source_id: &str) -> &str {
 }
 
 /// Milliseconds between a boot-clock instant and `now` (0 for future instants).
-pub(crate) fn age_ms(now_boot_ns: u64, instant_boot_ns: u64) -> u64 {
+pub(crate) const fn age_ms(now_boot_ns: u64, instant_boot_ns: u64) -> u64 {
     now_boot_ns.saturating_sub(instant_boot_ns) / NANOS_PER_MILLI
 }
 
@@ -55,10 +55,10 @@ pub(crate) fn bounded_list<S: AsRef<str>>(items: &[S], limit: usize) -> String {
 
 /// "adapter nvml quarantined (requires intervention): <detail>".
 pub(crate) fn host_state_text(subject: &str, status: &HostStatus) -> String {
-    let text = match &status.detail {
-        Some(detail) => format!("{subject} {}: {detail}", status.state.label()),
-        None => format!("{subject} {}", status.state.label()),
-    };
+    let text = status.detail.as_ref().map_or_else(
+        || format!("{subject} {}", status.state.label()),
+        |detail| format!("{subject} {}: {detail}", status.state.label()),
+    );
     note_text(&text)
 }
 

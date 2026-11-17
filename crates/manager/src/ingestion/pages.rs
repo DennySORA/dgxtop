@@ -73,8 +73,7 @@ impl PageAccumulator {
             let mut dropped = self
                 .open
                 .remove(adapter_id)
-                .map(|cycle| cycle.batches)
-                .unwrap_or_default();
+                .map_or_default(|cycle| cycle.batches);
             dropped.push(batch);
             return PagePush::Discarded {
                 records: record_count(&dropped),
@@ -84,8 +83,7 @@ impl PageAccumulator {
             let mut batches = self
                 .open
                 .remove(adapter_id)
-                .map(|cycle| cycle.batches)
-                .unwrap_or_default();
+                .map_or_default(|cycle| cycle.batches);
             batches.push(batch);
             return PagePush::Complete(batches);
         }

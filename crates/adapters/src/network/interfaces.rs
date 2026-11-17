@@ -59,7 +59,7 @@ const NET_COUNTERS: [NetCounter; 8] = [
 ];
 
 impl NetCounter {
-    fn file(self) -> &'static str {
+    const fn file(self) -> &'static str {
         match self {
             Self::RxBytes => "rx_bytes",
             Self::TxBytes => "tx_bytes",
@@ -72,7 +72,7 @@ impl NetCounter {
         }
     }
 
-    fn metric_id(self) -> &'static str {
+    const fn metric_id(self) -> &'static str {
         match self {
             Self::RxBytes => ids::NET_RX_BYTES,
             Self::TxBytes => ids::NET_TX_BYTES,
@@ -85,7 +85,7 @@ impl NetCounter {
         }
     }
 
-    fn native_unit(self) -> &'static str {
+    const fn native_unit(self) -> &'static str {
         match self {
             Self::RxBytes | Self::TxBytes => native::BYTES,
             _ => native::COUNT,
@@ -294,10 +294,9 @@ pub(crate) fn read_interface(
         .filter_map(|source| counter_record(context, source, gate))
         .collect();
     let after = timed(context.clock, || Ok(read_ifindex(context.files, ifname)));
-    match identity_failure(&after, ifindex) {
-        Some(failure) => failed_all(context, sources, &failure, ReadWindow::from(&after)),
-        None => records,
-    }
+    identity_failure(&after, ifindex).map_or(records, |failure| {
+        failed_all(context, sources, &failure, ReadWindow::from(&after))
+    })
 }
 
 /// Status and reason when the interface is not the catalogued one any more.

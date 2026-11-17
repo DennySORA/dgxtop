@@ -6,6 +6,7 @@
 //! the coarser sizes rather than dropped after a day.
 
 use dgxtop_compression::{Bucket, Divisible, TieredSeries};
+use dgxtop_core::num::ToF64Lossy;
 
 /// What a stretch of time held: the value integrated over the time it was
 /// recorded, that time and the largest value.
@@ -45,12 +46,12 @@ impl Divisible for Held {
     /// The part of a bucket's time a query overlaps, its recording assumed
     /// spread evenly over it; the peak stays, as it may be in that part.
     fn portion(&self, fraction: f64) -> Self {
-        #[allow(
-            clippy::cast_precision_loss,
+        #[expect(
             clippy::cast_possible_truncation,
-            clippy::cast_sign_loss
+            clippy::cast_sign_loss,
+            reason = "a share of the covered time: within 0..=covered_ns before the cast"
         )]
-        let covered_ns = (self.covered_ns as f64 * fraction).round() as u64;
+        let covered_ns = (self.covered_ns.to_f64_lossy() * fraction).round() as u64;
         Self {
             start_utc_ns: self.start_utc_ns,
             integral: self.integral * fraction,
@@ -69,8 +70,7 @@ pub(super) type HeldSeries = TieredSeries<Held>;
 pub(super) fn add_held(series: &mut HeldSeries, (start, end): (i64, i64), value: u64) {
     series.record_span((start, end), |bucket, piece_ns| {
         let piece_ns = u64::try_from(piece_ns).unwrap_or(0);
-        #[allow(clippy::cast_precision_loss)]
-        let integral = value as f64 * piece_ns as f64;
+        let integral = value.to_f64_lossy() * piece_ns.to_f64_lossy();
         bucket.merge(&Held {
             start_utc_ns: bucket.start_utc_ns,
             integral,
@@ -91,8 +91,7 @@ mod tests {
     impl Held {
         /// Time-weighted mean over the time covered.
         pub(crate) fn mean(&self) -> Option<f64> {
-            #[allow(clippy::cast_precision_loss)]
-            let covered = self.covered_ns as f64;
+            let covered = self.covered_ns.to_f64_lossy();
             (self.covered_ns > 0).then(|| self.integral / covered)
         }
     }
@@ -115,8 +114,7 @@ mod tests {
         assert_eq!(held.covered_ns, 15_000_000_000);
         assert_eq!(held.peak, Some(8 * GIB));
         let mean = held.mean().unwrap();
-        #[allow(clippy::cast_precision_loss)]
-        let expected = (4.0 * 12.0 + 8.0 * 3.0) / 15.0 * GIB as f64;
+        let expected = (4.0 * 12.0 + 8.0 * 3.0) / 15.0 * GIB.to_f64_lossy();
         assert!((mean - expected).abs() < 1.0, "{mean} vs {expected}");
         let first = held_in(&series, (100 * SECOND, 105 * SECOND));
         assert_eq!(first.covered_ns, 5_000_000_000);

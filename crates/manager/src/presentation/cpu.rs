@@ -1,6 +1,6 @@
 //! CPU module projection: host aggregate, logical cores, the current and
-//! maximum frequency of each kind of core, package, cluster and SoC
-//! temperatures, power, load, tasks and the CPU's stall pressure (D-135). Package, core, cluster and SoC
+//! maximum frequency of each kind of core, package, cluster and `SoC`
+//! temperatures, power, load, tasks and the CPU's stall pressure (D-135). Package, core, cluster and `SoC`
 //! temperatures are different metrics and are never substituted for one
 //! another.
 
@@ -19,6 +19,7 @@ use super::cell::missing_cell;
 use super::labels::{humanize_scope, label_text};
 use super::pressure::pressure_view;
 use super::reader::MetricReader;
+use dgxtop_core::num::ToF64Lossy;
 
 /// Logical CPUs kept per projection (the largest reference hosts have 512).
 pub(crate) const MAX_CORES: usize = 512;
@@ -252,8 +253,11 @@ fn frequency_khz(frequency: &MetricCell) -> Option<u64> {
     let mhz = frequency
         .value_f64()
         .filter(|_| frequency.state.has_value())?;
-    // Finite, non-negative and far below u64::MAX for any real clock.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "finite, non-negative and far below u64::MAX for any real clock"
+    )]
     let khz = (mhz * 1000.0).round().max(0.0) as u64;
     Some(khz)
 }
@@ -276,8 +280,7 @@ fn mean_frequency(cores: &[&CoreView]) -> MetricCell {
         );
     };
     let total: f64 = current.iter().filter_map(|cell| cell.value_f64()).sum();
-    #[allow(clippy::cast_precision_loss)]
-    let mean = total / current.len() as f64;
+    let mean = total / current.len().to_f64_lossy();
     MetricCell {
         value: Scalar::from_f64(mean).ok(),
         kind: SampleKind::Derived,
@@ -370,7 +373,7 @@ fn power_rows(reader: &MetricReader<'_>) -> Vec<LabeledCell> {
         .collect()
 }
 
-/// One labeled row per reported scope ("package 0", "SoC", "platform"),
+/// One labeled row per reported scope ("package 0", "`SoC`", "platform"),
 /// ordered by scope kind then numeric id; duplicates name their entity.
 fn labeled_rows(reader: &MetricReader<'_>, metric: &str) -> Vec<LabeledCell> {
     labeled_entries(reader, metric)
@@ -633,8 +636,8 @@ mod tests {
             "cpu",
             sample("cpu.utilization.total", "cpu.core.0", "core:0").f64(5.0),
         );
-        assert!(build(&fixture).frequencies.is_empty());
-        assert!(build(&Fixture::new()).frequencies.is_empty());
+        assert_eq!(build(&fixture).frequencies.len(), 0);
+        assert_eq!(build(&Fixture::new()).frequencies.len(), 0);
         frequency(&mut fixture, ids::CPU_FREQUENCY_CURRENT, 0, Some(1800.0));
         let view = build(&fixture);
         assert_eq!(groups(&view), vec![(Some(1800.0), None, 1)]);

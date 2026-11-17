@@ -1,7 +1,9 @@
-//! Immutable view projections produced by the Manager's PresentationService
-//! and consumed by the Viewer. A projection is a small, bounded, already
-//! arbitrated sub-view: the Viewer only formats it and never recomputes
-//! authoritative values, queries a store or samples hardware.
+//! Immutable view projections produced by the Manager's `PresentationService`
+//! and consumed by the Viewer.
+//!
+//! A projection is a small, bounded, already arbitrated sub-view: the Viewer
+//! only formats it and never recomputes authoritative values, queries a store
+//! or samples hardware.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -42,11 +44,13 @@ pub enum CellState {
 }
 
 impl CellState {
+    #[must_use]
     pub const fn has_value(self) -> bool {
         matches!(self, Self::Ok | Self::Degraded)
     }
 
     /// Human label used when there is no value.
+    #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Ok => "ok",
@@ -84,12 +88,15 @@ pub const TEMPERATURE_SCALE_C: f64 = 100.0;
 pub const OVERVIEW_GPU_CHART_ROWS: u16 = 2;
 /// Overview GPU panel geometry (D-38, D-43), shared so the Viewer lays the
 /// panel out and the Manager sizes the copied process window from the same
-/// rows: per GPU a headline, the utilization bar with its chart under it,
-/// and the memory bar.
+/// rows.
+///
+/// Per GPU a headline, the utilization bar with its chart under it, and
+/// the memory bar.
 pub const OVERVIEW_GPU_ROWS: u16 = 3 + OVERVIEW_GPU_CHART_ROWS;
 
 /// Rows `count` GPUs take inside the overview GPU panel: each GPU's rows
 /// and a divider between two GPUs (D-66).
+#[must_use]
 pub const fn overview_gpus_rows(count: u16) -> u16 {
     count
         .saturating_mul(OVERVIEW_GPU_ROWS)
@@ -113,7 +120,8 @@ pub struct MetricCell {
 
 impl MetricCell {
     /// A cell with no value in the given state.
-    pub fn missing(unit: CanonicalUnit, state: CellState) -> Self {
+    #[must_use]
+    pub const fn missing(unit: CanonicalUnit, state: CellState) -> Self {
         Self {
             value: None,
             unit,
@@ -142,16 +150,18 @@ pub struct Trend {
     pub points: Vec<Option<f64>>,
 }
 
-/// Colors of GPU processes (D-64, D-65): at most this many processes listed
-/// at once have a color of their own, the ones holding the most GPU memory;
-/// any further process counts among the other processes. The Viewer's
-/// process palette has this many colors.
+/// Colors of GPU processes (D-64, D-65).
+///
+/// At most this many processes listed at once have a color of their own,
+/// the ones holding the most GPU memory; any further process counts among
+/// the other processes. The Viewer's process palette has this many colors.
 pub const PROCESS_COLOR_SLOTS: usize = 8;
 
-/// What one GPU process holds of a memory bar now (D-64). `slot`
-/// (`0..PROCESS_COLOR_SLOTS`) picks its color: it stays with the process
-/// while it is tracked and follows from its name when it can (D-65), so the
-/// process has the same color on every bar, chart and table.
+/// What one GPU process holds of a memory bar now (D-64).
+///
+/// `slot` (`0..PROCESS_COLOR_SLOTS`) picks its color: it stays with the
+/// process while it is tracked and follows from its name when it can
+/// (D-65), so the process has the same color on every bar, chart and table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessShare {
     pub slot: u8,
@@ -170,8 +180,9 @@ pub struct ProcessTrend {
 
 /// A resource's stall pressure (PSI, D-135): the share of the last 10 s,
 /// 60 s and 300 s tasks stalled waiting for it, shortest first, as the
-/// kernel averages it. It is time lost waiting, never how much of the
-/// resource is in use.
+/// kernel averages it.
+///
+/// It is time lost waiting, never how much of the resource is in use.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PressureView {
     /// While at least one task stalled.
@@ -290,7 +301,7 @@ pub struct GpuCard {
     /// The device's own slowdown and shutdown temperatures.
     pub temperature_slowdown: MetricCell,
     pub temperature_shutdown: MetricCell,
-    /// The PCIe link now (it trains down at idle) and at its best.
+    /// The `PCIe` link now (it trains down at idle) and at its best.
     pub pcie_generation: MetricCell,
     pub pcie_width: MetricCell,
     pub pcie_generation_max: MetricCell,
@@ -319,11 +330,11 @@ pub struct GpuCard {
 /// capabilities, slow health, bandwidths, identity and software stack.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GpuDetails {
-    /// Per-direction capacity of the PCIe link now and at its best, from
+    /// Per-direction capacity of the `PCIe` link now and at its best, from
     /// its generation and width (derived, theoretical).
     pub pcie_bandwidth: MetricCell,
     pub pcie_bandwidth_max: MetricCell,
-    /// The driver's PCIe throughput in its own "KB/s" while that unit is
+    /// The driver's `PCIe` throughput in its own "KB/s" while that unit is
     /// not verified (D-11); `None` once the canonical value exists.
     pub pcie_tx_driver_kb: Option<f64>,
     pub pcie_rx_driver_kb: Option<f64>,
@@ -587,9 +598,11 @@ pub const HISTORY_LEGEND_COLUMNS: u16 = 17;
 
 /// Columns of a history chart's plot on a terminal `columns` wide (D-50):
 /// the panel's width, half the inside when panels stand side by side, less
-/// the gutter and the legend. Shared so the Manager queries as many points
-/// as a plot has columns.
-pub fn history_plot_columns(columns: u16) -> u16 {
+/// the gutter and the legend.
+///
+/// Shared so the Manager queries as many points as a plot has columns.
+#[must_use]
+pub const fn history_plot_columns(columns: u16) -> u16 {
     let inside = columns.saturating_sub(HISTORY_CHART_MARGIN_COLUMNS);
     let panel = if inside >= HISTORY_TWO_COLUMN_WIDTH {
         (inside - HISTORY_PANEL_GAP) / 2
@@ -622,7 +635,7 @@ pub enum HistoryChartKind {
     /// RAM in use: while some tasks stalled, and while all did.
     MemoryPressureSome,
     MemoryPressureFull,
-    /// Each CPU package's and the SoC's temperature, charted beside the
+    /// Each CPU package's and the `SoC`'s temperature, charted beside the
     /// GPUs' (D-137).
     CpuTemperature,
     SocTemperature,
@@ -639,6 +652,7 @@ pub enum HistoryChartKind {
 impl HistoryChartKind {
     /// Whether the chart draws a power, whose mean over the time it holds
     /// is an energy.
+    #[must_use]
     pub const fn is_power(self) -> bool {
         matches!(self, Self::GpuPower | Self::TotalPower | Self::CpuPower)
     }
@@ -676,17 +690,20 @@ pub struct HistoryChartView {
     pub parts: Vec<HistoryPart>,
 }
 
-/// A tracked process's part of a history chart (D-64): its mean in each
-/// cell of an even grid over the view's window. A time it was not listed
-/// counts as 0; `None` where no process list was recorded (before this run).
+/// A tracked process's part of a history chart (D-64): its mean in each cell
+/// of an even grid over the view's window.
+///
+/// A time it was not listed counts as 0; `None` where no process list was
+/// recorded (before this run).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HistoryPart {
     pub slot: u8,
     pub means: Vec<Option<f64>>,
 }
 
-/// The panels a frontend may fold away (D-114), saved in `viewer.folded`:
-/// the Overview's disk I/O and network modules, then the Overview
+/// The panels a frontend may fold away (D-114), saved in `viewer.folded`.
+///
+/// The Overview's disk I/O and network modules, then the Overview
 /// History's panels, the memory panel's stall pressure strips among them
 /// (D-144): folded, they leave the memory panel its `used` strip; then the
 /// GPU History's panels (D-148).
@@ -707,10 +724,11 @@ pub const FOLDABLE_PANELS: [&str; 13] = [
 ];
 
 /// Folds of panels that are gone (D-148): the temperature and the power
-/// panel that held the host's strips over the shown GPU's. Each became a
-/// panel of the Overview History and one of the GPU History, so a saved
-/// configuration may still name them; they are read and dropped, folding
-/// nothing.
+/// panel that held the host's strips over the shown GPU's.
+///
+/// Each became a panel of the Overview History and one of the GPU
+/// History, so a saved configuration may still name them; they are read
+/// and dropped, folding nothing.
 pub const RETIRED_FOLDS: [&str; 2] = ["history.gpu_temperature", "history.power"];
 
 /// The panels folded until the user says otherwise (D-146, D-148): the
@@ -719,6 +737,7 @@ pub const RETIRED_FOLDS: [&str; 2] = ["history.gpu_temperature", "history.power"
 pub const DEFAULT_FOLDED_PANELS: [&str; 1] = ["history.memory_pressure"];
 
 /// Whether `panels` are distinct foldable panels (D-114).
+#[must_use]
 pub fn are_foldable(panels: &[String]) -> bool {
     let mut seen = std::collections::BTreeSet::new();
     panels
@@ -857,6 +876,7 @@ pub enum HostState {
 }
 
 impl HostState {
+    #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Starting => "starting",
@@ -894,7 +914,7 @@ pub struct IntervalView {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SettingField {
     pub path: String,
     pub saved: String,
@@ -905,7 +925,7 @@ pub struct SettingField {
     pub overload_note: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SettingsView {
     pub revision: u32,
     pub pending: Option<String>,
@@ -918,7 +938,7 @@ pub struct SettingsView {
     pub hosts: Vec<HostStatus>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfirmationView {
     pub request_id: uuid::Uuid,
     pub target: ProcessKey,
@@ -929,7 +949,7 @@ pub struct ConfirmationView {
     pub warning: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActionsView {
     pub confirmation: Option<ConfirmationView>,
     pub audit: PersistenceStatus,
@@ -947,6 +967,7 @@ pub enum OverloadState {
 }
 
 impl OverloadState {
+    #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Normal => "normal",
@@ -1022,7 +1043,7 @@ pub struct HeaderView {
 }
 
 /// Per-session view state; the single authoritative copy lives in the Manager.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionState {
     pub session_id: SessionId,
     pub view: ViewKind,
@@ -1076,6 +1097,7 @@ pub struct ViewModel {
 
 impl ViewModel {
     /// The projection's exact JSON length (`usize::MAX` when it has none).
+    #[must_use]
     pub fn estimated_bytes(&self) -> usize {
         let mut counter = ByteCounter(0);
         serde_json::to_writer(&mut counter, self).map_or(usize::MAX, |()| counter.0)
@@ -1083,6 +1105,7 @@ impl ViewModel {
 
     /// An upper bound on [`Self::estimated_bytes`] found without writing
     /// the JSON (see [`crate::json_size`]).
+    #[must_use]
     pub fn bytes_bound(&self) -> usize {
         crate::json_size::json_length_bound(self).unwrap_or(usize::MAX)
     }
@@ -1090,6 +1113,7 @@ impl ViewModel {
     /// The size a projection is accounted at against `max_bytes`: the
     /// bound when it fits, otherwise the exact length. Either way the
     /// result fits `max_bytes` exactly when the JSON does.
+    #[must_use]
     pub fn accounted_bytes(&self, max_bytes: usize) -> usize {
         let bound = self.bytes_bound();
         if bound <= max_bytes {
@@ -1122,6 +1146,7 @@ pub struct ProjectionSlot {
 }
 
 impl ProjectionSlot {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -1183,8 +1208,8 @@ mod tests {
                 filter: String::new(),
                 sort: SortKey::GpuMemory,
                 ascending: false,
-                overview_bar: crate::tiers::BarSize::OneMinute,
-                process_bar: crate::tiers::BarSize::Auto,
+                overview_bar: BarSize::OneMinute,
+                process_bar: BarSize::Auto,
             },
             modules: ModuleViews::default(),
             banners: Vec::new(),

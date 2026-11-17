@@ -122,6 +122,7 @@ fn violation(code: &'static str, detail: impl Into<String>) -> FixtureViolation 
 }
 
 /// Live adapter family of a replay read group (`hwmon.fast` -> `hwmon`).
+#[must_use]
 pub fn family_of(read_group: &str) -> &str {
     read_group.split('.').next().unwrap_or(read_group)
 }
@@ -221,19 +222,27 @@ pub struct FixtureEntity {
     pub attributes: Vec<Attribute>,
 }
 
-fn default_revision() -> u32 {
+const fn default_revision() -> u32 {
     1
 }
 
-fn is_false(value: &bool) -> bool {
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "the signature serde's `skip_serializing_if` calls: it hands the field by reference"
+)]
+const fn is_false(value: &bool) -> bool {
     !*value
 }
 
-fn is_zero(value: &u32) -> bool {
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "the signature serde's `skip_serializing_if` calls: it hands the field by reference"
+)]
+const fn is_zero(value: &u32) -> bool {
     *value == 0
 }
 
-fn default_sampling_ms() -> u32 {
+const fn default_sampling_ms() -> u32 {
     1000
 }
 
@@ -302,7 +311,8 @@ pub struct FixtureSample {
 
 impl FixtureSample {
     /// Sample with a value.
-    pub fn value(source_id: SourceId, value: FixtureValue) -> Self {
+    #[must_use]
+    pub const fn value(source_id: SourceId, value: FixtureValue) -> Self {
         Self {
             source_id,
             entity_id: None,
@@ -315,7 +325,8 @@ impl FixtureSample {
     }
 
     /// Failed sample.
-    pub fn status(source_id: SourceId, status: ReadStatus) -> Self {
+    #[must_use]
+    pub const fn status(source_id: SourceId, status: ReadStatus) -> Self {
         Self {
             source_id,
             entity_id: None,
@@ -378,6 +389,11 @@ pub struct ReplayFixture {
 
 impl ReplayFixture {
     /// Reads (at most [`MAX_FIXTURE_BYTES`]), decodes and validates a fixture file.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ReplayError` when the fixture cannot be read or encoded, or
+    /// breaks a rule of replay.
     pub fn load(path: &Path) -> Result<Self, ReplayError> {
         let io_error = |source| ReplayError::Io {
             path: path.display().to_string(),
@@ -396,6 +412,11 @@ impl ReplayFixture {
     }
 
     /// Decodes and validates fixture JSON.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ReplayError` when the fixture cannot be read or encoded, or
+    /// breaks a rule of replay.
     pub fn from_json_slice(bytes: &[u8]) -> Result<Self, ReplayError> {
         let length = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         if length > MAX_FIXTURE_BYTES {
@@ -414,6 +435,11 @@ impl ReplayFixture {
     /// groups (and the faults of every group), and the entities their
     /// sources reference plus those entities' ancestors. Entities no source
     /// references go to slice 0.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ReplayError` when the fixture cannot be read or encoded, or
+    /// breaks a rule of replay.
     pub fn slice(&self, index: u32, count: u32) -> Result<Self, ReplayError> {
         let invalid = ReplayError::InvalidSlice { index, count };
         let (Ok(position), Ok(hosts)) = (usize::try_from(index), usize::try_from(count)) else {
@@ -525,11 +551,21 @@ impl ReplayFixture {
     }
 
     /// Stable compact JSON (identical bytes for identical fixtures).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ReplayError` when the fixture cannot be read or encoded, or
+    /// breaks a rule of replay.
     pub fn to_json_bytes(&self) -> Result<Vec<u8>, ReplayError> {
         serde_json::to_vec(self).map_err(|error| ReplayError::Encode(error.to_string()))
     }
 
     /// Checks every format rule and bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `FixtureViolation` when the fixture breaks a domain rule; its
+    /// code names the rule.
     pub fn validate(&self) -> Result<(), FixtureViolation> {
         self.check_header()?;
         let sources = check_sources(&self.sources)?;

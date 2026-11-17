@@ -1,9 +1,11 @@
 //! What the process history reads of the GPU processes it follows (D-76,
-//! D-77), beside the process table: the full command line, working folder,
-//! parent, program and control group, the bytes a process read and wrote,
-//! its threads, swap and open files, and how it ended. Read by a
-//! [`crate::ports::ProcessProbe`] for a few processes at a time, never for
-//! every process on the host. Its descendants come with the process table
+//! D-77), beside the process table.
+//!
+//! The full command line, working folder, parent, program and control
+//! group, the bytes a process read and wrote, its threads, swap and open
+//! files, and how it ended. Read by a [`crate::ports::ProcessProbe`] for a
+//! few processes at a time, never for every process on the host. Its
+//! descendants come with the process table
 //! ([`crate::canonical::ProcessDescendants`], D-79), which scans every
 //! process anyway.
 
@@ -41,6 +43,7 @@ impl ExitStatus {
     /// Decodes a `waitpid` status word. The kernel shows zero to a reader
     /// that may not trace the process, so a zero means a clean exit only
     /// where the reader may.
+    #[must_use]
     pub const fn from_wait_status(status: u32) -> Self {
         let signal = (status & 0x7f) as u8;
         if signal == 0 {
@@ -93,7 +96,8 @@ pub struct ProbeReading {
 
 impl ProbeReading {
     /// A reading of a process that is gone (or another's now).
-    pub fn gone(key: ProcessKey) -> Self {
+    #[must_use]
+    pub const fn gone(key: ProcessKey) -> Self {
         Self {
             key,
             liveness: ProbeLiveness::Gone,

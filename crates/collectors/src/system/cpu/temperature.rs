@@ -45,18 +45,19 @@ pub(super) fn publish(session: &mut Session<'_>, selections: &mut Selections) {
         if !triggered {
             continue;
         }
-        let result = formulas::aligned_inputs(session, &inputs, selections).and_then(hottest);
+        let result = formulas::aligned_inputs(session, &inputs, selections)
+            .and_then(|aligned| hottest(&aligned));
         publish_package(session, package, &inputs, result);
     }
 }
 
 /// The hottest of `inputs`, with their evidence.
-fn hottest(inputs: Vec<Selection>) -> Result<(Scalar, Vec<Evidence>), &'static str> {
+fn hottest(inputs: &[Selection]) -> Result<(Scalar, Vec<Evidence>), &'static str> {
     let celsius = inputs
         .iter()
         .map(|input| input.value.to_f64_lossy())
         .fold(f64::NEG_INFINITY, f64::max);
-    let value = Scalar::from_f64(celsius).map_err(|_| reasons::MISSING_INPUT)?;
+    let value = Scalar::from_f64(celsius).map_err(|_cause| reasons::MISSING_INPUT)?;
     Ok((value, inputs.iter().map(Evidence::of_selection).collect()))
 }
 

@@ -46,7 +46,12 @@ pub(crate) fn version_text(number: i32) -> String {
 }
 
 /// Accepts `number >= 3051003`.
-pub fn check_version_number(number: i32) -> Result<(), SqliteGateError> {
+///
+/// # Errors
+///
+/// Returns a `SqliteGateError` when the linked SQLite is older than required or
+/// was built without an option dgxtop needs.
+pub const fn check_version_number(number: i32) -> Result<(), SqliteGateError> {
     if number >= MIN_SQLITE_VERSION_NUMBER {
         Ok(())
     } else {
@@ -58,6 +63,11 @@ pub fn check_version_number(number: i32) -> Result<(), SqliteGateError> {
 }
 
 /// Floor check plus build/runtime consistency.
+///
+/// # Errors
+///
+/// Returns a `SqliteGateError` when the linked SQLite is older than required or
+/// was built without an option dgxtop needs.
 pub fn check_versions(runtime: i32, built: i32) -> Result<(), SqliteGateError> {
     check_version_number(runtime)?;
     if runtime == built {
@@ -68,6 +78,11 @@ pub fn check_versions(runtime: i32, built: i32) -> Result<(), SqliteGateError> {
 }
 
 /// Gate on the actually linked library; call before opening any database.
+///
+/// # Errors
+///
+/// Returns a `SqliteGateError` when the linked SQLite is older than required or
+/// was built without an option dgxtop needs.
 pub fn ensure_sqlite_version() -> Result<SqliteVersion, SqliteGateError> {
     let runtime_number = rusqlite::version_number();
     let built_number = rusqlite::ffi::SQLITE_VERSION_NUMBER;

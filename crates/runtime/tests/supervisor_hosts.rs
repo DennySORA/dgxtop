@@ -14,9 +14,13 @@
 //!
 //! Only processes created by these tests are ever signalled or reaped.
 
-// A test binary: panics are the failure signal and `unwrap` keeps the cases
-// readable (libtest's `allow-*-in-tests` does not apply without libtest).
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "a test binary without libtest, so `allow-*-in-tests` does not reach it: panics are the failure signal, `unwrap` keeps the cases readable and its own harness prints the results"
+)]
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -155,12 +159,12 @@ fn run_fake_adapter_host(
     ExitCode::from(u8::try_from(exit.exit_code()).unwrap_or(1))
 }
 
-#[allow(unsafe_code)]
+/// A handler that only sets a flag nobody reads replaces the default
+/// disposition, which is exactly what this fault mode needs: a child that
+/// survives SIGTERM.
 fn ignore_sigterm() {
-    // SAFETY: SIG_IGN installs no handler code; the disposition change is
-    // exactly what this fault mode needs (a child that survives SIGTERM).
-    unsafe { nix::sys::signal::signal(Signal::SIGTERM, nix::sys::signal::SigHandler::SigIgn) }
-        .expect("ignore SIGTERM");
+    let ignored = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    signal_hook::flag::register(Signal::SIGTERM as i32, ignored).expect("ignore SIGTERM");
 }
 
 fn child_manifest(adapter: &str) -> AdapterManifest {
@@ -204,7 +208,7 @@ fn read_one_request() {
     let mut decoder = FrameDecoder::new(64 * 1024).unwrap();
     let mut scratch = [0u8; 4096];
     let mut stdin = std::io::stdin().lock();
-    let _ = read_frame_blocking(&mut stdin, &mut decoder, &mut scratch);
+    read_frame_blocking(&mut stdin, &mut decoder, &mut scratch).unwrap_or_default();
 }
 
 fn wait_for_stdin_eof() {
@@ -245,13 +249,12 @@ impl TelemetryPort for ChildAdapter {
     fn read(&mut self, plan: &ReadPlan) -> ObservationBatch {
         let count = self.reads.fetch_add(1, Ordering::SeqCst) + 1;
         match self.behavior {
-            Behavior::Healthy => {}
             Behavior::Sleep(delay) => std::thread::sleep(delay),
             Behavior::SleepOnce(delay) if count == 1 => std::thread::sleep(delay),
-            Behavior::SleepOnce(_) => {}
+            Behavior::Healthy | Behavior::SleepOnce(_) => {}
             Behavior::Chatter => {
                 let mut stderr = std::io::stderr().lock();
-                let _ = writeln!(stderr, "chatter read {count} \u{1b}[31mred\u{1b}[0m");
+                writeln!(stderr, "chatter read {count} \u{1b}[31mred\u{1b}[0m").unwrap_or_default();
             }
         }
         child_batch(plan, f64::from(count))
@@ -504,7 +507,7 @@ fn start_with(
     let handle = Supervisor::start_with_launcher(
         config,
         specs,
-        ledger.clone(),
+        &ledger,
         gate,
         sender,
         Arc::clone(&clock),
@@ -533,8 +536,8 @@ impl Harness {
             match self.completions.recv_timeout(remaining) {
                 Ok(completion) if matches(&completion) => return completion,
                 Ok(_) => {}
-                Err(_) => panic!(
-                    "timed out waiting for {what}; statuses: {:?}",
+                Err(error) => panic!(
+                    "no completion for {what} ({error}); statuses: {:?}",
                     self.handle.statuses()
                 ),
             }
@@ -608,7 +611,7 @@ impl Harness {
         }
     }
 
-    fn dispatch(&self, job: AdapterJob) {
+    fn dispatch(&self, job: &AdapterJob) {
         let deadline = Instant::now() + WAIT;
         loop {
             match self.handle.try_dispatch(job.clone()) {
@@ -651,7 +654,11 @@ impl Harness {
 fn parent_of(pid: i32) -> Option<i32> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let close = stat.rfind(')')?;
-    stat[close + 1..].split_whitespace().nth(1)?.parse().ok()
+    stat.get(close + 1..)?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
 }
 
 fn own_pid() -> i32 {
@@ -673,7 +680,7 @@ fn healthy_round_trip_with_a_child_process() {
     assert_eq!(parent_of(pid), Some(own_pid()), "host is our managed child");
     assert_eq!(harness.handle.managed_pids(), vec![pid]);
     let discover = harness.discover("child", 1);
-    harness.dispatch(AdapterJob::Discover(discover.clone()));
+    harness.dispatch(&AdapterJob::Discover(discover.clone()));
     let catalog = harness.wait_for("catalog", |completion| {
         matches!(completion, IngestionCompletion::Catalog { request_id, .. } if *request_id == discover.request_id)
     });
@@ -681,7 +688,7 @@ fn healthy_round_trip_with_a_child_process() {
         matches!(catalog, IngestionCompletion::Catalog { result: Ok(ref delta), .. } if delta.complete)
     );
     let plan = harness.plan("child", 1, 1, 400);
-    harness.dispatch(AdapterJob::Read(plan.clone()));
+    harness.dispatch(&AdapterJob::Read(plan.clone()));
     let batch = harness.batch(plan.request_id).unwrap();
     assert_eq!(batch.records.len(), 2);
     assert!(batch.accounted_bytes() > 0);
@@ -701,14 +708,14 @@ fn healthy_round_trip_with_a_child_process() {
             exit: ExitSummary::Exited(0)
         }
     );
-    assert!(harness.handle.managed_pids().is_empty());
+    assert_eq!(harness.handle.managed_pids(), [] as [i32; 0]);
 }
 
 fn hung_host_times_out_and_is_restarted_with_sigterm() {
     let harness = start(fast_config(), vec![host_spec("hung", "hang_on_read")]);
     let first = harness.wait_state("hung", HostState::Healthy);
     let plan = harness.plan("hung", 1, 1, 300);
-    harness.dispatch(AdapterJob::Read(plan.clone()));
+    harness.dispatch(&AdapterJob::Read(plan.clone()));
     let started = Instant::now();
     let failure = harness.batch(plan.request_id).unwrap_err();
     assert_eq!(failure.kind, AdapterFailureKind::TimedOut);
@@ -730,7 +737,7 @@ fn sigterm_ignoring_host_is_killed_with_sigkill() {
     let harness = start(fast_config(), vec![host_spec("stubborn", "ignore_sigterm")]);
     harness.wait_state("stubborn", HostState::Healthy);
     let plan = harness.plan("stubborn", 1, 1, 200);
-    harness.dispatch(AdapterJob::Read(plan.clone()));
+    harness.dispatch(&AdapterJob::Read(plan.clone()));
     assert_eq!(
         harness.batch(plan.request_id).unwrap_err().kind,
         AdapterFailureKind::TimedOut
@@ -756,11 +763,11 @@ fn other_host_keeps_serving_while_one_hangs() {
     );
     harness.wait_all_healthy(&["nvml", "procfs"]);
     let hung = harness.plan("nvml", 1, 1, 3_000);
-    harness.dispatch(AdapterJob::Read(hung.clone()));
+    harness.dispatch(&AdapterJob::Read(hung.clone()));
     for cycle in 1..=10 {
         let plan = harness.plan("procfs", 1, cycle, 1_500);
         let started = Instant::now();
-        harness.dispatch(AdapterJob::Read(plan.clone()));
+        harness.dispatch(&AdapterJob::Read(plan.clone()));
         let batch = harness
             .batch(plan.request_id)
             .expect("healthy host keeps serving");
@@ -803,13 +810,13 @@ fn late_reply_is_discarded_and_host_recovers() {
     let harness = start(config, vec![host_spec("slow", "slow_once")]);
     harness.wait_state("slow", HostState::Healthy);
     let plan = harness.plan("slow", 1, 1, 300);
-    harness.dispatch(AdapterJob::Read(plan.clone()));
+    harness.dispatch(&AdapterJob::Read(plan.clone()));
     assert_eq!(
         harness.batch(plan.request_id).unwrap_err().kind,
         AdapterFailureKind::TimedOut
     );
     let recovered = harness.plan("slow", 1, 2, 2_000);
-    harness.dispatch(AdapterJob::Read(recovered.clone()));
+    harness.dispatch(&AdapterJob::Read(recovered.clone()));
     let batch = harness.batch(recovered.request_id).unwrap();
     assert_eq!(
         batch.request_id, recovered.request_id,
@@ -868,7 +875,7 @@ impl ChildControl for NeverReaped {
         self.inner.kill()
     }
 
-    fn try_reap(&mut self) -> Result<Option<dgxtop_runtime::supervisor::ExitSummary>, InfraError> {
+    fn try_reap(&mut self) -> Result<Option<ExitSummary>, InfraError> {
         Ok(None)
     }
 }
@@ -892,7 +899,10 @@ fn reap_test_children(pids: &[i32]) {
     for pid in pids {
         // These are children created by this test; reaping them here only
         // cleans up the zombies the fake control refused to collect.
-        let _ = nix::sys::wait::waitpid(Pid::from_raw(*pid), None);
+        // Reaped for the next case; how it ended is not this one's matter.
+        if nix::sys::wait::waitpid(Pid::from_raw(*pid), None).is_err() {
+            // Already reaped: nothing is left of it.
+        }
     }
 }
 
@@ -916,7 +926,7 @@ fn unreaped_child_is_quarantined_and_never_respawned() {
     );
     harness.wait_all_healthy(&["stuck", "procfs"]);
     let plan = harness.plan("stuck", 1, 1, 200);
-    harness.dispatch(AdapterJob::Read(plan.clone()));
+    harness.dispatch(&AdapterJob::Read(plan.clone()));
     assert_eq!(
         harness.batch(plan.request_id).unwrap_err().kind,
         AdapterFailureKind::TimedOut
@@ -942,7 +952,7 @@ fn unreaped_child_is_quarantined_and_never_respawned() {
     );
     // The other backend is unaffected.
     let plan = harness.plan("procfs", 1, 2, 1_000);
-    harness.dispatch(AdapterJob::Read(plan.clone()));
+    harness.dispatch(&AdapterJob::Read(plan.clone()));
     assert!(harness.batch(plan.request_id).is_ok());
     let begin = Instant::now();
     let report = harness.handle.shutdown(Duration::from_secs(2));
@@ -960,7 +970,7 @@ fn identical_reads_cause_one_host_request() {
     let plan = harness.plan("dedup", 1, 7, 3_000);
     let mut duplicate = plan.clone();
     duplicate.request_id = Uuid::new_v4();
-    harness.dispatch(AdapterJob::Read(plan.clone()));
+    harness.dispatch(&AdapterJob::Read(plan.clone()));
     harness
         .handle
         .try_dispatch(AdapterJob::Read(duplicate.clone()))
@@ -972,7 +982,7 @@ fn identical_reads_cause_one_host_request() {
     let value = first.records[0].value.unwrap().to_f64_lossy();
     assert!((value - 1.0).abs() < f64::EPSILON);
     let next = harness.plan("dedup", 1, 8, 3_000);
-    harness.dispatch(AdapterJob::Read(next.clone()));
+    harness.dispatch(&AdapterJob::Read(next.clone()));
     let second = harness.batch(next.request_id).unwrap();
     let value = second.records[0].value.unwrap().to_f64_lossy();
     assert!(
@@ -987,13 +997,13 @@ fn threads_and_fds_do_not_grow_with_requests() {
     harness.wait_state("steady", HostState::Healthy);
     // One warm-up request so lazily created state exists before counting.
     let warmup = harness.plan("steady", 1, 0, 2_000);
-    harness.dispatch(AdapterJob::Read(warmup.clone()));
+    harness.dispatch(&AdapterJob::Read(warmup.clone()));
     assert!(harness.batch(warmup.request_id).is_ok());
     let threads_before = count_entries("/proc/self/task");
     let fds_before = count_entries("/proc/self/fd");
     for cycle in 1..=200 {
         let plan = harness.plan("steady", 1, cycle, 2_000);
-        harness.dispatch(AdapterJob::Read(plan.clone()));
+        harness.dispatch(&AdapterJob::Read(plan.clone()));
         assert!(harness.batch(plan.request_id).is_ok());
     }
     let threads_after = count_entries("/proc/self/task");
@@ -1020,7 +1030,7 @@ fn shutdown_is_bounded_with_stubborn_hosts() {
     let harness = start(config, vec![host_spec("stubborn", "ignore_sigterm")]);
     harness.wait_state("stubborn", HostState::Healthy);
     let plan = harness.plan("stubborn", 1, 1, 10_000);
-    harness.dispatch(AdapterJob::Read(plan.clone()));
+    harness.dispatch(&AdapterJob::Read(plan.clone()));
     std::thread::sleep(Duration::from_millis(50));
     let begin = Instant::now();
     let report = harness.handle.shutdown(Duration::from_millis(400));
@@ -1063,7 +1073,7 @@ fn protocol_violations_restart_the_host() {
         let harness = start(fast_config(), vec![host_spec("broken", mode)]);
         harness.wait_state("broken", HostState::Healthy);
         let plan = harness.plan("broken", 1, 1, 2_000);
-        harness.dispatch(AdapterJob::Read(plan.clone()));
+        harness.dispatch(&AdapterJob::Read(plan.clone()));
         let failure = harness.batch(plan.request_id).unwrap_err();
         assert_eq!(failure.kind, AdapterFailureKind::Protocol, "{mode}");
         harness.wait_log("broken", "protocol error");
@@ -1097,7 +1107,7 @@ fn child_stderr_is_forwarded_sanitized() {
     let harness = start(fast_config(), vec![host_spec("chatty", "stderr_chatter")]);
     harness.wait_state("chatty", HostState::Healthy);
     let plan = harness.plan("chatty", 1, 1, 2_000);
-    harness.dispatch(AdapterJob::Read(plan.clone()));
+    harness.dispatch(&AdapterJob::Read(plan.clone()));
     assert!(harness.batch(plan.request_id).is_ok());
     let deadline = Instant::now() + WAIT;
     loop {

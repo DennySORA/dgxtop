@@ -43,15 +43,15 @@ pub(super) fn clock_ticks((start, end): (i64, i64), offset_s: i32, width: u16) -
         .find(|step| span_seconds / step <= MAX_TICKS)
         .unwrap_or(span_seconds);
     let step_ns = i64::try_from(step).unwrap_or(i64::MAX) * NANOS_PER_SECOND;
-    let offset_ns = i64::from(offset_s) * NANOS_PER_SECOND;
+    let shift_ns = i64::from(offset_s) * NANOS_PER_SECOND;
     let last = i128::from(width - 1);
     let span = i128::from(end - start);
     let mut ticks = Vec::new();
     // The latest tick at or before the end, on the local clock.
-    let mut tick = (end + offset_ns).div_euclid(step_ns) * step_ns - offset_ns;
+    let mut tick = (end + shift_ns).div_euclid(step_ns) * step_ns - shift_ns;
     while tick >= start {
         let column = i128::from(tick - start) * last / span;
-        let midnight = (tick + offset_ns).rem_euclid(SECONDS_PER_DAY * NANOS_PER_SECOND) == 0;
+        let midnight = (tick + shift_ns).rem_euclid(SECONDS_PER_DAY * NANOS_PER_SECOND) == 0;
         let label = if step >= 86_400 || midnight {
             format_local_date(tick, offset_s)
         } else {
@@ -130,7 +130,7 @@ mod tests {
         // Sixty days of day bars (D-82): about six date ticks.
         let months = clock_labels((MIDNIGHT - 60 * 24 * 60 * MINUTE, MIDNIGHT), 0);
         assert!((4..=7).contains(&months.len()), "{months:?}");
-        assert!(clock_ticks((0, 0), 0, 80).is_empty());
-        assert!(clock_ticks((0, MINUTE), 0, 1).is_empty());
+        assert_eq!(clock_ticks((0, 0), 0, 80).len(), 0);
+        assert_eq!(clock_ticks((0, MINUTE), 0, 1).len(), 0);
     }
 }

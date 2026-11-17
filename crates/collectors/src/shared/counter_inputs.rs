@@ -37,7 +37,7 @@ pub(crate) enum Step<'a> {
 }
 
 impl<'a> Step<'a> {
-    pub fn record(&self) -> Option<Record<'a>> {
+    pub const fn record(&self) -> Option<Record<'a>> {
         match self {
             Self::Delta { record, .. }
             | Self::Gap { record, .. }

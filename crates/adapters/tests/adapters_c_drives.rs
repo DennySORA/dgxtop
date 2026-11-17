@@ -1,7 +1,10 @@
 //! hwmon drive temperatures (D-92) over fake sysfs trees: which block
-//! devices an NVMe controller's or a drivetemp disk's sensor measures.
-#![allow(clippy::unwrap_used, clippy::expect_used)] // tests may unwrap
+//! devices an `NVMe` controller's or a drivetemp disk's sensor measures.
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
+#[expect(dead_code, reason = "each suite uses its part of the shared helpers")]
 #[path = "fixtures/adapters_c/support.rs"]
 mod support;
 
@@ -34,7 +37,7 @@ fn block(sysfs: &FakeSysfs, parent: &str, name: &str, dev: &str, partition: bool
     directory
 }
 
-/// An NVMe controller's hwmon (`Composite`, `Sensor 1`, `Sensor 2`).
+/// An `NVMe` controller's hwmon (`Composite`, `Sensor 1`, `Sensor 2`).
 fn nvme_sensor(sysfs: &FakeSysfs, index: u32, controller: &str, composite: &str) -> String {
     let hwmon = sysfs.hwmon(index, controller, "nvme");
     for (channel, label, value) in [
@@ -59,7 +62,7 @@ fn adapter_over(
     files: Arc<dyn SystemFiles>,
 ) -> (HwmonAdapter, Arc<dgxtop_core::testing::FakeClock>) {
     let clock = clock();
-    let hwmon = HwmonAdapter::new(time(&clock), host(), files, AdapterOptions::default());
+    let hwmon = HwmonAdapter::new(time(&clock), host(), files, &AdapterOptions::default());
     (hwmon, clock)
 }
 
@@ -101,11 +104,11 @@ fn disk_records(
         "disk",
         1,
         deadline(clock),
-        Vec::new(),
+        &Vec::new(),
     ))
 }
 
-/// One NVMe drive (the GB10's layout): `Composite` is the temperature of
+/// One `NVMe` drive (the GB10's layout): `Composite` is the temperature of
 /// its namespace disk, in the `disk` read group; its other sensors and its
 /// partitions are not sources.
 #[test]
@@ -153,7 +156,7 @@ fn an_nvme_composite_is_the_temperature_of_its_namespace() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     assert!(
         fast.is_empty(),
@@ -257,7 +260,7 @@ fn a_drivetemp_sensor_is_the_temperature_of_its_scsi_disk() {
 }
 
 /// No sensor, no temperature: a namespace of a controller without hwmon,
-/// and an NVMe sensor without a `Composite` label (an unknown layout).
+/// and an `NVMe` sensor without a `Composite` label (an unknown layout).
 #[test]
 fn drives_without_a_proven_sensor_get_no_temperature() {
     let sysfs = FakeSysfs::new("drives-none");
@@ -280,7 +283,7 @@ fn drives_without_a_proven_sensor_get_no_temperature() {
         false,
     );
     let (_, _, catalog) = catalog_of(&sysfs);
-    assert!(catalog.is_empty());
+    assert_eq!(catalog, [] as [SourceDescriptor; 0]);
 }
 
 /// Native multipath: the namespace head lies below the subsystem, not a
@@ -334,7 +337,7 @@ fn a_missing_or_unreadable_block_class_maps_no_drive() {
     let sysfs = FakeSysfs::new("drives-no-class");
     nvme_sensor(&sysfs, 1, NVME0, "41850");
     let (_, clock, catalog) = catalog_of(&sysfs);
-    assert!(catalog.is_empty());
+    assert_eq!(catalog, [] as [SourceDescriptor; 0]);
 
     block(
         &sysfs,
@@ -353,7 +356,7 @@ fn a_missing_or_unreadable_block_class_maps_no_drive() {
     let last = pages.last().unwrap();
     assert!(last.complete);
     assert_eq!(last.error_code.as_deref(), Some("PARTIAL_DISCOVERY"));
-    assert!(sources(&pages).is_empty());
+    assert_eq!(sources(&pages), [] as [SourceDescriptor; 0]);
 }
 
 /// A drive read failure is a failed record, never a number; a removed

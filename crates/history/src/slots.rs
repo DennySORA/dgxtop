@@ -24,7 +24,7 @@ pub(crate) struct SlotTable<T> {
 }
 
 impl<T> SlotTable<T> {
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             entries: Vec::new(),
             free: Vec::new(),
@@ -32,7 +32,7 @@ impl<T> SlotTable<T> {
         }
     }
 
-    pub(crate) fn live(&self) -> usize {
+    pub(crate) const fn live(&self) -> usize {
         self.live
     }
 

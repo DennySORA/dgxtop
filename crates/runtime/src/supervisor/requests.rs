@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::host::DISCOVER_READ_GROUP;
 
 /// Request id of either job kind.
-pub(crate) fn request_id_of(job: &AdapterJob) -> Uuid {
+pub(crate) const fn request_id_of(job: &AdapterJob) -> Uuid {
     match job {
         AdapterJob::Read(plan) => plan.request_id,
         AdapterJob::Discover(request) => request.request_id,
@@ -223,7 +223,7 @@ mod tests {
         let request = request_for(&AdapterJob::Discover(discover)).unwrap();
         assert_eq!(request.read_group.as_str(), "catalog:3");
         assert_eq!(request.cycle_id, 6);
-        assert!(request.source_slots.is_empty());
+        assert_eq!(request.source_slots.len(), 0);
     }
 
     #[test]

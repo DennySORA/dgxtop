@@ -3,7 +3,7 @@
 //!
 //! * the state actor feeding a real `SqliteArchive` actor whose storage
 //!   first stops answering and then runs out of space;
-//! * the Manager's ProcessService talking to a real `SqliteAuditRepository`
+//! * the Manager's `ProcessService` talking to a real `SqliteAuditRepository`
 //!   through the audit actor while the disk crosses the 64 MiB low-water mark
 //!   or the audit storage hangs.
 
@@ -41,7 +41,7 @@ use crate::support::workers::{
 };
 
 const SECOND: u64 = 1_000_000_000;
-/// Fake boot time at which the LiveState scenario starts.
+/// Fake boot time at which the `LiveState` scenario starts.
 const START_NS: u64 = 1_000 * SECOND;
 /// A commit must be acknowledged this fast even while the archive is stuck.
 const ACK_BOUND: Duration = Duration::from_millis(500);
@@ -246,7 +246,10 @@ fn at06_stuck_then_full_archive_never_stalls_hot_store_commits() {
         refused_while_stuck >= 1,
         "journals beyond the archive mailbox are refused, never waited on"
     );
-    assert!(store.probe.snapshot().receipts.is_empty());
+    assert_eq!(
+        store.probe.snapshot().receipts,
+        [] as [dgxtop_core::ports::ArchiveReceipt; 0]
+    );
     let reserve_with_stuck_journals = store.ledger.used(Partition::Reserve);
 
     // 2. The storage answers again but the disk is below the low-water mark:

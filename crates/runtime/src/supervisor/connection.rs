@@ -84,11 +84,11 @@ impl Connection {
         self.control
     }
 
-    pub(crate) fn decoder(&self) -> &FrameDecoder {
+    pub(crate) const fn decoder(&self) -> &FrameDecoder {
         &self.decoder
     }
 
-    pub(crate) fn decoder_mut(&mut self) -> &mut FrameDecoder {
+    pub(crate) const fn decoder_mut(&mut self) -> &mut FrameDecoder {
         &mut self.decoder
     }
 
@@ -96,12 +96,12 @@ impl Connection {
         self.paused_for_credit
     }
 
-    pub(crate) fn set_paused(&mut self, paused: bool) {
+    pub(crate) const fn set_paused(&mut self, paused: bool) {
         self.paused_for_credit = paused;
     }
 
-    pub(crate) fn queue_frame(&mut self, frame: Vec<u8>) {
-        self.outgoing.extend_from_slice(&frame);
+    pub(crate) fn queue_frame(&mut self, frame: &[u8]) {
+        self.outgoing.extend_from_slice(frame);
     }
 
     /// Closes the request pipe once everything queued is written; the host
@@ -139,7 +139,7 @@ impl Connection {
         Ok(())
     }
 
-    pub(crate) fn wants_write(&self) -> bool {
+    pub(crate) const fn wants_write(&self) -> bool {
         self.requests.is_some() && !self.outgoing.is_empty()
     }
 
@@ -202,7 +202,7 @@ impl Connection {
         }
     }
 
-    pub(crate) fn drain(&mut self) -> &mut StderrDrain {
+    pub(crate) const fn drain(&mut self) -> &mut StderrDrain {
         &mut self.drain
     }
 }

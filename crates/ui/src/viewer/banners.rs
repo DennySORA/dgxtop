@@ -34,6 +34,7 @@ impl BannerBlock {
     }
 
     /// Wrapped lines for a given width (one leading space of padding).
+    #[must_use]
     pub fn wrapped(&self, width: u16) -> Vec<String> {
         let room = usize::from(width.saturating_sub(1)).max(1);
         self.lines
@@ -42,12 +43,14 @@ impl BannerBlock {
             .collect()
     }
 
+    #[must_use]
     pub fn height(&self, width: u16) -> u16 {
         saturate_u16(self.wrapped(width).len())
     }
 }
 
 /// Greedy word wrap with hard breaks for words longer than the width.
+#[must_use]
 pub fn wrap_words(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let mut lines = Vec::new();

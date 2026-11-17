@@ -191,13 +191,16 @@ fn sample_value(sample: &CanonicalSample) -> Option<f64> {
 fn is_trend_key(key: &MetricKey) -> bool {
     match key.metric_id.as_str() {
         ids::CPU_UTILIZATION_TOTAL => key.scope.as_str() == entity::SCOPE_HOST,
-        ids::MEMORY_USED => true,
+        ids::MEMORY_USED
+        | ids::DISK_READ_BPS
+        | ids::DISK_WRITE_BPS
+        | ids::NET_RX_BPS
+        | ids::NET_TX_BPS => true,
         ids::GPU_UTILIZATION_COMPUTE
         | ids::GPU_TEMPERATURE
         | ids::GPU_POWER_DRAW
         | ids::GPU_MEMORY_FB_USED
         | ids::GPU_MEMORY_PROCESS_ALLOCATED => entity::parse_gpu(key.entity_id.as_str()).is_some(),
-        ids::DISK_READ_BPS | ids::DISK_WRITE_BPS | ids::NET_RX_BPS | ids::NET_TX_BPS => true,
         _ => false,
     }
 }
@@ -207,6 +210,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use dgxtop_core::num::ToF64Lossy;
     use dgxtop_core::testing::{
         gpu_process, metric_key, process_table, snapshot_entry, snapshot_of, test_process_key,
     };
@@ -233,7 +237,7 @@ mod tests {
         // The same reads committed again (another domain's commit) add nothing.
         recorder.record(&first);
         assert_eq!(trends.trend(&cpu, 10).points, vec![Some(12.5)]);
-        assert!(trends.trend(&core, 10).points.is_empty());
+        assert_eq!(trends.trend(&core, 10).points, [] as [Option<f64>; 0]);
         let second = snapshot_of(
             2,
             vec![
@@ -268,7 +272,7 @@ mod tests {
             2,
             vec![("memory", snapshot_entry(&memory, Some(6.0), 2))],
         ));
-        assert!(trends.trend(&gpu, 10).points.is_empty());
+        assert_eq!(trends.trend(&gpu, 10).points, [] as [Option<f64>; 0]);
         assert_eq!(trends.read().len(), 1);
         recorder.set_step(SECOND);
         assert_eq!(trends.read().len(), 1);
@@ -331,11 +335,11 @@ mod tests {
             vec![Some(25.0), None]
         );
         // Without a unified GPU there is no share series.
-        assert!(
+        assert_eq!(
             trends
                 .gpu_memory_beside(&memory, &BTreeSet::new(), 10)
-                .points
-                .is_empty()
+                .points,
+            [] as [Option<f64>; 0]
         );
     }
 
@@ -367,8 +371,7 @@ mod tests {
         step(1, Some(6 * GIB), Some(2 * GIB));
         step(2, None, None);
         step(3, Some(7 * GIB), None);
-        #[allow(clippy::cast_precision_loss)]
-        let gib = |value: u64| Some((value * GIB) as f64);
+        let gib = |value: u64| Some((value * GIB).to_f64_lossy());
         let part = |pid| {
             trends
                 .process_memory_beside(&memory, &test_process_key(pid), &unified, 10)

@@ -49,11 +49,13 @@ pub struct LoggerStats {
 #[cfg(test)]
 impl LoggerStats {
     /// Dropped debug/info records.
+    #[must_use]
     pub const fn dropped_low_priority(&self) -> u64 {
         self.dropped_info + self.dropped_debug
     }
 
     /// Dropped warn/error records (counted separately on purpose).
+    #[must_use]
     pub const fn dropped_high_priority(&self) -> u64 {
         self.dropped_error + self.dropped_warn
     }
@@ -160,6 +162,12 @@ impl FileLogger {
     /// Creates the `0700` directory and `0600` file (no symlinks), then
     /// starts the writer thread. `queue_bytes` is clamped to 4 KiB..=1 MiB;
     /// `keep_files` counts the active file plus rotated ones.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     pub fn start(
         path: &Path,
         queue_bytes: usize,
@@ -199,7 +207,7 @@ impl FileLogger {
             .name("dgxtop-log".into())
             .spawn(move || {
                 if let Some(gate) = start_gate {
-                    let _ = gate.recv();
+                    gate.recv().unwrap_or_default();
                 }
                 writer.run();
             })
@@ -250,7 +258,7 @@ impl FileLogger {
             std::thread::sleep(Duration::from_millis(1));
         }
         if worker.is_finished() {
-            let _ = worker.join();
+            worker.join().unwrap_or_default();
             true
         } else {
             false
@@ -311,7 +319,7 @@ impl Writer {
                 Ok(Command::Flush(acknowledge)) => {
                     self.write_due_summaries();
                     self.output.flush(&self.counters);
-                    let _ = acknowledge.send(());
+                    acknowledge.send(()).unwrap_or_default();
                 }
                 Ok(Command::Stop) | Err(RecvTimeoutError::Disconnected) => {
                     let pending = self.coalescer.drain();
@@ -426,7 +434,7 @@ impl RotatingFile {
 
     fn rotate(&mut self, counters: &Counters) -> io::Result<()> {
         if let Some(mut file) = self.file.take() {
-            let _ = file.flush();
+            file.flush().unwrap_or_default();
         }
         if self.keep_files <= 1 {
             remove_if_present(&self.path)?;
@@ -546,7 +554,7 @@ mod tests {
 
     impl Drop for TempDir {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            fs::remove_dir_all(&self.0).unwrap_or_default();
         }
     }
 

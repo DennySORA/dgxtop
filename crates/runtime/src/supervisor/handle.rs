@@ -113,12 +113,14 @@ impl SupervisorHandle {
     }
 
     /// Latest status of every host (includes the last success time).
+    #[must_use]
     pub fn statuses(&self) -> Vec<HostStatus> {
         self.inner.shared.lock().statuses.clone()
     }
 
     /// PIDs of live and quarantined children: protected from process actions
     /// and counted in process-tree statistics.
+    #[must_use]
     pub fn managed_pids(&self) -> Vec<i32> {
         self.inner
             .shared
@@ -131,6 +133,7 @@ impl SupervisorHandle {
     }
 
     /// Adapters supervised by this handle, in spec order.
+    #[must_use]
     pub fn adapters(&self) -> Vec<AdapterId> {
         self.inner
             .shared
@@ -186,7 +189,7 @@ impl SupervisorHandle {
             std::thread::sleep(JOIN_POLL);
         }
         if thread.is_finished() {
-            let _ = thread.join();
+            thread.join().unwrap_or_default();
         } else {
             *slot = Some(thread);
         }
@@ -210,6 +213,7 @@ impl SupervisorHandle {
                 },
             })
             .collect();
+        drop(state);
         ShutdownReport {
             elapsed,
             completed_within_deadline: false,
@@ -352,7 +356,7 @@ impl Dispatch<AdapterJob> for SupervisorHandle {
 }
 
 /// Default bounded shutdown used when the last handle is dropped.
-pub(crate) fn default_shutdown(config: &super::SupervisorConfig) -> Duration {
+pub(crate) const fn default_shutdown(config: &super::SupervisorConfig) -> Duration {
     Duration::from_nanos(ms_to_ns(
         config.child_grace_ms + config.child_term_ms + config.child_reap_ms + 500,
     ))

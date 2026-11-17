@@ -1,9 +1,11 @@
-//! GPU collector: per-GPU (`gpu:<UUID>`) gauges through arbitration with
-//! explicit normalization (mW -> W, mJ -> J), cumulative energy with exact
+//! GPU collector.
+//!
+//! Per-GPU (`gpu:<UUID>`) gauges through arbitration with explicit
+//! normalization (mW -> W, mJ -> J), cumulative energy with exact
 //! `CounterInterval`s, ECC/retired counts, and the per-GPU sum of visible
-//! process allocations. PCIe readings with an unverified unit stay without a
-//! value. No memory bandwidth is ever estimated from busy% x peak (D-11):
-//! the catalog has no such metric.
+//! process allocations. `PCIe` readings with an unverified unit stay without a
+//! value. No memory bandwidth is ever estimated from busy% x peak (D-11): the
+//! catalog has no such metric.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -60,6 +62,10 @@ pub struct GpuCollector {
 }
 
 impl GpuCollector {
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn new() -> Result<Self, IdentityError> {
         Ok(Self {
             id: CollectorId::new(naming::collectors::GPU)?,
@@ -176,9 +182,7 @@ fn publish_allocation(
         .map(|record| record.observation.cycle_id)
         .max();
     let group = group.filter(|group| direct_cycle.is_none_or(|cycle| group.cycle >= cycle));
-    let sum = group
-        .map(|group| sum_allocations(session, group))
-        .unwrap_or_default();
+    let sum = group.map_or_default(|group| sum_allocations(session, group));
     let note = sum.note();
     let synthetic = sum.observation(key);
     let mut candidates = session.candidates(key);
@@ -290,14 +294,14 @@ fn sum_allocations<'a>(session: &Session<'a>, group: &GpuProcesses<'a>) -> Alloc
     sum
 }
 
-impl<'a> AllocationSum<'a> {
+impl AllocationSum<'_> {
     fn total(&self) -> Option<u64> {
         self.contributors
             .iter()
             .try_fold(0u64, |total, (_, bytes)| total.checked_add(*bytes))
     }
 
-    fn note(&self) -> Option<&'static str> {
+    const fn note(&self) -> Option<&'static str> {
         if self.contributors.is_empty() {
             Some(reasons::NO_PROCESS_MEMORY_VISIBLE)
         } else if self.unknown_pids > 0 || self.incomplete_list {

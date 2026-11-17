@@ -64,6 +64,7 @@ impl IpcError {
     }
 
     /// Stable short code used in diagnostics labels and host stderr lines.
+    #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
             Self::FrameTooLarge { .. } => "FRAME_TOO_LARGE",
@@ -89,7 +90,7 @@ impl IpcError {
 
 impl From<IpcError> for InfraError {
     fn from(error: IpcError) -> Self {
-        InfraError::Protocol(sanitize_message(&error.to_string()))
+        Self::Protocol(sanitize_message(&error.to_string()))
     }
 }
 

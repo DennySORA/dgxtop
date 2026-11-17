@@ -173,10 +173,10 @@ fn summed(cells: &[MetricCell]) -> Option<Scalar> {
             .and_then(Scalar::as_u64)
             .map(|value| sum.saturating_add(value))
     });
-    match exact {
-        Some(total) => Some(Scalar::from_u64(total)),
-        None => Scalar::from_f64(cells.iter().filter_map(MetricCell::value_f64).sum()).ok(),
-    }
+    exact.map_or_else(
+        || Scalar::from_f64(cells.iter().filter_map(MetricCell::value_f64).sum()).ok(),
+        |total| Some(Scalar::from_u64(total)),
+    )
 }
 
 #[cfg(test)]
@@ -217,7 +217,7 @@ mod tests {
         let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, NOW)
             .with_trends(&fixture.trends);
         let index = SnapshotLookup::new(&fixture.snapshot);
-        let directory = GpuDirectory::new(&fixture.catalog, &index);
+        let directory = GpuDirectory::new(&fixture.catalog, index);
         build_memory_view(&reader, &directory, &fixture.processes, 30).gpu_resident
     }
 
@@ -270,7 +270,7 @@ mod tests {
         let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, NOW)
             .with_trends(&fixture.trends);
         let index = SnapshotLookup::new(&fixture.snapshot);
-        let directory = GpuDirectory::new(&fixture.catalog, &index);
+        let directory = GpuDirectory::new(&fixture.catalog, index);
         let view = build_memory_view(&reader, &directory, &fixture.processes, 30);
         assert_eq!(view.used_trend.points, vec![Some(8.0)]);
         assert_eq!(view.gpu_resident_trend.points, vec![Some(6.0)]);
@@ -279,12 +279,13 @@ mod tests {
         let reader =
             MetricReader::new(&plain.snapshot, &plain.catalog, NOW).with_trends(&plain.trends);
         let index = SnapshotLookup::new(&plain.snapshot);
-        let directory = GpuDirectory::new(&plain.catalog, &index);
-        assert!(
+        let directory = GpuDirectory::new(&plain.catalog, index);
+        assert_eq!(
             build_memory_view(&reader, &directory, &plain.processes, 30)
                 .gpu_resident_trend
                 .points
-                .is_empty()
+                .len(),
+            0
         );
     }
 
@@ -305,7 +306,7 @@ mod tests {
         let mut render = process_row(2, "render");
         render.gpu = vec![gpu_link(DISCRETE, None, Some(1 << 30))];
         fixture.set_processes(vec![train, render]);
-        let gpu = |id: &str| dgxtop_core::identity::EntityId::new(id).unwrap();
+        let gpu = |id: &str| EntityId::new(id).unwrap();
         fixture.processes.tracked = vec![
             TrackedProcess {
                 slot: TRAIN,
@@ -337,11 +338,11 @@ mod tests {
             &BTreeMap::new(),
             &BTreeMap::from([held(1, UNIFIED_A, 6), held(2, DISCRETE, 1)]),
         );
-        let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, NOW)
+        let metrics = MetricReader::new(&fixture.snapshot, &fixture.catalog, NOW)
             .with_trends(&fixture.trends);
         let index = SnapshotLookup::new(&fixture.snapshot);
-        let directory = GpuDirectory::new(&fixture.catalog, &index);
-        let view = build_memory_view(&reader, &directory, &fixture.processes, 30);
+        let directory = GpuDirectory::new(&fixture.catalog, index);
+        let view = build_memory_view(&metrics, &directory, &fixture.processes, 30);
         let shares: Vec<(u8, &str, u64)> = view
             .gpu_processes
             .iter()
@@ -354,10 +355,10 @@ mod tests {
         // Then it is what that list holds beyond the tracked, on the
         // unified GPU only (D-142).
         fixture.processes.other_gpu_bytes = vec![(gpu(UNIFIED_A), 2 << 30), (gpu(DISCRETE), 9)];
-        let listed = build_memory_view(&reader, &directory, &fixture.processes, 30);
+        let listed = build_memory_view(&metrics, &directory, &fixture.processes, 30);
         assert_eq!(listed.gpu_other_bytes, Some(2 << 30));
         fixture.processes.other_gpu_bytes = vec![(gpu(DISCRETE), 9)];
-        let discrete_only = build_memory_view(&reader, &directory, &fixture.processes, 30);
+        let discrete_only = build_memory_view(&metrics, &directory, &fixture.processes, 30);
         assert_eq!(discrete_only.gpu_other_bytes, None);
         let parts: Vec<(u8, Vec<Option<f64>>)> = view
             .gpu_process_trends
@@ -407,13 +408,13 @@ mod tests {
         let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, NOW)
             .with_trends(&fixture.trends);
         let index = SnapshotLookup::new(&fixture.snapshot);
-        let directory = GpuDirectory::new(&fixture.catalog, &index);
+        let directory = GpuDirectory::new(&fixture.catalog, index);
         let view = build_memory_view(&reader, &directory, &fixture.processes, 30);
         assert_eq!(view.total.value.unwrap().as_u64(), Some(128 << 30));
         assert_eq!(view.swap_total.value_f64(), Some(0.0));
         assert_eq!(view.cached.state, CellState::ReadFailed);
         assert_eq!(view.cached.value, None);
         assert_eq!(view.used.state, CellState::Unavailable);
-        assert!(view.used_trend.points.is_empty());
+        assert_eq!(view.used_trend.points.len(), 0);
     }
 }

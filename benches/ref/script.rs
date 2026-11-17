@@ -110,7 +110,7 @@ impl ResultRouter {
         }
     }
 
-    pub fn session(&self) -> &SessionHandle {
+    pub const fn session(&self) -> &SessionHandle {
         &self.session
     }
 
@@ -200,7 +200,7 @@ struct ViewChoice {
 }
 
 impl ViewChoice {
-    fn plain(view: ViewKind) -> Self {
+    const fn plain(view: ViewKind) -> Self {
         Self {
             view,
             entity: None,

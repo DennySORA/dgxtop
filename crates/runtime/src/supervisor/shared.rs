@@ -57,7 +57,7 @@ pub(crate) struct Execution {
 }
 
 impl Execution {
-    pub(crate) fn request_id(&self) -> Uuid {
+    pub(crate) const fn request_id(&self) -> Uuid {
         self.request.request_id
     }
 }
@@ -80,7 +80,7 @@ pub(crate) struct Shared {
 }
 
 impl Shared {
-    pub(crate) fn new(state: SharedState, wake: OwnedFd) -> Self {
+    pub(crate) const fn new(state: SharedState, wake: OwnedFd) -> Self {
         Self {
             state: Mutex::new(state),
             wake,
@@ -96,7 +96,7 @@ impl Shared {
     /// Wakes the supervisor's poll. A full wake pipe already guarantees a
     /// pending wake-up, so `EAGAIN` is ignored.
     pub(crate) fn wake(&self) {
-        let _ = nix::unistd::write(&self.wake, &[1]);
+        nix::unistd::write(&self.wake, &[1]).unwrap_or_default();
     }
 
     pub(crate) fn request_shutdown(&self, deadline_boot_ns: u64) {

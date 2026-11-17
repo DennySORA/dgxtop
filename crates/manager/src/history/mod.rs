@@ -1,4 +1,4 @@
-//! HistoryService: bounded, per-session Overview History reads for the
+//! `HistoryService`: bounded, per-session Overview History reads for the
 //! history view (D-46, D-48, D-82).
 //!
 //! * Charts: the overview's series over a longer window, as the
@@ -159,7 +159,7 @@ struct ChartState {
 }
 
 impl ChartState {
-    fn new(spec: HistoryChartSpec) -> Self {
+    const fn new(spec: HistoryChartSpec) -> Self {
         Self {
             spec,
             bars: None,
@@ -206,12 +206,12 @@ impl Round {
 
     /// One read of round `serial` is over; whether it was the current
     /// round's last.
-    fn finish(&mut self, serial: u64) -> bool {
+    const fn finish(&mut self, serial: u64) -> bool {
         serial == self.serial && self.finish_one()
     }
 
     /// One read of the current round is over; whether it was the last.
-    fn finish_one(&mut self) -> bool {
+    const fn finish_one(&mut self) -> bool {
         let was_pending = self.pending > 0;
         self.pending = self.pending.saturating_sub(1);
         was_pending && self.pending == 0
@@ -318,7 +318,7 @@ impl HistoryService {
     pub(crate) fn new(
         port: Box<dyn Dispatch<HistoryJob>>,
         clock: Arc<dyn TimeProvider>,
-        settings: HistorySettings,
+        settings: &HistorySettings,
         raw_interval_ms: u32,
     ) -> Self {
         Self {
@@ -326,7 +326,7 @@ impl HistoryService {
             clock,
             settings: HistorySettings {
                 max_inflight: settings.max_inflight.max(1),
-                ..settings
+                ..settings.clone()
             },
             raw_interval_ms,
             sessions: BTreeMap::new(),
@@ -336,7 +336,7 @@ impl HistoryService {
     }
 
     /// Raw sampling cadence (decides whether a bar merges samples).
-    pub(crate) fn set_raw_interval(&mut self, raw_interval_ms: u32) {
+    pub(crate) const fn set_raw_interval(&mut self, raw_interval_ms: u32) {
         self.raw_interval_ms = raw_interval_ms;
     }
 
@@ -407,10 +407,7 @@ impl HistoryService {
             return false;
         };
         let opening = !session.active || session.picked_for != state.view;
-        let changed = match wanted {
-            None => session.active,
-            Some(grid) => opening || session.grid != grid,
-        };
+        let changed = wanted.map_or(session.active, |grid| opening || session.grid != grid);
         if !changed {
             return false;
         }
@@ -578,7 +575,7 @@ impl HistoryService {
         }
     }
 
-    fn cancel_queries(&mut self, session_id: &SessionId) {
+    fn cancel_queries(&self, session_id: &SessionId) {
         // Entries stay until their answer or deadline so the running-job
         // bound holds; their answers are dropped by the generation check.
         for inflight in self
@@ -851,18 +848,16 @@ fn chart_view(
         display_downsampled: merges,
         pending: active && answer.is_none() && chart.error.is_none(),
         error: chart.error.clone(),
-        parts: answer
-            .map(|answer| {
-                answer
-                    .parts
-                    .iter()
-                    .map(|part| HistoryPart {
-                        slot: part.slot,
-                        means: part.means.clone(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
+        parts: answer.map_or_default(|answer| {
+            answer
+                .parts
+                .iter()
+                .map(|part| HistoryPart {
+                    slot: part.slot,
+                    means: part.means.clone(),
+                })
+                .collect()
+        }),
     }
 }
 

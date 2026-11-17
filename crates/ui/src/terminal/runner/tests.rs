@@ -1,5 +1,5 @@
-//! Runner driven deterministically: fake SessionPort, scripted input on a
-//! fake clock and a fake TerminalTransport that can accept N bytes per call,
+//! Runner driven deterministically: fake `SessionPort`, scripted input on a
+//! fake clock and a fake `TerminalTransport` that can accept N bytes per call,
 //! block, block for a while, or fail.
 
 use std::collections::VecDeque;
@@ -93,6 +93,7 @@ impl InputSource for ScriptedInput {
                 *remaining -= spent;
                 if remaining.is_zero() {
                     script.pop_front();
+                    drop(script);
                 }
                 None
             }
@@ -143,6 +144,7 @@ impl TerminalTransport for FakeTransport {
             Mode::Fail(kind) => return Err(io::Error::from(kind)),
         };
         state.accepted.extend_from_slice(&bytes[..accepted]);
+        drop(state);
         Ok(accepted)
     }
 
@@ -341,7 +343,7 @@ fn rendering_is_dirty_only() {
     let before = rig.time.now();
     rig.steps_until(1000, |rig| rig.frames() == 3);
     assert!(
-        rig.time.now() - before <= Duration::from_millis(300),
+        rig.time.now().checked_sub(before).unwrap() <= Duration::from_millis(300),
         "new data drawn promptly"
     );
 }
@@ -388,7 +390,7 @@ fn manager_shutdown_ends_the_loop() {
     rig.session.lock().unwrap().manager_shutdown = true;
     let exit = rig.tui.run().unwrap();
     assert_eq!(exit.reason, TuiExitReason::ManagerShutdown);
-    assert!(rig.session.lock().unwrap().shutdown_reasons.is_empty());
+    assert_eq!(rig.session.lock().unwrap().shutdown_reasons.len(), 0);
 }
 
 #[test]
@@ -546,7 +548,7 @@ fn input_and_q_still_work_while_output_is_blocked_for_30_seconds() {
         "a terminal that reads nothing cannot show the restore"
     );
     assert!(
-        rig.time.now() - quit_at <= MAX_EXIT_WAIT + Duration::from_millis(20),
+        rig.time.now().checked_sub(quit_at).unwrap() <= MAX_EXIT_WAIT + Duration::from_millis(20),
         "bounded exit wait"
     );
     assert!(rig.transport.lock().unwrap().restored >= 1);
@@ -627,13 +629,11 @@ fn a_signal_on_its_way_is_polled_within_milliseconds() {
     assert!(rig.tui.controller().awaits_signal());
     rig.polls.lock().unwrap().clear();
     rig.steps_until(20, |_| false);
-    {
-        let polls = rig.polls.lock().unwrap();
-        assert!(
-            polls.iter().all(|(timeout, _)| *timeout <= SIGNAL_POLL),
-            "{polls:?}"
-        );
-    }
+    let polls = rig.polls.lock().unwrap().clone();
+    assert!(
+        polls.iter().all(|(timeout, _)| *timeout <= SIGNAL_POLL),
+        "{polls:?}"
+    );
     let mut result = CommandResult::completed(prepare.request_id, "prepared");
     result.confirmation_token = Some(test_fixtures::token());
     rig.session.lock().unwrap().results.push_back(result);
@@ -690,7 +690,7 @@ fn an_idle_loop_sleeps_until_a_new_projection_could_be_drawn() {
     let published = rig.time.now();
     let frames = rig.frames();
     rig.steps_until(100, |rig| rig.frames() > frames);
-    assert!(rig.time.now() - published <= LONGEST_IDLE_POLL);
+    assert!(rig.time.now().checked_sub(published).unwrap() <= LONGEST_IDLE_POLL);
 }
 
 /// While a command's result is awaited the loop looks for it at the input
@@ -705,7 +705,7 @@ fn an_awaited_result_is_polled_at_the_input_cadence() {
     assert!(rig.tui.controller().awaits_results());
     rig.polls.lock().unwrap().clear();
     rig.steps_until(20, |_| false);
-    let polls = rig.polls.lock().unwrap();
+    let polls = rig.polls.lock().unwrap().clone();
     assert!(
         polls.iter().all(|(timeout, _)| *timeout <= RESULT_POLL),
         "{polls:?}"

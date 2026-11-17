@@ -92,7 +92,7 @@ fn a_refused_flush_is_sent_again_while_the_shutdown_waits() {
     let mut rig = rig();
     rig.inputs.set_busy(true);
     rig.link.flush();
-    assert!(rig.inputs.take().is_empty());
+    assert_eq!(rig.inputs.take().len(), 0);
     assert!(!rig.link.settled(), "a flush is owed");
     rig.inputs.set_busy(false);
     assert!(!rig.link.settled(), "sent now, not answered yet");
@@ -144,7 +144,7 @@ fn the_shutdown_waits_for_the_flush_it_asked_for() {
     let mut none = ProcessHistoryLink::new(None);
     none.flush();
     assert!(none.settled());
-    assert!(none.model().runs.is_empty());
+    assert_eq!(none.model().runs.len(), 0);
 }
 
 #[test]

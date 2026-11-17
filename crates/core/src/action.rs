@@ -3,7 +3,7 @@
 //! with the action worker and the audit worker.
 //!
 //! The action path never shares types with telemetry: only the Manager's
-//! ProcessService holds a `ProcessActionPort`, and only after a durable audit
+//! `ProcessService` holds a `ProcessActionPort`, and only after a durable audit
 //! intent may a signal be sent through a held pidfd.
 
 use std::fmt;
@@ -25,6 +25,7 @@ pub enum Signal {
 }
 
 impl Signal {
+    #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Sigterm => "SIGTERM",
@@ -33,6 +34,7 @@ impl Signal {
     }
 
     /// Linux signal number.
+    #[must_use]
     pub const fn number(self) -> i32 {
         match self {
             Self::Sigterm => 15,
@@ -62,6 +64,7 @@ pub enum ActionState {
 }
 
 impl ActionState {
+    #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Requested => "requested",
@@ -82,6 +85,7 @@ impl ActionState {
     }
 
     /// States after which cancellation can no longer prevent the signal.
+    #[must_use]
     pub const fn is_past_point_of_no_return(self) -> bool {
         matches!(
             self,
@@ -93,6 +97,7 @@ impl ActionState {
         )
     }
 
+    #[must_use]
     pub const fn is_terminal(self) -> bool {
         matches!(
             self,
@@ -107,7 +112,8 @@ impl ActionState {
     }
 
     /// Projection onto the command-result `action_state` enum.
-    pub const fn result_state(self) -> ActionState {
+    #[must_use]
+    pub const fn result_state(self) -> Self {
         match self {
             Self::Requested | Self::Prepared => Self::Prepared,
             Self::Confirming | Self::IntentPending => Self::IntentPending,
@@ -123,6 +129,10 @@ impl ActionState {
 pub struct ConfirmationToken(String);
 
 impl ConfirmationToken {
+    /// # Errors
+    ///
+    /// Returns an `ActionError` when the action is refused or cannot be carried
+    /// out; every failure leaves the process untouched.
     pub fn new(value: impl Into<String>) -> Result<Self, ActionError> {
         let value = value.into();
         let valid = (32..=128).contains(&value.len())
@@ -136,6 +146,7 @@ impl ConfirmationToken {
         }
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -164,6 +175,10 @@ impl fmt::Debug for ConfirmationToken {
 /// Caller context built by the Manager from this process's identity; never
 /// deserialized from user-supplied JSON.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent switches of the action policy, not the states of one thing"
+)]
 pub struct CapabilityContext {
     pub host_id: HostId,
     pub boot_id: BootId,
@@ -238,6 +253,7 @@ pub enum ActionError {
 }
 
 impl ActionError {
+    #[must_use]
     pub const fn code(&self) -> ErrorCode {
         match self {
             Self::Disabled(_)
@@ -257,7 +273,7 @@ impl ActionError {
 
 impl From<ActionError> for ErrorDetail {
     fn from(error: ActionError) -> Self {
-        ErrorDetail::new(error.code(), error.to_string())
+        Self::new(error.code(), error.to_string())
     }
 }
 
@@ -393,7 +409,8 @@ pub struct PersistenceStatus {
 }
 
 impl PersistenceStatus {
-    pub fn healthy(kind: PersistenceKind) -> Self {
+    #[must_use]
+    pub const fn healthy(kind: PersistenceKind) -> Self {
         Self {
             kind,
             state: PersistenceState::Healthy,
@@ -404,6 +421,7 @@ impl PersistenceStatus {
         }
     }
 
+    #[must_use]
     pub fn disabled(kind: PersistenceKind) -> Self {
         Self {
             state: PersistenceState::Disabled,
@@ -412,6 +430,7 @@ impl PersistenceStatus {
     }
 
     /// Whether new destructive actions may rely on this partition.
+    #[must_use]
     pub const fn accepts_writes(&self) -> bool {
         matches!(
             self.state,
@@ -431,7 +450,7 @@ pub struct AuditFailure {
 
 impl From<AuditFailure> for ErrorDetail {
     fn from(failure: AuditFailure) -> Self {
-        let detail = ErrorDetail::new(failure.code, &failure.message);
+        let detail = Self::new(failure.code, &failure.message);
         if failure.commit_uncertain {
             detail.uncertain()
         } else {

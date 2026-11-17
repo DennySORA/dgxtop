@@ -169,7 +169,7 @@ mod tests {
         )
         .into_parts();
         let clock = FakeClock::new(10 * SECOND);
-        let mut slower = config.sampling.clone();
+        let mut slower = config.sampling;
         slower.interval_ms = 5_000;
         let expected = SamplingTiming::from_sampling(&slower);
 

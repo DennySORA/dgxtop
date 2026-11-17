@@ -9,6 +9,7 @@
 //! per-cycle p95 is compared with that end-to-end budget only as a
 //! necessary condition, never reported as a pass of it.
 
+#[expect(dead_code, reason = "each bench uses its part of the shared helpers")]
 #[path = "../common/mod.rs"]
 mod common;
 
@@ -87,15 +88,14 @@ struct RunTimings {
 }
 
 fn main() -> ExitCode {
-    common::run_bench(BENCH, run)
+    common::run_bench(BENCH, false, run)
 }
 
-fn run() -> BenchResult<PathBuf> {
-    let args = common::parse_args(BENCH, false)?;
+fn run(args: &common::BenchArgs) -> BenchResult<PathBuf> {
     let inputs = common::load_inputs()?;
     let config = common::reference_config()?;
     let sizes = sizes(args.mode);
-    let paths = common::output_paths(BENCH, &args);
+    let paths = common::output_paths(BENCH, args);
     let environment = common::environment(
         "none (collectors only; no viewer)",
         "single-threaded in-process loop; reads untimed, collect() timed",
@@ -173,7 +173,7 @@ fn run() -> BenchResult<PathBuf> {
         ],
     };
     common::finish(
-        outcome,
+        &outcome,
         &inputs,
         &config,
         environment,

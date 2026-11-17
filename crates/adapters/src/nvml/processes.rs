@@ -87,6 +87,7 @@ pub enum UsageKind {
 }
 
 impl UsageKind {
+    #[must_use]
     pub const fn reason_code(self) -> &'static str {
         match self {
             Self::Compute => "gpu_usage:compute",
@@ -119,7 +120,7 @@ pub struct MergedProcesses {
     pub associations: Vec<Association>,
     /// More associations than [`MAX_PROCESSES_PER_GPU`] (lowest PIDs kept).
     pub truncated: bool,
-    /// Entries with a PID outside `1..=i32::MAX` (cannot form a ProcessKey).
+    /// Entries with a PID outside `1..=i32::MAX` (cannot form a `ProcessKey`).
     pub invalid_pids: u32,
 }
 
@@ -542,7 +543,7 @@ mod tests {
     #[test]
     fn invalid_pids_are_dropped_and_lists_are_bounded() {
         let merged = merge_processes(&[entry(0, Some(1)), entry(u32::MAX, Some(1))], &[]);
-        assert!(merged.associations.is_empty());
+        assert_eq!(merged.associations.len(), 0);
         assert_eq!(merged.invalid_pids, 2);
         let many: Vec<GpuProcessEntry> = (1..=2000).map(|pid| entry(pid, Some(1))).collect();
         let merged = merge_processes(&many, &[]);

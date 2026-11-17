@@ -40,6 +40,10 @@ const ROOT_UID: u32 = 0;
 
 /// The action-relevant part of the effective configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the switches of the configuration, each on its own"
+)]
 pub(crate) struct ActionPolicy {
     pub(crate) enabled: bool,
     pub(crate) read_only: bool,
@@ -83,7 +87,7 @@ impl Denial {
     }
 }
 
-/// Audit readiness as seen by the ProcessService.
+/// Audit readiness as seen by the `ProcessService`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AuditReadiness<'a> {
     pub(crate) status: Option<&'a PersistenceStatus>,

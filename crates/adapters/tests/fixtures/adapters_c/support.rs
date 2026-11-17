@@ -1,8 +1,6 @@
 //! Shared helpers of the adapters-C integration tests: fake sysfs trees in
 //! temporary directories, fault-injecting file access and request builders.
 //! Nothing here touches real drivers.
-#![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
-
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -33,7 +31,7 @@ impl FakeSysfs {
             "dgxtop-adapters-c-{label}-{}-{unique}",
             std::process::id()
         ));
-        let _ = std::fs::remove_dir_all(&root);
+        std::fs::remove_dir_all(&root).unwrap_or_default();
         std::fs::create_dir_all(&root).unwrap();
         Self { root }
     }
@@ -60,7 +58,7 @@ impl FakeSysfs {
     pub fn symlink(&self, link: &str, target: &str) {
         let link_path = self.path(link);
         std::fs::create_dir_all(link_path.parent().unwrap()).unwrap();
-        let _ = std::fs::remove_file(&link_path);
+        std::fs::remove_file(&link_path).unwrap_or_default();
         std::os::unix::fs::symlink(self.path(target), link_path).unwrap();
     }
 
@@ -166,7 +164,7 @@ impl FakeSysfs {
 
 impl Drop for FakeSysfs {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
+        std::fs::remove_dir_all(&self.root).unwrap_or_default();
     }
 }
 
@@ -193,7 +191,7 @@ pub struct FaultyFiles<F> {
 }
 
 impl<F: SystemFiles> FaultyFiles<F> {
-    pub fn new(inner: F) -> Self {
+    pub const fn new(inner: F) -> Self {
         Self {
             inner,
             failures: Mutex::new(BTreeMap::new()),
@@ -215,15 +213,11 @@ impl<F: SystemFiles> FaultyFiles<F> {
     }
 
     fn check(&self, path: &str) -> io::Result<()> {
-        match self
-            .failures
+        self.failures
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(path)
-        {
-            Some(failure) => Err(failure.error()),
-            None => Ok(()),
-        }
+            .map_or(Ok(()), |failure| Err(failure.error()))
     }
 }
 
@@ -358,12 +352,12 @@ pub fn read_all(
     group: &str,
     cycle: u64,
     deadline: u64,
-    slots: Vec<u32>,
+    slots: &[u32],
 ) -> Vec<ObservationBatch> {
     let mut batches = Vec::new();
     let mut page = 0;
     loop {
-        let plan = read_plan(adapter, group, cycle, page, deadline, slots.clone());
+        let plan = read_plan(adapter, group, cycle, page, deadline, slots.to_vec());
         let batch = port.read(&plan);
         batch.validate_against(&plan, 256).unwrap();
         let continues = batch.continues();
@@ -413,6 +407,6 @@ pub fn record<'a>(records: &'a [Observation], source_id: &str) -> &'a Observatio
         })
 }
 
-pub fn value_of(record: &Observation) -> f64 {
+pub const fn value_of(record: &Observation) -> f64 {
     record.value.expect("record has a value").to_f64_lossy()
 }

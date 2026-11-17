@@ -1,6 +1,6 @@
 //! Processes module projection: the processes that use a GPU (D-36), GPU
-//! and text filters, a stable sort whose tie-breaker is the ProcessKey, and
-//! a window around the selected ProcessKey. Only the window plus a small
+//! and text filters, a stable sort whose tie-breaker is the `ProcessKey`, and
+//! a window around the selected `ProcessKey`. Only the window plus a small
 //! overscan is copied; selection is never a row index.
 
 use std::cmp::Ordering;
@@ -144,7 +144,7 @@ pub(crate) fn build_processes_view(
         filter: filter_text(&session.filter),
         gpu_filter,
         gpu_choices: directory.choices(),
-        selected: selected_index.and(session.selected_process.clone()),
+        selected: selected_index.and_then(|_| session.selected_process.clone()),
         selected_index: selected_index.and_then(|index| u32::try_from(index).ok()),
         selected_missing: session
             .selected_process
@@ -221,7 +221,7 @@ fn present_first<T>(
     }
 }
 
-fn directed(ordering: Ordering, ascending: bool) -> Ordering {
+const fn directed(ordering: Ordering, ascending: bool) -> Ordering {
     if ascending {
         ordering
     } else {
@@ -316,7 +316,7 @@ mod tests {
 
     fn build(fixture: &Fixture, visible: usize) -> ProcessesView {
         let index = SnapshotLookup::new(&fixture.snapshot);
-        let directory = GpuDirectory::new(&fixture.catalog, &index);
+        let directory = GpuDirectory::new(&fixture.catalog, index);
         build_processes_view(
             &fixture.snapshot.process_table,
             &fixture.session,

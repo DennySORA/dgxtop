@@ -3,8 +3,9 @@
 //! and busy handling (AT31), expiry on its owner's request (D-96),
 //! schema/version handling and corruption.
 
-// Test helpers panic on setup failures; the lints target production code.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -45,8 +46,7 @@ impl TempDir {
         std::fs::create_dir_all(&path).unwrap();
         // Like the real state directory: a file is recreated only in a
         // private one (D-85).
-        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o700))
-            .unwrap();
+        std::fs::set_permissions(&path, PermissionsExt::from_mode(0o700)).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         Self(path)
     }
@@ -58,7 +58,7 @@ impl TempDir {
 
 impl Drop for TempDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        std::fs::remove_dir_all(&self.0).unwrap_or_default();
     }
 }
 
@@ -361,11 +361,11 @@ fn recover_unknown_marks_unresolved_intents_and_never_returns_them_as_sendable()
         audit.lookup(cancelled.request_id).unwrap().unwrap().state,
         ActionState::Cancelled
     );
-    assert!(
+    assert_eq!(
         audit
             .recover_unknown(fixture.clock.now_boot_ns(), &fixture.now_utc())
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        [] as [dgxtop_core::action::RecoveredIntent; 0]
     );
     let unknown_events: i64 = fixture
         .reader()

@@ -209,7 +209,7 @@ mod tests {
             .collect();
         assert_eq!(lost, vec![(BUCKET_NS, 2 * BUCKET_NS, UNPLACED_REASON)]);
         let placed = overview_minutes(&rows, &clock());
-        assert!(placed.unplaced.is_empty());
+        assert_eq!(placed.unplaced.len(), 0);
         let minutes = placed.placed;
         assert_eq!(minutes.len(), 1);
         let minute = &minutes[0];

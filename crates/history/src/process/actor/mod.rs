@@ -45,6 +45,14 @@ pub struct ProcessHistoryPorts {
     pub logger: Arc<dyn Logger>,
 }
 
+impl std::fmt::Debug for ProcessHistoryPorts {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProcessHistoryPorts")
+            .finish_non_exhaustive()
+    }
+}
+
 /// The process actor's state (module docs).
 pub struct ProcessHistory {
     service: ProcessHistoryService,
@@ -58,10 +66,19 @@ pub struct ProcessHistory {
     last_table: Option<(u64, u64)>,
 }
 
+impl std::fmt::Debug for ProcessHistory {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProcessHistory")
+            .finish_non_exhaustive()
+    }
+}
+
 impl ProcessHistory {
     /// The actor and what it publishes. It asks the stores for what they
     /// kept at its first input, once the composition root has wired their
     /// answers back to it.
+    #[must_use]
     pub fn new(
         settings: ProcessHistorySettings,
         ports: ProcessHistoryPorts,

@@ -130,7 +130,7 @@ mod tests {
     fn invalid_canonical_value_is_dropped_with_a_failure() {
         let mut output = Output::default();
         assert!(!output.push_canonical(unavailable_with_value()));
-        assert!(output.canonical.is_empty());
+        assert_eq!(output.canonical, [] as [CanonicalValue; 0]);
         assert_eq!(output.failures.len(), 1);
         assert_eq!(output.failures[0].code, reasons::CANONICAL_INVALID);
     }

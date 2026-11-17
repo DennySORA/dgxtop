@@ -42,12 +42,12 @@ pub(crate) const LOAD_FIELDS: [LoadField; 5] = [
     LoadField::Total,
 ];
 
-/// The kernel recomputes load averages every LOAD_FREQ (5 s); reading more
+/// The kernel recomputes load averages every `LOAD_FREQ` (5 s); reading more
 /// often does not produce a new measurement.
 const LOAD_AVERAGE_UPDATE_MS: u32 = 5_000;
 
 impl LoadField {
-    pub(crate) fn channel(self) -> &'static str {
+    pub(crate) const fn channel(self) -> &'static str {
         match self {
             Self::One => "1m",
             Self::Five => "5m",
@@ -57,7 +57,7 @@ impl LoadField {
         }
     }
 
-    pub(crate) fn metric_id(self) -> &'static str {
+    pub(crate) const fn metric_id(self) -> &'static str {
         match self {
             Self::One => ids::CPU_LOAD_1M,
             Self::Five => ids::CPU_LOAD_5M,
@@ -67,11 +67,10 @@ impl LoadField {
         }
     }
 
-    pub(crate) fn native_unit(self) -> &'static str {
-        native::COUNT
-    }
+    /// Every load field is a count.
+    pub(crate) const NATIVE_UNIT: &'static str = native::COUNT;
 
-    pub(crate) fn update_interval_ms(self) -> Option<u32> {
+    pub(crate) const fn update_interval_ms(self) -> Option<u32> {
         match self {
             Self::One | Self::Five | Self::Fifteen => Some(LOAD_AVERAGE_UPDATE_MS),
             Self::Running | Self::Total => None,

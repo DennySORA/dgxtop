@@ -3,8 +3,9 @@
 //! metadata) and the installer (`installer`: AT18
 //! rollback, AT20 integrity checks).
 
-// Test helpers may unwrap: a broken fixture must fail loudly.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -68,7 +69,7 @@ impl Home {
 
 impl Drop for Home {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
+        std::fs::remove_dir_all(&self.root).unwrap_or_default();
     }
 }
 
@@ -301,7 +302,7 @@ fn import_legacy_requires_an_explicit_mode() {
     let home = Home::new("mode");
     let output = home.run(&["--import-legacy", "/nonexistent"]);
     assert!(!output.status.success());
-    assert!(home.files().is_empty());
+    assert_eq!(home.files(), [] as [PathBuf; 0]);
 }
 
 /// `--snapshot-json` of the replay demo (D-140): standard output carries
@@ -477,7 +478,7 @@ fn snapshot_json_refuses_the_flags_of_a_kept_state() {
         assert_eq!(output.status.code(), Some(2), "{other:?}");
         assert_eq!(stdout(&output), "", "{other:?}");
     }
-    assert!(home.files().is_empty());
+    assert_eq!(home.files(), [] as [PathBuf; 0]);
 }
 
 /// A snapshot reads the saved configuration under the rules the monitor

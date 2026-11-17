@@ -1,7 +1,7 @@
 //! `memory` read group, on entity `memory`, scope `system`:
 //! `/proc/meminfo` fields in KiB, the swap and OOM-kill counters of
 //! `/proc/vmstat` and the memory's pressure averages (D-135). A field the
-//! kernel does not provide (e.g. MemAvailable before Linux 3.14, `oom_kill`
+//! kernel does not provide (e.g. `MemAvailable` before Linux 3.14, `oom_kill`
 //! before 4.13) is reported unsupported; it is never derived from other
 //! fields. `MemFree` is not read: on unified memory it says nothing about
 //! what is usable, and used memory is total minus available. The swap

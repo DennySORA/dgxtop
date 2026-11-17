@@ -26,6 +26,7 @@ use dgxtop_core::identity::{
     BootId, CollectorId, EntityId, HostId, IdentityError, MetricId, MetricKey, Scope, SourceId,
 };
 use dgxtop_core::metric::{CanonicalUnit, METRIC_CATALOG, MetricRole, Scalar, descriptor};
+use dgxtop_core::num::ToF64Lossy;
 use dgxtop_core::ports::StoreWriter;
 use dgxtop_core::quality::{Freshness, Quality, SampleKind, SelectionState};
 use dgxtop_state::StateWriter;
@@ -61,6 +62,7 @@ pub struct HistorySeries {
 
 impl HistorySeries {
     /// `None` unless the key's metric is a history-eligible canonical metric.
+    #[must_use]
     pub fn for_key(key: MetricKey) -> Option<Self> {
         let known = descriptor(key.metric_id.as_str())?;
         let rate = matches!(
@@ -78,6 +80,7 @@ impl HistorySeries {
 /// UTC of `boot_ns` on the synthetic timeline the preload pairs the
 /// boot clock with: what a reader's clock must say for its reads to land
 /// on the preloaded minutes.
+#[must_use]
 pub fn synthetic_utc_ns(boot_ns: u64) -> i128 {
     SYNTHETIC_UTC_AT_BOOT_NS.saturating_add(i128::from(boot_ns))
 }
@@ -96,6 +99,11 @@ pub fn history_series(
 }
 
 /// `count` keys cycling over every history-eligible canonical metric.
+///
+/// # Errors
+///
+/// Returns an `IdentityError` when the value breaks the rules of its kind: its
+/// length, a control character or its syntax.
 pub fn synthetic_keys(
     host_id: &HostId,
     boot_id: &BootId,
@@ -126,6 +134,10 @@ pub fn synthetic_keys(
 
 /// Time layout of a preload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "every quantity is named with its unit, as the report prints it"
+)]
 pub struct PreloadShape {
     pub span_ns: u64,
     pub bulk_step_ns: u64,
@@ -135,6 +147,7 @@ pub struct PreloadShape {
 
 impl PreloadShape {
     /// 24 h, minute bulk, 300 s at 1 s.
+    #[must_use]
     pub const fn reference() -> Self {
         Self {
             span_ns: DAY_SECONDS * NANOS_PER_SECOND,
@@ -144,6 +157,7 @@ impl PreloadShape {
         }
     }
 
+    #[must_use]
     pub const fn with_span(self, span_ns: u64) -> Self {
         Self { span_ns, ..self }
     }
@@ -163,7 +177,8 @@ pub struct PreloadReport {
 }
 
 impl PreloadReport {
-    pub fn span_seconds(&self) -> u64 {
+    #[must_use]
+    pub const fn span_seconds(&self) -> u64 {
         self.end_ns.saturating_sub(self.start_ns) / NANOS_PER_SECOND
     }
 }
@@ -199,6 +214,10 @@ pub struct HistoryFeeder {
 }
 
 impl HistoryFeeder {
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn new(
         series: Vec<HistorySeries>,
         seed: u64,
@@ -220,6 +239,7 @@ impl HistoryFeeder {
         })
     }
 
+    #[must_use]
     pub fn series(&self) -> &[HistorySeries] {
         &self.series
     }
@@ -271,7 +291,8 @@ impl HistoryFeeder {
         ack
     }
 
-    pub fn report(&self) -> &PreloadReport {
+    #[must_use]
+    pub const fn report(&self) -> &PreloadReport {
         &self.report
     }
 
@@ -384,13 +405,13 @@ impl HistoryFeeder {
     }
 
     /// Daily triangle wave plus ±5 % noise inside the unit's typical range.
-    #[allow(clippy::cast_precision_loss)]
     fn level(&self, index: usize, at_ns: u64) -> f64 {
         let (low, high) = typical_range(self.series[index].unit);
         let slot = u64::try_from(index).unwrap_or(u64::MAX);
         let second = (at_ns / NANOS_PER_SECOND + slot * 3_607) % DAY_SECONDS;
-        let triangle = ((2 * second) as f64 / DAY_SECONDS as f64 - 1.0).abs();
-        let noise = (self.hash(&[3, slot, at_ns / NANOS_PER_SECOND]) % 2001) as f64 / 1000.0 - 1.0;
+        let triangle = ((2 * second).to_f64_lossy() / DAY_SECONDS.to_f64_lossy() - 1.0).abs();
+        let noise =
+            (self.hash(&[3, slot, at_ns / NANOS_PER_SECOND]) % 2001).to_f64_lossy() / 1000.0 - 1.0;
         let share = (0.2 + 0.6 * triangle + 0.05 * noise).clamp(0.0, 1.0);
         low + (high - low) * share
     }
@@ -407,14 +428,14 @@ impl HistoryFeeder {
         )
     }
 
-    #[allow(
+    #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        clippy::cast_precision_loss
+        reason = "a load generator's counter delta: rounded and never negative"
     )]
     fn interval(&self, index: usize, start: u64, end: u64, rate: f64) -> Option<CounterInterval> {
         let (source_id, generation) = self.source(index, end);
-        let seconds = end.checked_sub(start)? as f64 / NANOS_PER_SECOND as f64;
+        let seconds = end.checked_sub(start)?.to_f64_lossy() / NANOS_PER_SECOND.to_f64_lossy();
         let delta = (rate * seconds).round().max(0.0) as u64;
         Some(CounterInterval {
             key: self.series[index].key.clone(),
@@ -473,7 +494,7 @@ impl HistoryFeeder {
     }
 }
 
-fn typical_range(unit: CanonicalUnit) -> (f64, f64) {
+const fn typical_range(unit: CanonicalUnit) -> (f64, f64) {
     match unit {
         CanonicalUnit::Percent => (0.0, 100.0),
         CanonicalUnit::DegC => (25.0, 90.0),
@@ -608,7 +629,7 @@ mod tests {
             .find(|series| !series.rate && is_overview(series))
             .unwrap();
         let held = windows(&store, &gauge.key, vec![2 * HOUR_NS], end);
-        let coverage = held[0].covered_ns as f64 / (2 * HOUR_NS) as f64;
+        let coverage = held[0].covered_ns.to_f64_lossy() / (2 * HOUR_NS).to_f64_lossy();
         assert!(coverage > 0.9, "coverage {coverage}");
         let rate = feeder
             .series()
@@ -622,7 +643,7 @@ mod tests {
             from_utc_ns: at - i64::try_from(HOUR_NS).unwrap(),
             end_utc_ns: at,
             at_utc_ns: at,
-            parts_of: std::collections::BTreeSet::new(),
+            parts_of: BTreeSet::new(),
         };
         let answer = store
             .history
@@ -662,7 +683,7 @@ mod tests {
         assert!(is_overview(outage));
         let span = 2 * HOUR_NS;
         let held = |key: &MetricKey| windows(&store, key, vec![span], end)[0].covered_ns;
-        let outage_coverage = held(&outage.key) as f64 / span as f64;
+        let outage_coverage = held(&outage.key).to_f64_lossy() / span.to_f64_lossy();
         assert!(
             outage_coverage < 0.97,
             "10 min outage visible: {outage_coverage}"

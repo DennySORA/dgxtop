@@ -5,8 +5,9 @@
 //! the only processes ever signalled are the managed adapter hosts during the
 //! bounded shutdown.
 
-// Test helpers may unwrap: an unexpected environment must fail loudly.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -61,7 +62,7 @@ impl LiveHosts {
         let handle = Supervisor::start(
             SupervisorConfig::from_config(&config),
             specs,
-            ledger,
+            &ledger,
             ingress,
             sender,
             Arc::clone(&clock),
@@ -93,7 +94,7 @@ impl LiveHosts {
             {
                 return;
             }
-            let _ = self.completions.recv_timeout(Duration::from_millis(50));
+            drop(self.completions.recv_timeout(Duration::from_millis(50)));
         }
         panic!("hosts not healthy: {:?}", self.handle.statuses());
     }
@@ -117,7 +118,7 @@ impl LiveHosts {
                 page,
             };
             let request_id = request.request_id;
-            self.dispatch(AdapterJob::Discover(request));
+            self.dispatch(&AdapterJob::Discover(request));
             let delta = self.await_catalog(request_id);
             let next = delta.next_page.filter(|_| !delta.complete);
             pages.push(delta);
@@ -146,7 +147,7 @@ impl LiveHosts {
                 page,
             };
             let request_id = plan.request_id;
-            self.dispatch(AdapterJob::Read(plan));
+            self.dispatch(&AdapterJob::Read(plan));
             let batch = self.await_batch(request_id);
             let continues = batch.continues();
             batches.push(batch);
@@ -157,7 +158,7 @@ impl LiveHosts {
         }
     }
 
-    fn dispatch(&self, job: AdapterJob) {
+    fn dispatch(&self, job: &AdapterJob) {
         let deadline = Instant::now() + WAIT;
         loop {
             match self.handle.try_dispatch(job.clone()) {

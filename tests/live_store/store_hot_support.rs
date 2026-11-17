@@ -2,8 +2,6 @@
 //!
 //! Every `store_hot_*` test crate includes this file as a module and uses a
 //! different subset of it, hence the crate-wide `dead_code` allowance.
-#![allow(dead_code)]
-
 use std::sync::Arc;
 
 use dgxtop::live_store::LiveStore;

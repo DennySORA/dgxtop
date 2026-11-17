@@ -1,5 +1,7 @@
 msrv = "1.100.0"
+avoid-breaking-exported-api = false
 allow-dbg-in-tests = true
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
+allow-print-in-tests = true

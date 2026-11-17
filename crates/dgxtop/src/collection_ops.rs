@@ -31,13 +31,14 @@ pub fn run_collection(
     else {
         return failure(UNKNOWN_COLLECTOR);
     };
-    match catch_unwind(AssertUnwindSafe(|| collector.collect(plan))) {
-        Ok(batch) => IngestionCompletion::Collected(Box::new(batch)),
-        Err(_) => failure(COLLECTOR_PANICKED),
-    }
+    catch_unwind(AssertUnwindSafe(|| collector.collect(plan))).map_or_else(
+        |_| failure(COLLECTOR_PANICKED),
+        |batch| IngestionCompletion::Collected(Box::new(batch)),
+    )
 }
 
 /// Whether `completion` reports a collector that panicked.
+#[must_use]
 pub fn is_collector_panic(completion: &IngestionCompletion) -> bool {
     matches!(
         completion,

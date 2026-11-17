@@ -1,4 +1,4 @@
-//! ConfirmationInput: the one-time confirmation token lives only here, in
+//! `ConfirmationInput`: the one-time confirmation token lives only here, in
 //! controller memory. It is never rendered, logged or exposed through the
 //! UI state; `y`/`Enter` act on an active token, and a token that arrives
 //! while the user is typing elsewhere is cancelled, never activated. A
@@ -48,7 +48,7 @@ pub enum PrepareOutcome {
     /// Confirm mode entered.
     Activated,
     /// A token arrived while another input mode was active: it must be
-    /// cancelled at once (the caller submits the returned CancelSignal).
+    /// cancelled at once (the caller submits the returned `CancelSignal`).
     MustCancel(ConfirmationToken),
     /// The token arrived already answered: the caller confirms (true) or
     /// cancels it at once, then reports [`ConfirmationInput::finish`].
@@ -92,19 +92,22 @@ pub struct ActiveSummary {
 }
 
 impl ConfirmationInput {
-    pub fn is_idle(&self) -> bool {
+    #[must_use]
+    pub const fn is_idle(&self) -> bool {
         matches!(self.state, State::Idle)
     }
 
-    pub fn is_awaiting(&self) -> bool {
+    #[must_use]
+    pub const fn is_awaiting(&self) -> bool {
         matches!(self.state, State::Awaiting { .. })
     }
 
-    pub fn is_active(&self) -> bool {
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
         matches!(self.state, State::Active { .. })
     }
 
-    /// A PrepareSignal was accepted by the session queue.
+    /// A `PrepareSignal` was accepted by the session queue.
     pub fn begin(&mut self, request_id: u128, target: ProcessKey, signal: Signal, now: Duration) {
         self.state = State::Awaiting {
             request_id,
@@ -117,14 +120,15 @@ impl ConfirmationInput {
 
     /// Keeps the answer for the token on its way (true confirms); the
     /// latest answer counts. Nothing while no token is awaited.
-    pub fn answer_early(&mut self, confirmed: bool) {
+    pub const fn answer_early(&mut self, confirmed: bool) {
         if let State::Awaiting { answer, .. } = &mut self.state {
             *answer = Some(confirmed);
         }
     }
 
     /// The answer kept for the token on its way.
-    pub fn early_answer(&self) -> Option<bool> {
+    #[must_use]
+    pub const fn early_answer(&self) -> Option<bool> {
         match &self.state {
             State::Awaiting { answer, .. } => *answer,
             _ => None,
@@ -178,6 +182,7 @@ impl ConfirmationInput {
 
     /// The token for a confirm/cancel submission (the state stays active
     /// until [`Self::finish`] reports the submission was accepted).
+    #[must_use]
     pub fn token(&self) -> Option<(ConfirmationToken, ProcessKey)> {
         match &self.state {
             State::Active { token, target, .. } => Some((token.clone(), target.clone())),
@@ -205,6 +210,7 @@ impl ConfirmationInput {
         }
     }
 
+    #[must_use]
     pub fn summary(&self, now: Duration) -> Option<ActiveSummary> {
         match &self.state {
             State::Active {
@@ -237,8 +243,7 @@ mod tests {
     }
 
     fn request_id() -> u128 {
-        let id: dgxtop_core::commands::CommandResult =
-            prepare_result(false, CommandStatus::Accepted);
+        let id: CommandResult = prepare_result(false, CommandStatus::Accepted);
         id.request_id.as_u128()
     }
 

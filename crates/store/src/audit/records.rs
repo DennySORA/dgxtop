@@ -125,7 +125,7 @@ fn detail_json(detail: &str, extra: &[(&str, &str)]) -> Result<String, AuditFail
     Ok(text)
 }
 
-pub(crate) fn signal_name(signal: Signal) -> &'static str {
+pub(crate) const fn signal_name(signal: Signal) -> &'static str {
     signal.name()
 }
 
@@ -297,7 +297,7 @@ impl AttemptRow {
 /// precede the intent. `not_sent` is stored as `rejected` (its result-state
 /// projection) because the DDL status list has no `not_sent`; the event row
 /// keeps `event_kind = 'not_sent'`.
-pub(crate) fn intent_status(state: ActionState) -> Option<&'static str> {
+pub(crate) const fn intent_status(state: ActionState) -> Option<&'static str> {
     match state {
         ActionState::Requested
         | ActionState::Prepared
@@ -354,7 +354,7 @@ pub(crate) fn transition_allowed(current: &str, next: &str) -> bool {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 /// State reported for a request that only has an `action_attempts` row.
 pub(crate) fn attempt_state(result_code: &str) -> ActionState {
     match result_code {

@@ -48,7 +48,7 @@ pub(crate) struct CollectorSpec {
 
 /// [`CollectorSpec::leaves`] of a collector that leaves no metric to
 /// another.
-pub(crate) fn leaves_none(_metric: &MetricDescriptor) -> bool {
+pub(crate) const fn leaves_none(_metric: &MetricDescriptor) -> bool {
     false
 }
 
@@ -113,15 +113,15 @@ pub(crate) struct Record<'a> {
 }
 
 impl<'a> Record<'a> {
-    pub fn is_new(&self) -> bool {
+    pub const fn is_new(&self) -> bool {
         self.route.is_some()
     }
 
-    pub fn source_id(&self) -> &'a SourceId {
+    pub const fn source_id(&self) -> &'a SourceId {
         &self.observation.provenance.source_id
     }
 
-    pub fn key(&self) -> &'a MetricKey {
+    pub const fn key(&self) -> &'a MetricKey {
         &self.observation.key
     }
 
@@ -366,11 +366,11 @@ impl<'a> Session<'a> {
 
     // ----- plan access -------------------------------------------------
 
-    pub fn plan(&self) -> &'a CollectionPlan {
+    pub const fn plan(&self) -> &'a CollectionPlan {
         self.plan
     }
 
-    pub fn now(&self) -> u64 {
+    pub const fn now(&self) -> u64 {
         self.plan.now_boot_ns
     }
 
@@ -403,8 +403,7 @@ impl<'a> Session<'a> {
     pub fn records(&self, key: &MetricKey) -> Vec<Record<'a>> {
         self.records
             .get(key)
-            .map(|sources| sources.values().copied().collect())
-            .unwrap_or_default()
+            .map_or_default(|sources| sources.values().copied().collect())
     }
 
     /// Records (new and retained) of the keys `wanted` accepts, in key order,
@@ -755,7 +754,7 @@ impl<'a> Session<'a> {
     }
 
     /// Process bases of the next state (for collector-specific pruning).
-    pub fn next_processes_mut(&mut self) -> &mut BTreeMap<ProcessKey, ProcessBase> {
+    pub const fn next_processes_mut(&mut self) -> &mut BTreeMap<ProcessKey, ProcessBase> {
         &mut self.next_state.processes
     }
 
@@ -827,15 +826,15 @@ impl<'a> Session<'a> {
 }
 
 fn mapping_of(descriptor: Option<&SourceDescriptor>, key: &MetricKey) -> CatalogMapping {
-    match descriptor {
-        None => CatalogMapping::NotCatalogued,
-        Some(descriptor) => match &descriptor.metric {
+    descriptor.map_or(
+        CatalogMapping::NotCatalogued,
+        |descriptor| match &descriptor.metric {
             Some(mapped) if mapped == key => CatalogMapping::Matches,
             Some(_) => CatalogMapping::KeyMismatch,
             None if carries_dynamic_key(key) => CatalogMapping::NotCatalogued,
             None => CatalogMapping::UnprovenPurpose,
         },
-    }
+    )
 }
 
 /// Per-process series (`process:…`, `gpupid:…`) are keyed by each record:
@@ -843,7 +842,7 @@ fn mapping_of(descriptor: Option<&SourceDescriptor>, key: &MetricKey) -> Catalog
 /// fixed key. Every other source without a mapped key has no proven purpose.
 fn carries_dynamic_key(key: &MetricKey) -> bool {
     metric::descriptor(key.metric_id.as_str())
-        .is_some_and(|descriptor| descriptor.domain == dgxtop_core::metric::Domain::Process)
+        .is_some_and(|descriptor| descriptor.domain == metric::Domain::Process)
 }
 
 /// Whether `observation` is a collector-built candidate carrying `formula`.

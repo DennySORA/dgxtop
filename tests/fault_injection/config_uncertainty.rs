@@ -1,5 +1,5 @@
 //! AT36 (versioned configuration persistence with uncertain outcomes): the
-//! Manager's ConfigurationService driving the real `FileConfigRepository`
+//! Manager's `ConfigurationService` driving the real `FileConfigRepository`
 //! through the config actor, over a failpoint filesystem.
 
 use std::path::PathBuf;

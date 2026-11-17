@@ -202,8 +202,8 @@ impl ControlCore {
         if now_ns >= self.timers.next_maintain_ns {
             self.timers.next_maintain_ns = now_ns.saturating_add(MAINTAIN_NS);
             // Refused for a full state queue: asked again next period.
-            let _ = self.ingestion.retry_sampling();
-            let _ = self.ingestion.request_maintenance();
+            self.ingestion.retry_sampling().unwrap_or_default();
+            self.ingestion.request_maintenance().unwrap_or_default();
             // The process history's writes leave on time without commits.
             self.process_history.tick();
         }

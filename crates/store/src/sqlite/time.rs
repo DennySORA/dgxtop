@@ -10,13 +10,17 @@ use dgxtop_core::clock::NANOS_PER_SECOND;
 const SECONDS_PER_DAY: i64 = 86_400;
 
 /// `YYYY-MM-DDTHH:MM:SSZ`, clamped to years 0000..=9999 so the text keeps a
-/// fixed width and its lexical order. Shared with the Manager through core so
-/// the audit validates exactly the format the Manager produces.
+/// fixed width and its lexical order.
+///
+/// Shared with the Manager through core so the audit validates exactly the
+/// format the Manager produces.
+#[must_use]
 pub fn format_utc_rfc3339(unix_ns: i128) -> String {
     dgxtop_core::clock::format_utc_rfc3339(unix_ns)
 }
 
 /// `YYYY-MM-DDTHH:MM:SS[.f{1,9}]Z` with plausible field ranges.
+#[must_use]
 pub fn is_rfc3339_utc(text: &str) -> bool {
     let bytes = text.as_bytes();
     if bytes.len() < 20 || bytes.len() > 30 {
@@ -35,8 +39,11 @@ pub fn is_rfc3339_utc(text: &str) -> bool {
 
 /// Nanoseconds since the Unix epoch of RFC 3339 UTC text as the archive
 /// stores it (`2026-10-04T12:00:00.123456789Z`, a fraction of 0 to 9
-/// digits); `None` for any other text. The history view places archived
-/// minutes of every boot on the wall clock with it (D-51).
+/// digits); `None` for any other text.
+///
+/// The history view places archived minutes of every boot on the wall
+/// clock with it (D-51).
+#[must_use]
 pub fn parse_utc_rfc3339_ns(text: &str) -> Option<i128> {
     if !is_rfc3339_utc(text) {
         return None;
@@ -68,7 +75,7 @@ fn fraction_ns(bytes: &[u8]) -> u32 {
 }
 
 /// Days since 1970-01-01 of a proleptic Gregorian date.
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+const fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
     let era = year.div_euclid(400);
     let year_of_era = year.rem_euclid(400);

@@ -43,6 +43,7 @@ use crate::modules::common::{
 };
 use crate::num::saturate_u16;
 use crate::registry::{DisplayContext, DisplayModuleManifest, controls};
+use dgxtop_core::num::ToF64Lossy;
 use dgxtop_core::view::ViewModel;
 
 const SWATCH: &str = "■";
@@ -227,16 +228,12 @@ impl<'a> RunLayout<'a> {
     /// Tasks, Disk, Network · host` with the keys turning pages, in shorter
     /// forms; nothing on one page.
     fn divider_forms(&self) -> Vec<DividerForm> {
-        let next: Vec<String> = self
-            .pages
-            .get(self.page + 1)
-            .map(|next| {
-                self.panels[next.clone()]
-                    .iter()
-                    .map(|panel| clean(&panel.title))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let next: Vec<String> = self.pages.get(self.page + 1).map_or_default(|next| {
+            self.panels[next.clone()]
+                .iter()
+                .map(|panel| clean(&panel.title))
+                .collect()
+        });
         page_divider_forms((self.page, self.pages.len()), &next, "panel")
     }
 }
@@ -339,8 +336,7 @@ fn list_cells(
     };
     // A share of its whole in the gauge colors (D-77): the GPUs it used,
     // the host's CPUs.
-    #[allow(clippy::cast_precision_loss)]
-    let gpu_scale = 100.0 * run.gpus.len().max(1) as f64;
+    let gpu_scale = 100.0 * run.gpus.len().max(1).to_f64_lossy();
     let level = |value: Option<f64>, scale: Option<f64>| match (value, scale) {
         (Some(value), Some(scale)) if scale > 0.0 && value.is_finite() => {
             Style::new().fg(theme.level_color(value / scale))
@@ -441,7 +437,7 @@ fn render_detail(
     };
     let body = rows
         .rest()
-        .unwrap_or(Rect::new(area.x, area.bottom(), area.width, 0));
+        .unwrap_or_else(|| Rect::new(area.x, area.bottom(), area.width, 0));
     let pages = RunLayout::new((run, detail), body, context);
     let shown = pages.shown();
     let strips: Vec<u16> = shown
@@ -915,7 +911,7 @@ pub(super) fn status_text(run: &RunRowView) -> String {
 }
 
 /// Running in the text color, a kill as a warning, any other end muted.
-pub(super) fn status_style(run: &RunRowView, context: &DisplayContext) -> Style {
+pub(super) const fn status_style(run: &RunRowView, context: &DisplayContext) -> Style {
     let theme = &context.theme;
     match run.end {
         Some(end) if end.cause.was_killed() => theme.tone_style(crate::format::CellTone::Conflict),

@@ -123,15 +123,12 @@ pub(crate) fn decode_octal_escapes(text: &str) -> String {
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
-        match octal_escape(&bytes[index..]) {
-            Some(byte) => {
-                decoded.push(byte);
-                index += 4;
-            }
-            None => {
-                decoded.push(bytes[index]);
-                index += 1;
-            }
+        if let Some(byte) = octal_escape(&bytes[index..]) {
+            decoded.push(byte);
+            index += 4;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
         }
     }
     String::from_utf8_lossy(&decoded).into_owned()
@@ -187,7 +184,8 @@ impl MountTable {
     /// its path resolve to the upper filesystem.
     pub(crate) fn is_shadowed(&self, entry: &MountEntry) -> bool {
         self.entries.iter().any(|other| {
-            other.parent_id == entry.mount_id
+            let mounted_on_entry = other.parent_id == entry.mount_id;
+            mounted_on_entry
                 && other.mount_id != entry.mount_id
                 && other.mount_point == entry.mount_point
         })

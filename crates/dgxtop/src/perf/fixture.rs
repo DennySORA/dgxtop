@@ -53,6 +53,7 @@ pub struct FixtureCensus {
 }
 
 impl FixtureCensus {
+    #[must_use]
     pub fn of(fixture: &ReplayFixture) -> Self {
         let mut census = Self {
             namespace_label: fixture.namespace_label.clone(),
@@ -124,6 +125,7 @@ impl FixtureCensus {
 
     /// Every metric kind and every intermittent sample class is present, and
     /// no source can enter the live namespace.
+    #[must_use]
     pub fn covers_reference_classes(&self) -> bool {
         let has_kind = |kind: &str| {
             self.sources_by_kind
@@ -145,7 +147,7 @@ impl FixtureCensus {
     }
 }
 
-fn raw_kind_label(kind: RawKind) -> &'static str {
+const fn raw_kind_label(kind: RawKind) -> &'static str {
     match kind {
         RawKind::Gauge => "gauge",
         RawKind::Counter => "counter",
@@ -165,11 +167,21 @@ pub struct GeneratedFixture {
 }
 
 /// Canonical bytes of the seeded fixture (identical for identical inputs).
+///
+/// # Errors
+///
+/// Returns a `ReplayError` when the fixture cannot be read or encoded, or
+/// breaks a rule of replay.
 pub fn fixture_bytes(seed: u64, profile: &RefProfile) -> Result<Vec<u8>, ReplayError> {
     generate_ref_fixture(seed, profile).to_json_bytes()
 }
 
 /// Generates the fixture and writes it below `directory` (created if absent).
+///
+/// # Errors
+///
+/// Returns a `FixtureError` when the fixture cannot be read or breaks a rule of
+/// replay.
 pub fn write_fixture(
     directory: &Path,
     seed: u64,
@@ -205,20 +217,18 @@ fn fixture_file_name(seed: u64, profile: &RefProfile) -> String {
 /// Read groups served by each of `hosts` replay hosts, by the same rule the
 /// replay adapter uses (`ReplayFixture::slice`: one live adapter family per
 /// host for REF).
+#[must_use]
 pub fn slice_read_groups(fixture: &ReplayFixture, hosts: u32) -> Vec<BTreeSet<String>> {
     let count = hosts.max(1);
     (0..count)
         .map(|index| {
-            fixture
-                .slice(index, count)
-                .map(|slice| {
-                    slice
-                        .sources
-                        .into_iter()
-                        .map(|source| source.read_group)
-                        .collect()
-                })
-                .unwrap_or_default()
+            fixture.slice(index, count).map_or_default(|slice| {
+                slice
+                    .sources
+                    .into_iter()
+                    .map(|source| source.read_group)
+                    .collect()
+            })
         })
         .collect()
 }
@@ -226,6 +236,11 @@ pub fn slice_read_groups(fixture: &ReplayFixture, hosts: u32) -> Vec<BTreeSet<St
 /// Writes one fixture file per replay host next to `generated`, so every
 /// host parses only its own slice (a live host never holds another
 /// adapter's data either). Returns the paths in host order.
+///
+/// # Errors
+///
+/// Returns a `FixtureError` when the fixture cannot be read or breaks a rule of
+/// replay.
 pub fn write_host_slices(
     generated: &GeneratedFixture,
     hosts: u32,

@@ -1,12 +1,12 @@
 //! Deterministic synthetic workload fixtures mirroring `bench/scenarios.json`
 //! (REF / OVERLOAD). Every value comes from integer arithmetic over a
-//! stateless SplitMix64 hash of `(seed, purpose, indices)`, and the fixture
+//! stateless `SplitMix64` hash of `(seed, purpose, indices)`, and the fixture
 //! only uses `Vec`/`BTreeMap` ordering, so the same seed always serializes to
 //! identical bytes on every platform (AT35). Everything is labelled
 //! `simulated` (`SYNTHETIC_FIXTURE`); it is never hardware evidence.
 //!
 //! Interpretation of the profile numbers:
-//! * `series` = distinct non-process MetricKeys with candidates; `sources` =
+//! * `series` = distinct non-process `MetricKeys` with candidates; `sources` =
 //!   their candidate sources (1..=`max_candidates_per_series` per key:
 //!   primary, confirmed alias, independent confirmed origin, unknown origin).
 //! * Temperature keys exercise arbitration: aliases share an origin,
@@ -59,6 +59,7 @@ pub struct RefProfile {
 
 impl RefProfile {
     /// REF: 512 series, 2048 sources, 256 processes, 1024 GPU links, 7 hosts, 1 s.
+    #[must_use]
     pub fn reference() -> Self {
         Self {
             id: "REF".to_owned(),
@@ -76,6 +77,7 @@ impl RefProfile {
     }
 
     /// OVERLOAD: 4096 series, 8192 sources, 4096 processes, 16384 links, 8 hosts, 100 ms.
+    #[must_use]
     pub fn overload() -> Self {
         Self {
             id: "OVERLOAD".to_owned(),
@@ -95,6 +97,7 @@ impl RefProfile {
 
 /// Seeded deterministic fixture for `profile` (inputs are clamped to the
 /// fixture bounds, so the result always validates).
+#[must_use]
 pub fn generate_ref_fixture(seed: u64, profile: &RefProfile) -> ReplayFixture {
     let plan = Plan::from_profile(profile);
     let topology = Topology::sized_for(plan.series, plan.gpus);
@@ -257,7 +260,7 @@ struct Topology {
 }
 
 impl Topology {
-    fn scaled(multiplier: usize, gpus: usize) -> Self {
+    const fn scaled(multiplier: usize, gpus: usize) -> Self {
         Self {
             packages: 2,
             cores: 32 * multiplier,
@@ -308,7 +311,7 @@ enum ValueModel {
     Static { low: u64, high: u64 },
 }
 
-/// One synthetic MetricKey.
+/// One synthetic `MetricKey`.
 #[derive(Debug, Clone)]
 struct KeySpec {
     entity: String,
@@ -327,7 +330,7 @@ struct KeySpec {
 }
 
 impl KeySpec {
-    fn new(
+    const fn new(
         entity: String,
         metric: &'static str,
         scope: String,
@@ -363,7 +366,7 @@ impl KeySpec {
         self
     }
 
-    fn modulus(mut self, modulus: u64) -> Self {
+    const fn modulus(mut self, modulus: u64) -> Self {
         self.modulus = Some(modulus);
         self
     }
@@ -756,6 +759,10 @@ fn filesystem_keys(topology: &Topology) -> Vec<KeySpec> {
         .collect()
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one entry a metric of the generated fixture: a table"
+)]
 fn gpu_fast_keys(topology: &Topology, uuids: &[String]) -> Vec<KeySpec> {
     let metrics: [(&'static str, &'static str, ValueModel, &'static str); 16] = [
         (
@@ -872,6 +879,10 @@ fn gpu_fast_keys(topology: &Topology, uuids: &[String]) -> Vec<KeySpec> {
         .collect()
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one entry a metric of the generated fixture: a table"
+)]
 fn gpu_slow_keys(topology: &Topology, uuids: &[String]) -> Vec<KeySpec> {
     let metrics: [(
         &'static str,
@@ -1063,7 +1074,7 @@ impl Generator {
             let count = self.plan.candidates(key_index, self.keys.len());
             let mut ids = Vec::with_capacity(count);
             for candidate in 0..count {
-                if let Some(source) = self.key_source(key_index, key, candidate) {
+                if let Some(source) = Self::key_source(key_index, key, candidate) {
                     ids.push(source.source_id.clone());
                     sources.push(source);
                 }
@@ -1096,12 +1107,7 @@ impl Generator {
         }
     }
 
-    fn key_source(
-        &self,
-        key_index: usize,
-        key: &KeySpec,
-        candidate: usize,
-    ) -> Option<FixtureSource> {
+    fn key_source(key_index: usize, key: &KeySpec, candidate: usize) -> Option<FixtureSource> {
         let group = if candidate % 2 == 1 {
             key.alias_group
         } else {
@@ -1329,13 +1335,13 @@ impl Generator {
             step_low,
             step_high,
         );
-        match key.modulus {
-            Some(modulus) => {
+        key.modulus.map_or_else(
+            || value.saturating_add(step),
+            |modulus| {
                 let sum = (u128::from(value) + u128::from(step)) % u128::from(modulus);
                 u64::try_from(sum).unwrap_or(0)
-            }
-            None => value.saturating_add(step),
-        }
+            },
+        )
     }
 
     /// Primary integer value of a gauge key at `cycle`.
@@ -1399,7 +1405,10 @@ impl Generator {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument a coordinate of the generated row: the generator's table reads as columns"
+    )]
     fn candidate_value(
         &self,
         key_index: usize,
@@ -1442,7 +1451,10 @@ impl Generator {
 
     /// Temperature candidates: aliases equal, independent/unknown within
     /// tolerance except on conflict cycles; alarms are real high readings.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument a coordinate of the generated row: the generator's table reads as columns"
+    )]
     fn temperature_level(
         &self,
         key_index: usize,
@@ -1568,7 +1580,6 @@ fn confirmed(origin: &str) -> Option<OriginIdentity> {
     Some(OriginIdentity::confirmed(OriginId::new(origin).ok()?))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn row_source(
     source_id: &str,
     entity_id: EntityId,

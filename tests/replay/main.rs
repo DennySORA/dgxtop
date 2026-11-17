@@ -4,8 +4,9 @@
 //! adapter/collector naming contract end to end (AT03, AT04, AT07, AT09) and
 //! that replay data never becomes live or history-eligible.
 
-// Test helpers may unwrap: a broken fixture must fail loudly.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -50,7 +51,7 @@ impl Pipeline {
         let adapter_id = AdapterId::new("replay").unwrap();
         let time: Arc<dyn TimeProvider> = clock.clone();
         let mut adapter =
-            ReplayAdapter::from_path(&fixture(), adapter_id.clone(), time, host_id.clone(), None)
+            ReplayAdapter::from_path(&fixture(), adapter_id.clone(), time, &host_id, None)
                 .unwrap()
                 .with_in_process(true);
         let catalog = discover_all(&mut adapter, &adapter_id, clock.now_boot_ns());

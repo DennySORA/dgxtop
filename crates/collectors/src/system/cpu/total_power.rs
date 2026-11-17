@@ -45,7 +45,7 @@ pub(super) fn publish(session: &mut Session<'_>) {
     };
     let mut parts = cpu_parts(session);
     parts.extend(gpus.into_iter().map(|gpu| gpu_part(session, gpu)));
-    if let Some(value) = total(session, key, &parts) {
+    if let Some(value) = total(session, &key, &parts) {
         session.publish_value(value);
     }
 }
@@ -126,7 +126,7 @@ fn committed_part(entry: &SnapshotEntry, now: u64) -> Part {
 /// The sum of `parts` (the CPU's first, so a CPU package's source names
 /// the total), or the total unavailable with the reason the first part
 /// without a value has.
-fn total(session: &Session<'_>, key: MetricKey, parts: &[Part]) -> Option<CanonicalValue> {
+fn total(session: &Session<'_>, key: &MetricKey, parts: &[Part]) -> Option<CanonicalValue> {
     let present: Vec<&(Scalar, Evidence)> =
         parts.iter().filter_map(|part| part.as_ref().ok()).collect();
     let evidence: Vec<Evidence> = present
@@ -150,14 +150,16 @@ fn total(session: &Session<'_>, key: MetricKey, parts: &[Part]) -> Option<Canoni
     let sum = watts
         .next()
         .and_then(|first| watts.try_fold(first, values::sum));
-    match sum {
-        Some(sum) => values::derived(
-            context,
-            key.clone(),
-            sum,
-            &evidence,
-            &[reasons::FORMULA_HOST_POWER_TOTAL],
-        ),
-        None => unavailable(reasons::VALUE_OVERFLOW),
-    }
+    sum.map_or_else(
+        || unavailable(reasons::VALUE_OVERFLOW),
+        |sum| {
+            values::derived(
+                context,
+                key.clone(),
+                sum,
+                &evidence,
+                &[reasons::FORMULA_HOST_POWER_TOTAL],
+            )
+        },
+    )
 }

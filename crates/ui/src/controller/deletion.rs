@@ -22,7 +22,7 @@ pub(super) enum RunSet {
 
 impl RunSet {
     /// Runs the command deletes, as far as the controller knows.
-    pub(super) fn len(&self) -> usize {
+    pub(super) const fn len(&self) -> usize {
         match self {
             Self::Listed(runs) => runs.len(),
             Self::Every { count, .. } => *count,
@@ -82,11 +82,11 @@ impl RunDeletion {
     }
 
     /// `runs` more were deleted.
-    pub(super) fn count_deleted(&mut self, runs: usize) {
+    pub(super) const fn count_deleted(&mut self, runs: usize) {
         self.deleted += runs;
     }
 
-    pub(super) fn deleted(&self) -> usize {
+    pub(super) const fn deleted(&self) -> usize {
         self.deleted
     }
 

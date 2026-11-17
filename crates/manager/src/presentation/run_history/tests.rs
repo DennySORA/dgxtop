@@ -52,7 +52,7 @@ fn bucket(start: i64, cpu: f64, samples: u32) -> RunBucket {
     bucket
 }
 
-fn row(pid: i64, whole: RunBucket) -> RunRow {
+fn row(pid: i64, whole: &RunBucket) -> RunRow {
     let info = info(pid);
     RunRow {
         key: info.key.clone(),
@@ -62,7 +62,7 @@ fn row(pid: i64, whole: RunBucket) -> RunRow {
         live: true,
         end: None,
         gpus: info.gpus,
-        whole,
+        whole: *whole,
     }
 }
 
@@ -96,7 +96,7 @@ fn detail(pid: i64, bar: BarSize) -> RunDetail {
 fn model() -> ProcessHistoryModel {
     ProcessHistoryModel {
         revision: 3,
-        runs: vec![row(2, bucket(0, 20.0, 4)), row(1, bucket(0, 50.0, 4))],
+        runs: vec![row(2, &bucket(0, 20.0, 4)), row(1, &bucket(0, 50.0, 4))],
         more_runs: 5,
         kept_on_disk: true,
         details: vec![detail(1, BarSize::Auto)],
@@ -171,7 +171,7 @@ fn the_filter_keeps_the_runs_whose_name_or_pid_hold_it() {
     model.more_runs = 0;
     let mut runs: Vec<RunRow> = (1..=250)
         .map(|pid| {
-            let mut run = row(pid, bucket(0, 10.0, 4));
+            let mut run = row(pid, &bucket(0, 10.0, 4));
             run.name = if pid == 7 {
                 "ComfyUI/main".to_owned()
             } else {
@@ -204,7 +204,7 @@ fn deleting_every_run_finds_each_ended_run_the_filter_keeps() {
     let mut model = model();
     model.runs = (1..=300)
         .map(|pid| {
-            let mut run = row(pid, bucket(0, 10.0, 4));
+            let mut run = row(pid, &bucket(0, 10.0, 4));
             run.live = pid == 300;
             run.end = (!run.live).then_some(dgxtop_core::process_history::RunEnd {
                 utc_ns: START + MINUTE,

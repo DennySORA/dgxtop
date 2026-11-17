@@ -1,5 +1,5 @@
 //! Controller behavior: input modes, identity-based selection, safe
-//! confirmation and coalescing. The HitMap comes from a real Viewer render
+//! confirmation and coalescing. The `HitMap` comes from a real Viewer render
 //! so `K` targets exactly what the process table drew.
 
 use std::cell::{Cell, RefCell};
@@ -106,7 +106,7 @@ impl Harness {
         }
     }
 
-    fn press(&mut self, event: Event) {
+    fn press(&mut self, event: &Event) {
         let context = ControllerContext {
             model: Some(&self.model),
             hit_map: &self.hit_map,
@@ -114,13 +114,13 @@ impl Harness {
             now: self.now,
             projection_received_at: Some(Duration::ZERO),
         };
-        self.controller.handle_event(&event, &context, &self.sink);
+        self.controller.handle_event(event, &context, &self.sink);
     }
 
     /// Presses keys then ends the input batch (flushes coalesced navigation).
     fn keys(&mut self, events: &[Event]) {
         for event in events {
-            self.press(event.clone());
+            self.press(&event.clone());
         }
         self.batch();
     }
@@ -136,7 +136,7 @@ impl Harness {
         self.controller.finish_input_batch(&context, &self.sink);
     }
 
-    fn deliver(&mut self, result: CommandResult) {
+    fn deliver(&mut self, result: &CommandResult) {
         let context = ControllerContext {
             model: Some(&self.model),
             hit_map: &self.hit_map,
@@ -144,10 +144,10 @@ impl Harness {
             now: self.now,
             projection_received_at: Some(Duration::ZERO),
         };
-        self.controller.on_result(&result, &context, &self.sink);
+        self.controller.on_result(result, &context, &self.sink);
     }
 
-    /// Makes a new projection active (re-renders its HitMap).
+    /// Makes a new projection active (re-renders its `HitMap`).
     fn project(&mut self, model: ViewModel) {
         self.model = model;
         self.hit_map = render_hit_map(&self.model, &self.controller.ui_state(self.now));
@@ -198,7 +198,7 @@ impl Harness {
             .expect("an UpdateViewSession was submitted")
     }
 
-    /// The bar sizes of the last UpdateViewSession (D-80).
+    /// The bar sizes of the last `UpdateViewSession` (D-80).
     fn last_bars(&self) -> (dgxtop_core::tiers::BarSize, dgxtop_core::tiers::BarSize) {
         self.submitted()
             .into_iter()
@@ -214,7 +214,7 @@ impl Harness {
             .expect("an UpdateViewSession with bar sizes was submitted")
     }
 
-    /// K, then the Manager answers the PrepareSignal with a token.
+    /// K, then the Manager answers the `PrepareSignal` with a token.
     fn activate_confirmation(&mut self) -> ProcessKey {
         self.keys(&[shift('K')]);
         let envelope = self.take().pop().expect("PrepareSignal submitted");
@@ -224,7 +224,7 @@ impl Harness {
         let mut result = CommandResult::completed(envelope.request_id, "prepared");
         result.confirmation_token = Some(token());
         result.expires_boot_ns = Some(self.model.generated_boot_ns + 9_000_000_000);
-        self.deliver(result);
+        self.deliver(&result);
         assert_eq!(self.controller.mode(), ModeKind::Confirm);
         target
     }
@@ -307,7 +307,7 @@ fn k_without_a_visible_selection_does_nothing() {
     let mut harness = Harness::new(ViewKind::Overview);
     harness.hit_map = HitMap::new(5);
     harness.keys(&[shift('K')]);
-    assert!(harness.submitted().is_empty());
+    assert_eq!(harness.submitted().len(), 0);
     assert!(
         harness.controller.ui_state(harness.now).notices[0]
             .text
@@ -346,7 +346,7 @@ fn k_builds_prepare_signal_with_the_full_process_key() {
     );
 }
 
-/// F9 asks to force kill the selected process (D-70): the same PrepareSignal
+/// F9 asks to force kill the selected process (D-70): the same `PrepareSignal`
 /// and confirmation as K, with SIGKILL; the Manager's policy decides.
 #[test]
 fn f9_builds_prepare_signal_with_sigkill() {
@@ -386,7 +386,7 @@ fn wheel(down: bool, column: u16, row: u16) -> Event {
 #[test]
 fn the_memory_legend_scrolls_apart_from_the_process_selection() {
     let mut harness = Harness::new(ViewKind::Overview);
-    let memory = ModuleId::new(crate::modules::MEMORY_MODULE_ID).unwrap();
+    let memory = ModuleId::new(MEMORY_MODULE_ID).unwrap();
     let scroll = |harness: &Harness| {
         harness
             .controller
@@ -464,7 +464,7 @@ fn arrows_act_on_the_page_they_are_pressed_on() {
 #[test]
 fn history_process_pages_navigate_and_select_the_run() {
     let mut harness = Harness::new(ViewKind::History);
-    let history = ModuleId::new(crate::modules::HISTORY_MODULE_ID).unwrap();
+    let history = ModuleId::new(HISTORY_MODULE_ID).unwrap();
     let state = |harness: &Harness| {
         let ui = harness.controller.ui_state(harness.now);
         (
@@ -514,7 +514,7 @@ fn the_cursor_follows_the_selected_run_when_the_list_moves() {
     let training = test_fixtures::process_history_view().runs[1].key.clone();
     assert_eq!(harness.last_session().2, Some(training.clone()));
     // A newer run arrives at the top: the selected run is third now.
-    let runs = std::sync::Arc::make_mut(harness.model.modules.process_history.as_mut().unwrap());
+    let runs = Arc::make_mut(harness.model.modules.process_history.as_mut().unwrap());
     let mut newer = runs.runs[1].clone();
     newer.key.pid = dgxtop_core::identity::Pid::new(77).unwrap();
     runs.runs.insert(0, newer);
@@ -574,7 +574,7 @@ fn w_steps_the_window_or_an_opened_runs_bar_size() {
 #[test]
 fn z_shows_the_processes_alone_until_z_esc_or_another_view() {
     let mut harness = Harness::new(ViewKind::Overview);
-    let processes = ModuleId::new(crate::modules::PROCESSES_MODULE_ID).unwrap();
+    let processes = ModuleId::new(PROCESSES_MODULE_ID).unwrap();
     let zoomed = |harness: &Harness| {
         harness
             .controller
@@ -599,7 +599,7 @@ fn z_shows_the_processes_alone_until_z_esc_or_another_view() {
     harness.keys(&[code(KeyCode::Esc)]);
     assert!(!zoomed(&harness), "then the panels came back");
     // A key of another panel shows the panels first, then acts.
-    let cpu = ModuleId::new(crate::modules::CPU_MODULE_ID).unwrap();
+    let cpu = ModuleId::new(CPU_MODULE_ID).unwrap();
     harness.keys(&[key('z'), key('c')]);
     let state = harness.controller.ui_state(harness.now);
     assert!(!zoomed(&harness) && state.expanded.contains(&cpu));
@@ -609,7 +609,7 @@ fn z_shows_the_processes_alone_until_z_esc_or_another_view() {
     // `z` before the GPU view's projection came: gone once it comes.
     harness.keys(&[key('z')]);
     assert!(zoomed(&harness));
-    harness.project(crate::test_fixtures::view_model(ViewKind::GpuDetail, 2));
+    harness.project(test_fixtures::view_model(ViewKind::GpuDetail, 2));
     assert!(!zoomed(&harness), "the GPU view came");
     harness.keys(&[key('z')]);
     assert!(!zoomed(&harness), "the GPU view has no z");
@@ -620,7 +620,7 @@ fn z_shows_the_processes_alone_until_z_esc_or_another_view() {
 #[test]
 fn an_opened_run_expands_and_copies_its_command() {
     let mut harness = Harness::new(ViewKind::History);
-    let history = ModuleId::new(crate::modules::HISTORY_MODULE_ID).unwrap();
+    let history = ModuleId::new(HISTORY_MODULE_ID).unwrap();
     harness.keys(&[key('5'), key('e'), key('y')]);
     assert!(
         harness.controller.take_clipboard().is_none(),
@@ -698,7 +698,7 @@ fn other_keys_are_ignored_while_confirming() {
     let mut harness = Harness::new(ViewKind::Overview);
     harness.activate_confirmation();
     harness.keys(&[key('j'), code(KeyCode::Tab), shift('K'), key('s'), key('/')]);
-    assert!(harness.submitted().is_empty());
+    assert_eq!(harness.submitted().len(), 0);
     assert_eq!(harness.controller.mode(), ModeKind::Confirm);
     harness.keys(&[key('q')]);
     assert!(harness.controller.quit_requested(), "quit still works");
@@ -717,7 +717,7 @@ fn no_typing_starts_while_a_token_is_on_its_way() {
     assert_eq!(harness.controller.ui_state(harness.now).early_answer, None);
     let mut result = CommandResult::completed(prepare.request_id, "prepared");
     result.confirmation_token = Some(token());
-    harness.deliver(result);
+    harness.deliver(&result);
     assert!(harness.submitted().is_empty(), "{:?}", harness.submitted());
     assert!(matches!(
         harness.controller.ui_state(harness.now).mode,
@@ -830,7 +830,7 @@ fn tab_clicks_and_keys_switch_views() {
         .hit_map
         .targets()
         .iter()
-        .find(|target| target.control_id == crate::views::Tab::OverviewHistory.control_id())
+        .find(|target| target.control_id == views::Tab::OverviewHistory.control_id())
         .unwrap()
         .clone();
     harness.keys(&[click(tab.rect.x, tab.rect.y)]);
@@ -856,7 +856,7 @@ fn tab_clicks_and_keys_switch_views() {
 #[test]
 fn the_cpu_panel_expands_and_collapses_by_click_or_c_without_a_command() {
     let mut harness = Harness::new(ViewKind::Overview);
-    let cpu = ModuleId::new(crate::modules::CPU_MODULE_ID).unwrap();
+    let cpu = ModuleId::new(CPU_MODULE_ID).unwrap();
     let toggle = harness
         .hit_map
         .targets()
@@ -911,9 +911,9 @@ fn filter_enter_applies_and_esc_clears() {
 #[test]
 fn filter_input_is_bounded_to_256_bytes() {
     let mut harness = Harness::new(ViewKind::Overview);
-    harness.press(key('/'));
+    harness.press(&key('/'));
     for _ in 0..300 {
-        harness.press(key('x'));
+        harness.press(&key('x'));
     }
     let ModeView::Filter { buffer, .. } = harness.controller.ui_state(harness.now).mode else {
         panic!("filter mode");
@@ -936,7 +936,7 @@ fn interval_keys_require_the_settings_revision() {
     let mut harness = Harness::new(ViewKind::Overview);
     harness.model.modules.settings = None;
     harness.keys(&[key('+')]);
-    assert!(harness.submitted().is_empty());
+    assert_eq!(harness.submitted().len(), 0);
     assert!(
         harness.controller.ui_state(harness.now).notices[0]
             .text
@@ -967,7 +967,7 @@ fn results_become_honest_notices() {
     let confirm = harness.take().pop().unwrap();
     let mut result = CommandResult::completed(confirm.request_id, "sent");
     result.action_state = Some(ActionState::SignalSent);
-    harness.deliver(result);
+    harness.deliver(&result);
     let notices = harness.controller.ui_state(harness.now).notices;
     assert!(
         notices
@@ -983,18 +983,18 @@ fn results_become_honest_notices() {
 
 /// The History module's id.
 fn history_module() -> ModuleId {
-    ModuleId::new(crate::modules::HISTORY_MODULE_ID).unwrap()
+    ModuleId::new(HISTORY_MODULE_ID).unwrap()
 }
 
 /// A frame of the Overview History scrolled past `above` bands with
 /// `below` bands waiting, as its time axis tells (D-107).
 fn history_bands(harness: &mut Harness, above: usize, below: usize) {
-    page_frame(harness, history_module(), (above, below));
+    page_frame(harness, &history_module(), (above, below));
 }
 
 /// A frame where `module` drew its page with `above` units scrolled past
 /// and `below` waiting (D-107, D-110).
-fn page_frame(harness: &mut Harness, module: ModuleId, (above, below): (usize, usize)) {
+fn page_frame(harness: &mut Harness, module: &ModuleId, (above, below): (usize, usize)) {
     let mut map = HitMap::new(harness.hit_map.frame_revision());
     let rows = ratatui::layout::Rect::new(1, 40, 120, 1);
     for (control_id, count) in [(controls::PAGE_ABOVE, above), (controls::PAGE_BELOW, below)] {
@@ -1037,7 +1037,7 @@ fn marked_pids(harness: &Harness) -> Vec<i32> {
         .collect()
 }
 
-/// Answers each DeleteRuns sent with `status` until none is left
+/// Answers each `DeleteRuns` sent with `status` until none is left
 /// unanswered (the next command leaves once the last is answered); the
 /// commands' runs.
 fn answer_deletions(harness: &mut Harness, completed: bool) -> Vec<Vec<ProcessKey>> {
@@ -1070,7 +1070,7 @@ fn answer_deletions(harness: &mut Harness, completed: bool) -> Vec<Vec<ProcessKe
             } else {
                 CommandResult::rejected(envelope.request_id, ErrorCode::Busy, "busy")
             };
-            harness.deliver(result);
+            harness.deliver(&result);
         }
     }
 }
@@ -1086,7 +1086,7 @@ fn notice_texts(harness: &Harness) -> Vec<String> {
         .collect()
 }
 
-/// The runs of each DeleteRuns sent.
+/// The runs of each `DeleteRuns` sent.
 fn deletions(harness: &Harness) -> Vec<Vec<i32>> {
     harness
         .submitted()
@@ -1270,7 +1270,7 @@ fn the_arrows_scroll_the_overview_history() {
 
 /// PgDn/PgUp scroll the Overview History a band at a time and g/G to the
 /// first and the last bands, counted from the bands the frame showed:
-/// PgDn stops at the last band, and after a taller frame PgUp moves at
+/// `PgDn` stops at the last band, and after a taller frame `PgUp` moves at
 /// once (D-107).
 #[test]
 fn the_overview_history_scrolls_from_the_bands_the_frame_showed() {
@@ -1331,7 +1331,7 @@ fn the_process_history_goes_to_its_first_and_last_run() {
     assert_eq!(harness.last_session().2.unwrap().pid.get(), 42);
     harness.keys(&[code(KeyCode::End), code(KeyCode::Enter)]);
     assert_eq!(state(&harness), (2, 1));
-    page_frame(&mut harness, history_module(), (1, 1));
+    page_frame(&mut harness, &history_module(), (1, 1));
     harness.keys(&[code(KeyCode::Home)]);
     assert_eq!(state(&harness), (2, 1), "the run stays open");
     assert_eq!(history_offset(&harness), 0, "at its first page");
@@ -1378,8 +1378,8 @@ fn runs_are_marked_one_by_one_or_all_at_once() {
         "an opened run takes no marks"
     );
     harness.keys(&[code(KeyCode::Esc)]);
-    assert!(marked_pids(&harness).is_empty());
-    assert!(deletions(&harness).is_empty());
+    assert_eq!(marked_pids(&harness).len(), 0);
+    assert_eq!(deletions(&harness).len(), 0);
 }
 
 /// `d` asks before anything is deleted, then sends the ended runs among
@@ -1486,9 +1486,9 @@ fn an_opened_run_is_deleted_alone_and_the_list_comes_back() {
             .tabs
             .get(&history_module())
             .copied(),
-        Some(crate::views::PROCESS_LIST_PAGE)
+        Some(views::PROCESS_LIST_PAGE)
     );
-    harness.deliver(CommandResult::completed(
+    harness.deliver(&CommandResult::completed(
         deletion.request_id,
         "deleting 1 run; running ones stay",
     ));
@@ -1534,7 +1534,7 @@ fn a_large_deletion_is_sent_a_bounded_command_at_a_time() {
     assert!(answered.len() > 1, "{} commands", answered.len());
     let pids: Vec<i32> = answered.concat().iter().map(|key| key.pid.get()).collect();
     assert_eq!(pids, (1_000..1_300).collect::<Vec<_>>(), "every run once");
-    assert!(marked_pids(&harness).is_empty());
+    assert_eq!(marked_pids(&harness).len(), 0);
     let notices = notice_texts(&harness);
     assert_eq!(
         notices
@@ -1547,7 +1547,7 @@ fn a_large_deletion_is_sent_a_bounded_command_at_a_time() {
 
 /// `a` marks every ended run the filter keeps, the ones beyond the
 /// projected rows too (D-128): `d` asks for all of them and sends one
-/// DeleteAllRuns of the filter, which the Manager expands; a mark changed
+/// `DeleteAllRuns` of the filter, which the Manager expands; a mark changed
 /// one by one afterwards makes the marks explicit again.
 #[test]
 fn a_then_d_deletes_every_ended_run_beyond_the_list_too() {
@@ -1583,7 +1583,7 @@ fn a_then_d_deletes_every_ended_run_beyond_the_list_too() {
         }]
     );
     answer_deletions(&mut harness, true);
-    assert!(marked_pids(&harness).is_empty());
+    assert_eq!(marked_pids(&harness).len(), 0);
     assert!(
         notice_texts(&harness).contains(&"deleted 599 runs from the Process History".to_owned()),
         "{:?}",
@@ -1693,7 +1693,7 @@ fn a_pending_signal_keeps_the_deletion_question_away() {
     let mut result = CommandResult::completed(prepare.request_id, "prepared");
     result.confirmation_token = Some(token());
     result.expires_boot_ns = Some(harness.model.generated_boot_ns + 9_000_000_000);
-    harness.deliver(result);
+    harness.deliver(&result);
     assert_eq!(harness.controller.mode(), ModeKind::Confirm);
     harness.keys(&[key('y')]);
     let bodies = harness.submitted();
@@ -1703,7 +1703,7 @@ fn a_pending_signal_keeps_the_deletion_question_away() {
             .any(|body| matches!(body, CommandBody::ConfirmSignal { .. })),
         "{bodies:?}"
     );
-    assert!(deletions(&harness).is_empty());
+    assert_eq!(deletions(&harness).len(), 0);
 }
 
 /// The prepare of a signal that `F9` sent, and its token-bearing result.
@@ -1738,7 +1738,7 @@ fn a_kill_confirmed_before_its_token_is_sent_when_the_token_arrives() {
         let ui = harness.controller.ui_state(harness.now);
         assert_eq!(ui.early_answer, Some(true));
         assert!(harness.submitted().is_empty(), "nothing without the token");
-        harness.deliver(result);
+        harness.deliver(&result);
         let submitted = harness.submitted();
         assert!(
             matches!(&submitted[..], [CommandBody::ConfirmSignal { confirmation_token }] if *confirmation_token == token()),
@@ -1763,7 +1763,7 @@ fn a_kill_cancelled_before_its_token_is_never_sent() {
         harness.controller.ui_state(harness.now).early_answer,
         Some(false)
     );
-    harness.deliver(result);
+    harness.deliver(&result);
     let submitted = harness.submitted();
     assert!(
         matches!(&submitted[..], [CommandBody::CancelSignal { confirmation_token }] if *confirmation_token == token()),
@@ -1801,7 +1801,7 @@ fn a_kill_targets_the_row_selected_last_when_it_was_drawn() {
         .find(|target| target.process_key.as_ref() == Some(&next))
         .unwrap()
         .rect;
-    harness.press(click(row.x, row.y));
+    harness.press(&click(row.x, row.y));
     harness.keys(&[code(KeyCode::F(9))]);
     let targets: Vec<ProcessKey> = harness
         .submitted()
@@ -1837,7 +1837,7 @@ fn a_kill_targets_the_row_selected_last_when_it_was_drawn() {
         }
     }
     offscreen.hit_map = map;
-    offscreen.press(click(row.x, row.y));
+    offscreen.press(&click(row.x, row.y));
     offscreen.keys(&[code(KeyCode::F(9))]);
     let fallback: Vec<ProcessKey> = offscreen
         .submitted()
@@ -1857,7 +1857,7 @@ fn a_kill_targets_the_row_selected_last_when_it_was_drawn() {
 #[test]
 fn the_gpu_view_turns_the_pages_of_its_sections() {
     let mut harness = Harness::new(ViewKind::GpuDetail);
-    let gpu = ModuleId::new(crate::modules::GPU_MODULE_ID).unwrap();
+    let gpu = ModuleId::new(GPU_MODULE_ID).unwrap();
     let page = |harness: &Harness| {
         harness
             .controller
@@ -1867,21 +1867,21 @@ fn the_gpu_view_turns_the_pages_of_its_sections() {
             .copied()
             .unwrap_or(0)
     };
-    page_frame(&mut harness, gpu.clone(), (0, 0));
+    page_frame(&mut harness, &gpu.clone(), (0, 0));
     harness.keys(&[code(KeyCode::Down)]);
     assert_eq!(page(&harness), 0, "one page");
-    page_frame(&mut harness, gpu.clone(), (0, 2));
+    page_frame(&mut harness, &gpu.clone(), (0, 2));
     harness.keys(&[key('j')]);
     assert_eq!(page(&harness), 1);
-    page_frame(&mut harness, gpu.clone(), (1, 1));
+    page_frame(&mut harness, &gpu.clone(), (1, 1));
     harness.keys(&[code(KeyCode::PageDown)]);
     assert_eq!(page(&harness), 2);
-    page_frame(&mut harness, gpu.clone(), (2, 0));
+    page_frame(&mut harness, &gpu.clone(), (2, 0));
     harness.keys(&[code(KeyCode::Down)]);
     assert_eq!(page(&harness), 2, "the last page shows");
     harness.keys(&[key('k')]);
     assert_eq!(page(&harness), 1);
-    page_frame(&mut harness, gpu.clone(), (1, 1));
+    page_frame(&mut harness, &gpu.clone(), (1, 1));
     harness.keys(&[code(KeyCode::End)]);
     assert_eq!(page(&harness), 2);
     harness.keys(&[code(KeyCode::Home)]);
@@ -1930,36 +1930,36 @@ fn an_opened_run_turns_its_pages_and_never_switches_the_run() {
     };
     harness.keys(&[key('5'), code(KeyCode::Enter)]);
     let opened = harness.last_session().2;
-    page_frame(&mut harness, history_module(), (0, 2));
+    page_frame(&mut harness, &history_module(), (0, 2));
     harness.keys(&[code(KeyCode::Down)]);
     assert_eq!(history_offset(&harness), 1);
-    page_frame(&mut harness, history_module(), (1, 1));
+    page_frame(&mut harness, &history_module(), (1, 1));
     harness.keys(&[key('j')]);
     assert_eq!(history_offset(&harness), 2);
-    page_frame(&mut harness, history_module(), (2, 0));
+    page_frame(&mut harness, &history_module(), (2, 0));
     harness.keys(&[code(KeyCode::Down)]);
     assert_eq!(history_offset(&harness), 2, "the last page shows");
     harness.keys(&[code(KeyCode::Up)]);
     assert_eq!(history_offset(&harness), 1);
-    page_frame(&mut harness, history_module(), (1, 1));
+    page_frame(&mut harness, &history_module(), (1, 1));
     harness.keys(&[key('k')]);
     assert_eq!(history_offset(&harness), 0);
-    page_frame(&mut harness, history_module(), (0, 2));
+    page_frame(&mut harness, &history_module(), (0, 2));
     harness.keys(&[shift('G')]);
     assert_eq!(history_offset(&harness), 2, "G: the last page");
-    page_frame(&mut harness, history_module(), (2, 0));
+    page_frame(&mut harness, &history_module(), (2, 0));
     harness.keys(&[key('g')]);
     assert_eq!(history_offset(&harness), 0, "g: the first page");
-    page_frame(&mut harness, history_module(), (0, 2));
+    page_frame(&mut harness, &history_module(), (0, 2));
     harness.keys(&[ctrl('d')]);
     assert_eq!(history_offset(&harness), 1);
-    page_frame(&mut harness, history_module(), (1, 1));
+    page_frame(&mut harness, &history_module(), (1, 1));
     harness.keys(&[code(KeyCode::PageUp)]);
     assert_eq!(history_offset(&harness), 0);
     assert_eq!(harness.last_session().2, opened, "the run stays selected");
-    assert_eq!(tab(&harness), Some(crate::views::RUN_PAGE), "and open");
+    assert_eq!(tab(&harness), Some(views::RUN_PAGE), "and open");
     // Back on the list and into the next run: its first page.
-    page_frame(&mut harness, history_module(), (0, 1));
+    page_frame(&mut harness, &history_module(), (0, 1));
     harness.keys(&[code(KeyCode::PageDown)]);
     assert_eq!(history_offset(&harness), 1);
     harness.keys(&[code(KeyCode::Enter), key('j'), code(KeyCode::Enter)]);
@@ -1969,7 +1969,7 @@ fn an_opened_run_turns_its_pages_and_never_switches_the_run() {
         "the next run starts at its first page"
     );
     assert_ne!(harness.last_session().2, opened);
-    page_frame(&mut harness, history_module(), (0, 1));
+    page_frame(&mut harness, &history_module(), (0, 1));
     harness.keys(&[code(KeyCode::PageDown), key('3')]);
     assert_eq!(
         history_offset(&harness),
@@ -2008,7 +2008,7 @@ fn slash_filters_the_process_historys_runs() {
             .tabs
             .get(&history_module())
             .copied(),
-        Some(crate::views::PROCESS_LIST_PAGE),
+        Some(views::PROCESS_LIST_PAGE),
         "the run leaves for the list"
     );
     harness.keys(&[key('c'), key('o'), key('m'), code(KeyCode::Enter)]);
@@ -2083,12 +2083,12 @@ fn overview_panels_fold_at_once_and_are_saved_one_save_at_a_time() {
     assert_eq!(folded_now(&harness), ["disk", "network"], "shown at once");
     assert_eq!(fold_saves(&harness).len(), 1, "one save at a time");
     let first = last_fold_save(&harness);
-    harness.deliver(CommandResult::completed(first.request_id, "saved"));
+    harness.deliver(&CommandResult::completed(first.request_id, "saved"));
     let saves = fold_saves(&harness);
     assert_eq!(saves.len(), 2);
     assert_eq!(saves[1].1, ["disk", "network"], "the rest follows");
     let busy = last_fold_save(&harness);
-    harness.deliver(CommandResult::rejected(
+    harness.deliver(&CommandResult::rejected(
         busy.request_id,
         ErrorCode::Busy,
         "busy",
@@ -2099,9 +2099,9 @@ fn overview_panels_fold_at_once_and_are_saved_one_save_at_a_time() {
     harness.keys(&[]);
     assert_eq!(fold_saves(&harness).len(), 3, "tried again");
     let again = last_fold_save(&harness);
-    harness.deliver(CommandResult::completed(again.request_id, "saved"));
+    harness.deliver(&CommandResult::completed(again.request_id, "saved"));
     harness.keys(&[key('o')]);
-    assert!(folded_now(&harness).is_empty());
+    assert_eq!(folded_now(&harness).len(), 0);
     let saves = fold_saves(&harness);
     assert_eq!(saves.last().unwrap().1, Vec::<String>::new());
 }
@@ -2126,7 +2126,7 @@ fn saved_folds_show_at_start_and_history_panels_fold_on_their_page() {
         "not on the Process History"
     );
     harness.keys(&[key('3'), key('o')]);
-    assert!(folded_now(&harness).is_empty());
+    assert_eq!(folded_now(&harness).len(), 0);
     // `t` and `p` fold the temperature and the power of the page shown;
     // the other page's keys do nothing.
     harness.keys(&[key('t'), key('u'), key('v')]);
@@ -2147,7 +2147,7 @@ fn saved_folds_show_at_start_and_history_panels_fold_on_their_page() {
         "o unfolds the page shown"
     );
     harness.keys(&[key('3'), key('o')]);
-    assert!(folded_now(&harness).is_empty());
+    assert_eq!(folded_now(&harness).len(), 0);
 }
 
 /// `Esc` hides a slowed GPU's banner once it is known (D-147), before the
@@ -2168,7 +2168,7 @@ fn esc_hides_a_known_slowdown_until_a_new_cause_appears() {
     let mut model = test_fixtures::view_model(ViewKind::Overview, 5);
     model.banners = vec![slowdown(0x400), lasting.clone()];
     let mut harness = Harness::with_model(model);
-    let processes = ModuleId::new(crate::modules::PROCESSES_MODULE_ID).unwrap();
+    let processes = ModuleId::new(PROCESSES_MODULE_ID).unwrap();
     harness.keys(&[key('z'), code(KeyCode::Esc)]);
     let state = harness.controller.ui_state(harness.now);
     assert!(!state.hidden_banners.shows(&slowdown(0x400)));

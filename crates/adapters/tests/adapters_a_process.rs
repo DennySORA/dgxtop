@@ -1,6 +1,11 @@
 //! Procfs `process` group: identity, values, paging and bounds. One record
 //! per process (D-79): its CPU ticks, the rest of its `stat` as tags.
 
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
+
+#[expect(dead_code, reason = "each suite uses its part of the shared helpers")]
 #[path = "fixtures/adapters_a/support.rs"]
 mod support;
 
@@ -221,10 +226,10 @@ fn hostile_command_names_are_sanitized() {
 
 /// A stat line of process `pid` whose parent is `parent`.
 fn write_child(tree: &FakeTree, pid: u32, comm: &str, parent: u32, start: u64) {
-    let stat = format!(
+    let stat_line = format!(
         "{pid} ({comm}) S {parent} {pid} {pid} 0 -1 4194560 100 0 0 0 1 1 0 0 20 0 1 0 {start} 1234567 10 18446744073709551615 1 1 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0\n"
     );
-    tree.write(&format!("/proc/{pid}/stat"), &stat);
+    tree.write(&format!("/proc/{pid}/stat"), &stat_line);
 }
 
 /// D-65: an interpreter's process is named by what it runs, never by an
@@ -345,7 +350,7 @@ fn paging_is_consistent_within_a_cycle_and_resnapshots_the_next_cycle() {
         .map(|record| record.provenance.source_id.as_str())
         .collect();
     assert_eq!(sources.len(), 9, "no duplicates across pages");
-    assert!(first.started_boot_ns == third.started_boot_ns);
+    assert_eq!(first.started_boot_ns, third.started_boot_ns);
 
     let next = records(&read_all(&mut adapter, ADAPTER, "process", 2));
     assert_eq!(next.len(), 10);
@@ -453,7 +458,11 @@ fn process_scan_is_bounded() {
     let last = batches.last().unwrap();
     assert_eq!(last.error_code.as_deref(), Some("PROCESS_SCAN_TRUNCATED"));
     assert_eq!(last.status, BatchStatus::Partial);
-    assert!(batches[..15].iter().all(|batch| batch.continues()));
+    assert!(
+        batches[..15]
+            .iter()
+            .all(dgxtop_core::observation::ObservationBatch::continues)
+    );
 }
 
 /// Clock that advances 1 ms on every reading, so long scans hit deadlines.

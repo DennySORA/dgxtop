@@ -1,7 +1,9 @@
-//! LayoutEngine: size tiers, banner-first allocation and manifest-driven
-//! module placement. The engine never names a module: placement derives from
-//! the modules' overview cells, priority and minimum sizes, so a new module
-//! needs no layout change.
+//! `LayoutEngine`: size tiers, banner-first allocation and manifest-driven
+//! module placement.
+//!
+//! The engine never names a module: placement derives from the modules'
+//! overview cells, priority and minimum sizes, so a new module needs no
+//! layout change.
 //!
 //! Tiers: width ≥ 120 → wide; 80–119 → single column summary +
 //! active detail; width < 80 or height < 24 → minimal summary with keyboard
@@ -46,6 +48,7 @@ pub enum SizeTier {
     TwoColumn,
 }
 
+#[must_use]
 pub const fn size_tier(width: u16, height: u16) -> SizeTier {
     if width < MIN_COLUMNS || height < MIN_ROWS {
         SizeTier::TooSmall
@@ -99,6 +102,14 @@ pub struct LayoutRequest<'a> {
     pub preferred_rows: &'a dyn Fn(usize, u16) -> Option<u16>,
 }
 
+impl std::fmt::Debug for LayoutRequest<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LayoutRequest")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Result of one layout pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FramePlan {
@@ -135,6 +146,7 @@ fn take_bottom(area: &mut Rect, rows: u16) -> Rect {
 }
 
 /// Plans a frame of at least 40×10 (callers handle `TooSmall` themselves).
+#[must_use]
 pub fn plan(request: &LayoutRequest<'_>) -> FramePlan {
     let tier = size_tier(request.area.width, request.area.height);
     let mut remaining = request.area;
@@ -425,10 +437,10 @@ fn row_heights(
         fillers
     };
     if let Some(last) = receivers.last().copied() {
-        let share = spare / saturate_u16(receivers.len()).max(1);
+        let per_receiver = spare / saturate_u16(receivers.len()).max(1);
         for position in &receivers {
-            heights[*position] += share;
-            spare -= share;
+            heights[*position] += per_receiver;
+            spare -= per_receiver;
         }
         heights[last] += spare;
     }
@@ -487,10 +499,9 @@ mod tests {
 
     fn reference_preferences(index: usize, _: u16) -> Option<u16> {
         match index {
-            0 => Some(8),
             1 => Some(12),
             2 => Some(9),
-            3 => Some(8),
+            0 | 3 => Some(8),
             4 => Some(10),
             _ => None,
         }
@@ -500,8 +511,10 @@ mod tests {
         plan.placements
             .iter()
             .find(|placement| placement.index == index)
-            .map(|placement| placement.area)
-            .unwrap_or_else(|| panic!("module {index} not placed: {plan:?}"))
+            .map_or_else(
+                || panic!("module {index} not placed: {plan:?}"),
+                |placement| placement.area,
+            )
     }
 
     fn request<'a>(
@@ -528,7 +541,7 @@ mod tests {
         preferred: &dyn Fn(usize, u16) -> Option<u16>,
     ) -> FramePlan {
         let candidates = overview();
-        super::plan(&request(
+        plan(&request(
             area,
             ViewKind::Overview,
             banners,
@@ -560,7 +573,7 @@ mod tests {
     fn a_module_without_a_cell_gets_a_full_width_row_below_the_grid() {
         let mut candidates = overview();
         candidates.push(candidate(10, 3, 10, None));
-        let planned = super::plan(&request(
+        let planned = plan(&request(
             Rect::new(0, 0, 160, 50),
             ViewKind::Overview,
             &[],

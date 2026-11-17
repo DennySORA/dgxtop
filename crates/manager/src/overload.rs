@@ -106,12 +106,12 @@ impl OverloadController {
         }
     }
 
-    pub(crate) fn state(&self) -> OverloadState {
+    pub(crate) const fn state(&self) -> OverloadState {
         self.state
     }
 
     /// Multiplier applied to throttleable fast read groups.
-    pub(crate) fn multiplier(&self) -> u32 {
+    pub(crate) const fn multiplier(&self) -> u32 {
         self.multiplier
     }
 
@@ -269,7 +269,7 @@ mod tests {
     fn pressure_needs_consecutive_samples_and_three_seconds() {
         let mut overload = controller();
         // Three samples span only 2 s: not yet.
-        assert!(run(&mut overload, 0, 3, queue(0.8)).is_empty());
+        assert_eq!(run(&mut overload, 0, 3, queue(0.8)).len(), 0);
         assert_eq!(overload.state(), OverloadState::Normal);
         let transitions = run(&mut overload, 3, 4, queue(0.8));
         assert_eq!(transitions.len(), 1);
@@ -291,7 +291,7 @@ mod tests {
             ..OverloadSignals::default()
         };
         // Any queue's bytes >= 75 % for 3 samples and 3 s.
-        assert!(run(&mut overload, 0, 3, held).is_empty());
+        assert_eq!(run(&mut overload, 0, 3, held).len(), 0);
         let transitions = run(&mut overload, 3, 4, held);
         assert_eq!(transitions.len(), 1, "{transitions:?}");
         assert_eq!(
@@ -304,7 +304,7 @@ mod tests {
             ingress_utilization: 0.749,
             ..OverloadSignals::default()
         };
-        assert!(run(&mut calm, 0, 10, below).is_empty());
+        assert_eq!(run(&mut calm, 0, 10, below).len(), 0);
         assert_eq!(calm.state(), OverloadState::Normal);
     }
 
@@ -361,9 +361,15 @@ mod tests {
         run(&mut overload, 0, 4, queue(0.8));
         assert_eq!(overload.state(), OverloadState::Pressured);
         // 29 healthy seconds, then a 60 % sample (not pressure, not healthy).
-        assert!(run(&mut overload, 4, 33, OverloadSignals::default()).is_empty());
+        assert_eq!(
+            run(&mut overload, 4, 33, OverloadSignals::default()).len(),
+            0
+        );
         assert!(overload.sample(33 * SECOND, queue(0.6)).is_none());
-        assert!(run(&mut overload, 34, 63, OverloadSignals::default()).is_empty());
+        assert_eq!(
+            run(&mut overload, 34, 63, OverloadSignals::default()).len(),
+            0
+        );
         let recovered = overload
             .sample(64 * SECOND, OverloadSignals::default())
             .unwrap();
@@ -383,7 +389,7 @@ mod tests {
         run(&mut overload, 0, 4, overrun);
         assert_eq!(overload.state(), OverloadState::Pressured);
         assert_eq!(overload.max_fps(1), 1);
-        assert!(run(&mut overload, 4, 120, overrun).is_empty());
+        assert_eq!(run(&mut overload, 4, 120, overrun).len(), 0);
         assert_eq!(overload.state(), OverloadState::Pressured);
     }
 }

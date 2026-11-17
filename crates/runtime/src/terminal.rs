@@ -33,6 +33,10 @@ pub struct NonBlockingTerminal {
 
 impl NonBlockingTerminal {
     /// Wraps any open descriptor (`std::io::stdout()`, a PTY, a pipe).
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     pub fn from_borrowed(fd: impl AsFd) -> io::Result<Self> {
         // Close-on-exec, so adapter hosts started later never inherit it.
         let duplicate = fd.as_fd().try_clone_to_owned()?;
@@ -48,7 +52,8 @@ impl NonBlockingTerminal {
     }
 
     /// Flags that will be put back by [`TerminalTransport::restore`].
-    pub fn original_flags(&self) -> OFlag {
+    #[must_use]
+    pub const fn original_flags(&self) -> OFlag {
         self.original_flags
     }
 }
@@ -107,7 +112,7 @@ impl TerminalTransport for NonBlockingTerminal {
 impl Drop for NonBlockingTerminal {
     fn drop(&mut self) {
         // Best effort: a descriptor that vanished cannot be restored anyway.
-        let _ = self.restore();
+        self.restore().unwrap_or_default();
     }
 }
 
@@ -133,6 +138,10 @@ pub struct TtyInputGate {
 impl TtyInputGate {
     /// Gate over the device the input library reads: standard input when it
     /// is a terminal, otherwise the controlling terminal (`/dev/tty`).
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     pub fn controlling_terminal() -> io::Result<Self> {
         let stdin = io::stdin();
         if nix::unistd::isatty(stdin.as_fd()).unwrap_or(false) {
@@ -149,6 +158,10 @@ impl TtyInputGate {
 
     /// Gate over any readable descriptor (a PTY, a pipe); the duplicate is
     /// close-on-exec.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     pub fn from_borrowed(fd: impl AsFd) -> io::Result<Self> {
         Ok(Self {
             fd: fd.as_fd().try_clone_to_owned()?,
@@ -185,7 +198,7 @@ impl InputGate for TtyInputGate {
 
 /// A hung-up terminal also reports POLLIN (its reads return end-of-file),
 /// so the hang-up bits must win; unread input of a hung-up peer is dropped.
-fn input_readiness(events: PollFlags) -> InputReadiness {
+const fn input_readiness(events: PollFlags) -> InputReadiness {
     if events.intersects(HANG_UP_EVENTS) {
         InputReadiness::HungUp
     } else if events.contains(PollFlags::POLLIN) {

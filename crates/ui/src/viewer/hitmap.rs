@@ -1,4 +1,4 @@
-//! HitMap of one rendered frame. Clicks are resolved against the map of the
+//! `HitMap` of one rendered frame. Clicks are resolved against the map of the
 //! frame the user actually saw, together with that frame's revision, so a
 //! click can never be retargeted to whatever row now occupies the position.
 
@@ -17,7 +17,8 @@ pub struct HitMap {
 }
 
 impl HitMap {
-    pub fn new(frame_revision: u64) -> Self {
+    #[must_use]
+    pub const fn new(frame_revision: u64) -> Self {
         Self {
             frame_revision,
             targets: Vec::new(),
@@ -25,7 +26,8 @@ impl HitMap {
     }
 
     /// Revision of the projection this frame was drawn from.
-    pub fn frame_revision(&self) -> u64 {
+    #[must_use]
+    pub const fn frame_revision(&self) -> u64 {
         self.frame_revision
     }
 
@@ -42,11 +44,13 @@ impl HitMap {
         self.targets.push(target);
     }
 
+    #[must_use]
     pub fn targets(&self) -> &[HitTarget] {
         &self.targets
     }
 
     /// Topmost target at a cell (later targets are drawn over earlier ones).
+    #[must_use]
     pub fn hit(&self, column: u16, row: u16) -> Option<&HitTarget> {
         let position = Position::new(column, row);
         self.targets
@@ -56,6 +60,7 @@ impl HitMap {
     }
 
     /// Targets of `control_id` that `module_id` drew.
+    #[must_use]
     pub fn count_of(&self, module_id: &ModuleId, control_id: &str) -> usize {
         self.targets
             .iter()
@@ -63,6 +68,7 @@ impl HitMap {
             .count()
     }
 
+    #[must_use]
     pub fn count(&self, control_id: &str) -> usize {
         self.targets
             .iter()
@@ -71,6 +77,7 @@ impl HitMap {
     }
 
     /// Whether the frame drew a row of `key` (selected or not).
+    #[must_use]
     pub fn draws_process(&self, key: &ProcessKey) -> bool {
         self.targets.iter().any(|target| {
             matches!(
@@ -81,6 +88,7 @@ impl HitMap {
     }
 
     /// The selected process row as drawn.
+    #[must_use]
     pub fn visible_selected_process(&self) -> Option<&ProcessKey> {
         self.targets
             .iter()
@@ -89,6 +97,7 @@ impl HitMap {
     }
 
     /// Number of process rows drawn (page size for PageUp/PageDown).
+    #[must_use]
     pub fn visible_process_rows(&self) -> usize {
         self.count(controls::PROCESS_ROW) + self.count(controls::PROCESS_ROW_SELECTED)
     }
@@ -146,7 +155,7 @@ mod tests {
             target(controls::PROCESS_ROW, Rect::new(20, 20, 5, 1)),
             bounds,
         );
-        assert!(map.targets().is_empty());
+        assert_eq!(map.targets().len(), 0);
         map.push_clipped(
             target(controls::PROCESS_ROW, Rect::new(5, 0, 20, 1)),
             bounds,

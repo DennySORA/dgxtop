@@ -113,7 +113,7 @@ pub(crate) struct ArchiveQueue {
     identity: Option<(String, String)>,
 }
 
-fn row_span(row: &ArchiveRow) -> (u64, u64) {
+const fn row_span(row: &ArchiveRow) -> (u64, u64) {
     match row {
         ArchiveRow::GaugeBucket { bucket, .. } => (bucket.start_ns, bucket.end_ns),
         ArchiveRow::CounterBucket { bucket, .. } => (bucket.start_ns, bucket.end_ns),
@@ -144,7 +144,7 @@ impl ArchiveQueue {
     }
 
     /// Whether a host and boot are known to stamp a journal with.
-    pub(crate) fn knows_identity(&self) -> bool {
+    pub(crate) const fn knows_identity(&self) -> bool {
         self.identity.is_some()
     }
 
@@ -203,13 +203,13 @@ impl ArchiveQueue {
         let before = self.account.bytes();
         let mut released = 0u64;
         self.rows.retain(|queued| {
-            let pruned = prunes
+            let dropped = prunes
                 .iter()
                 .any(|prune| is_pruned(&queued.row, prune, clock));
-            if pruned {
+            if dropped {
                 released = released.saturating_add(queued.bytes);
             }
-            !pruned
+            !dropped
         });
         self.account.shrink_to(before.saturating_sub(released));
     }
@@ -634,7 +634,7 @@ mod tests {
         let start_of_minute_2 = i64::try_from(UTC_ON_A_WHOLE_MINUTE_NS).unwrap()
             + 2 * i64::try_from(BUCKET_NS).unwrap();
         let prune = ArchivePrune {
-            series: dgxtop_core::history::SeriesInEveryBoot::from(&pruned.key),
+            series: SeriesInEveryBoot::from(&pruned.key),
             before_utc_ns: start_of_minute_2,
         };
         queue.drop_pruned(&[], &clock());
@@ -677,7 +677,7 @@ mod tests {
         let ledger = ByteLedger::for_memory_limit_mib(64);
         let mut queue = ArchiveQueue::new(&ledger);
         let prune = ArchivePrune {
-            series: dgxtop_core::history::SeriesInEveryBoot::from(&segment().key),
+            series: SeriesInEveryBoot::from(&segment().key),
             before_utc_ns: i64::try_from(UTC_ON_A_WHOLE_MINUTE_NS).unwrap(),
         };
         assert!(!queue.knows_identity());
@@ -691,12 +691,12 @@ mod tests {
         let rows = queue
             .take(1 << 20, &clock(), 2, (Vec::new(), None))
             .unwrap();
-        assert!(rows.prunes.is_empty());
+        assert_eq!(rows.prunes.len(), 0);
         let alone = queue
             .take(1 << 20, &clock(), 3, (vec![prune.clone()], None))
             .unwrap();
         assert_eq!(alone.prunes, vec![prune]);
-        assert!(alone.buckets.is_empty());
+        assert_eq!(alone.buckets.len(), 0);
         assert_eq!(
             (alone.host_id.as_str(), alone.boot_id.as_str()),
             ("test-host", "fake-boot")
@@ -724,7 +724,7 @@ mod tests {
         ]);
         let first = queue.take(1, &clock(), 1, (Vec::new(), None)).unwrap();
         assert_eq!(first.buckets.len(), 1);
-        assert!(first.bridges.is_empty());
+        assert_eq!(first.bridges.len(), 0);
         let rest = queue
             .take(1 << 20, &clock(), 2, (Vec::new(), None))
             .unwrap();

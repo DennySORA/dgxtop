@@ -106,6 +106,11 @@ macro_rules! bounded_identity {
 
         impl $name {
             /// Validates length and rejects control characters.
+            ///
+            /// # Errors
+            ///
+            /// Returns an `IdentityError` when the value breaks the rules of
+            /// its kind: its length, a control character or its syntax.
             pub fn new(value: impl Into<String>) -> Result<Self, IdentityError> {
                 let value = value.into();
                 validate_bounded($field, &value, $min, $max)?;
@@ -312,12 +317,18 @@ fn validate_metric_id(value: &str) -> Result<(), IdentityError> {
 
 impl MetricId {
     /// Validates `^[a-z][a-z0-9_.]{1,127}$`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn new(value: impl Into<String>) -> Result<Self, IdentityError> {
         let value = value.into();
         validate_metric_id(&value)?;
         Ok(Self(Arc::from(value)))
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -376,7 +387,8 @@ pub struct MetricKey {
 }
 
 impl MetricKey {
-    pub fn new(
+    #[must_use]
+    pub const fn new(
         host_id: HostId,
         boot_id: BootId,
         entity_id: EntityId,
@@ -394,11 +406,17 @@ impl MetricKey {
 
     /// Compact selector `metric_id|scope|entity_id` used inside view sessions
     /// (host and boot are implicit there). `metric_id` cannot contain `|`.
+    #[must_use]
     pub fn series_selector(&self) -> String {
         format!("{}|{}|{}", self.metric_id, self.scope, self.entity_id)
     }
 
     /// Rebuilds a key from a selector produced by [`MetricKey::series_selector`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn from_series_selector(
         host_id: &HostId,
         boot_id: &BootId,
@@ -437,14 +455,16 @@ pub struct OriginIdentity {
 }
 
 impl OriginIdentity {
-    pub fn confirmed(origin_id: OriginId) -> Self {
+    #[must_use]
+    pub const fn confirmed(origin_id: OriginId) -> Self {
         Self {
             origin_id: Some(origin_id),
             relation: OriginRelation::Confirmed,
         }
     }
 
-    pub fn unknown() -> Self {
+    #[must_use]
+    pub const fn unknown() -> Self {
         Self {
             origin_id: None,
             relation: OriginRelation::Unknown,
@@ -452,6 +472,11 @@ impl OriginIdentity {
     }
 
     /// Rejects `confirmed` without an `origin_id` (schema `if/then`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn validate(&self) -> Result<(), IdentityError> {
         if self.relation == OriginRelation::Confirmed && self.origin_id.is_none() {
             return Err(IdentityError::ConfirmedOriginWithoutId);
@@ -460,7 +485,8 @@ impl OriginIdentity {
     }
 
     /// Confirmed origin id, if any.
-    pub fn confirmed_id(&self) -> Option<&OriginId> {
+    #[must_use]
+    pub const fn confirmed_id(&self) -> Option<&OriginId> {
         match self.relation {
             OriginRelation::Confirmed => self.origin_id.as_ref(),
             OriginRelation::Unknown => None,
@@ -474,6 +500,10 @@ impl OriginIdentity {
 pub struct Pid(i32);
 
 impl Pid {
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn new(value: i64) -> Result<Self, IdentityError> {
         i32::try_from(value)
             .ok()
@@ -482,6 +512,7 @@ impl Pid {
             .ok_or(IdentityError::PidRange)
     }
 
+    #[must_use]
     pub const fn get(self) -> i32 {
         self.0
     }
@@ -496,7 +527,7 @@ impl TryFrom<i64> for Pid {
 
 impl From<Pid> for i64 {
     fn from(value: Pid) -> Self {
-        i64::from(value.0)
+        Self::from(value.0)
     }
 }
 
@@ -521,6 +552,11 @@ pub struct ProcessKey {
 
 impl ProcessKey {
     /// Entity id used when a process appears in metric keys.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn entity_id(&self) -> Result<EntityId, IdentityError> {
         EntityId::new(format!(
             "process:{}:{}:{}",
@@ -530,6 +566,7 @@ impl ProcessKey {
 
     /// Rebuilds a key from `process:<pid_namespace>:<pid>:<start_time_ticks>`
     /// (the namespace itself may contain `:`, so parsing goes from the right).
+    #[must_use]
     pub fn from_entity_id(host_id: &HostId, boot_id: &BootId, entity_id: &str) -> Option<Self> {
         let rest = entity_id.strip_prefix("process:")?;
         let (head, start) = rest.rsplit_once(':')?;
@@ -544,6 +581,7 @@ impl ProcessKey {
     }
 
     /// Short, non-secret digest of the identity for display/audit summaries.
+    #[must_use]
     pub fn summary(&self) -> String {
         format!(
             "pid {} · start {} · ns {}",

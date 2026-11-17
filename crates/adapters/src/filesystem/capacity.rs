@@ -21,6 +21,10 @@ pub struct CapacityFigures {
 pub trait CapacityProbe: Send {
     /// Capacity of the filesystem mounted at `mount_point` (absolute path as
     /// written in mountinfo).
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn capacity(&self, mount_point: &str) -> io::Result<CapacityFigures>;
 }
 
@@ -35,10 +39,12 @@ impl StatvfsProbe {
         Self { root: root.into() }
     }
 
+    #[must_use]
     pub fn host() -> Self {
         Self::new("/")
     }
 
+    #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -47,7 +53,10 @@ impl StatvfsProbe {
 impl CapacityProbe for StatvfsProbe {
     // `fsblkcnt_t` and `c_ulong` are `u64` on 64-bit Linux but narrower on
     // some targets, so the widening conversions are kept explicit.
-    #[allow(clippy::useless_conversion)]
+    #[expect(
+        clippy::useless_conversion,
+        reason = "`fsblkcnt_t` and `c_ulong` are u64 on 64-bit Linux but narrower on some targets, where the conversions widen"
+    )]
     fn capacity(&self, mount_point: &str) -> io::Result<CapacityFigures> {
         let path = self.root.join(mount_point.trim_start_matches('/'));
         let stat = nix::sys::statvfs::statvfs(&path).map_err(io::Error::from)?;

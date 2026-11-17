@@ -89,6 +89,7 @@ impl ModeSet {
     /// Every mode except text entry (where printable keys are text).
     pub const NOT_FILTER: Self = Self(5);
 
+    #[must_use]
     pub const fn contains(self, mode: ModeKind) -> bool {
         let bit = match mode {
             ModeKind::Normal => 1,
@@ -107,6 +108,7 @@ pub enum ViewScope {
 }
 
 impl ViewScope {
+    #[must_use]
     pub fn contains(self, view: ViewKind) -> bool {
         match self {
             Self::All => true,
@@ -124,6 +126,7 @@ pub struct KeyPattern {
 }
 
 impl KeyPattern {
+    #[must_use]
     pub const fn key(code: KeyCode) -> Self {
         Self {
             code,
@@ -131,10 +134,12 @@ impl KeyPattern {
         }
     }
 
+    #[must_use]
     pub const fn char(character: char) -> Self {
         Self::key(KeyCode::Char(character))
     }
 
+    #[must_use]
     pub const fn ctrl(character: char) -> Self {
         Self {
             code: KeyCode::Char(character),
@@ -142,6 +147,7 @@ impl KeyPattern {
         }
     }
 
+    #[must_use]
     pub fn matches(&self, event: &KeyEvent) -> bool {
         let control = event.modifiers.contains(KeyModifiers::CONTROL);
         let shift = event.modifiers.contains(KeyModifiers::SHIFT);
@@ -184,7 +190,6 @@ const PROCESS_VIEWS: &[ViewKind] = &[ViewKind::Overview];
 const FILTER_VIEWS: &[ViewKind] = &[ViewKind::Overview, ViewKind::History];
 
 /// Table-row constructor: positional arguments keep the table one line per binding.
-#[allow(clippy::too_many_arguments)]
 const fn binding(
     keys: &'static str,
     description: &'static str,
@@ -279,6 +284,7 @@ pub static KEYMAP: &[KeyBinding] = &[
 ];
 
 /// Resolves a key event in the given mode and view (`None` = unbound).
+#[must_use]
 pub fn resolve(event: &KeyEvent, mode: ModeKind, view: ViewKind) -> Option<KeyAction> {
     if event.kind == KeyEventKind::Release {
         return None;
@@ -297,6 +303,7 @@ pub fn resolve(event: &KeyEvent, mode: ModeKind, view: ViewKind) -> Option<KeyAc
 }
 
 /// Footer hints for the current mode and view, in table order.
+#[must_use]
 pub fn hints(mode: ModeKind, view: ViewKind) -> Vec<(&'static str, &'static str)> {
     let mut hints: Vec<(&'static str, &'static str)> = KEYMAP
         .iter()

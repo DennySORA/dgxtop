@@ -29,7 +29,8 @@ pub enum BackendError {
 
 impl BackendError {
     /// Read status recorded on the observation for this failure.
-    pub fn read_status(&self) -> ReadStatus {
+    #[must_use]
+    pub const fn read_status(&self) -> ReadStatus {
         match self {
             Self::NotSupported => ReadStatus::Unsupported,
             Self::NoPermission => ReadStatus::PermissionDenied,
@@ -39,6 +40,7 @@ impl BackendError {
     }
 
     /// Bounded reason code (no paths, no driver free text beyond 80 bytes).
+    #[must_use]
     pub fn reason_code(&self) -> String {
         match self {
             Self::NotSupported => "NVML_NOT_SUPPORTED".to_owned(),
@@ -54,7 +56,8 @@ impl BackendError {
 
     /// Failures that describe a capability rather than a transient fault; they
     /// are cached and re-probed at most once per probe interval.
-    pub fn is_capability_failure(&self) -> bool {
+    #[must_use]
+    pub const fn is_capability_failure(&self) -> bool {
         matches!(self, Self::NotSupported | Self::NoPermission)
     }
 }
@@ -82,6 +85,7 @@ pub enum ConnectError {
 }
 
 impl ConnectError {
+    #[must_use]
     pub fn reason_code(&self) -> String {
         match self {
             Self::DriverMissing(detail) => format!(
@@ -153,6 +157,7 @@ pub enum ClockDomain {
 impl ClockDomain {
     pub const ALL: [Self; 4] = [Self::Graphics, Self::Memory, Self::Sm, Self::Video];
 
+    #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Graphics => "graphics",
@@ -185,6 +190,7 @@ impl ThermalThreshold {
         Self::Target,
     ];
 
+    #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Slowdown => entity::SCOPE_SLOWDOWN,
@@ -248,6 +254,7 @@ impl ThrottleCause {
         Self::Reliability,
     ];
 
+    #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Power => entity::SCOPE_THROTTLE_POWER,
@@ -287,7 +294,7 @@ impl HealthValue {
     }
 }
 
-/// An attribute of the PCIe link.
+/// An attribute of the `PCIe` link.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum PcieLink {
     Generation,
@@ -297,6 +304,7 @@ pub enum PcieLink {
 impl PcieLink {
     pub const ALL: [Self; 2] = [Self::Generation, Self::Width];
 
+    #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Generation => entity::SCOPE_LINK_GENERATION,
@@ -305,7 +313,7 @@ impl PcieLink {
     }
 }
 
-/// PCIe throughput direction.
+/// `PCIe` throughput direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PcieDirection {
     Transmit,
@@ -329,6 +337,7 @@ pub enum EccCounterScope {
 impl EccCounterScope {
     pub const ALL: [Self; 2] = [Self::Volatile, Self::Aggregate];
 
+    #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Volatile => "volatile",
@@ -368,84 +377,263 @@ pub struct ProcessUtilizationSample {
 
 /// Device enumeration and slowly changing metadata (discovery only).
 pub trait GpuInventory {
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn driver_version(&self) -> BackendResult<String>;
     /// Version of the NVML library itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn nvml_version(&self) -> BackendResult<String>;
     /// Newest CUDA version the driver supports, `major.minor`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn cuda_driver_version(&self) -> BackendResult<String>;
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn device_count(&self) -> BackendResult<u32>;
     /// UUID of the device currently enumerated at `index`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn device_uuid(&self, index: u32) -> BackendResult<String>;
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn device_details(&self, uuid: &str) -> BackendResult<DeviceDetails>;
     /// Human readable compute mode (`default`, `exclusive_process`, ...).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn compute_mode(&self, uuid: &str) -> BackendResult<String>;
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn persistence_mode(&self, uuid: &str) -> BackendResult<bool>;
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn fan_count(&self, uuid: &str) -> BackendResult<u32>;
     /// Enforced power limit in milliwatts.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn power_limit_mw(&self, uuid: &str) -> BackendResult<u32>;
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn max_clock_mhz(&self, uuid: &str, domain: ClockDomain) -> BackendResult<u32>;
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn temperature_threshold_c(
         &self,
         uuid: &str,
         threshold: ThermalThreshold,
     ) -> BackendResult<u32>;
     /// Highest generation or width the device and its slot support.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn max_pcie_link(&self, uuid: &str, link: PcieLink) -> BackendResult<u32>;
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn static_fact(&self, uuid: &str, fact: StaticFact) -> BackendResult<u64>;
     /// CPUs nearest the device: bit `n` of the words is CPU `n` (D-54).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn cpu_affinity(&self, uuid: &str) -> BackendResult<Vec<u64>>;
     /// NUMA nodes nearest the device's memory: bit `n` is node `n`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn numa_affinity(&self, uuid: &str) -> BackendResult<Vec<u64>>;
     /// The device's NVLink-C2C links to the CPU (GB10, Grace).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn c2c_links(&self, uuid: &str) -> BackendResult<C2cLinks>;
-    /// The PCIe path between two devices.
+    /// The `PCIe` path between two devices.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn peer_link(&self, uuid: &str, peer: &str) -> BackendResult<GpuLink>;
     /// Whether `uuid` may read and write `peer`'s memory directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn peer_access(&self, uuid: &str, peer: &str) -> BackendResult<PeerAccess>;
 }
 
-/// Per-device gauges and counters (fast and slow_health groups).
+/// Per-device gauges and counters (fast and `slow_health` groups).
 pub trait GpuTelemetry {
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn utilization(&self, uuid: &str) -> BackendResult<UtilizationRates>;
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn temperature_c(&self, uuid: &str) -> BackendResult<u32>;
     /// Power the driver reports by default (a one-second average on Ampere
     /// and newer GPUs).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn power_draw_mw(&self, uuid: &str) -> BackendResult<u32>;
     /// The driver's instantaneous power reading (D-54).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn power_instant_mw(&self, uuid: &str) -> BackendResult<u32>;
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn clock_mhz(&self, uuid: &str, domain: ClockDomain) -> BackendResult<u32>;
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn fan_speed_percent(&self, uuid: &str, fan: u32) -> BackendResult<u32>;
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn framebuffer_memory(&self, uuid: &str) -> BackendResult<FramebufferMemory>;
-    /// PCIe throughput in the driver's "KB/s" (definition unverified).
+    /// `PCIe` throughput in the driver's "KB/s" (definition unverified).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn pcie_throughput_kb(&self, uuid: &str, direction: PcieDirection) -> BackendResult<u32>;
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn encoder_utilization(&self, uuid: &str) -> BackendResult<u32>;
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn decoder_utilization(&self, uuid: &str) -> BackendResult<u32>;
     /// Energy since the last driver reload in millijoules.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn total_energy_mj(&self, uuid: &str) -> BackendResult<u64>;
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn ecc_errors(
         &self,
         uuid: &str,
         kind: EccErrorKind,
         scope: EccCounterScope,
     ) -> BackendResult<u64>;
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn retired_page_count(&self, uuid: &str, cause: RetiredPageCause) -> BackendResult<u64>;
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn nvlink_active(&self, uuid: &str, link: u32) -> BackendResult<bool>;
     /// Performance state, 0 (maximum performance) to 15.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn performance_state(&self, uuid: &str) -> BackendResult<u32>;
     /// NVML clocks-event ("throttle") reason bits.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn throttle_reasons(&self, uuid: &str) -> BackendResult<u64>;
-    /// Current generation or width of the PCIe link (it may train down at
+    /// Current generation or width of the `PCIe` link (it may train down at
     /// idle).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn pcie_link(&self, uuid: &str, link: PcieLink) -> BackendResult<u32>;
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn health_value(&self, uuid: &str, value: HealthValue) -> BackendResult<u64>;
 }
 
 /// Per-device process associations (process group).
 pub trait GpuProcessQueries {
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn compute_processes(&self, uuid: &str) -> BackendResult<Vec<GpuProcessEntry>>;
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn graphics_processes(&self, uuid: &str) -> BackendResult<Vec<GpuProcessEntry>>;
     /// Samples newer than `since_timestamp_us` (0 = everything buffered); an
     /// empty list means the driver had no new sample.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BackendError` when the driver does not support the query,
+    /// refuses it, lost the GPU or fails otherwise.
     fn process_utilization(
         &self,
         uuid: &str,
@@ -465,6 +653,10 @@ impl<T: GpuInventory + GpuTelemetry + GpuProcessQueries + Send> GpuBackend for T
 
 /// Opens backend sessions; called lazily and throttled by the adapter.
 pub trait BackendConnector: Send {
+    /// # Errors
+    ///
+    /// Returns a `ConnectError` when the driver's library is missing, access is
+    /// refused, no GPU is present or the driver fails otherwise.
     fn connect(&mut self) -> Result<Box<dyn GpuBackend>, ConnectError>;
 }
 

@@ -114,7 +114,7 @@ pub(crate) fn open_database(
             recreated: None,
         }),
         Err(OpenFailure::Surroundings(unusable)) => Err(unusable),
-        Err(OpenFailure::File(reason)) => recreate(spec, fs, reason),
+        Err(OpenFailure::File(reason)) => recreate(spec, fs, &reason),
     }
 }
 
@@ -123,14 +123,14 @@ pub(crate) fn open_database(
 fn recreate(
     spec: &DatabaseSpec<'_>,
     fs: &dyn FileSystemOps,
-    reason: String,
+    reason: &str,
 ) -> Result<OpenedDatabase, Unusable> {
     remove_database_files(spec.path, fs)
         .map_err(|error| Unusable::failed(format!("{reason}; not deleted: {error}")))?;
     match open_as_found(spec, fs) {
         Ok(connection) => Ok(OpenedDatabase {
             connection,
-            recreated: Some(dgxtop_core::text::sanitize_message(&reason)),
+            recreated: Some(dgxtop_core::text::sanitize_message(reason)),
         }),
         Err(OpenFailure::Surroundings(unusable)) => Err(unusable),
         Err(OpenFailure::File(again)) => Err(Unusable::failed(format!(
@@ -305,7 +305,7 @@ mod tests {
 
     impl Drop for PrivateDir {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
+            std::fs::remove_dir_all(&self.0).unwrap_or_default();
         }
     }
 

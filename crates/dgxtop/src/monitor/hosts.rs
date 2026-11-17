@@ -68,7 +68,7 @@ fn replay_host(
         &fixture,
         adapter_id.clone(),
         Arc::clone(clock),
-        host_id.clone(),
+        &host_id.clone(),
         None,
     )
     .map_err(|error| StartError::invalid(format!("replay fixture: {error}")))?
@@ -83,12 +83,12 @@ fn replay_host(
             &fixture,
             factory_adapter.clone(),
             Arc::clone(&factory_clock),
-            factory_host.clone(),
+            &factory_host.clone(),
             None,
         ) {
             Ok(adapter) => Box::new(adapter.with_in_process(true)),
             Err(_) => Box::new(crate::replay_unavailable::UnavailableReplay::new(
-                factory_adapter.clone(),
+                &factory_adapter.clone(),
             )),
         }
     });

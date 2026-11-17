@@ -10,6 +10,7 @@ use crate::{
 };
 
 /// The six collectors, in `naming::collectors::ALL` order.
+#[must_use]
 pub fn default_collectors() -> Vec<Arc<dyn Collector>> {
     collectors::ALL
         .iter()
@@ -19,6 +20,7 @@ pub fn default_collectors() -> Vec<Arc<dyn Collector>> {
 
 /// Collector registered under `id` (`cpu`, `gpu`, `memory`, `disk`,
 /// `network`, `process`), `None` for unknown ids.
+#[must_use]
 pub fn collector_for(id: &str) -> Option<Arc<dyn Collector>> {
     let collector: Arc<dyn Collector> = match id {
         collectors::CPU => Arc::new(CpuCollector::new().ok()?),

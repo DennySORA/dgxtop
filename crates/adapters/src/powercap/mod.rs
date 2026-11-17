@@ -24,6 +24,7 @@ use crate::hwmon::sysfs::live_manifest;
 use crate::registry::AdapterOptions;
 
 /// Static manifest of the powercap adapter.
+#[must_use]
 pub fn manifest() -> AdapterManifest {
     live_manifest(naming::adapters::POWERCAP, "PowercapAdapter")
 }
@@ -33,13 +34,21 @@ pub struct PowercapAdapter {
     inner: SysfsAdapter<PowercapScanner>,
 }
 
+impl std::fmt::Debug for PowercapAdapter {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PowercapAdapter")
+            .finish_non_exhaustive()
+    }
+}
+
 impl PowercapAdapter {
     /// `files` is rooted at `/` in production and at a fake tree in tests.
     pub fn new(
         clock: Arc<dyn TimeProvider>,
         host_id: HostId,
         files: Arc<dyn SystemFiles>,
-        options: AdapterOptions,
+        options: &AdapterOptions,
     ) -> Self {
         Self {
             inner: SysfsAdapter::new(
@@ -47,13 +56,14 @@ impl PowercapAdapter {
                 clock,
                 host_id,
                 files,
-                &options,
+                options,
                 PowercapScanner::new(),
             ),
         }
     }
 
     /// Number of currently catalogued sources.
+    #[must_use]
     pub fn source_count(&self) -> usize {
         self.inner.source_count()
     }

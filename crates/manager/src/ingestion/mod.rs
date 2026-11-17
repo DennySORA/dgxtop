@@ -1,4 +1,4 @@
-//! IngestionService: the single logical writer of telemetry (AT05).
+//! `IngestionService`: the single logical writer of telemetry (AT05).
 //!
 //! * A completed read cycle (all pages) is routed to every collector whose
 //!   `consumes(adapter, base_group)` is true.
@@ -29,6 +29,7 @@ use dgxtop_core::canonical::{
 use dgxtop_core::clock::{NANOS_PER_MILLI, NANOS_PER_SECOND};
 use dgxtop_core::config::{Config, SamplingConfig};
 use dgxtop_core::identity::{AdapterId, BootId, CollectorId, HostId};
+use dgxtop_core::num::ToF64Lossy;
 use dgxtop_core::ports::{
     Collector, Dispatch, DispatchError, IngressBatch, SnapshotReader, StateJob,
 };
@@ -59,7 +60,7 @@ pub(crate) struct CycleInput {
 }
 
 impl CycleInput {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         adapter_id: AdapterId,
         group: String,
         cycle_id: u64,
@@ -132,11 +133,11 @@ struct CollectorSlot {
 }
 
 impl CollectorSlot {
-    fn is_idle(&self) -> bool {
+    const fn is_idle(&self) -> bool {
         matches!(self.phase, SlotPhase::Idle)
     }
 
-    fn job_deadline(&self) -> Option<u64> {
+    const fn job_deadline(&self) -> Option<u64> {
         match &self.phase {
             SlotPhase::Idle => None,
             SlotPhase::Collecting(job) | SlotPhase::AwaitingAck(job) => Some(job.deadline_ns),
@@ -281,13 +282,13 @@ impl IngestionService {
         &self.snapshots
     }
 
-    pub(crate) fn pages(&mut self) -> &mut pages::PageAccumulator {
+    pub(crate) const fn pages(&mut self) -> &mut pages::PageAccumulator {
         &mut self.pages
     }
 
     /// Queues a completed cycle for every consuming collector. Returns the
     /// number of consumers and the gaps of backlog entries pushed out.
-    pub(crate) fn route(&mut self, input: CycleInput) -> (usize, Vec<GapRecord>) {
+    pub(crate) fn route(&mut self, input: &CycleInput) -> (usize, Vec<GapRecord>) {
         let mut gaps = Vec::new();
         if self.stopped {
             return (0, gaps);
@@ -611,7 +612,7 @@ impl IngestionService {
 }
 
 /// Collector bounds taken from `config.store`.
-pub(crate) fn collection_limits(config: &Config) -> CollectionLimits {
+pub(crate) const fn collection_limits(config: &Config) -> CollectionLimits {
     CollectionLimits {
         max_series: config.store.max_series,
         max_sources: config.store.max_sources,
@@ -663,12 +664,11 @@ fn record_service(samples: &mut VecDeque<u64>, duration_ns: u64) {
     samples.push_back(duration_ns);
 }
 
-#[allow(clippy::cast_precision_loss)]
 fn ratio(used: usize, limit: usize) -> f64 {
     if limit == 0 {
         return 1.0;
     }
-    used as f64 / limit as f64
+    used.to_f64_lossy() / limit.to_f64_lossy()
 }
 
 #[cfg(test)]
@@ -792,9 +792,9 @@ mod tests {
     #[test]
     fn a_cycle_of_pages_becomes_one_job_per_consuming_collector() {
         let mut bench = bench(8);
-        let (consumers, gaps) = bench.service.route(cycle("procfs", "cpu", 1, 1, 3));
+        let (consumers, gaps) = bench.service.route(&cycle("procfs", "cpu", 1, 1, 3));
         assert_eq!(consumers, 1);
-        assert!(gaps.is_empty());
+        assert_eq!(gaps.len(), 0);
         let report = bench.service.pump(SECOND, &context(1));
         assert_eq!(report.dispatched, 1);
         let plans = bench.plans.take();
@@ -804,7 +804,7 @@ mod tests {
         assert_eq!(plans[0].epoch, 1);
         assert_eq!(plans[0].state_revision, 0);
         // Unconsumed groups route nowhere.
-        assert_eq!(bench.service.route(cycle("nvml", "fast", 1, 1, 1)).0, 0);
+        assert_eq!(bench.service.route(&cycle("nvml", "fast", 1, 1, 1)).0, 0);
     }
 
     fn arriving(mut input: CycleInput, arrived_ns: u64) -> CycleInput {
@@ -817,7 +817,7 @@ mod tests {
         const MS: u64 = NANOS_PER_MILLI;
         let mut held = bench(8);
         held.service
-            .route(arriving(cycle("procfs", "cpu", 1, 1, 1), SECOND));
+            .route(&arriving(cycle("procfs", "cpu", 1, 1, 1), SECOND));
         let busy = context_with_busy(1, &["procfs"]);
         assert_eq!(
             held.service
@@ -835,19 +835,19 @@ mod tests {
         // Inputs of idle adapters are never held.
         let mut idle = bench(8);
         idle.service
-            .route(arriving(cycle("hwmon", "fast", 1, 1, 1), SECOND));
+            .route(&arriving(cycle("hwmon", "fast", 1, 1, 1), SECOND));
         assert_eq!(idle.service.pump(SECOND + MS, &busy).dispatched, 1);
     }
 
     #[test]
     fn one_job_in_flight_and_backlog_coalesces_into_the_next_job() {
         let mut bench = bench(8);
-        bench.service.route(cycle("procfs", "cpu", 1, 1, 1));
+        bench.service.route(&cycle("procfs", "cpu", 1, 1, 1));
         bench.service.pump(SECOND, &context(1));
         let first = bench.plans.take().pop().unwrap();
         // Busy collector: two more cycles wait; nothing else is dispatched.
-        bench.service.route(cycle("procfs", "cpu", 2, 1, 1));
-        bench.service.route(cycle("hwmon", "fast", 2, 1, 1));
+        bench.service.route(&cycle("procfs", "cpu", 2, 1, 1));
+        bench.service.route(&cycle("hwmon", "fast", 2, 1, 1));
         assert_eq!(bench.service.pump(2 * SECOND, &context(1)).dispatched, 0);
         assert!(bench.plans.is_empty());
         // Collected -> commit with the epoch/base guard; still one un-acked delta.
@@ -878,7 +878,7 @@ mod tests {
     #[test]
     fn stale_base_rejection_retries_with_the_fresh_base() {
         let mut bench = bench(8);
-        bench.service.route(cycle("procfs", "cpu", 1, 1, 1));
+        bench.service.route(&cycle("procfs", "cpu", 1, 1, 1));
         bench.service.pump(SECOND, &context(1));
         let first = bench.plans.take().pop().unwrap();
         bench.service.on_collected(collected(&first), SECOND, 1);
@@ -922,7 +922,7 @@ mod tests {
     #[test]
     fn stale_and_unknown_completions_are_ignored() {
         let mut bench = bench(8);
-        bench.service.route(cycle("procfs", "cpu", 1, 1, 1));
+        bench.service.route(&cycle("procfs", "cpu", 1, 1, 1));
         bench.service.pump(SECOND, &context(1));
         let plan = bench.plans.take().pop().unwrap();
         let mut foreign = collected(&plan);
@@ -948,11 +948,11 @@ mod tests {
     #[test]
     fn old_epoch_inputs_never_reach_a_job_and_expired_ones_become_gaps() {
         let mut bench = bench(8);
-        bench.service.route(cycle("procfs", "cpu", 1, 1, 1));
+        bench.service.route(&cycle("procfs", "cpu", 1, 1, 1));
         let mut expiring = cycle("procfs", "cpu", 2, 2, 1);
         expiring.expires_ns = 5 * SECOND;
-        bench.service.route(expiring);
-        bench.service.route(cycle("procfs", "cpu", 3, 2, 1));
+        bench.service.route(&expiring);
+        bench.service.route(&cycle("procfs", "cpu", 3, 2, 1));
         let report = bench.service.pump(6 * SECOND, &context(2));
         assert_eq!(report.stale_inputs, 1);
         assert_eq!(report.gaps.len(), 1);
@@ -965,12 +965,12 @@ mod tests {
     #[test]
     fn backlog_is_bounded_and_overflow_is_a_gap() {
         let mut bench = bench(2);
-        bench.service.route(cycle("procfs", "process", 1, 1, 1));
+        bench.service.route(&cycle("procfs", "process", 1, 1, 1));
         bench.service.pump(SECOND, &context(1));
-        bench.service.route(cycle("procfs", "process", 2, 1, 1));
-        bench.service.route(cycle("procfs", "process", 3, 1, 1));
+        bench.service.route(&cycle("procfs", "process", 2, 1, 1));
+        bench.service.route(&cycle("procfs", "process", 3, 1, 1));
         assert!((bench.service.backlog_utilization() - 1.0).abs() < f64::EPSILON);
-        let (_, gaps) = bench.service.route(cycle("procfs", "process", 4, 1, 1));
+        let (_, gaps) = bench.service.route(&cycle("procfs", "process", 4, 1, 1));
         assert_eq!(gaps.len(), 1);
         assert_eq!(gaps[0].reason, "collector_backlog_full");
         assert_eq!(gaps[0].affected_count, 2);
@@ -980,7 +980,7 @@ mod tests {
     fn busy_pool_keeps_inputs_and_retries() {
         let mut bench = bench(8);
         bench.plans.set_busy(true);
-        bench.service.route(cycle("procfs", "cpu", 1, 1, 1));
+        bench.service.route(&cycle("procfs", "cpu", 1, 1, 1));
         assert_eq!(bench.service.pump(SECOND, &context(1)).dispatched, 0);
         assert!(bench.service.next_deadline().is_some());
         bench.plans.set_busy(false);
@@ -998,7 +998,7 @@ mod tests {
     #[test]
     fn failures_and_timeouts_free_the_collector() {
         let mut bench = bench(8);
-        bench.service.route(cycle("procfs", "cpu", 1, 1, 1));
+        bench.service.route(&cycle("procfs", "cpu", 1, 1, 1));
         bench.service.pump(SECOND, &context(1));
         let plan = bench.plans.take().pop().unwrap();
         let gaps = bench
@@ -1006,7 +1006,7 @@ mod tests {
             .on_collector_failed(&plan.collector_id, plan.batch_id)
             .unwrap();
         assert_eq!(gaps[0].reason, "collector_failed");
-        bench.service.route(cycle("procfs", "cpu", 2, 1, 1));
+        bench.service.route(&cycle("procfs", "cpu", 2, 1, 1));
         bench.service.pump(2 * SECOND, &context(1));
         assert_eq!(bench.plans.take().len(), 1);
         let gaps = bench.service.expire_jobs(13 * SECOND);
@@ -1017,7 +1017,7 @@ mod tests {
     #[test]
     fn store_refusal_drops_the_batch_as_gaps() {
         let mut bench = bench(8);
-        bench.service.route(cycle("procfs", "cpu", 1, 1, 1));
+        bench.service.route(&cycle("procfs", "cpu", 1, 1, 1));
         bench.service.pump(SECOND, &context(1));
         let plan = bench.plans.take().pop().unwrap();
         bench.state.set_busy(true);
@@ -1036,7 +1036,9 @@ mod tests {
     fn service_time_p95_detects_overrun_and_stop_releases_backlog() {
         let mut bench = bench(8);
         for index in 0..5u64 {
-            bench.service.route(cycle("procfs", "cpu", index + 1, 1, 1));
+            bench
+                .service
+                .route(&cycle("procfs", "cpu", index + 1, 1, 1));
             bench.service.pump(index * SECOND, &context(1));
             let plan = bench.plans.take().pop().unwrap();
             bench
@@ -1050,10 +1052,10 @@ mod tests {
         }
         assert!(bench.service.service_overrun(SECOND));
         assert!(!bench.service.service_overrun(3 * SECOND));
-        bench.service.route(cycle("procfs", "cpu", 99, 1, 1));
+        bench.service.route(&cycle("procfs", "cpu", 99, 1, 1));
         bench.service.stop();
         assert_eq!(bench.service.backlog_utilization(), 0.0);
-        assert_eq!(bench.service.route(cycle("procfs", "cpu", 100, 1, 1)).0, 0);
+        assert_eq!(bench.service.route(&cycle("procfs", "cpu", 100, 1, 1)).0, 0);
         assert_eq!(bench.service.pump(10 * SECOND, &context(1)).dispatched, 0);
     }
 }

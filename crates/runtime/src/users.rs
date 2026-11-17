@@ -14,15 +14,16 @@ const MAX_PASSWD_BYTES: usize = 1024 * 1024;
 
 /// The names `/etc/passwd` lists; none when it cannot be read, so every
 /// process owner keeps its uid.
+#[must_use]
 pub fn local_user_names() -> UserNames {
     user_names_at(Path::new("/"))
 }
 
 /// [`local_user_names`] with `/etc` resolved under `root`.
+#[must_use]
 pub fn user_names_at(root: &Path) -> UserNames {
     read_bounded(&root.join(PASSWD_PATH), MAX_PASSWD_BYTES)
-        .map(|bytes| UserNames::from_passwd(&String::from_utf8_lossy(&bytes)))
-        .unwrap_or_default()
+        .map_or_default(|bytes| UserNames::from_passwd(&String::from_utf8_lossy(&bytes)))
 }
 
 /// The first `limit` bytes of `path`, without the line the limit cut: half
@@ -57,7 +58,7 @@ mod tests {
                 "dgxtop-runtime-users-{label}-{}",
                 std::process::id()
             ));
-            let _ = fs::remove_dir_all(&root);
+            fs::remove_dir_all(&root).unwrap_or_default();
             fs::create_dir_all(root.join("etc")).unwrap();
             fs::write(root.join(PASSWD_PATH), contents).unwrap();
             Self(root)
@@ -66,7 +67,7 @@ mod tests {
 
     impl Drop for TempRoot {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            fs::remove_dir_all(&self.0).unwrap_or_default();
         }
     }
 

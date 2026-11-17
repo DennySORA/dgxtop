@@ -1,11 +1,12 @@
-//! Ports between the crates of the D-79 architecture. Every implementation
-//! crate depends only on `dgxtop-core` (the history also on the pure
-//! `dgxtop-compression`); only the composition root (`dgxtop`) wires the
-//! concrete types behind these traits.
+//! Ports between the crates of the D-79 architecture.
+//!
+//! Every implementation crate depends only on `dgxtop-core` (the history
+//! also on the pure `dgxtop-compression`); only the composition root
+//! (`dgxtop`) wires the concrete types behind these traits.
 //!
 //! * Adapters: `TelemetryPort` (read-only, inside adapter hosts) and
 //!   `ProcessProbe` (the followed GPU processes, D-76); `ProcessActionPort`
-//!   is a separate trait that only the Manager's ProcessService receives.
+//!   is a separate trait that only the Manager's `ProcessService` receives.
 //! * Collectors: pure `Collector::collect` (state in, state out) and
 //!   `ProbeDeriver` (the probe readings' rates, D-79).
 //! * State: `StoreWriter` (the state actor only), `SnapshotReader` and
@@ -152,6 +153,7 @@ pub trait TrendReader: Send + Sync {
 pub struct CancelFlag(Arc<AtomicBool>);
 
 impl CancelFlag {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -160,6 +162,7 @@ impl CancelFlag {
         self.0.store(true, Ordering::Release);
     }
 
+    #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }
@@ -173,9 +176,14 @@ impl fmt::Debug for CancelFlag {
 
 /// The Overview History's reads (D-82): the bars of a size and the window
 /// statistics of one series, answered from the history's own sizes.
+///
 /// Bounded: `TimedOut` past the deadline, `Cancelled` when the flag is
 /// set; a series the history does not hold answers with no bars.
 pub trait OverviewReader: Send + Sync {
+    /// # Errors
+    ///
+    /// Returns an `ErrorDetail` when the request cannot be answered; its code
+    /// says why.
     fn read(
         &self,
         request: &OverviewRequest,
@@ -259,7 +267,8 @@ pub struct HistoryOutcome {
 
 impl HistoryOutcome {
     /// Whether the mutation changed what a snapshot shows (evictions, gaps).
-    pub fn changed_visible_state(&self) -> bool {
+    #[must_use]
+    pub const fn changed_visible_state(&self) -> bool {
         self.evicted_records > 0 || !self.new_gaps.is_empty()
     }
 }
@@ -296,16 +305,27 @@ pub trait HistoryIngest: Send {
     fn take_archive_journal(&mut self, max_bytes: u64) -> Option<ArchiveJournal>;
 }
 
-/// Reader of the history archive (D-51, D-82): the minutes earlier runs
-/// and boots left on disk, which the history compresses into the
-/// Overview's sizes at startup: which series earlier runs left, and their
-/// minutes oldest first, a bounded page at a time. An archive that does not
-/// exist yet holds none.
+/// Reader of the history archive (D-51, D-82).
+///
+/// The minutes earlier runs and boots left on disk, which the history
+/// compresses into the Overview's sizes at startup: which series earlier
+/// runs left, and their minutes oldest first, a bounded page at a time. An
+/// archive that does not exist yet holds none.
 pub trait ArchiveReader: Send {
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     fn archived_series(
         &mut self,
         list: &ArchivedSeriesList,
     ) -> Result<Vec<crate::history::SeriesInEveryBoot>, InfraError>;
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     fn archived_minutes(
         &mut self,
         read: &ArchivedMinutesRead,
@@ -316,9 +336,21 @@ pub trait ArchiveReader: Send {
 /// (D-82): it executes what the history asks, nothing more.
 pub trait HistoryTierStore: Send {
     /// Every series' kept buckets, read once at startup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     fn load(&mut self) -> Result<Vec<StoredTierSeries>, InfraError>;
     /// Deletes the series the journal forgets, writes closed buckets and
     /// keeps the latest of each (series, size); returns what it holds then.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     fn append(&mut self, journal: &TierJournal) -> Result<TierStoreUsage, InfraError>;
 }
 
@@ -340,7 +372,7 @@ pub struct LoadedConfig {
     pub origin: LoadOrigin,
 }
 
-#[derive(Debug, Clone, PartialEq, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ConfigLoadError {
     #[error("{path}: {error}")]
     Invalid { path: String, error: ConfigError },
@@ -383,10 +415,19 @@ pub enum PersistError {
 
 /// Versioned atomic JSON configuration store.
 pub trait ConfigRepository: Send {
+    /// # Errors
+    ///
+    /// Returns a `ConfigLoadError` when the file is invalid, of a newer schema,
+    /// at an unsafe path or cannot be read.
     fn load(&mut self) -> Result<LoadedConfig, ConfigLoadError>;
     /// CAS on `revision`: stage -> temp 0600 -> fsync -> rename -> dir fsync.
     /// The candidate's revision must equal `expected_revision`; the stored
     /// document gets `expected_revision + 1`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PersistError` when the revision conflicts, the document is
+    /// invalid or the write fails or is left uncertain.
     fn compare_and_swap(
         &mut self,
         expected_revision: u32,
@@ -397,10 +438,27 @@ pub trait ConfigRepository: Send {
 
 /// Action audit store (SQLite WAL, synchronous=FULL).
 pub trait AuditRepository: Send {
+    /// # Errors
+    ///
+    /// Returns an `AuditFailure` when the audit cannot record or read the
+    /// entry; its code says why.
     fn append_intent(&mut self, intent: &ActionIntent) -> Result<DurableReceipt, AuditFailure>;
+    /// # Errors
+    ///
+    /// Returns an `AuditFailure` when the audit cannot record or read the
+    /// entry; its code says why.
     fn append_outcome(&mut self, outcome: &ActionOutcomeRecord) -> Result<(), AuditFailure>;
+    /// # Errors
+    ///
+    /// Returns an `AuditFailure` when the audit cannot record or read the
+    /// entry; its code says why.
     fn append_attempt(&mut self, attempt: &ActionAttempt) -> Result<(), AuditFailure>;
     /// Marks intents without a provable outcome as `unknown` (never resent).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `AuditFailure` when the audit cannot record or read the
+    /// entry; its code says why.
     fn recover_unknown(
         &mut self,
         now_boot_ns: u64,
@@ -409,13 +467,18 @@ pub trait AuditRepository: Send {
     /// Deletes the rows older than `before_utc` (RFC 3339 UTC), bounded per
     /// call. The only way rows leave the audit: its owner decides the age
     /// and when (D-96).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `AuditFailure` when the audit cannot record or read the
+    /// entry; its code says why.
     fn expire(&mut self, before_utc: &str) -> Result<AuditExpiryReport, AuditFailure>;
     /// A read: never deletes or changes a row.
     fn status(&mut self) -> PersistenceStatus;
 }
 
 /// One archived segment (`history.sql` `history_segments`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArchivedSegment {
     pub segment_id: String,
     pub key: MetricKey,
@@ -499,6 +562,11 @@ pub struct ArchiveReceipt {
 
 /// Optional history archive (SQLite WAL, synchronous=NORMAL, off by default).
 pub trait ArchiveSink: Send {
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     fn append(&mut self, journal: ArchiveJournal) -> Result<ArchiveReceipt, InfraError>;
     fn status(&mut self) -> PersistenceStatus;
 }
@@ -526,6 +594,7 @@ pub enum ArchiveGapCause {
 
 impl ArchiveGapCause {
     /// Bounded diagnostics label.
+    #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::WorkerBusy => "worker_busy",
@@ -539,6 +608,11 @@ impl ArchiveGapCause {
 pub trait ProcessActionPort: Send {
     /// Opens a pidfd (flags 0), re-verifies identity, uid, namespace and
     /// liveness against `key`, and keeps the descriptor for the confirmation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `ActionError` when the action is refused or cannot be carried
+    /// out; every failure leaves the process untouched.
     fn prepare(
         &mut self,
         key: &ProcessKey,
@@ -567,9 +641,10 @@ pub trait ProcessProbe: Send {
 
 /// Turns a probe reading of a running process into the values its run's
 /// samples take (D-79: the process collector's transformation, kept apart
-/// from the process history that follows the runs). Pure: `previous` is
-/// what the last reading of the same process left; the result is the
-/// state the next reading starts from.
+/// from the process history that follows the runs).
+///
+/// Pure: `previous` is what the last reading of the same process left;
+/// the result is the state the next reading starts from.
 pub trait ProbeDeriver: Send + Sync {
     /// `read_boot_ns` is when the probe read `reading`.
     fn derive(
@@ -582,19 +657,45 @@ pub trait ProbeDeriver: Send + Sync {
 
 /// The stores of the process history (D-76): a long-term database of runs
 /// and their buckets of a minute and more, and a short-term file of the
-/// live runs' recent buckets. They keep what they are told and read what
-/// they are asked; what stays is the history's decision (D-94).
+/// live runs' recent buckets.
+///
+/// They keep what they are told and read what they are asked; what stays
+/// is the history's decision (D-94).
 pub trait ProcessHistoryStore: Send {
     /// What both stores kept, read at startup, as `request` asks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     fn load(
         &mut self,
         request: &ProcessHistoryLoadRequest,
     ) -> Result<ProcessHistoryLoad, InfraError>;
     /// Writes the journal and says what the store holds then.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     fn append(&mut self, journal: &ProcessHistoryJournal) -> Result<StoreUsage, InfraError>;
     /// Replaces the short-term file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     fn save_recent(&mut self, recent: &RecentHistory) -> Result<(), InfraError>;
     /// One run's buckets, for a run whose buckets are not in memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     fn read_run(
         &mut self,
         key: &ProcessKey,
@@ -632,9 +733,11 @@ pub enum ProcessHistoryCompletion {
     },
 }
 
-/// What the history's process actor takes (D-79): from the Manager the
-/// committed tables, the commits between them, the signals dgxtop sent and
-/// the runs sessions show; from the probe and the stores what they did.
+/// What the history's process actor takes (D-79).
+///
+/// From the Manager the committed tables, the commits between them, the
+/// signals dgxtop sent and the runs sessions show; from the probe and the
+/// stores what they did.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProcessHistoryInput {
     /// A committed process table new since the last one handed over.
@@ -688,6 +791,10 @@ pub enum DispatchError {
 
 /// Submits `J` to a bounded worker; never blocks the caller.
 pub trait Dispatch<J>: Send {
+    /// # Errors
+    ///
+    /// Returns a `DispatchError` when the worker is busy or closed, or its
+    /// queue is full.
     fn try_dispatch(&self, job: J) -> Result<(), DispatchError>;
 }
 
@@ -743,11 +850,13 @@ pub struct IngressBatch {
 }
 
 impl IngressBatch {
-    pub fn new(batch: ObservationBatch, permit: Option<BytePermit>) -> Self {
+    #[must_use]
+    pub const fn new(batch: ObservationBatch, permit: Option<BytePermit>) -> Self {
         Self { batch, permit }
     }
 
-    pub fn batch(&self) -> &ObservationBatch {
+    #[must_use]
+    pub const fn batch(&self) -> &ObservationBatch {
         &self.batch
     }
 
@@ -836,6 +945,11 @@ pub trait SessionPort: Send {
     fn session_id(&self) -> &SessionId;
     /// Non-blocking: `Ok` means accepted (a result slot is reserved), never
     /// "completed"; a full queue is rejected immediately with `Busy`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `CommandRejection` when the command is refused before it is
+    /// queued; its code says why.
     fn submit(&self, command: CommandEnvelope) -> Result<(), CommandRejection>;
     /// Latest pending projection (at most one is ever pending).
     fn take_projection(&self) -> Option<Arc<ViewModel>>;
@@ -849,14 +963,26 @@ pub trait SessionPort: Send {
     fn set_viewport(&self, columns: u16, rows: u16);
 }
 
-/// Non-blocking terminal output, implemented in the runtime with O_NONBLOCK
+/// Non-blocking terminal output, implemented in the runtime with `O_NONBLOCK`
 /// and poll(POLLOUT); restores the original file flags.
 pub trait TerminalTransport: Send {
     /// Writes what the terminal accepts now; `Ok(0)` means it would block.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn write_nonblocking(&mut self, bytes: &[u8]) -> std::io::Result<usize>;
     /// Waits up to `timeout` for writability.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn wait_writable(&mut self, timeout: Duration) -> std::io::Result<bool>;
     /// Restores the original descriptor flags (idempotent).
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn restore(&mut self) -> std::io::Result<()>;
 }
 
@@ -875,11 +1001,19 @@ pub enum InputReadiness {
 pub trait InputGate: Send {
     /// Waits until input is pending, the terminal hangs up, or `timeout`
     /// passes.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn wait(&mut self, timeout: Duration) -> std::io::Result<InputReadiness>;
 
     /// Waits until the terminal hangs up (`Ok(true)`) or `timeout` passes,
     /// ignoring pending input: bytes the input library left unread must not
     /// turn its wait into a busy loop.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn wait_for_hang_up(&mut self, timeout: Duration) -> std::io::Result<bool>;
 }
 

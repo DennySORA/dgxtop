@@ -1,7 +1,8 @@
-//! What the history's series share with the rest of dgxtop: how a
-//! segment's points were aggregated ([`HistoryMethod`], a segment
-//! identity part), the most bars a chart asks for, the coverage ratio,
-//! and a series in every boot ([`SeriesInEveryBoot`]).
+//! What the history's series share with the rest of dgxtop.
+//!
+//! How a segment's points were aggregated ([`HistoryMethod`], a
+//! segment identity part), the most bars a chart asks for, the
+//! coverage ratio, and a series in every boot ([`SeriesInEveryBoot`]).
 //!
 //! There is no general history query: the Manager reads the history only
 //! through the Overview's sizes (D-82, D-90).
@@ -13,6 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::identity::{EntityId, HostId, MetricId, MetricKey, Scope};
+use crate::num::ToF64Lossy;
 
 /// Most bars one chart asks for.
 pub const MAX_HISTORY_POINTS: u32 = 2000;
@@ -31,12 +33,12 @@ pub enum HistoryMethod {
 }
 
 /// The share of `span_ns` that `covered_ns` covers, clamped to `[0, 1]`.
-#[allow(clippy::cast_precision_loss)]
+#[must_use]
 pub fn coverage_ratio(covered_ns: u64, span_ns: u64) -> f64 {
     if span_ns == 0 {
         return 0.0;
     }
-    (covered_ns.min(span_ns) as f64) / (span_ns as f64)
+    covered_ns.min(span_ns).to_f64_lossy() / span_ns.to_f64_lossy()
 }
 
 /// A series in every boot: its metric key without the boot.

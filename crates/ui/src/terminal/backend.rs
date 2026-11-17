@@ -26,7 +26,7 @@ pub struct AnsiBackend<W: Write> {
 }
 
 impl<W: Write> AnsiBackend<W> {
-    pub fn new(writer: W, size: Size) -> Self {
+    pub const fn new(writer: W, size: Size) -> Self {
         Self {
             writer,
             size,
@@ -35,12 +35,12 @@ impl<W: Write> AnsiBackend<W> {
     }
 
     /// New terminal size (from a resize event); the next draw resizes.
-    pub fn set_size(&mut self, size: Size) {
+    pub const fn set_size(&mut self, size: Size) {
         self.size = size;
     }
 
     #[cfg(test)]
-    pub fn writer_mut(&mut self) -> &mut W {
+    pub const fn writer_mut(&mut self) -> &mut W {
         &mut self.writer
     }
 }

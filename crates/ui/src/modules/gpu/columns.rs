@@ -339,7 +339,7 @@ mod tests {
     }
 
     /// Blocks of the RTX 5080's heights: state, utilization, clocks,
-    /// memory, PCIe, thermal, power, CUDA, driver, device, PCI & firmware.
+    /// memory, `PCIe`, thermal, power, CUDA, driver, device, PCI & firmware.
     fn gpu_blocks() -> Vec<Block> {
         [5, 4, 5, 9, 6, 6, 6, 5, 6, 8, 7]
             .into_iter()
@@ -360,8 +360,8 @@ mod tests {
         assert_eq!((narrow.columns.len(), narrow.columns[0].clone()), (1, 0..3));
         // Not even the first block fits.
         let none = arrange(&blocks, 78, 2);
-        assert!(none.columns.is_empty());
+        assert_eq!(none.columns.len(), 0);
         assert_eq!(none.hidden, 11);
-        assert!(arrange(&[], 80, 10).columns.is_empty());
+        assert_eq!(arrange(&[], 80, 10).columns.len(), 0);
     }
 }

@@ -44,7 +44,7 @@ impl Scratch {
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        std::fs::remove_dir_all(&self.0).unwrap_or_default();
     }
 }
 
@@ -116,11 +116,11 @@ fn bucket(start_utc_ns: i64, cpu: f64) -> RunBucket {
     bucket
 }
 
-fn row(pid: i64, tier: Tier, bucket: RunBucket) -> RunBucketRow {
+fn row(pid: i64, tier: Tier, bucket: &RunBucket) -> RunBucketRow {
     RunBucketRow {
         key: key(pid),
         tier,
-        bucket,
+        bucket: *bucket,
     }
 }
 
@@ -140,10 +140,10 @@ fn runs_and_buckets_survive_a_restart() {
         .append(&ProcessHistoryJournal {
             runs: vec![run(1, now - 2 * MINUTE, None), run(2, now - MINUTE, None)],
             buckets: vec![
-                row(1, Tier::OneMinute, bucket(now - 3 * MINUTE, 10.0)),
-                row(1, Tier::OneMinute, bucket(now - 2 * MINUTE, 20.0)),
-                row(1, Tier::TenMinutes, bucket(now - 10 * MINUTE, 15.0)),
-                row(9, Tier::OneMinute, bucket(now, 1.0)),
+                row(1, Tier::OneMinute, &bucket(now - 3 * MINUTE, 10.0)),
+                row(1, Tier::OneMinute, &bucket(now - 2 * MINUTE, 20.0)),
+                row(1, Tier::TenMinutes, &bucket(now - 10 * MINUTE, 15.0)),
+                row(9, Tier::OneMinute, &bucket(now, 1.0)),
             ],
             ..ProcessHistoryJournal::default()
         })
@@ -187,7 +187,10 @@ fn runs_and_buckets_survive_a_restart() {
         (2, Some(20.0), Some(30.0))
     );
     assert_eq!(store.read_run(&key(1), &every_size()).unwrap().len(), 3);
-    assert!(store.read_run(&key(8), &every_size()).unwrap().is_empty());
+    assert_eq!(
+        store.read_run(&key(8), &every_size()).unwrap(),
+        [] as [dgxtop_core::process_history::RunBucketRow; 0]
+    );
 }
 
 /// Every end cause round-trips through its columns.
@@ -253,7 +256,7 @@ fn nothing_is_deleted_unless_a_journal_says_so() {
             row(
                 1,
                 Tier::OneMinute,
-                bucket(now - (minutes - minute) * MINUTE, 1.0),
+                &bucket(now - (minutes - minute) * MINUTE, 1.0),
             )
         })
         .collect();
@@ -306,10 +309,10 @@ fn a_journal_deletes_what_it_names() {
             row(
                 1,
                 Tier::OneMinute,
-                bucket(now - (10 - minute) * MINUTE, 1.0),
+                &bucket(now - (10 - minute) * MINUTE, 1.0),
             )
         })
-        .chain([row(2, Tier::OneMinute, bucket(now - MINUTE, 2.0))])
+        .chain([row(2, Tier::OneMinute, &bucket(now - MINUTE, 2.0))])
         .collect();
     let before = store
         .append(&ProcessHistoryJournal {
@@ -344,7 +347,10 @@ fn a_journal_deletes_what_it_names() {
         .map(|row| (row.bucket.start_utc_ns - now) / MINUTE)
         .collect();
     assert_eq!(minutes, vec![-3, -2, -1], "run 1 keeps its latest three");
-    assert!(store.read_run(&key(2), &every_size()).unwrap().is_empty());
+    assert_eq!(
+        store.read_run(&key(2), &every_size()).unwrap(),
+        [] as [dgxtop_core::process_history::RunBucketRow; 0]
+    );
 }
 
 /// The load reads what its request asks: the runs last seen up to its
@@ -372,10 +378,10 @@ fn the_load_reads_what_its_request_asks() {
             buckets.push(row(
                 pid,
                 Tier::OneMinute,
-                bucket(now - minute * MINUTE, 1.0),
+                &bucket(now - minute * MINUTE, 1.0),
             ));
         }
-        buckets.push(row(pid, Tier::OneHour, bucket(now - 60 * MINUTE, 1.0)));
+        buckets.push(row(pid, Tier::OneHour, &bucket(now - 60 * MINUTE, 1.0)));
     }
     store
         .append(&ProcessHistoryJournal {
@@ -468,16 +474,16 @@ fn buckets_pack_twelve_bytes_a_metric_and_back() {
     assert_eq!(back.value(RunMetric::Gpu1Device).mean(), Some(40.0));
     assert!(database::unpack(0, &packed[..95]).is_none());
     assert!(database::unpack(0, &[]).is_none());
-    let mut longer = with_gpus.clone();
+    let mut longer = with_gpus;
     longer.resize(12 * (RUN_METRICS + 1), 0);
     assert!(database::unpack(MINUTE, &longer).is_none());
 }
 
 /// Writes a database of this schema holding one run, stamped with
 /// `application_id` (0: written before format versions existed).
-fn write_database_of_format(path: &std::path::Path, application_id: i32, clock: &FakeClock) {
+fn write_database_of_format(path: &Path, application_id: i32, clock: &FakeClock) {
     let now = now_utc(clock);
-    let connection = rusqlite::Connection::open(path).unwrap();
+    let connection = Connection::open(path).unwrap();
     connection.execute_batch(PROCESS_HISTORY_DDL).unwrap();
     connection
         .pragma_update(None, "application_id", application_id)
@@ -519,7 +525,7 @@ fn a_database_of_another_format_is_replaced_by_an_empty_one() {
         );
         assert_eq!(store.recreated().is_none(), kept, "{label}");
         drop(store);
-        let stamp: i32 = rusqlite::Connection::open(&path)
+        let stamp: i32 = Connection::open(&path)
             .unwrap()
             .query_row("PRAGMA application_id", [], |row| row.get(0))
             .unwrap();
@@ -553,7 +559,7 @@ fn an_unreadable_database_is_replaced() {
     store
         .append(&ProcessHistoryJournal {
             runs: vec![run(1, now, None)],
-            buckets: vec![row(1, Tier::OneMinute, bucket(now - MINUTE, 10.0))],
+            buckets: vec![row(1, Tier::OneMinute, &bucket(now - MINUTE, 10.0))],
             ..ProcessHistoryJournal::default()
         })
         .unwrap();
@@ -622,7 +628,7 @@ fn a_short_term_file_of_another_format_is_replaced() {
 
 /// Caps the database at the pages it has, so the next growth is
 /// `SQLITE_FULL`.
-fn fill_up(connection: &rusqlite::Connection) {
+fn fill_up(connection: &Connection) {
     let _cap: i64 = connection
         .query_row("PRAGMA max_page_count = 1", [], |row| row.get(0))
         .unwrap();
@@ -678,7 +684,7 @@ fn an_undecodable_bucket_fails_the_load() {
     store
         .append(&ProcessHistoryJournal {
             runs: vec![run(1, now, None)],
-            buckets: vec![row(1, Tier::OneMinute, bucket(now - MINUTE, 10.0))],
+            buckets: vec![row(1, Tier::OneMinute, &bucket(now - MINUTE, 10.0))],
             ..ProcessHistoryJournal::default()
         })
         .unwrap();
@@ -706,7 +712,7 @@ fn an_undecodable_bucket_fails_the_load() {
     store
         .append(&ProcessHistoryJournal {
             runs: vec![run(1, now, None)],
-            buckets: vec![row(1, Tier::OneMinute, bucket(now - MINUTE, 10.0))],
+            buckets: vec![row(1, Tier::OneMinute, &bucket(now - MINUTE, 10.0))],
             ..ProcessHistoryJournal::default()
         })
         .unwrap();
@@ -717,7 +723,7 @@ fn an_undecodable_bucket_fails_the_load() {
     );
 }
 
-/// Corruption stops the database like every partition's (sqlite::Writer):
+/// Corruption stops the database like every partition's (`sqlite::Writer)`:
 /// later calls say why, and the short-term file still works.
 #[test]
 fn a_corrupt_database_stops_with_its_reason() {

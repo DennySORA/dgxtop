@@ -73,7 +73,7 @@ pub struct Candidate<'a> {
 }
 
 impl<'a> Candidate<'a> {
-    pub fn source_id(&self) -> &'a SourceId {
+    pub const fn source_id(&self) -> &'a SourceId {
         &self.observation.provenance.source_id
     }
 }
@@ -146,7 +146,7 @@ impl Assessed<'_, '_> {
         self.assessment.verdict.as_ref().err()
     }
 
-    pub fn is_eligible(&self) -> bool {
+    pub const fn is_eligible(&self) -> bool {
         self.assessment.verdict.is_ok()
     }
 }
@@ -248,7 +248,7 @@ fn limit_candidates<'a>(
     (candidates, dropped)
 }
 
-fn reading_order(observation: &Observation) -> (u64, u64, u32) {
+const fn reading_order(observation: &Observation) -> (u64, u64, u32) {
     (
         observation.read_finished_boot_ns,
         observation.cycle_id,
@@ -363,7 +363,7 @@ fn is_degraded(assessed: &[Assessed<'_, '_>], selected: usize) -> bool {
 
 /// Rejections that mean "this source could not deliver", as opposed to
 /// "this source does not serve this key here" (scope, namespace, policy).
-pub(crate) fn is_failure(reason: &RejectReason) -> bool {
+pub(crate) const fn is_failure(reason: &RejectReason) -> bool {
     matches!(
         reason,
         RejectReason::ReadFailed { .. }

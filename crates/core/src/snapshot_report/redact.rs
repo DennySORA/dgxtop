@@ -89,7 +89,7 @@ impl SnapshotReport {
         let gpus = GpuStandIns::of(&self.entities);
         let mut names = NamedParts::default();
         names.take(&self.host.name, REDACTED);
-        self.host.name = REDACTED.to_owned();
+        REDACTED.clone_into(&mut self.host.name);
         self.host.id = None;
         let mut numbers = KindNumbers::default();
         for entity in &mut self.entities {
@@ -309,6 +309,10 @@ mod tests {
     }
 
     /// A document of an invented host with everything that names it.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "a fixture: one literal of every field"
+    )]
     fn document() -> SnapshotReport {
         SnapshotReport {
             format: SNAPSHOT_FORMAT,

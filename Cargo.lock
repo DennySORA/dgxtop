@@ -605,6 +605,7 @@ dependencies = [
  "libc",
  "nix 0.32.0",
  "proptest",
+ "rustix",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -620,6 +621,7 @@ dependencies = [
  "libc",
  "nix 0.32.0",
  "nvml-wrapper",
+ "rustix",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -686,6 +688,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "signal-hook",
  "thiserror 2.0.21",
  "uuid",
 ]

@@ -29,7 +29,7 @@ pub(super) struct Folds {
 }
 
 impl Folds {
-    pub(super) fn shown(&self) -> &BTreeSet<String> {
+    pub(super) const fn shown(&self) -> &BTreeSet<String> {
         &self.shown
     }
 
@@ -91,36 +91,47 @@ impl Folds {
         self.retry_at = Some(now + RETRY_AFTER);
     }
 
-    /// A result of request `request_id`: whether it was a save, and why it
-    /// failed for good (said once; the set stays as shown).
+    /// What the result of request `request_id` meant for the save under
+    /// way (a failure for good is said once; the set stays as shown).
     pub(super) fn answered(
         &mut self,
         request_id: u128,
         result: &CommandResult,
         now: Duration,
-    ) -> Option<Option<String>> {
-        let (_, panels) = self
-            .sending
-            .take_if(|(sending, _)| *sending == request_id)?;
+    ) -> SaveAnswer {
+        let Some((_, panels)) = self.sending.take_if(|(sending, _)| *sending == request_id) else {
+            return SaveAnswer::NotASave;
+        };
         match (result.status, result.code) {
             (CommandStatus::Completed, _) => {
                 self.saved = Some(panels);
-                Some(None)
+                SaveAnswer::Settled
             }
             (_, ResultCode::Error(ErrorCode::Busy)) => {
                 self.retry_at = Some(now + RETRY_AFTER);
-                Some(None)
+                SaveAnswer::Settled
             }
             _ => {
                 // Saving again would fail again: the folds stay this run.
                 self.saved = Some(self.shown.clone());
-                Some(Some(format!(
+                SaveAnswer::Failed(format!(
                     "folded panels not saved: {}",
                     crate::format::clean(&result.message)
-                )))
+                ))
             }
         }
     }
+}
+
+/// What a result meant for the folds being saved.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum SaveAnswer {
+    /// The result of another request.
+    NotASave,
+    /// Saved, or to be tried again in a moment.
+    Settled,
+    /// Failed for good, with what to say once.
+    Failed(String),
 }
 
 #[cfg(test)]
@@ -159,10 +170,10 @@ mod tests {
         assert!(folds.shown().contains("disk"), "the user's folds stay");
         assert_eq!(
             folds.answered(id() + 1, &ok(), NOW),
-            None,
+            SaveAnswer::NotASave,
             "another request"
         );
-        assert_eq!(folds.answered(id(), &ok(), NOW), Some(None));
+        assert_eq!(folds.answered(id(), &ok(), NOW), SaveAnswer::Settled);
         assert_eq!(folds.due(NOW), None, "saved");
     }
 
@@ -173,13 +184,16 @@ mod tests {
         folds.sent(id(), folds.due(NOW).unwrap());
         assert_eq!(
             folds.answered(id(), &rejected(ErrorCode::Busy), NOW),
-            Some(None)
+            SaveAnswer::Settled
         );
         assert_eq!(folds.due(NOW), None, "waits a moment");
         assert_eq!(folds.due(NOW + RETRY_AFTER).unwrap(), ["network"]);
         folds.sent(id(), vec!["network".to_owned()]);
         let refused = rejected(ErrorCode::ValidationFailed);
-        assert!(folds.answered(id(), &refused, NOW).unwrap().is_some());
+        assert!(matches!(
+            folds.answered(id(), &refused, NOW),
+            SaveAnswer::Failed(_)
+        ));
         assert_eq!(folds.due(NOW + RETRY_AFTER), None, "not again");
         assert!(folds.unfold(|panel| !panel.starts_with("history.")));
         assert!(folds.shown().is_empty());

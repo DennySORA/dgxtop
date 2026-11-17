@@ -1,9 +1,11 @@
-//! Pressure stall information (PSI, D-135): for a resource, the share of
-//! time tasks stalled waiting for it, as the kernel averages it over its
-//! last 10, 60 and 300 seconds (`/proc/pressure/<resource>`). `some` counts
-//! the time at least one task stalled, `full` the time every task that was
-//! not idle stalled at once. It measures time lost waiting, never how much
-//! of the resource is in use: memory can be nearly full with no pressure.
+//! Pressure stall information (PSI, D-135).
+//!
+//! For a resource, the share of time tasks stalled waiting for it, as the
+//! kernel averages it over its last 10, 60 and 300 seconds
+//! (`/proc/pressure/<resource>`). `some` counts the time at least one task
+//! stalled, `full` the time every task that was not idle stalled at once.
+//! It measures time lost waiting, never how much of the resource is in use:
+//! memory can be nearly full with no pressure.
 
 use crate::metric::ids;
 
@@ -43,6 +45,7 @@ impl PressureResource {
     pub const ALL: [Self; 3] = [Self::Cpu, Self::Memory, Self::Io];
 
     /// The file under `/proc/pressure`.
+    #[must_use]
     pub const fn kernel_name(self) -> &'static str {
         match self {
             Self::Cpu => "cpu",
@@ -54,6 +57,7 @@ impl PressureResource {
     /// The kinds read for the whole system. The CPU has no `full`: the
     /// kernel defines it only inside a control group and writes zeros for
     /// the system.
+    #[must_use]
     pub const fn kinds(self) -> &'static [PressureKind] {
         match self {
             Self::Cpu => &[PressureKind::Some],
@@ -63,6 +67,7 @@ impl PressureResource {
 
     /// The metric of one average; `None` for a kind the resource does not
     /// report ([`Self::kinds`]).
+    #[must_use]
     pub const fn metric_id(
         self,
         kind: PressureKind,
@@ -102,6 +107,7 @@ impl PressureResource {
     }
 
     /// Whether `metric_id` is one of the resource's averages.
+    #[must_use]
     pub fn reports(self, metric_id: &str) -> bool {
         self.metric_ids().any(|id| id == metric_id)
     }
@@ -109,6 +115,7 @@ impl PressureResource {
 
 impl PressureKind {
     /// The word a pressure line starts with.
+    #[must_use]
     pub const fn kernel_name(self) -> &'static str {
         match self {
             Self::Some => "some",
@@ -119,6 +126,7 @@ impl PressureKind {
 
 impl PressureWindow {
     /// The key of the average on a pressure line.
+    #[must_use]
     pub const fn kernel_name(self) -> &'static str {
         match self {
             Self::Avg10 => "avg10",

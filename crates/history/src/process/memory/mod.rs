@@ -43,6 +43,7 @@ use dgxtop_core::process_model::MemoryPart;
 
 use self::buckets::{Held, HeldSeries, add_held};
 use self::tracking::{Listed as TrackedListed, Tracking};
+use dgxtop_core::num::ToF64Lossy;
 
 /// A table's values hold for at most this many sampling periods.
 const HOLD_PERIODS: u64 = 3;
@@ -64,7 +65,7 @@ pub(crate) struct TrackedProcess<'a> {
 }
 
 impl TrackedProcess<'_> {
-    pub(crate) fn is_listed(&self) -> bool {
+    pub(crate) const fn is_listed(&self) -> bool {
         !self.current.is_empty()
     }
 }
@@ -126,7 +127,7 @@ impl ProcessMemoryBook {
     }
 
     /// Moves with every table recorded.
-    pub(crate) fn revision(&self) -> u64 {
+    pub(crate) const fn revision(&self) -> u64 {
         self.revision
     }
 
@@ -295,8 +296,7 @@ impl ProcessMemoryBook {
             .iter()
             .zip(integrals)
             .map(|(listed, integral)| {
-                #[allow(clippy::cast_precision_loss)]
-                let listed_ns = listed.covered_ns as f64;
+                let listed_ns = listed.covered_ns.to_f64_lossy();
                 (listed.covered_ns > 0).then(|| integral / listed_ns)
             })
             .collect()

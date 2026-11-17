@@ -46,6 +46,12 @@ sha2 = "0.11.1"
 # Runtime mechanics.
 crossbeam-channel = "0.5.17"
 libc = "0.2.191"
+# Safe wrappers of the system calls dgxtop would otherwise need `unsafe`
+# for. Both are linked by crossterm already: rustix for the pidfd calls,
+# signal-hook for the termination flag, at crossterm's own 0.3 so a process
+# has one signal registry.
+rustix = { version = "1.1.6", default-features = false, features = ["process", "std"] }
+signal-hook = { version = "0.3.18", default-features = false }
 nix = { version = "0.32.0", features = ["fs", "poll", "process", "signal", "time", "term", "user", "resource"] }
 
 # Drivers and persistence.
@@ -64,18 +70,62 @@ clap = { version = "4.6.7", features = ["derive"] }
 proptest = "1.12.0"
 jsonschema = { version = "0.61.2", default-features = false }
 
+# The strict lint policy (product-strict): every member opts in with
+# `[lints] workspace = true`. No crate has unsafe code: the signal flags
+# are signal-hook's, pidfds and the terminal's size go through rustix.
+# `dead_code_pub_in_binary` is denied in the binary itself (`main.rs`): in
+# a library built as its test harness it reports the API other crates use.
 [workspace.lints.rust]
-unsafe_code = "deny"
+warnings = "deny"
+unsafe_code = "forbid"
+unused_must_use = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+unused_qualifications = "deny"
+redundant_lifetimes = "deny"
+unit_bindings = "deny"
+unused_macro_rules = "deny"
+missing_debug_implementations = "deny"
 
 [workspace.lints.clippy]
-unwrap_used = "warn"
-expect_used = "warn"
-todo = "warn"
-unimplemented = "warn"
-dbg_macro = "warn"
-cast_possible_truncation = "warn"
-cast_possible_wrap = "warn"
-cast_sign_loss = "warn"
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+# Transitive duplicates come and go with the dependencies' own releases.
+multiple_crate_versions = "allow"
+# `pub(crate)` in a private module says the item is never exported, even
+# through a re-export; `pub` there would only read as if it could be.
+redundant_pub_crate = "allow"
+# `mul_add` is a library call on the x86-64 baseline the releases target
+# (no FMA), and it would change the rounding of the sums the history keeps.
+suboptimal_flops = "allow"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+exit = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+string_slice = "deny"
+let_underscore_must_use = "deny"
+unused_result_ok = "deny"
+map_err_ignore = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
+self_named_module_files = "deny"
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "deny"
+
+# Cargo's own lints (stable since the pinned toolchain): a dependency no
+# target of its package uses is an error. `[dev-dependencies]` are outside
+# what Cargo can check.
+[workspace.lints.cargo]
+unused_dependencies = "deny"
 
 [profile.release]
 opt-level = 3

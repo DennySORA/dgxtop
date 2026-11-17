@@ -24,6 +24,7 @@ use crate::modules::common::draw_line;
 use crate::registry::DisplayContext;
 use crate::theme::LevelScale;
 use crate::widgets::GapSparkline;
+use dgxtop_core::num::ToF64Lossy;
 
 /// Marks a column where nothing was recorded.
 const NO_DATA: &str = "┈";
@@ -38,7 +39,7 @@ pub(super) struct Window {
 }
 
 /// Columns of a strip's plot in `width`.
-pub(super) fn plot_width(width: u16) -> u16 {
+pub(super) const fn plot_width(width: u16) -> u16 {
     width.saturating_sub(HISTORY_GUTTER_COLUMNS + HISTORY_LEGEND_COLUMNS)
 }
 
@@ -92,8 +93,7 @@ fn render_gutter(
     let text_width = usize::from(HISTORY_GUTTER_COLUMNS.saturating_sub(1));
     let scale = strip
         .scale
-        .map(|scale| axis_value(scale, strip.series.unit))
-        .unwrap_or_default();
+        .map_or_default(|scale| axis_value(scale, strip.series.unit));
     let last = area.height.saturating_sub(1);
     for row in 0..area.height {
         let (text, style) = match (alone, row) {
@@ -251,19 +251,19 @@ fn legend_entry(
     context: &DisplayContext,
 ) -> Line<'static> {
     let theme = &context.theme;
-    let (text, style) = match value.filter(|value| value.is_finite()) {
-        Some(value) => {
+    let (text, style) = value.filter(|value| value.is_finite()).map_or_else(
+        || (NOT_AVAILABLE.to_owned(), theme.muted_style()),
+        |value| {
             let style = match (strip.paint, strip.scale) {
                 (Paint::Levels | Paint::Pressure, Some(scale)) if scale > 0.0 => {
-                    let levels = own_levels(strip).unwrap_or(LevelScale::share_of(scale));
+                    let levels = own_levels(strip).unwrap_or_else(|| LevelScale::share_of(scale));
                     Style::new().fg(theme.level_color(levels.level(value)))
                 }
                 _ => theme.text_style(),
             };
             (format_value(value, strip.series.unit), style)
-        }
-        None => (NOT_AVAILABLE.to_owned(), theme.muted_style()),
-    };
+        },
+    );
     Line::from(vec![
         Span::styled(format!("{label} "), theme.label_style()),
         Span::styled(text, style),
@@ -330,8 +330,7 @@ pub(super) fn columns_of(
             let overlap = to
                 .min(edge(column + 1))
                 .saturating_sub(from.max(edge(column)));
-            #[allow(clippy::cast_precision_loss)]
-            let weight = overlap.max(1) as f64;
+            let weight = overlap.max(1).to_f64_lossy();
             sums[column].0 += mean * weight;
             sums[column].1 += weight;
         }
@@ -366,8 +365,7 @@ pub(super) fn grid_columns(cells: &[Option<f64>], width: u16) -> Vec<Option<f64>
                     continue;
                 };
                 let overlap = end.min((cell + 1) * columns) - start.max(cell * columns);
-                #[allow(clippy::cast_precision_loss)]
-                let overlap = overlap as f64;
+                let overlap = overlap.to_f64_lossy();
                 sum += mean * overlap;
                 weight += overlap;
             }

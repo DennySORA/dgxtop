@@ -29,6 +29,7 @@ use crate::setup::{
     validate,
 };
 use crate::shutdown::{ShutdownSignal, ShutdownSummary, ShutdownTrigger};
+use dgxtop_core::num::ToF64Lossy;
 
 /// Control completions per iteration.
 const CONTROL_BATCH: usize = 8;
@@ -70,6 +71,7 @@ pub struct ManagerChannels {
 
 impl ManagerChannels {
     /// Creates both inboxes with their fixed capacities.
+    #[must_use]
     pub fn create() -> Self {
         let (ingestion_sender, ingestion) = bounded(INGESTION_INBOX_CAPACITY);
         let (control_sender, control) = bounded(CONTROL_INBOX_CAPACITY);
@@ -82,6 +84,7 @@ impl ManagerChannels {
     }
 
     /// Senders for the runtime workers.
+    #[must_use]
     pub fn inboxes(&self) -> ManagerInboxes {
         ManagerInboxes {
             ingestion: self.ingestion_sender.clone(),
@@ -102,11 +105,21 @@ pub struct Manager {
     _control_sender: Sender<ControlCompletion>,
 }
 
+impl std::fmt::Debug for Manager {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("Manager").finish_non_exhaustive()
+    }
+}
+
 impl Manager {
+    /// # Errors
+    ///
+    /// Returns a `ManagerError` when the setup is invalid, the session limit is
+    /// reached or the Manager is shutting down.
     pub fn new(
         setup: ManagerSetup,
         ports: ManagerPorts,
-    ) -> Result<(Manager, ManagerInboxes), ManagerError> {
+    ) -> Result<(Self, ManagerInboxes), ManagerError> {
         let channels = ManagerChannels::create();
         let inboxes = channels.inboxes();
         let manager = Self::with_channels(setup, ports, channels)?;
@@ -116,11 +129,16 @@ impl Manager {
     /// Builds the Manager on inbox channels created beforehand, so runtime
     /// workers (and the adapter supervisor, which reports host status as
     /// soon as it starts) can hold the senders before the Manager exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ManagerError` when the setup is invalid, the session limit is
+    /// reached or the Manager is shutting down.
     pub fn with_channels(
         setup: ManagerSetup,
         ports: ManagerPorts,
         channels: ManagerChannels,
-    ) -> Result<Manager, ManagerError> {
+    ) -> Result<Self, ManagerError> {
         validate(&setup, &ports)?;
         let effective = &setup.effective_config;
         let ManagerChannels {
@@ -146,7 +164,7 @@ impl Manager {
             shutdown: Arc::clone(&shutdown),
         }));
         let core = ControlCore::new(setup, ports, inbox, shutdown);
-        let manager = Manager {
+        let manager = Self {
             core,
             receivers: Receivers {
                 ingestion,
@@ -162,11 +180,17 @@ impl Manager {
     }
 
     /// Opens a view session (at most `viewer.max_sessions`).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ManagerError` when the setup is invalid, the session limit is
+    /// reached or the Manager is shutting down.
     pub fn open_session(&mut self) -> Result<SessionHandle, ManagerError> {
         self.core.open_session()
     }
 
     /// Clonable, thread-safe shutdown request (e.g. for a signal watcher).
+    #[must_use]
     pub fn shutdown_trigger(&self) -> ShutdownTrigger {
         self.core.shutdown_trigger()
     }
@@ -174,12 +198,14 @@ impl Manager {
     /// The device catalog as the Manager builds it from now on, readable
     /// from another thread (D-140): with the state's snapshots, what a
     /// one-shot report is made of.
+    #[must_use]
     pub fn catalog_reader(&self) -> Arc<dyn CatalogReader> {
         self.core.catalog_reader()
     }
 
     /// Runs the control loop on the calling thread until the bounded
     /// shutdown completes.
+    #[must_use]
     pub fn run(mut self) -> ShutdownSummary {
         loop {
             let iteration = self.iterate();
@@ -251,17 +277,17 @@ impl Manager {
         select.recv(&self.receivers.ingestion);
         select.recv(&self.receivers.wake);
         // Readiness only: the next iteration takes items in fairness order.
-        let _ = select.ready_timeout(timeout);
+        select.ready_timeout(timeout).unwrap_or_default();
         while self.receivers.wake.try_recv().is_ok() {}
     }
 
     #[cfg(test)]
-    pub(crate) fn summary(&mut self) -> Option<ShutdownSummary> {
+    pub(crate) const fn summary(&mut self) -> Option<ShutdownSummary> {
         self.summary.take()
     }
 
     #[cfg(test)]
-    pub(crate) fn core(&self) -> &ControlCore {
+    pub(crate) const fn core(&self) -> &ControlCore {
         &self.core
     }
 
@@ -327,10 +353,9 @@ fn drain<T>(receiver: &Receiver<T>, cap: usize, budget: &Slice, mut handle: impl
     !receiver.is_empty()
 }
 
-#[allow(clippy::cast_precision_loss)]
 fn fill<T>(receiver: &Receiver<T>) -> f64 {
     match receiver.capacity() {
-        Some(capacity) if capacity > 0 => receiver.len() as f64 / capacity as f64,
+        Some(capacity) if capacity > 0 => receiver.len().to_f64_lossy() / capacity.to_f64_lossy(),
         _ => 0.0,
     }
 }

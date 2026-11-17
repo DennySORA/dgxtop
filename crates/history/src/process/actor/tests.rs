@@ -19,6 +19,7 @@ use dgxtop_core::testing::{
 use dgxtop_core::tiers::BarSize;
 
 use super::*;
+use dgxtop_core::num::ToF64Lossy;
 
 const SECOND: u64 = 1_000_000_000;
 const GIB: u64 = 1 << 30;
@@ -300,11 +301,10 @@ fn the_memory_record_answers_the_parts_of_a_window() {
     let gpus = std::collections::BTreeSet::from([EntityId::new(GPU).unwrap()]);
     let parts = rig.published.parts(&gpus, window, 2);
     assert_eq!(parts.len(), 1);
-    #[allow(clippy::cast_precision_loss)]
-    let held = (2 * GIB) as f64;
+    let held = (2 * GIB).to_f64_lossy();
     assert_eq!(parts[0].means, vec![Some(held), Some(held)]);
     let other = std::collections::BTreeSet::from([EntityId::new("gpu:GPU-bbbb").unwrap()]);
-    assert!(rig.published.parts(&other, window, 2).is_empty());
+    assert_eq!(rig.published.parts(&other, window, 2).len(), 0);
     assert!(
         rig.published
             .parts(&gpus, (10 * SECOND, 20 * SECOND), 2)

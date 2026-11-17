@@ -46,7 +46,7 @@ enum AppendKind {
     Interval,
 }
 
-fn record_drop(report: &mut HistoryReport, kind: AppendKind, reason: DropReason) {
+const fn record_drop(report: &mut HistoryReport, kind: AppendKind, reason: DropReason) {
     match kind {
         AppendKind::Gauge => report.gauge_drops.record(reason),
         AppendKind::Interval => report.interval_drops.record(reason),
@@ -95,7 +95,7 @@ impl HistoryState {
 
     /// The boot's minutes, once known.
     #[cfg(test)]
-    pub(crate) fn minute_grid(&self) -> Option<MinuteGrid> {
+    pub(crate) const fn minute_grid(&self) -> Option<MinuteGrid> {
         self.grid
     }
 
@@ -105,7 +105,7 @@ impl HistoryState {
         self.grid.map_or(0, |grid| grid.floor(time_ns))
     }
 
-    pub(crate) fn set_finalize_grace(&mut self, grace_ns: u64) {
+    pub(crate) const fn set_finalize_grace(&mut self, grace_ns: u64) {
         self.settings.finalize_grace_ns = grace_ns;
     }
 
@@ -632,8 +632,7 @@ impl HistoryState {
         self.by_key
             .get(key)
             .and_then(|handle| self.slots.get(*handle))
-            .map(|series| series.provisional_gauge_buckets(now_ns, grid))
-            .unwrap_or_default()
+            .map_or_default(|series| series.provisional_gauge_buckets(now_ns, grid))
     }
 }
 

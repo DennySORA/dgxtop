@@ -1,7 +1,10 @@
-//! Timers and descriptor lifecycle of the ProcessService: deadline and TTL
+//! Timers and descriptor lifecycle of the `ProcessService`: deadline and TTL
 //! expiry, unknown send outcomes, exit polling, revocation and pidfd release.
 
-use super::*;
+use super::{
+    ActionHandle, ActionOp, ActionState, CommandResult, Denial, EXIT_POLL_NS, EXIT_POLL_STUCK_NS,
+    Effects, ErrorCode, ErrorDetail, ExitObservation, Now, ProcessService, RevokeReason, SessionId,
+};
 
 impl ProcessService {
     pub(super) fn tick_record(&mut self, index: usize, now: Now, fx: &mut Effects) {
@@ -215,8 +218,10 @@ impl ProcessService {
             record.release_wanted = false;
         }
     }
-    pub(super) fn release_untracked(&mut self, handle: ActionHandle) {
+    pub(super) fn release_untracked(&self, handle: ActionHandle) {
         // Best effort: a release refused for a full queue is dropped.
-        let _ = self.actions.try_dispatch(ActionOp::Release { handle });
+        self.actions
+            .try_dispatch(ActionOp::Release { handle })
+            .unwrap_or_default();
     }
 }

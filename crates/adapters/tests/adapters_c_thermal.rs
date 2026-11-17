@@ -1,6 +1,9 @@
 //! Thermal-zone adapter integration tests over fake sysfs trees.
-#![allow(clippy::unwrap_used, clippy::expect_used)] // tests may unwrap
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
+#[expect(dead_code, reason = "each suite uses its part of the shared helpers")]
 #[path = "fixtures/adapters_c/support.rs"]
 mod support;
 
@@ -12,6 +15,7 @@ use dgxtop_adapters::registry::AdapterOptions;
 use dgxtop_adapters::thermal::{self, ThermalAdapter};
 use dgxtop_core::identity::OriginRelation;
 use dgxtop_core::metric::ids;
+use dgxtop_core::num::ToF64Lossy;
 use dgxtop_core::observation::MAX_ATTRIBUTES;
 use dgxtop_core::quality::{Availability, Namespace, Quality, ReadStatus, Support};
 use support::*;
@@ -23,11 +27,11 @@ fn adapter(sysfs: &FakeSysfs, clock: &Arc<dgxtop_core::testing::FakeClock>) -> T
         time(clock),
         host(),
         sysfs.files(),
-        AdapterOptions::default(),
+        &AdapterOptions::default(),
     )
 }
 
-/// Single-package host with acpitz, iwlwifi and x86_pkg_temp zones (like the dev box).
+/// Single-package host with acpitz, iwlwifi and `x86_pkg_temp` zones (like the dev box).
 fn intel_laptop(sysfs: &FakeSysfs) {
     sysfs.cpus(&[0, 0, 0, 0]);
     sysfs.thermal_zone(
@@ -67,7 +71,7 @@ fn x86_pkg_temp_maps_to_package_with_the_coretemp_origin() {
         time(&clock),
         host(),
         sysfs.files(),
-        AdapterOptions::default(),
+        &AdapterOptions::default(),
     );
     let (_, hwmon_pages) = discover(&mut hwmon, "hwmon", 0, deadline(&clock));
     let hwmon_catalog = sources(&hwmon_pages);
@@ -87,7 +91,7 @@ fn x86_pkg_temp_maps_to_package_with_the_coretemp_origin() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     let reading = record(&readings, "thermal:x86_pkg_temp:temp");
     assert_eq!(value_of(reading), 68000.0);
@@ -106,7 +110,7 @@ fn other_zones_are_neither_catalogued_nor_read() {
     let counting = Arc::new(CountingFiles::new(sysfs.rooted()));
     let files: Arc<dyn SystemFiles> = counting.clone();
     let clock = clock();
-    let mut zones = ThermalAdapter::new(time(&clock), host(), files, AdapterOptions::default());
+    let mut zones = ThermalAdapter::new(time(&clock), host(), files, &AdapterOptions::default());
     let (_, pages) = discover(&mut zones, ADAPTER, 0, deadline(&clock));
     let catalog = sources(&pages);
     let ids: Vec<&str> = catalog
@@ -120,7 +124,7 @@ fn other_zones_are_neither_catalogued_nor_read() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     assert_eq!(readings.len(), 1);
     for zone in [
@@ -144,7 +148,10 @@ fn unknown_topology_does_not_prove_a_package() {
     let clock = clock();
     let mut zones = adapter(&sysfs, &clock);
     let (_, pages) = discover(&mut zones, ADAPTER, 0, deadline(&clock));
-    assert!(sources(&pages).is_empty());
+    assert_eq!(
+        sources(&pages),
+        [] as [dgxtop_core::observation::SourceDescriptor; 0]
+    );
 }
 
 #[test]
@@ -170,7 +177,7 @@ fn soc_zone_is_soc_temperature_not_cpu_package() {
         time(&clock),
         host(),
         sysfs.files(),
-        AdapterOptions::default(),
+        &AdapterOptions::default(),
     );
     let (_, hwmon_pages) = discover(&mut hwmon, "hwmon", 0, deadline(&clock));
     let hwmon_catalog = sources(&hwmon_pages);
@@ -186,7 +193,7 @@ fn soc_zone_is_soc_temperature_not_cpu_package() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     let soc_reading = record(&readings, "thermal:soc_thermal:temp");
     assert_eq!(value_of(soc_reading), 42000.0);
@@ -197,7 +204,7 @@ fn soc_zone_is_soc_temperature_not_cpu_package() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     assert_eq!(value_of(&hwmon_readings[0]), 68000.0);
 }
@@ -227,7 +234,7 @@ fn zone_id(index: usize) -> String {
 }
 
 /// GB10 (D-68): the zones of its CPU clusters' E and P cores map to
-/// `cpu.temperature.cluster` and its SoC zone to `soc.temperature`, both
+/// `cpu.temperature.cluster` and its `SoC` zone to `soc.temperature`, both
 /// usable (named by the firmware, not a datasheet); the GPU and uncore
 /// zones are not catalogued. Without all four cluster zones, or on more
 /// than one package, no zone is proven.
@@ -283,7 +290,7 @@ fn gb10_zones_map_by_their_acpi_paths() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     let hottest_p = record(&readings, &zone_id(4));
     assert_eq!(
@@ -297,20 +304,26 @@ fn gb10_zones_map_by_their_acpi_paths() {
     gb10(&partial, &["TSOC", "TS0E", "TS0P"]);
     let mut zones = adapter(&partial, &clock);
     let (_, pages) = discover(&mut zones, ADAPTER, 0, deadline(&clock));
-    assert!(sources(&pages).is_empty());
+    assert_eq!(
+        sources(&pages),
+        [] as [dgxtop_core::observation::SourceDescriptor; 0]
+    );
 
     let two = FakeSysfs::new("thermal-gb10-two-packages");
     gb10(&two, &names);
     two.cpus(&[0, 1]);
     let mut zones = adapter(&two, &clock);
     let (_, pages) = discover(&mut zones, ADAPTER, 0, deadline(&clock));
-    assert!(sources(&pages).is_empty());
+    assert_eq!(
+        sources(&pages),
+        [] as [dgxtop_core::observation::SourceDescriptor; 0]
+    );
 }
 
 /// On GB10 the kernel also mirrors the seven `acpitz` zones as hwmon
 /// `acpitz` (`temp1`..`temp7`, its `device` the first zone). Each sensor is
 /// read once (D-81): by the thermal adapter, which keeps the D-68 cluster
-/// and SoC mapping, while hwmon catalogs none of the mirror's channels.
+/// and `SoC` mapping, while hwmon catalogs none of the mirror's channels.
 #[test]
 fn gb10_zones_are_read_once_by_the_thermal_adapter() {
     let names = ["TSOC", "TS0E", "TS0P", "TS1E", "TS1P", "TGPU", "TUNC"];
@@ -329,7 +342,7 @@ fn gb10_zones_are_read_once_by_the_thermal_adapter() {
         time(&clock),
         host(),
         sysfs.files(),
-        AdapterOptions::default(),
+        &AdapterOptions::default(),
     );
     let (_, hwmon_pages) = discover(&mut hwmon, "hwmon", 0, deadline(&clock));
     assert!(
@@ -347,7 +360,7 @@ fn gb10_zones_are_read_once_by_the_thermal_adapter() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     let expected = [
         (ids::SOC_TEMPERATURE, "soc"),
@@ -360,7 +373,7 @@ fn gb10_zones_are_read_once_by_the_thermal_adapter() {
         let reading = record(&readings, &zone_id(index));
         assert_eq!(reading.key.metric_id.as_str(), *metric, "zone {index}");
         assert_eq!(reading.key.scope.as_str(), *scope, "zone {index}");
-        assert_eq!(value_of(reading), 70_000.0 + index as f64);
+        assert_eq!(value_of(reading), 70_000.0 + index.to_f64_lossy());
     }
 }
 
@@ -399,7 +412,7 @@ fn disabled_zone_is_unsupported_and_reprobed_with_throttling() {
     let counting = Arc::new(CountingFiles::new(sysfs.rooted()));
     let files: Arc<dyn SystemFiles> = counting.clone();
     let clock = clock();
-    let mut zones = ThermalAdapter::new(time(&clock), host(), files, AdapterOptions::default());
+    let mut zones = ThermalAdapter::new(time(&clock), host(), files, &AdapterOptions::default());
     let (_, pages) = discover(&mut zones, ADAPTER, 0, deadline(&clock));
     let capability = &pages[0].capabilities[0];
     assert_eq!(capability.support, Support::Unsupported);
@@ -412,7 +425,7 @@ fn disabled_zone_is_unsupported_and_reprobed_with_throttling() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     assert_eq!(readings[0].read_status, ReadStatus::Unsupported);
     assert!(readings[0].value.is_none());
@@ -426,7 +439,7 @@ fn disabled_zone_is_unsupported_and_reprobed_with_throttling() {
             "fast",
             cycle,
             deadline(&clock),
-            Vec::new(),
+            &Vec::new(),
         );
     }
     assert_eq!(counting.reads_of(&format!("{zone}/mode")), mode_reads);
@@ -444,7 +457,7 @@ fn disabled_zone_is_unsupported_and_reprobed_with_throttling() {
         "fast",
         7,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     assert_eq!(readings[0].read_status, ReadStatus::Ok);
     assert_eq!(value_of(&readings[0]), 30000.0);
@@ -499,7 +512,13 @@ fn trip_points_are_bounded_entity_attributes_not_series() {
     assert_eq!(entity.attribute("trip_0"), Some("passive 90000 mdegC"));
     assert_eq!(entity.attribute("policy"), Some("step_wise"));
     assert_eq!(entity.attribute("type"), Some("soc_thermal"));
-    assert_eq!(entity.parent_id.as_ref().map(|id| id.as_str()), Some("soc"));
+    assert_eq!(
+        entity
+            .parent_id
+            .as_ref()
+            .map(dgxtop_core::identity::EntityId::as_str),
+        Some("soc")
+    );
 }
 
 #[test]
@@ -517,7 +536,7 @@ fn zero_and_negative_zone_temperatures_are_kept() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     assert_eq!(value_of(record(&readings, "thermal:soc_thermal:temp")), 0.0);
     assert_eq!(value_of(record(&readings, "thermal:soc_max:temp")), -5000.0);

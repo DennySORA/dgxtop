@@ -64,14 +64,19 @@ const NO_CURRENT_FREQUENCY: &str = "–";
 /// A kilohertz, the step cpufreq counts in, in the megahertz of a cell.
 const MEGAHERTZ_PER_KILOHERTZ: f64 = 0.001;
 
+#[derive(Debug)]
 pub struct CpuModule {
     manifest: DisplayModuleManifest,
 }
 
 impl CpuModule {
+    /// # Errors
+    ///
+    /// Returns a `ModuleBuildError` when the module's static manifest is
+    /// invalid, which is a build defect.
     pub fn new() -> Result<Self, ModuleBuildError> {
         Ok(Self {
-            manifest: build_manifest(ManifestSpec {
+            manifest: build_manifest(&ManifestSpec {
                 id: CPU_MODULE_ID,
                 title: "CPU utilization and temperature",
                 min_columns: 36,
@@ -370,21 +375,18 @@ fn frequency_spans(groups: &[FrequencyGroup], context: &DisplayContext) -> Vec<S
         if index > 0 {
             spans.push(Span::styled(" · ", theme.muted_style()));
         }
-        spans.push(match gigahertz(&group.current) {
-            Some(current) => Span::styled(current, theme.tone_style(cell_tone(&group.current))),
-            None => Span::styled(NO_CURRENT_FREQUENCY, theme.muted_style()),
-        });
-        match frequency_cap(group) {
-            Some((limit, maximum)) => {
-                spans.push(Span::styled("/", theme.label_style()));
-                spans.push(Span::styled(limit, Style::new().fg(theme.warning)));
-                spans.push(Span::styled(format!(" ({maximum})"), theme.label_style()));
-            }
-            None => {
-                let top = gigahertz(&group.maximum).or_else(|| gigahertz(&group.limit));
-                if let Some(top) = top {
-                    spans.push(Span::styled(format!("/{top}"), theme.label_style()));
-                }
+        spans.push(gigahertz(&group.current).map_or_else(
+            || Span::styled(NO_CURRENT_FREQUENCY, theme.muted_style()),
+            |current| Span::styled(current, theme.tone_style(cell_tone(&group.current))),
+        ));
+        if let Some((limit, maximum)) = frequency_cap(group) {
+            spans.push(Span::styled("/", theme.label_style()));
+            spans.push(Span::styled(limit, Style::new().fg(theme.warning)));
+            spans.push(Span::styled(format!(" ({maximum})"), theme.label_style()));
+        } else {
+            let top = gigahertz(&group.maximum).or_else(|| gigahertz(&group.limit));
+            if let Some(top) = top {
+                spans.push(Span::styled(format!("/{top}"), theme.label_style()));
             }
         }
         spans.push(Span::styled(" GHz", theme.label_style()));
@@ -453,7 +455,7 @@ fn sensor_cells(cpu: &CpuView) -> Vec<(String, &MetricCell)> {
         ("power", &cpu.package_power),
         ("power", &cpu.power),
     ] {
-        for labeled in group.iter() {
+        for labeled in group {
             cells.push((sensor_label(prefix, labeled), &labeled.cell));
         }
     }
@@ -664,13 +666,13 @@ mod tests {
     use dgxtop_core::view::CellState;
 
     fn megahertz(value: Option<f64>) -> MetricCell {
-        match value {
-            Some(mhz) => MetricCell {
+        value.map_or_else(
+            || MetricCell::missing(CanonicalUnit::MHz, CellState::Unavailable),
+            |mhz| MetricCell {
                 value: Scalar::from_f64(mhz).ok(),
                 ..MetricCell::missing(CanonicalUnit::MHz, CellState::Ok)
             },
-            None => MetricCell::missing(CanonicalUnit::MHz, CellState::Unavailable),
-        }
+        )
     }
 
     /// A kind of core nothing caps: its limit is its maximum.
@@ -951,7 +953,7 @@ mod tests {
         let context = test_fixtures::display_context();
         let theme = &context.theme;
         let load = |value: f64| test_fixtures::ok(value, CanonicalUnit::Count);
-        let colors = |cpu: &CpuView| -> Vec<Option<ratatui::style::Color>> {
+        let colors = |cpu: &CpuView| -> Vec<Option<Color>> {
             let line = load_line(cpu, &context);
             // `load `, then each average with a space between.
             [1, 3, 5]
@@ -989,7 +991,7 @@ mod tests {
     /// Where the package's temperature is its hottest cluster's, the CPU
     /// line names that cluster after it (D-137), muted, unless that would
     /// push the load off the line or the line past the panel; a package a
-    /// sensor reports itself, or the SoC's temperature in its place, names
+    /// sensor reports itself, or the `SoC`'s temperature in its place, names
     /// none.
     #[test]
     fn the_cpu_line_names_the_hottest_cluster_where_it_fits() {

@@ -58,6 +58,7 @@ impl fmt::Debug for HostLaunch {
 }
 
 impl HostLaunch {
+    #[must_use]
     pub const fn is_in_process(&self) -> bool {
         matches!(self, Self::InProcess(_))
     }
@@ -80,6 +81,14 @@ pub struct LaunchRequest<'a> {
     pub limits: IpcLimits,
 }
 
+impl fmt::Debug for LaunchRequest<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LaunchRequest")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Parent-side ends of a started host. Every descriptor is non-blocking.
 pub struct LaunchedHost {
     pub control: Box<dyn ChildControl>,
@@ -91,8 +100,21 @@ pub struct LaunchedHost {
     pub diagnostics: Option<OwnedFd>,
 }
 
+impl fmt::Debug for LaunchedHost {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LaunchedHost")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Starts host incarnations (injectable for fault tests).
 pub trait HostLauncher: Send + Sync {
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     fn launch(&self, request: &LaunchRequest<'_>) -> Result<LaunchedHost, InfraError>;
 }
 
@@ -131,10 +153,28 @@ impl fmt::Display for ExitSummary {
 pub trait ChildControl: Send {
     fn pid(&self) -> Option<i32>;
     /// SIGTERM.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     fn terminate(&mut self) -> Result<SignalDelivery, InfraError>;
     /// SIGKILL.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     fn kill(&mut self) -> Result<SignalDelivery, InfraError>;
     /// Non-blocking reap (`waitpid(WNOHANG)` for processes).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     fn try_reap(&mut self) -> Result<Option<ExitSummary>, InfraError>;
 }
 
@@ -181,8 +221,8 @@ fn spawn_child(
         }),
         Err(error) => {
             // The child exists but is unusable: it is ours, so stop it here.
-            let _ = child.kill();
-            let _ = child.wait();
+            child.kill().unwrap_or_default();
+            child.wait().unwrap_or_default();
             Err(error)
         }
     }
@@ -225,7 +265,7 @@ impl ProcessChild {
     fn raw_pid(&self) -> Result<Pid, InfraError> {
         i32::try_from(self.child.id())
             .map(Pid::from_raw)
-            .map_err(|_| InfraError::Unavailable("child pid exceeds i32".into()))
+            .map_err(|_cause| InfraError::Unavailable("child pid exceeds i32".into()))
     }
 }
 
@@ -355,10 +395,10 @@ impl ChildControl for ThreadControl {
         let Some(thread) = self.thread.take_if(|thread| thread.is_finished()) else {
             return Ok(None);
         };
-        let exit = match thread.join() {
-            Ok(outcome) => ExitSummary::Thread(format!("{outcome:?}")),
-            Err(_) => ExitSummary::Thread("panicked".into()),
-        };
+        let exit = thread.join().map_or_else(
+            |_| ExitSummary::Thread("panicked".into()),
+            |outcome| ExitSummary::Thread(format!("{outcome:?}")),
+        );
         self.exit = Some(exit.clone());
         Ok(Some(exit))
     }

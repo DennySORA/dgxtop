@@ -14,11 +14,13 @@ use super::{ByteLedger, BytePermit, CapacityError, Partition};
 const MIN_CAPACITY: usize = 4;
 
 /// Bytes occupied by `count` values of `T` (saturating).
+#[must_use]
 pub fn bytes_of<T>(count: usize) -> u64 {
-    u64::try_from(count.saturating_mul(std::mem::size_of::<T>())).unwrap_or(u64::MAX)
+    u64::try_from(count.saturating_mul(size_of::<T>())).unwrap_or(u64::MAX)
 }
 
 /// A growable byte reservation in one partition; empty until it first grows.
+#[derive(Debug)]
 pub struct Account {
     ledger: ByteLedger,
     partition: Partition,
@@ -26,6 +28,7 @@ pub struct Account {
 }
 
 impl Account {
+    #[must_use]
     pub fn new(ledger: &ByteLedger, partition: Partition) -> Self {
         Self {
             ledger: ledger.clone(),
@@ -39,16 +42,19 @@ impl Account {
     }
 
     /// Grows the reservation, failing without side effects.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `CapacityError` when the byte or item budget has no room left.
     pub fn try_grow(&mut self, additional: u64) -> Result<(), CapacityError> {
         if additional == 0 {
             return Ok(());
         }
-        match &mut self.permit {
-            Some(permit) => permit.try_grow(additional),
-            None => {
-                self.permit = Some(self.ledger.try_reserve(self.partition, additional)?);
-                Ok(())
-            }
+        if let Some(permit) = &mut self.permit {
+            permit.try_grow(additional)
+        } else {
+            self.permit = Some(self.ledger.try_reserve(self.partition, additional)?);
+            Ok(())
         }
     }
 
@@ -65,12 +71,14 @@ impl Account {
 }
 
 /// A `VecDeque` whose capacity is always covered by an [`Account`].
+#[derive(Debug)]
 pub struct AccountedDeque<T> {
     items: VecDeque<T>,
     account: Account,
 }
 
 impl<T> AccountedDeque<T> {
+    #[must_use]
     pub fn new(ledger: &ByteLedger, partition: Partition) -> Self {
         Self {
             items: VecDeque::new(),
@@ -78,26 +86,32 @@ impl<T> AccountedDeque<T> {
         }
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.items.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
 
+    #[must_use]
     pub fn iter(&self) -> vec_deque::Iter<'_, T> {
         self.items.iter()
     }
 
+    #[must_use]
     pub fn front(&self) -> Option<&T> {
         self.items.front()
     }
 
+    #[must_use]
     pub fn back(&self) -> Option<&T> {
         self.items.back()
     }
 
+    #[must_use]
     pub fn get(&self, index: usize) -> Option<&T> {
         self.items.get(index)
     }
@@ -113,6 +127,7 @@ impl<T> AccountedDeque<T> {
     }
 
     /// Bytes the next push would have to reserve.
+    #[must_use]
     pub fn growth_cost(&self) -> u64 {
         if self.items.len() < self.items.capacity() {
             return 0;
@@ -150,10 +165,13 @@ impl<T> AccountedDeque<T> {
         } else if actual > reserved {
             // The extra bytes already exist; recording them keeps the ledger
             // honest even if it briefly passes the soft target.
-            let _ = self.account.try_grow(actual - reserved);
+            self.account.try_grow(actual - reserved).unwrap_or_default();
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns a `CapacityError` when the byte or item budget has no room left.
     pub fn try_insert(&mut self, index: usize, item: T) -> Result<(), CapacityError> {
         self.try_make_room()?;
         self.items.insert(index.min(self.items.len()), item);
@@ -175,6 +193,15 @@ impl<T> AccountedDeque<T> {
             self.items.shrink_to(self.items.len().max(MIN_CAPACITY));
             self.reconcile();
         }
+    }
+}
+
+impl<'a, T> IntoIterator for &'a AccountedDeque<T> {
+    type Item = &'a T;
+    type IntoIter = vec_deque::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }
 

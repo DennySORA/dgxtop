@@ -12,6 +12,7 @@ use dgxtop_core::tiers::Tier;
 use crate::bucket::{Bucket, Divisible};
 use crate::series::TieredSeries;
 use crate::span::{take_bucket_at, whole_fit};
+use dgxtop_core::num::ToF64Lossy;
 
 /// `[start, end)` of `series` in `cells` even cells, oldest first, each a
 /// bucket starting at its cell's start; a cell no size holds anything of is
@@ -80,8 +81,7 @@ fn take_share<B: Divisible>(
     take_bucket_at(series, tier, bucket_start, &mut bucket);
     if !bucket.is_empty() {
         // Spans of at most a day in ns (< 2^47): exact in f64.
-        #[allow(clippy::cast_precision_loss)]
-        let fraction = (piece_end - cursor) as f64 / step as f64;
+        let fraction = (piece_end - cursor).to_f64_lossy() / step.to_f64_lossy();
         merged.merge(&bucket.portion(fraction));
     }
     piece_end
@@ -120,8 +120,7 @@ mod tests {
             let at = start + reading * 10 * SECOND;
             let level = value(reading / 6);
             series.record_span((at, at + 10 * SECOND), |bucket, piece_ns| {
-                #[allow(clippy::cast_precision_loss)]
-                let piece = piece_ns as f64;
+                let piece = piece_ns.to_f64_lossy();
                 bucket.integral += level * piece;
                 bucket.covered_ns += piece;
             });
@@ -132,15 +131,13 @@ mod tests {
         cells.iter().map(Level::mean).collect()
     }
 
-    #[allow(clippy::cast_precision_loss)]
     fn by_minute(minute: i64) -> f64 {
-        (minute % 7) as f64
+        (minute % 7).to_f64_lossy()
     }
 
     /// The mean of `by_minute` over minutes `[from, to)`.
-    #[allow(clippy::cast_precision_loss)]
     fn brute_mean(from: i64, to: i64) -> f64 {
-        (from..to).map(by_minute).sum::<f64>() / (to - from) as f64
+        (from..to).map(by_minute).sum::<f64>() / (to - from).to_f64_lossy()
     }
 
     fn close(left: Option<f64>, right: f64) -> bool {
@@ -179,8 +176,7 @@ mod tests {
         let mut series = TieredSeries::<Level>::new(0);
         // 4 for 10 s from 0: buckets [0, 5) and [5, 10) s.
         series.record_span((MIDNIGHT, MIDNIGHT + 10 * SECOND), |bucket, piece| {
-            #[allow(clippy::cast_precision_loss)]
-            let piece = piece as f64;
+            let piece = piece.to_f64_lossy();
             bucket.integral += 4.0 * piece;
             bucket.covered_ns += piece;
         });
@@ -207,7 +203,7 @@ mod tests {
         assert!(cells[0].is_empty() && cells[2].is_empty());
         let none = cells_between(&TieredSeries::<Level>::new(0), (0, HOUR), 2);
         assert_eq!(means(&none), vec![None, None]);
-        assert!(cells_between(&series, (0, HOUR), 0).is_empty());
+        assert_eq!(cells_between(&series, (0, HOUR), 0).len(), 0);
         let inverted = cells_between(&series, (HOUR, 0), 2);
         assert_eq!(means(&inverted), vec![None, None], "an empty window");
     }

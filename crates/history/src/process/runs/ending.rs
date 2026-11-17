@@ -28,7 +28,7 @@ pub(super) struct EndEvidence {
 /// dgxtop's own signal first (it is why the process ended, whatever its
 /// status), then the OOM killer where its count rose as the run ended with
 /// a SIGKILL or no status, then the status, else not visible.
-pub(super) fn end_cause(evidence: &EndEvidence) -> EndCause {
+pub(super) const fn end_cause(evidence: EndEvidence) -> EndCause {
     if evidence.while_away {
         return EndCause::WhileAway;
     }
@@ -48,7 +48,7 @@ mod tests {
     use super::*;
 
     fn cause(signal: Option<Signal>, status: Option<ExitStatus>, oom_rose: bool) -> EndCause {
-        end_cause(&EndEvidence {
+        end_cause(EndEvidence {
             signal,
             status,
             oom_rose,
@@ -87,7 +87,7 @@ mod tests {
     fn without_evidence_the_cause_is_not_visible() {
         assert_eq!(cause(None, None, false), EndCause::NotVisible);
         assert_eq!(
-            end_cause(&EndEvidence {
+            end_cause(EndEvidence {
                 signal: Some(Signal::Sigkill),
                 while_away: true,
                 ..EndEvidence::default()

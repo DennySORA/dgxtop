@@ -1,8 +1,9 @@
-//! The process history's stores (D-76, D-77): a long-term SQLite database
-//! of runs with the latest buckets of each size, 1 minute to 24 hours
-//! ([`database`]), and a short-term JSON file of the live runs' 5 s
-//! buckets and the buckets being filled, replaced atomically every 30 s
-//! ([`recent`]).
+//! The process history's stores (D-76, D-77).
+//!
+//! A long-term SQLite database of runs with the latest buckets of each
+//! size, 1 minute to 24 hours ([`database`]), and a short-term JSON file
+//! of the live runs' 5 s buckets and the buckets being filled, replaced
+//! atomically every 30 s ([`recent`]).
 //!
 //! The database is opened like the other partitions (0600, no symlinks,
 //! format, schema and integrity checked before any write, a file of
@@ -82,10 +83,10 @@ impl ProcessHistoryFiles {
         let opened =
             open_small_database(database_path, SchemaKind::ProcessHistory, fs.as_ref(), gate);
         let (database, recreated) = Writer::new("process history", opened);
-        let recent_path = match path_problem(recent_path) {
-            Some(problem) => Err(format!("{}: {problem}", recent_path.display())),
-            None => Ok(recent_path.to_path_buf()),
-        };
+        let recent_path = path_problem(recent_path).map_or_else(
+            || Ok(recent_path.to_path_buf()),
+            |problem| Err(format!("{}: {problem}", recent_path.display())),
+        );
         Self {
             database,
             recreated,

@@ -25,11 +25,11 @@ impl Effects {
         self.results.push(result);
     }
 
-    pub(crate) fn mark_all_dirty(&mut self) {
+    pub(crate) const fn mark_all_dirty(&mut self) {
         self.dirty_all = true;
     }
 
-    pub(crate) fn reread_processes(&mut self) {
+    pub(crate) const fn reread_processes(&mut self) {
         self.reread_processes = true;
     }
 }

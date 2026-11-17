@@ -108,11 +108,10 @@ pub fn step_list<T: PartialEq + Clone>(
     let position = current.and_then(|current| items.iter().position(|item| item == current));
     let distance = |step: u32| usize::try_from(step).unwrap_or(usize::MAX);
     let index = match (movement, position) {
-        (Movement::First, _) => 0,
         (Movement::Last, _) => last,
         (Movement::Down(step), Some(position)) => position.saturating_add(distance(step)).min(last),
         (Movement::Up(step), Some(position)) => position.saturating_sub(distance(step)),
-        (_, None) => 0,
+        (Movement::First, _) | (_, None) => 0,
     };
     items.get(index).cloned()
 }

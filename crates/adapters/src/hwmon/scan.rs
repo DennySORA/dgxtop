@@ -299,12 +299,11 @@ impl HwmonScanner {
         if sensors.is_empty() {
             return BTreeMap::new();
         }
-        match self.blocks.assign(files, sensors) {
-            Ok(disks) => disks,
-            Err(_) => {
-                output.partial_failures = output.partial_failures.saturating_add(1);
-                BTreeMap::new()
-            }
+        if let Ok(disks) = self.blocks.assign(files, sensors) {
+            disks
+        } else {
+            output.partial_failures = output.partial_failures.saturating_add(1);
+            BTreeMap::new()
         }
     }
 }
@@ -530,7 +529,7 @@ fn push_draft(output: &mut ScanOutput, draft: Option<(SourceDraft, Option<Entity
 }
 
 /// Native unit, raw kind and value format of a channel kind.
-fn channel_units(kind: ChannelKind) -> (&'static str, RawKind, ValueFormat) {
+const fn channel_units(kind: ChannelKind) -> (&'static str, RawKind, ValueFormat) {
     match kind {
         ChannelKind::Temperature => (
             native::MILLI_DEG_C,
@@ -568,6 +567,10 @@ fn alarm_reason(suffix: &str) -> Option<&'static str> {
 }
 
 #[derive(Debug, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "which files a sensor has: each on its own"
+)]
 struct AttributeGroup {
     input: bool,
     average: bool,

@@ -54,7 +54,7 @@ pub(super) fn write(
         .and_then(|()| fs.sync_file(&file));
     drop(file);
     if let Err(error) = staged.and_then(|()| fs.rename(&temporary, path)) {
-        let _ = fs.remove_file(&temporary);
+        fs.remove_file(&temporary).unwrap_or_default();
         return Err(io_error("process_recent.write", &error));
     }
     fs.sync_directory(directory)

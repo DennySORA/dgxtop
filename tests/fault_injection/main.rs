@@ -17,7 +17,9 @@
 //! wait is bounded; time-heavy state machines (overload recovery needs 90 s
 //! of healthy samples) run on a fake clock.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
 mod support;
 

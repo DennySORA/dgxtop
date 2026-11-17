@@ -220,19 +220,15 @@ fn process_lines(model: &ViewModel, palette: &ThemePalette, narrow: bool) -> Vec
             palette.text_style(),
         ),
     ];
-    let tail = processes
-        .rows
-        .first()
-        .map(|top| {
-            vec![
-                sep("top ", palette),
-                Span::styled(
-                    format!("{} (pid {})", clean(&top.name), top.key.pid),
-                    palette.text_style(),
-                ),
-            ]
-        })
-        .unwrap_or_default();
+    let tail = processes.rows.first().map_or_default(|top| {
+        vec![
+            sep("top ", palette),
+            Span::styled(
+                format!("{} (pid {})", clean(&top.name), top.key.pid),
+                palette.text_style(),
+            ),
+        ]
+    });
     topic(head, tail, narrow, palette)
 }
 

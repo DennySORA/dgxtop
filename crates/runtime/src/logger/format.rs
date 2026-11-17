@@ -6,6 +6,7 @@ const NANOS_PER_SECOND: i128 = 1_000_000_000;
 const SECONDS_PER_DAY: i64 = 86_400;
 
 /// Upper-case level name used in log lines.
+#[must_use]
 pub const fn level_name(level: LogLevel) -> &'static str {
     match level {
         LogLevel::Error => "ERROR",
@@ -16,6 +17,7 @@ pub const fn level_name(level: LogLevel) -> &'static str {
 }
 
 /// `YYYY-MM-DDTHH:MM:SS.mmmZ` for nanoseconds since the Unix epoch.
+#[must_use]
 pub fn format_utc(utc_ns: i128) -> String {
     let seconds = utc_ns.div_euclid(NANOS_PER_SECOND);
     let millis = utc_ns.rem_euclid(NANOS_PER_SECOND) / 1_000_000;

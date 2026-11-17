@@ -3,8 +3,9 @@
 //! into the Rust type and re-serialize to a schema-valid document, and the
 //! closed enum sets of the schemas must equal the Rust enums (AT02, AT40).
 
-// Test helpers outside #[test] functions may unwrap: a broken fixture must fail loudly.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
 mod structure;
 
@@ -154,7 +155,7 @@ fn example_config_reference() {
     );
     let reencoded = to_value(&parsed);
     assert_valid("config.schema.json", &reencoded);
-    let mut expected = original.clone();
+    let mut expected = original;
     dgxtop_core::config::remove_retired_keys(&mut expected);
     assert_eq!(reencoded, expected);
 }
@@ -177,7 +178,7 @@ example_round_trip!(
 fn contract_extensions_are_accepted() {
     let session = SessionId::new("session-1").unwrap();
     let with_bars = CommandEnvelope::new(
-        session.clone(),
+        session,
         CommandBody::UpdateViewSession {
             view: ViewKind::History,
             selected_entity_id: None,
@@ -193,7 +194,7 @@ fn contract_extensions_are_accepted() {
     let encoded = to_value(&with_bars);
     assert_eq!(encoded["body"]["overview_bar"], "1h");
     assert_valid("command.schema.json", &encoded);
-    let mut wrong = encoded.clone();
+    let mut wrong = encoded;
     wrong["body"]["process_bar"] = json!("3h");
     assert_invalid("command.schema.json", &wrong);
     let mut config = load_json("examples/config.reference.json");

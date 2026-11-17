@@ -22,6 +22,10 @@ pub const HELLO_FRAME_BYTES: usize = 64 * 1024;
 
 /// Validated limits for one IPC endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "each field is named as its accessor and as the bound the errors name"
+)]
 pub struct IpcLimits {
     max_frame_bytes: usize,
     max_decoded_bytes: usize,
@@ -44,6 +48,11 @@ impl Default for IpcLimits {
 
 impl IpcLimits {
     /// Limits lower than (or equal to) the hard caps; never higher.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IpcError` when a frame or message is rejected: too large,
+    /// truncated, malformed or over a limit, or when its pipe fails.
     pub fn new(
         max_frame_bytes: usize,
         max_decoded_bytes: usize,
@@ -74,6 +83,7 @@ impl IpcLimits {
     }
 
     /// Same limits with a smaller frame cap (requests, hello frames).
+    #[must_use]
     pub fn with_frame_cap(self, cap: usize) -> Self {
         Self {
             max_frame_bytes: self.max_frame_bytes.min(cap.max(1)),
@@ -81,22 +91,27 @@ impl IpcLimits {
         }
     }
 
+    #[must_use]
     pub const fn max_frame_bytes(&self) -> usize {
         self.max_frame_bytes
     }
 
+    #[must_use]
     pub const fn max_decoded_bytes(&self) -> usize {
         self.max_decoded_bytes
     }
 
+    #[must_use]
     pub const fn max_records(&self) -> usize {
         self.max_records
     }
 
+    #[must_use]
     pub const fn max_depth(&self) -> usize {
         self.max_depth
     }
 
+    #[must_use]
     pub const fn max_values(&self) -> usize {
         self.max_values
     }

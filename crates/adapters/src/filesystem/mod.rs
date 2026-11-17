@@ -1,11 +1,13 @@
-//! Filesystem adapter (`filesystem`, read group `capacity`, paged):
-//! mountinfo + statvfs. Every mount of a disk-backed filesystem is its own
-//! entity `fs:<mntns>:<mount_id>` (scope `filesystem`); several mounts of one
-//! device are distinct entities whose capacities describe the same
-//! filesystem, so consumers must never sum them. Network filesystems are
-//! reported as unsupported (`NETWORK_FS_SKIPPED`) and never probed; before
-//! each statvfs the read path re-checks mountinfo so a mount that changed,
-//! got shadowed or sits below a network mount is not touched.
+//! Filesystem adapter (`filesystem`, read group `capacity`, paged): mountinfo
+//! + statvfs.
+//!
+//! Every mount of a disk-backed filesystem is its own entity
+//! `fs:<mntns>:<mount_id>` (scope `filesystem`); several mounts of one device
+//! are distinct entities whose capacities describe the same filesystem, so
+//! consumers must never sum them. Network filesystems are reported as
+//! unsupported (`NETWORK_FS_SKIPPED`) and never probed; before each statvfs
+//! the read path re-checks mountinfo so a mount that changed, got shadowed or
+//! sits below a network mount is not touched.
 
 mod capacity;
 mod mountinfo;
@@ -57,11 +59,13 @@ const DRIVER: &str = "statvfs";
 const FAMILY_MOUNT: &str = "mount";
 
 /// Static manifest with default options.
+#[must_use]
 pub fn manifest() -> AdapterManifest {
     manifest_with(&AdapterOptions::default())
 }
 
-/// Manifest for `options` (source limit = min(max_sources, 2048)).
+/// Manifest for `options` (source limit = `min(max_sources`, 2048)).
+#[must_use]
 pub fn manifest_with(options: &AdapterOptions) -> AdapterManifest {
     kernel_file_manifest(
         adapters::FILESYSTEM,
@@ -86,7 +90,7 @@ const CAPACITY_FIGURES: [CapacityFigure; 3] = [
 ];
 
 impl CapacityFigure {
-    fn channel(self) -> &'static str {
+    const fn channel(self) -> &'static str {
         match self {
             Self::Total => "total",
             Self::Free => "free",
@@ -94,7 +98,7 @@ impl CapacityFigure {
         }
     }
 
-    fn metric_id(self) -> &'static str {
+    const fn metric_id(self) -> &'static str {
         match self {
             Self::Total => ids::FS_TOTAL,
             Self::Free => ids::FS_FREE,
@@ -103,7 +107,7 @@ impl CapacityFigure {
     }
 
     /// Bytes of this figure; `None` on u64 overflow.
-    fn bytes(self, figures: &CapacityFigures) -> Option<u64> {
+    const fn bytes(self, figures: &CapacityFigures) -> Option<u64> {
         let fragments = match self {
             Self::Total => figures.blocks,
             Self::Free => figures.blocks_free,
@@ -135,6 +139,14 @@ pub struct FilesystemAdapter {
     read_gate: ReprobeGate,
     pagers: GroupPagers,
     shut_down: bool,
+}
+
+impl std::fmt::Debug for FilesystemAdapter {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FilesystemAdapter")
+            .finish_non_exhaustive()
+    }
 }
 
 impl FilesystemAdapter {
@@ -199,13 +211,12 @@ impl FilesystemAdapter {
             ..
         } = self;
         let mut builder = book.begin_snapshot(now_boot_ns);
-        let availability = match mount_namespace.as_deref() {
-            Some(namespace) => enumerate(&mut builder, &keys, &**files, namespace),
-            None => {
-                builder.carry_over_family(FAMILY_MOUNT);
-                builder.error("MOUNT_NAMESPACE_UNKNOWN");
-                Availability::Unavailable
-            }
+        let availability = if let Some(namespace) = mount_namespace.as_deref() {
+            enumerate(&mut builder, &keys, &**files, namespace)
+        } else {
+            builder.carry_over_family(FAMILY_MOUNT);
+            builder.error("MOUNT_NAMESPACE_UNKNOWN");
+            Availability::Unavailable
         };
         builder.finish(request, availability)
     }

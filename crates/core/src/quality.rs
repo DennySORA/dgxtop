@@ -19,6 +19,7 @@ pub enum ReadStatus {
 }
 
 impl ReadStatus {
+    #[must_use]
     pub const fn is_ok(self) -> bool {
         matches!(self, Self::Ok)
     }
@@ -38,6 +39,7 @@ pub enum SampleKind {
 
 impl SampleKind {
     /// Namespace this kind belongs to.
+    #[must_use]
     pub const fn namespace(self) -> Namespace {
         match self {
             Self::Measured | Self::Derived | Self::Estimated => Namespace::Live,
@@ -68,11 +70,13 @@ pub enum Quality {
 impl Quality {
     /// Only verified/usable sources may become canonical
     /// (`allow_suspect_as_canonical` is a fixed `false`).
+    #[must_use]
     pub const fn is_canonical_eligible(self) -> bool {
         matches!(self, Self::Verified | Self::Usable)
     }
 
     /// Ordering rank for arbitration (lower is better).
+    #[must_use]
     pub const fn rank(self) -> u8 {
         match self {
             Self::Verified => 0,
@@ -108,6 +112,7 @@ pub enum SelectionState {
 }
 
 impl SelectionState {
+    #[must_use]
     pub const fn has_value(self) -> bool {
         matches!(self, Self::Selected | Self::Degraded)
     }

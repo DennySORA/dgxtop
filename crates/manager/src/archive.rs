@@ -36,7 +36,7 @@ impl ArchiveTracker {
     }
 
     /// `None` until the archive reported anything (also when it is disabled).
-    pub(crate) fn status(&self) -> Option<&PersistenceStatus> {
+    pub(crate) const fn status(&self) -> Option<&PersistenceStatus> {
         self.status.as_ref()
     }
 }

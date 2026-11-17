@@ -59,10 +59,12 @@ pub struct MapEnv {
 }
 
 impl MapEnv {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn with(mut self, name: &str, value: &str) -> Self {
         self.values.insert(name.to_owned(), value.to_owned());
         self
@@ -147,6 +149,11 @@ pub struct StatePaths {
 
 impl StatePaths {
     /// Resolves every path; performs no I/O.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PathError` when a directory cannot be resolved or is not safe
+    /// to use: not absolute, a symlink, another owner's or writable by others.
     pub fn resolve(
         env: &dyn EnvSource,
         config_override: Option<&Path>,
@@ -154,22 +161,17 @@ impl StatePaths {
         namespace: Namespace,
     ) -> Result<Self, PathError> {
         let mut notes = Vec::new();
-        let config_file = match config_override {
-            Some(path) => validated_file_override("--config", path)?,
-            None => {
-                let base = base_directory(env, XDG_CONFIG_HOME, ".config", "config", &mut notes)?;
-                namespace_root(&base, namespace).join(CONFIG_FILE_NAME)
-            }
+        let config_file = if let Some(path) = config_override {
+            validated_file_override("--config", path)?
+        } else {
+            let base = base_directory(env, XDG_CONFIG_HOME, ".config", "config", &mut notes)?;
+            namespace_root(&base, namespace).join(CONFIG_FILE_NAME)
         };
-        let state_dir = match state_override {
-            Some(path) => {
-                namespace_subdirectory(validated_dir_override("--state-dir", path)?, namespace)
-            }
-            None => {
-                let base =
-                    base_directory(env, XDG_STATE_HOME, ".local/state", "state", &mut notes)?;
-                namespace_root(&base, namespace)
-            }
+        let state_dir = if let Some(path) = state_override {
+            namespace_subdirectory(validated_dir_override("--state-dir", path)?, namespace)
+        } else {
+            let base = base_directory(env, XDG_STATE_HOME, ".local/state", "state", &mut notes)?;
+            namespace_root(&base, namespace)
         };
         let legacy_config_file = legacy_location(env);
         Ok(Self {
@@ -189,11 +191,17 @@ impl StatePaths {
     }
 
     /// Directory holding the configuration file.
+    #[must_use]
     pub fn config_dir(&self) -> &Path {
-        self.config_file.parent().unwrap_or(Path::new("/"))
+        self.config_file.parent().unwrap_or_else(|| Path::new("/"))
     }
 
     /// Creates (0700) and validates the config and state directories.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PathError` when a directory cannot be resolved or is not safe
+    /// to use: not absolute, a symlink, another owner's or writable by others.
     pub fn ensure_directories(&self, fs: &dyn FileSystemOps) -> Result<(), PathError> {
         ensure_private_dir(fs, self.config_dir())?;
         ensure_private_dir(fs, &self.state_dir)
@@ -277,6 +285,11 @@ fn legacy_location(env: &dyn EnvSource) -> Option<PathBuf> {
 /// directory owned by another uid, and a group/world-writable directory.
 /// Every directory created here is validated the same way. Pre-existing
 /// ancestors (such as `$HOME` or `/tmp`) are trusted as given.
+///
+/// # Errors
+///
+/// Returns a `PathError` when a directory cannot be resolved or is not safe to
+/// use: not absolute, a symlink, another owner's or writable by others.
 pub fn ensure_private_dir(fs: &dyn FileSystemOps, path: &Path) -> Result<(), PathError> {
     if !path.is_absolute() {
         return Err(PathError::RelativeDirectory {
@@ -317,6 +330,11 @@ fn missing_components(fs: &dyn FileSystemOps, path: &Path) -> Result<Vec<PathBuf
 }
 
 /// Checks one directory: real directory, owned by us, not writable by others.
+///
+/// # Errors
+///
+/// Returns a `PathError` when a directory cannot be resolved or is not safe to
+/// use: not absolute, a symlink, another owner's or writable by others.
 pub fn verify_private_directory(fs: &dyn FileSystemOps, path: &Path) -> Result<(), PathError> {
     let facts = fs
         .symlink_metadata(path)
@@ -394,7 +412,7 @@ mod tests {
             paths.legacy_config_file,
             Some(PathBuf::from("/xdg/config/dgxtop/config.json"))
         );
-        assert!(paths.notes.is_empty());
+        assert_eq!(paths.notes, [] as [String; 0]);
     }
 
     #[test]
@@ -409,7 +427,7 @@ mod tests {
             paths.state_dir,
             PathBuf::from("/home/alice/.local/state/dgxtop/v2")
         );
-        assert!(paths.notes.is_empty());
+        assert_eq!(paths.notes, [] as [String; 0]);
     }
 
     #[test]

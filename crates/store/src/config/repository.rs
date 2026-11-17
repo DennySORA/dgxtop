@@ -133,6 +133,7 @@ impl FileConfigRepository {
         }
     }
 
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -216,7 +217,7 @@ impl FileConfigRepository {
         let _ignored = self.fs.remove_file(temporary);
     }
 
-    /// temp (0600, O_EXCL) -> write -> fsync -> rename/link -> dir fsync.
+    /// temp (0600, `O_EXCL`) -> write -> fsync -> rename/link -> dir fsync.
     pub(crate) fn publish(&self, bytes: &[u8], publish: Publish) -> Result<(), PersistError> {
         let directory = self.directory()?;
         let temporary = directory.join(format!(

@@ -4,6 +4,10 @@ use dgxtop_core::ports::HistoryOutcome;
 
 /// Monotonic counters exposed through `SharedSnapshot::counters`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "each field is a monotonic counter, named as counters are reported"
+)]
 pub struct StoreCounters {
     pub commits_total: u64,
     pub duplicate_batches_total: u64,
@@ -25,12 +29,12 @@ pub struct StoreCounters {
     pub archive_rows_dropped_total: u64,
 }
 
-fn add(counter: &mut u64, amount: u64) {
+const fn add(counter: &mut u64, amount: u64) {
     *counter = counter.saturating_add(amount);
 }
 
 impl StoreCounters {
-    pub(crate) fn absorb_history(&mut self, outcome: &HistoryOutcome) {
+    pub(crate) const fn absorb_history(&mut self, outcome: &HistoryOutcome) {
         add(
             &mut self.history_values_dropped_total,
             outcome.values_dropped,
@@ -47,23 +51,23 @@ impl StoreCounters {
         );
     }
 
-    pub(crate) fn count_commit(&mut self) {
+    pub(crate) const fn count_commit(&mut self) {
         add(&mut self.commits_total, 1);
     }
 
-    pub(crate) fn count_duplicate(&mut self) {
+    pub(crate) const fn count_duplicate(&mut self) {
         add(&mut self.duplicate_batches_total, 1);
     }
 
-    pub(crate) fn count_rejection(&mut self) {
+    pub(crate) const fn count_rejection(&mut self) {
         add(&mut self.rejected_batches_total, 1);
     }
 
-    pub(crate) fn count_gaps(&mut self, gaps: u64) {
+    pub(crate) const fn count_gaps(&mut self, gaps: u64) {
         add(&mut self.gaps_total, gaps);
     }
 
-    pub(crate) fn count_invalid_gap(&mut self) {
+    pub(crate) const fn count_invalid_gap(&mut self) {
         add(&mut self.invalid_gaps_total, 1);
     }
 }

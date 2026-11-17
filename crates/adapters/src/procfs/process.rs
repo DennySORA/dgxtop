@@ -1,6 +1,6 @@
 //! `process` read group (paged, not catalogued): scans `/proc/[0-9]*` in PID
 //! order, at most [`MAX_SCANNED_PROCESSES`] processes, and emits ONE record
-//! per ProcessKey (D-79): `process.cpu.ticks` (utime + stime from one
+//! per `ProcessKey` (D-79): `process.cpu.ticks` (utime + stime from one
 //! read: a lossless decode of two same-unit counters) carrying the rest of
 //! the `stat` as [`ProcessStat`] tags: RSS (pages × page size, bytes), the
 //! owner of `/proc/<pid>` (read once per process), parent, state and the
@@ -276,10 +276,9 @@ fn read_process(scan: &ProcessScan<'_>, owners: &ProcessOwners, pid: Pid) -> Pro
     let Some(stat) = parse_pid_stat(&text).filter(|stat| stat.pid == pid.get()) else {
         return ProcessOutcome::Unparsable;
     };
-    let uid = match owners.get((pid.get(), stat.start_time_ticks)) {
-        Some(uid) => Ok(uid),
-        None => scan.files.owner_uid(&format!("/proc/{pid}")),
-    };
+    let uid = owners
+        .get((pid.get(), stat.start_time_ticks))
+        .map_or_else(|| scan.files.owner_uid(&format!("/proc/{pid}")), Ok);
     if matches!(&uid, Err(error) if is_vanished(error)) {
         return ProcessOutcome::Vanished;
     }
@@ -311,7 +310,7 @@ struct SeenProcess {
 
 impl SeenProcess {
     /// One instance of a PID: names and owners are cached per start time.
-    fn cache_key(&self) -> (i32, u64) {
+    const fn cache_key(&self) -> (i32, u64) {
         (self.pid.get(), self.stat.start_time_ticks)
     }
 
@@ -406,7 +405,7 @@ impl ProcessIdentity {
         // Each ProcessKey is its own incarnation (the start time is part of
         // the source id), so the generation never needs bumping.
         descriptor.generation = 1;
-        descriptor.channel = channel.to_owned();
+        channel.clone_into(&mut descriptor.channel);
         Some(descriptor)
     }
 }
@@ -427,7 +426,7 @@ fn cpu_ticks(stat: &PidStat) -> Result<u64, DerivationFailure> {
 
 /// The reaped children's time (`cutime + cstime`); `None` when either
 /// column is missing or unparsable, so it is left out, never sent as zero.
-fn reaped_ticks(stat: &PidStat) -> Option<u64> {
+const fn reaped_ticks(stat: &PidStat) -> Option<u64> {
     match (stat.cutime, stat.cstime) {
         (Field::Value(user), Field::Value(system)) => Some(user.saturating_add(system)),
         _ => None,

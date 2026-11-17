@@ -117,12 +117,18 @@ fn read_document_bytes(
 }
 
 /// Copies the document at `saved` to the new private file `copy`, for a
-/// run that keeps a state of its own (D-140). The document is read as a
-/// load reads it: a regular file of ours that nobody else can write, never
-/// through a symbolic link, within the size limit; a file a load would
-/// refuse is refused here, an invalid document with its own path and
-/// place. `saved` and its directory are only read. `Ok(false)` when there
-/// is no saved document, and nothing is written.
+/// run that keeps a state of its own (D-140).
+///
+/// The document is read as a load reads it: a regular file of ours that
+/// nobody else can write, never through a symbolic link, within the size
+/// limit; a file a load would refuse is refused here, an invalid document
+/// with its own path and place. `saved` and its directory are only read.
+/// `Ok(false)` when there is no saved document, and nothing is written.
+///
+/// # Errors
+///
+/// Returns a `ConfigLoadError` when the file is invalid, of a newer schema, at
+/// an unsafe path or cannot be read.
 pub fn copy_trusted_document(
     fs: &dyn FileSystemOps,
     saved: &Path,
@@ -189,7 +195,7 @@ mod tests {
                 "dgxtop-store-document-{label}-{}",
                 std::process::id()
             ));
-            let _ = std::fs::remove_dir_all(&root);
+            std::fs::remove_dir_all(&root).unwrap_or_default();
             std::fs::create_dir_all(&root).unwrap();
             Self(root)
         }
@@ -205,7 +211,7 @@ mod tests {
 
     impl Drop for Scratch {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
+            std::fs::remove_dir_all(&self.0).unwrap_or_default();
         }
     }
 

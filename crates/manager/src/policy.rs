@@ -1,4 +1,4 @@
-//! QualityPolicyService: the versioned arbitration policy handed to
+//! `QualityPolicyService`: the versioned arbitration policy handed to
 //! collectors (`PolicySnapshot`).
 //!
 //! The snapshot combines `config.quality`, the sampling stale factor, the

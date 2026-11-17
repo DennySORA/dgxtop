@@ -1,5 +1,5 @@
-//! Viewer composition: LayoutEngine, module registry,
-//! chrome, banners, summary strip, help overlay and the HitMap of the frame.
+//! Viewer composition: `LayoutEngine`, module registry,
+//! chrome, banners, summary strip, help overlay and the `HitMap` of the frame.
 //!
 //! `Viewer::render` is pure presentation: it reads one immutable projection
 //! and the redacted controller state, never performs I/O, never blocks and
@@ -63,7 +63,7 @@ pub struct FrameReport {
 }
 
 impl FrameReport {
-    fn new(tier: SizeTier, frame_revision: u64) -> Self {
+    const fn new(tier: SizeTier, frame_revision: u64) -> Self {
         Self {
             tier,
             hit_map: HitMap::new(frame_revision),
@@ -85,6 +85,7 @@ pub struct Viewer {
 }
 
 impl Viewer {
+    #[must_use]
     pub fn new(registry: ModuleRegistry) -> Self {
         Self {
             registry,
@@ -93,20 +94,22 @@ impl Viewer {
     }
 
     /// Viewer over the built-in modules.
+    #[must_use]
     pub fn builtin() -> Self {
         Self::new(ModuleRegistry::builtin())
     }
 
-    pub fn registry(&self) -> &ModuleRegistry {
+    #[must_use]
+    pub const fn registry(&self) -> &ModuleRegistry {
         &self.registry
     }
 
     #[cfg(test)]
-    pub fn registry_mut(&mut self) -> &mut ModuleRegistry {
+    pub const fn registry_mut(&mut self) -> &mut ModuleRegistry {
         &mut self.registry
     }
 
-    /// Renders one complete frame and returns its HitMap and labels.
+    /// Renders one complete frame and returns its `HitMap` and labels.
     pub fn render(&self, frame: &mut Frame<'_>, input: &RenderInput<'_>) -> FrameReport {
         let area = frame.area();
         // Start every frame from a clean buffer so nothing stale survives a
@@ -324,8 +327,14 @@ impl Viewer {
     }
 
     fn body_note_text(&self, view: ViewKind) -> String {
-        match self.registry.detail_module_for(view) {
-            Some(module) => {
+        self.registry.detail_module_for(view).map_or_else(
+            || {
+                format!(
+                    "no display module is registered for the {} view",
+                    view.title()
+                )
+            },
+            |module| {
                 let manifest = module.manifest();
                 format!(
                     "enlarge the terminal to show {} (the panel needs at least {}x{})",
@@ -333,16 +342,12 @@ impl Viewer {
                     manifest.min_columns,
                     manifest.min_rows
                 )
-            }
-            None => format!(
-                "no display module is registered for the {} view",
-                view.title()
-            ),
-        }
+            },
+        )
     }
 }
 
-fn candidate(
+const fn candidate(
     index: usize,
     manifest: &DisplayModuleManifest,
     cell: Option<OverviewCell>,

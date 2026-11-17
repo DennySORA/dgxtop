@@ -13,14 +13,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use dgxtop_core::clock::{NANOS_PER_SECOND, ms_to_ns};
 use dgxtop_core::config::SamplingConfig;
 use dgxtop_core::naming::{self, PeriodClass};
+use dgxtop_core::num::ToF64Lossy;
 use dgxtop_core::observation::split_page;
 use serde::Serialize;
 
 /// How long after a window ends its coverage waits for the commits of reads
-/// that finished inside it. A read commits only after every page of its
-/// cycle arrived and the collection was stored, so a report taken at the end
-/// would miss a read that finished just before it; a read committing later
-/// than this counts as missing.
+/// that finished inside it.
+///
+/// A read commits only after every page of its cycle arrived and the
+/// collection was stored, so a report taken at the end would miss a read
+/// that finished just before it; a read committing later than this counts as
+/// missing.
 pub const COMMIT_GRACE_NS: u64 = NANOS_PER_SECOND;
 
 /// One read group a host is expected to deliver every `period_ns`.
@@ -33,6 +36,7 @@ pub struct ScheduledGroup {
 
 /// Configured period of a replay read group spelled `<live adapter>.<group>`
 /// (the period class of the live group it mirrors; unknown groups are fast).
+#[must_use]
 pub fn replay_group_period_ms(read_group: &str, sampling: &SamplingConfig) -> u32 {
     let (base, _page) = split_page(read_group);
     let class = base.split_once('.').and_then(|(adapter, group)| {
@@ -50,6 +54,7 @@ pub fn replay_group_period_ms(read_group: &str, sampling: &SamplingConfig) -> u3
 
 /// Scheduled groups of replay hosts: `groups_per_host[i]` belongs to
 /// `adapter_ids[i]`.
+#[must_use]
 pub fn scheduled_replay_groups(
     adapter_ids: &[String],
     groups_per_host: &[BTreeSet<String>],
@@ -69,7 +74,7 @@ pub fn scheduled_replay_groups(
 }
 
 /// Coverage of one scheduled group.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GroupCoverage {
     pub adapter_id: String,
     pub read_group: String,
@@ -120,6 +125,7 @@ impl CoverageLedger {
 
     /// Coverage of `groups` over `[start_ns, end_ns)` once it is final:
     /// `None` until `now_ns` is [`COMMIT_GRACE_NS`] past the end.
+    #[must_use]
     pub fn final_report(
         &self,
         groups: &[ScheduledGroup],
@@ -134,7 +140,7 @@ impl CoverageLedger {
     /// Coverage of `groups` over `[start_ns, end_ns)` from the reads
     /// committed so far (reads near the end may still be committing; see
     /// [`Self::final_report`]).
-    #[allow(clippy::cast_precision_loss)]
+    #[must_use]
     pub fn report(&self, groups: &[ScheduledGroup], start_ns: u64, end_ns: u64) -> CoverageReport {
         let window_ns = end_ns.saturating_sub(start_ns);
         let in_window = |cycles: &BTreeMap<u64, u64>| -> u64 {
@@ -180,7 +186,7 @@ impl CoverageLedger {
             expected_slots,
             covered_slots,
             percent: (expected_slots > 0)
-                .then(|| 100.0 * covered_slots as f64 / expected_slots as f64),
+                .then(|| 100.0 * covered_slots.to_f64_lossy() / expected_slots.to_f64_lossy()),
             unscheduled_reads,
             groups: per_group,
         }

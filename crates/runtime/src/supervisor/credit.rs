@@ -27,18 +27,21 @@ fn bytes_of(count: usize) -> u64 {
 }
 
 /// Decoded credit for `wire` bytes, capped by the decoded budget.
+#[must_use]
 pub fn decoded_credit(wire: u64, limits: &IpcLimits) -> u64 {
     wire.saturating_mul(DECODED_PER_WIRE_BYTE)
         .min(bytes_of(limits.max_decoded_bytes()))
 }
 
 /// Wire + decoded credit for a frame of exactly `declared` bytes.
+#[must_use]
 pub fn frame_credit(declared: usize, limits: &IpcLimits) -> u64 {
     let wire = bytes_of(declared);
     wire.saturating_add(decoded_credit(wire, limits))
 }
 
 /// Credit reserved before dispatching `plan`.
+#[must_use]
 pub fn read_credit(plan: &ReadPlan, limits: &IpcLimits) -> u64 {
     let records = if plan.source_slots.is_empty() {
         limits.max_records()
@@ -52,6 +55,7 @@ pub fn read_credit(plan: &ReadPlan, limits: &IpcLimits) -> u64 {
 }
 
 /// Credit reserved before dispatching a discover request.
+#[must_use]
 pub fn discover_credit(limits: &IpcLimits) -> u64 {
     let wire = DISCOVER_INITIAL_WIRE_BYTES.min(bytes_of(limits.max_frame_bytes()));
     wire.saturating_add(decoded_credit(wire, limits))

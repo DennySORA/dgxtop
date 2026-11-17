@@ -28,7 +28,7 @@ fn coordinates(entry: &SnapshotEntry) -> Coordinates<'_> {
 
 /// Two domains never own the same key; if a transition ever produces one,
 /// the most recently committed sample wins deterministically.
-fn recency(entry: &SnapshotEntry) -> (u64, u64) {
+const fn recency(entry: &SnapshotEntry) -> (u64, u64) {
     (
         entry.sample.snapshot_revision,
         entry.sample.read_finished_boot_ns,
@@ -45,6 +45,7 @@ pub struct SampleIndex {
 
 impl SampleIndex {
     /// Indexes every sample of `domains` (shared, not copied).
+    #[must_use]
     pub fn new(domains: &std::collections::BTreeMap<CollectorId, Arc<DomainSnapshot>>) -> Self {
         let mut entries: Vec<Arc<SnapshotEntry>> = domains
             .values()
@@ -66,14 +67,17 @@ impl SampleIndex {
         Self { entries, entities }
     }
 
-    pub fn len(&self) -> usize {
+    #[must_use]
+    pub const fn len(&self) -> usize {
         self.entries.len()
     }
 
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
+    #[must_use]
     pub fn get(&self, metric: &str, entity: &str, scope: &str) -> Option<&SnapshotEntry> {
         self.entries
             .binary_search_by(|entry| coordinates(entry).cmp(&(metric, entity, scope)))
@@ -83,6 +87,7 @@ impl SampleIndex {
 
     /// The preferred scope when reported, else the first scope (in order)
     /// reported for the entity.
+    #[must_use]
     pub fn find(
         &self,
         metric: &str,
@@ -97,11 +102,13 @@ impl SampleIndex {
     }
 
     /// Every series of `metric`, by entity then scope.
+    #[must_use]
     pub fn entries_of_metric(&self, metric: &str) -> &[Arc<SnapshotEntry>] {
         self.range(|(candidate, _, _)| candidate.cmp(metric))
     }
 
     /// Every scope of `metric` reported for `entity`, by scope.
+    #[must_use]
     pub fn entries_of_entity(&self, metric: &str, entity: &str) -> &[Arc<SnapshotEntry>] {
         self.range(|(candidate_metric, candidate_entity, _)| {
             candidate_metric
@@ -111,6 +118,7 @@ impl SampleIndex {
     }
 
     /// Distinct entities (sorted by id) whose id starts with `prefix`.
+    #[must_use]
     pub fn entities_with_prefix(&self, prefix: &str) -> &[EntityId] {
         let start = self
             .entities
@@ -123,6 +131,7 @@ impl SampleIndex {
     }
 
     /// Any committed key: names the snapshot's host and boot.
+    #[must_use]
     pub fn any_key(&self) -> Option<&MetricKey> {
         self.entries.first().map(|entry| &entry.sample.key)
     }
@@ -274,11 +283,10 @@ mod tests {
                 .is_none()
         );
         assert_eq!(index.entries_of_metric("cpu.utilization.total").len(), 3);
-        assert!(index.entries_of_metric("memory.used").is_empty());
-        assert!(
-            index
-                .entries_of_entity("gpu.fan.speed", "gpu:GPU-b")
-                .is_empty()
+        assert_eq!(index.entries_of_metric("memory.used").len(), 0);
+        assert_eq!(
+            index.entries_of_entity("gpu.fan.speed", "gpu:GPU-b").len(),
+            0
         );
         let fan = index.find("gpu.fan.speed", "gpu:GPU-a", "gpu").unwrap();
         assert_eq!(fan.sample.key.scope.as_str(), "fan:0");
@@ -289,7 +297,7 @@ mod tests {
             .collect();
         assert_eq!(cores, vec!["cpu.core.0", "cpu.core.1"]);
         assert_eq!(index.entities_with_prefix("gpu:").len(), 1);
-        assert!(index.entities_with_prefix("zzz").is_empty());
+        assert_eq!(index.entities_with_prefix("zzz").len(), 0);
         assert!(index.any_key().is_some());
     }
 

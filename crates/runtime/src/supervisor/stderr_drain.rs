@@ -95,7 +95,7 @@ mod tests {
     #[test]
     fn lines_split_across_reads_are_reassembled_and_sanitized() {
         let mut drain = StderrDrain::new(10, 1000, 0);
-        assert!(collect(&mut drain, b"partial \x1b[31mred", 0).is_empty());
+        assert_eq!(collect(&mut drain, b"partial \x1b[31mred", 0).len(), 0);
         assert_eq!(
             collect(&mut drain, b" line\nnext\n", 0),
             ["partial red line", "next"]
@@ -110,7 +110,7 @@ mod tests {
     fn long_lines_are_truncated_and_floods_are_rate_limited() {
         let mut drain = StderrDrain::new(2, 1000, 0);
         let long = vec![b'x'; 5000];
-        let mut input = long.clone();
+        let mut input = long;
         input.push(b'\n');
         let lines = collect(&mut drain, &input, 0);
         assert_eq!(lines.len(), 1);

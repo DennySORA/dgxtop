@@ -8,6 +8,7 @@ use dgxtop_core::view::{BannerLevel, ModuleViews, Trend, ViewModel};
 
 use super::banners::{order_and_bound, push};
 use super::history::downsample;
+use dgxtop_core::num::ToF64Lossy;
 
 /// Facts from the builders that trimming must preserve.
 #[derive(Debug, Clone, Copy)]
@@ -255,8 +256,7 @@ fn halve_cells(means: &[Option<f64>]) -> Vec<Option<f64>> {
         .chunks(2)
         .map(|pair| {
             let known: Vec<f64> = pair.iter().flatten().copied().collect();
-            #[allow(clippy::cast_precision_loss)]
-            let count = known.len() as f64;
+            let count = known.len().to_f64_lossy();
             (!known.is_empty()).then(|| known.iter().sum::<f64>() / count)
         })
         .collect()
@@ -291,24 +291,23 @@ fn limit_cores(modules: &mut ModuleViews, keep: usize) -> bool {
 /// The stall pressures (D-135) go before a whole module does: they add to
 /// what a panel says of its resource, and every other figure of it stays.
 fn drop_pressure(modules: &mut ModuleViews, _: &BudgetHints) -> bool {
-    let mut changed = false;
-    if let Some(cpu) = modules.cpu.as_mut().filter(|cpu| cpu.pressure.is_some()) {
-        Arc::make_mut(cpu).pressure = None;
-        changed = true;
-    }
-    if let Some(memory) = modules
+    // Each module's pressure goes, whether or not another's did.
+    let cpu = modules
+        .cpu
+        .as_mut()
+        .filter(|cpu| cpu.pressure.is_some())
+        .map(|cpu| Arc::make_mut(cpu).pressure = None);
+    let memory = modules
         .memory
         .as_mut()
         .filter(|memory| memory.pressure.is_some())
-    {
-        Arc::make_mut(memory).pressure = None;
-        changed = true;
-    }
-    if let Some(disk) = modules.disk.as_mut().filter(|disk| disk.pressure.is_some()) {
-        Arc::make_mut(disk).pressure = None;
-        changed = true;
-    }
-    changed
+        .map(|memory| Arc::make_mut(memory).pressure = None);
+    let disk = modules
+        .disk
+        .as_mut()
+        .filter(|disk| disk.pressure.is_some())
+        .map(|disk| Arc::make_mut(disk).pressure = None);
+    cpu.is_some() || memory.is_some() || disk.is_some()
 }
 
 fn drop_secondary_modules(modules: &mut ModuleViews, _: &BudgetHints) -> bool {

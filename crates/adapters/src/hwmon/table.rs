@@ -110,7 +110,7 @@ pub(crate) struct ScanOutput {
 }
 
 impl ScanOutput {
-    pub(crate) fn complete() -> Self {
+    pub(crate) const fn complete() -> Self {
         Self {
             outcome: ScanOutcome::Complete,
             devices: Vec::new(),
@@ -219,7 +219,7 @@ impl SourceTable {
     }
 
     /// Device keys whose cached metadata must be re-read (suspected re-creation).
-    pub(crate) fn suspects(&self) -> &BTreeSet<String> {
+    pub(crate) const fn suspects(&self) -> &BTreeSet<String> {
         &self.suspects
     }
 
@@ -271,33 +271,30 @@ impl SourceTable {
         let mut assigned = false;
         for device in devices {
             let fresh_generation = self.next_generation;
-            match self.devices.get_mut(&device.device_key) {
-                Some(state) => {
-                    let recreated = !state.present
-                        || state.instance != device.instance
-                        || self.suspects.contains(&device.device_key);
-                    if recreated {
-                        state.generation = fresh_generation;
-                        state.throttle = ProbeThrottle::new(self.probe_interval_ms);
-                        assigned = true;
-                    }
-                    state.instance.clone_from(&device.instance);
-                    state.present = true;
-                    state.last_seen_scan = self.scan_counter;
-                }
-                None => {
-                    self.devices.insert(
-                        device.device_key.clone(),
-                        DeviceState {
-                            generation: fresh_generation,
-                            instance: device.instance.clone(),
-                            present: true,
-                            last_seen_scan: self.scan_counter,
-                            throttle: ProbeThrottle::new(self.probe_interval_ms),
-                        },
-                    );
+            if let Some(state) = self.devices.get_mut(&device.device_key) {
+                let recreated = !state.present
+                    || state.instance != device.instance
+                    || self.suspects.contains(&device.device_key);
+                if recreated {
+                    state.generation = fresh_generation;
+                    state.throttle = ProbeThrottle::new(self.probe_interval_ms);
                     assigned = true;
                 }
+                state.instance.clone_from(&device.instance);
+                state.present = true;
+                state.last_seen_scan = self.scan_counter;
+            } else {
+                self.devices.insert(
+                    device.device_key.clone(),
+                    DeviceState {
+                        generation: fresh_generation,
+                        instance: device.instance.clone(),
+                        present: true,
+                        last_seen_scan: self.scan_counter,
+                        throttle: ProbeThrottle::new(self.probe_interval_ms),
+                    },
+                );
+                assigned = true;
             }
         }
         if assigned {
@@ -560,7 +557,9 @@ impl SourceTable {
             if now_boot_ns > deadline_boot_ns {
                 break;
             }
-            let _ = self.read_one(files, &source_id, now_boot_ns);
+            // Only the probe's effect on the source's support counts here;
+            // what it read is taken by the next read of the group.
+            drop(self.read_one(files, &source_id, now_boot_ns));
         }
     }
 

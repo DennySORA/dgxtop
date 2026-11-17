@@ -148,9 +148,10 @@ impl ProcessTableSnapshots {
 
 impl SnapshotReader for ProcessTableSnapshots {
     fn latest(&self) -> Arc<ImmutableSnapshot> {
-        if self.fail_next_read.swap(false, Ordering::SeqCst) {
-            panic!("injected Manager invariant failure: snapshot state is inconsistent");
-        }
+        assert!(
+            !self.fail_next_read.swap(false, Ordering::SeqCst),
+            "injected Manager invariant failure: snapshot state is inconsistent"
+        );
         Arc::clone(&self.current.lock().unwrap_or_else(PoisonError::into_inner))
     }
 }
@@ -173,7 +174,7 @@ pub fn process_row(key: ProcessKey) -> ProcessRow {
     }
 }
 
-pub fn navigation(view: ViewKind) -> CommandBody {
+pub const fn navigation(view: ViewKind) -> CommandBody {
     CommandBody::UpdateViewSession {
         view,
         selected_entity_id: None,
@@ -317,7 +318,7 @@ impl Drop for RunningManager {
                 std::thread::sleep(POLL_STEP);
             }
             if thread.is_finished() {
-                let _ = thread.join();
+                drop(thread.join());
             }
         }
     }

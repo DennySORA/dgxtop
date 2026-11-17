@@ -1,6 +1,9 @@
 //! Powercap (RAPL) adapter integration tests over fake sysfs trees.
-#![allow(clippy::unwrap_used, clippy::expect_used)] // tests may unwrap
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
+#[expect(dead_code, reason = "each suite uses its part of the shared helpers")]
 #[path = "fixtures/adapters_c/support.rs"]
 mod support;
 
@@ -39,7 +42,7 @@ fn adapter_with(
     files: Arc<dyn SystemFiles>,
     clock: &Arc<dgxtop_core::testing::FakeClock>,
 ) -> PowercapAdapter {
-    PowercapAdapter::new(time(clock), host(), files, AdapterOptions::default())
+    PowercapAdapter::new(time(clock), host(), files, &AdapterOptions::default())
 }
 
 #[test]
@@ -88,7 +91,7 @@ fn package_and_psys_are_distinct_metrics_and_subdomains_are_not_catalogued() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     let package_reading = record(&readings, "powercap:intel-rapl:0:energy_uj");
     assert_eq!(package_reading.value.unwrap().as_u64(), Some(123_456_789));
@@ -138,7 +141,7 @@ fn counters_stay_exact_u64() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     assert_eq!(readings[0].value.unwrap().as_u64(), Some(u64::MAX));
 }
@@ -176,7 +179,7 @@ fn permission_denied_energy_is_reported_never_zero() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     for reading in &readings {
         assert_eq!(reading.read_status, ReadStatus::PermissionDenied);
@@ -205,7 +208,7 @@ fn denied_energy_is_reprobed_at_most_once_per_interval() {
             "fast",
             cycle,
             deadline(&clock),
-            Vec::new(),
+            &Vec::new(),
         );
         if cycle % 5 == 0 {
             generation = discover(&mut adapter, ADAPTER, generation, deadline(&clock)).0;
@@ -223,7 +226,7 @@ fn denied_energy_is_reprobed_at_most_once_per_interval() {
         "fast",
         11,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     );
     assert_eq!(counting.reads_of(&energy), 2);
 }
@@ -253,7 +256,10 @@ fn zones_without_energy_counters_are_skipped() {
     let clock = clock();
     let mut adapter = adapter_with(sysfs.files(), &clock);
     let (_, pages) = discover(&mut adapter, ADAPTER, 0, deadline(&clock));
-    assert!(sources(&pages).is_empty());
+    assert_eq!(
+        sources(&pages),
+        [] as [dgxtop_core::observation::SourceDescriptor; 0]
+    );
     assert_eq!(pages[0].availability, Some(Availability::Unavailable));
 }
 

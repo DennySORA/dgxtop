@@ -408,7 +408,7 @@ pub fn render_selector(
         .set_line(area.x, area.y, &line, area.width);
 }
 
-fn mode_kind(mode: &ModeView) -> ModeKind {
+const fn mode_kind(mode: &ModeView) -> ModeKind {
     match mode {
         ModeView::Normal => ModeKind::Normal,
         ModeView::Filter { .. } => ModeKind::Filter,

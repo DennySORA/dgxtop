@@ -10,12 +10,14 @@ use dgxtop_core::tiers::Tier;
 use crate::bucket::Bucket;
 use crate::series::TieredSeries;
 
-/// `[start, end)` of `series` as one bucket starting at `start`. Each step
-/// takes the coarsest size whose bucket starts there, ends by `end` and is
-/// still held; time no size holds at a minute's start is skipped to the
-/// next minute (a window's start before the finest size's reach is cut to
-/// the next boundary a coarser size holds). The `extra` minutes (ones the
-/// series was not given yet) whose minute starts in the window join it.
+/// `[start, end)` of `series` as one bucket starting at `start`.
+///
+/// Each step takes the coarsest size whose bucket starts there, ends by
+/// `end` and is still held; time no size holds at a minute's start is
+/// skipped to the next minute (a window's start before the finest size's
+/// reach is cut to the next boundary a coarser size holds). The `extra`
+/// minutes (ones the series was not given yet) whose minute starts in the
+/// window join it.
 pub fn merged_between<'a, B: Bucket + 'a>(
     series: &TieredSeries<B>,
     (start, end): (i64, i64),
@@ -90,25 +92,24 @@ mod tests {
     use dgxtop_core::overview_history::OverviewBucket;
 
     use super::*;
+    use dgxtop_core::num::ToF64Lossy;
 
     const MINUTE: i64 = 60_000_000_000;
     const HOUR: i64 = 60 * MINUTE;
     /// Midnight UTC.
     const MIDNIGHT: i64 = 1_790_208_000 * 1_000_000_000;
 
-    #[allow(clippy::cast_precision_loss)]
     fn value_at(minute: i64) -> f64 {
-        (minute % 97) as f64
+        (minute % 97).to_f64_lossy()
     }
 
-    #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
     fn minute_bucket(minute: i64) -> OverviewBucket {
         let value = value_at(minute);
         let covered = 60_000_000_000_u64;
         OverviewBucket::gauge(
             MIDNIGHT + minute * MINUTE,
             covered,
-            value * covered as f64,
+            value * covered.to_f64_lossy(),
             (value, value),
             12,
         )

@@ -9,19 +9,23 @@ const ELLIPSIS: char = '…';
 /// Upper bound for any single projected string drawn by the viewer.
 const MAX_FIELD_BYTES: usize = 512;
 
-/// Strips control/escape/bidi characters and bounds the byte length. Driver
-/// labels and process names are untrusted even after the Manager cleaned
-/// them; the viewer re-applies the core hygiene before drawing.
+/// Strips control/escape/bidi characters and bounds the byte length.
+///
+/// Driver labels and process names are untrusted even after the Manager
+/// cleaned them; the viewer re-applies the core hygiene before drawing.
+#[must_use]
 pub fn clean(text: &str) -> String {
     sanitize_display(text, MAX_FIELD_BYTES)
 }
 
 /// Display width in terminal columns (CJK is 2 columns wide).
+#[must_use]
 pub fn display_width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
 }
 
 /// Cuts `text` to at most `max_width` columns, ending with `…` when cut.
+#[must_use]
 pub fn truncate_to_width(text: &str, max_width: usize) -> String {
     if display_width(text) <= max_width {
         return text.to_owned();
@@ -47,6 +51,7 @@ pub fn truncate_to_width(text: &str, max_width: usize) -> String {
 /// Cuts `text` to at most `max_width` columns by taking out its middle, so
 /// a path keeps where it starts and the file it ends in: `/home/u/…/bin/
 /// python3`. The end keeps the larger half.
+#[must_use]
 pub fn truncate_middle(text: &str, max_width: usize) -> String {
     if display_width(text) <= max_width {
         return text.to_owned();
@@ -79,6 +84,7 @@ fn leading(characters: impl Iterator<Item = char>, budget: usize) -> Vec<char> {
 /// `RTX 5080` of `NVIDIA GeForce RTX 5080`, `GB10` of `NVIDIA GB10`: a GPU's
 /// model without the maker's and the product line's words, so a narrow
 /// place still tells two GPUs apart (D-122).
+#[must_use]
 pub fn short_gpu_model(name: &str) -> &str {
     let name = name.trim();
     let name = name.strip_prefix("NVIDIA ").unwrap_or(name);
@@ -87,6 +93,7 @@ pub fn short_gpu_model(name: &str) -> &str {
 
 /// `GPU 0 · RTX 5080`: a GPU's label with its short model; the label alone
 /// when the model is unknown.
+#[must_use]
 pub fn gpu_with_model(label: &str, name: &str) -> String {
     match short_gpu_model(name) {
         "" => label.to_owned(),
@@ -100,6 +107,7 @@ const MAX_GPU_NUMBER_DIGITS: usize = 3;
 
 /// `3` of `GPU 3`: the number of the GPU a label names, which picks its
 /// color (D-123); `None` for a GPU labelled by its UUID (`GPU 1a2b3c4d`).
+#[must_use]
 pub fn gpu_number(label: &str) -> Option<u32> {
     let number = label.trim().strip_prefix("GPU ")?;
     let digits = 1..=MAX_GPU_NUMBER_DIGITS;
@@ -110,6 +118,7 @@ pub fn gpu_number(label: &str) -> Option<u32> {
 }
 
 /// Left-aligned, truncated and space-padded to exactly `width` columns.
+#[must_use]
 pub fn pad_right(text: &str, width: usize) -> String {
     let fitted = truncate_to_width(text, width);
     let padding = width.saturating_sub(display_width(&fitted));
@@ -117,6 +126,7 @@ pub fn pad_right(text: &str, width: usize) -> String {
 }
 
 /// Right-aligned, truncated and space-padded to exactly `width` columns.
+#[must_use]
 pub fn pad_left(text: &str, width: usize) -> String {
     let fitted = truncate_to_width(text, width);
     let padding = width.saturating_sub(display_width(&fitted));
@@ -124,6 +134,7 @@ pub fn pad_left(text: &str, width: usize) -> String {
 }
 
 /// `count` `noun`s: `1 run`, `3 runs`.
+#[must_use]
 pub fn counted(count: usize, noun: &str) -> String {
     if count == 1 {
         format!("1 {noun}")

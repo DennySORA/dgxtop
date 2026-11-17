@@ -287,9 +287,7 @@ pub(crate) fn harness_setup(options: &HarnessOptions) -> ManagerSetup {
         saved_config: options.saved.clone(),
         effective_config: options.effective.clone(),
         value_origins: options.origins.clone(),
-        config_file: dgxtop_core::action::PersistenceStatus::healthy(
-            dgxtop_core::action::PersistenceKind::Config,
-        ),
+        config_file: PersistenceStatus::healthy(PersistenceKind::Config),
         host_id: host_id("test-host"),
         boot_id: boot_id("fake-boot"),
         pid_namespace: PidNamespace::new("pid:[4026531836]").unwrap(),
@@ -319,7 +317,9 @@ pub(crate) fn harness_ports(options: &HarnessOptions) -> (ManagerPorts, Ports) {
         audit: CapturingDispatch::new(),
         actions: CapturingDispatch::new(),
         process_inputs: CapturingDispatch::new(),
-        process_history: StaticProcessHistory::new(Default::default()),
+        process_history: StaticProcessHistory::new(
+            dgxtop_core::process_model::ProcessHistoryModel::default(),
+        ),
         snapshots: Arc::new(FakeSnapshots::default()),
         logger: Arc::new(MemoryLogger::default()),
         ingress: QueueGate::new(
@@ -364,9 +364,9 @@ pub(crate) struct Harness {
 }
 
 impl Harness {
-    pub(crate) fn new(options: HarnessOptions) -> Self {
-        let (manager_ports, ports) = harness_ports(&options);
-        let (mut manager, inboxes) = Manager::new(harness_setup(&options), manager_ports).unwrap();
+    pub(crate) fn new(options: &HarnessOptions) -> Self {
+        let (manager_ports, ports) = harness_ports(options);
+        let (mut manager, inboxes) = Manager::new(harness_setup(options), manager_ports).unwrap();
         let session = manager.open_session().unwrap();
         let mut harness = Self {
             manager,
@@ -455,7 +455,7 @@ impl Harness {
 
     /// Answers every captured discovery request with a complete catalog
     /// page; returns the read jobs captured meanwhile.
-    pub(crate) fn answer_discovery(&mut self, sources: Vec<SourceDescriptor>) -> Vec<AdapterJob> {
+    pub(crate) fn answer_discovery(&mut self, sources: &[SourceDescriptor]) -> Vec<AdapterJob> {
         let mut others = Vec::new();
         for job in self.ports.adapters.take() {
             match job {

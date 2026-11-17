@@ -14,6 +14,7 @@ pub struct BuildInfo {
 }
 
 impl BuildInfo {
+    #[must_use]
     pub const fn current() -> Self {
         Self {
             version: env!("CARGO_PKG_VERSION"),
@@ -33,11 +34,13 @@ pub struct RuntimeFacts {
 }
 
 /// One-line version (`dgxtop 2.0.0`).
+#[must_use]
 pub fn short(build: &BuildInfo) -> String {
     format!("dgxtop {}", build.version)
 }
 
 /// Multi-line verbose report.
+#[must_use]
 pub fn verbose(build: &BuildInfo, runtime: &RuntimeFacts) -> String {
     let mut text = short(build);
     text.push('\n');
@@ -46,20 +49,22 @@ pub fn verbose(build: &BuildInfo, runtime: &RuntimeFacts) -> String {
     } else {
         "FAILED"
     };
-    let _ = writeln!(text, "commit: {}", build.commit);
-    let _ = writeln!(text, "toolchain: {}", build.rustc);
-    let _ = writeln!(text, "target: {}", build.target);
-    let _ = writeln!(text, "profile: {}", build.profile);
-    let _ = writeln!(
+    writeln!(text, "commit: {}", build.commit).unwrap_or_default();
+    writeln!(text, "toolchain: {}", build.rustc).unwrap_or_default();
+    writeln!(text, "target: {}", build.target).unwrap_or_default();
+    writeln!(text, "profile: {}", build.profile).unwrap_or_default();
+    writeln!(
         text,
         "sqlite: {} (runtime gate >= 3.51.3: {gate})",
         runtime.sqlite_version
-    );
-    let _ = writeln!(
+    )
+    .unwrap_or_default();
+    writeln!(
         text,
         "config schema: {}",
         dgxtop_core::config::CONFIG_SCHEMA_VERSION
-    );
+    )
+    .unwrap_or_default();
     text
 }
 

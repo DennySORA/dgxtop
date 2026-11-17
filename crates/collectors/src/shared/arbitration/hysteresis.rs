@@ -47,7 +47,7 @@ pub(super) fn decide(input: &Input<'_>) -> Verdict {
 }
 
 /// Memo of a source held without a pending challenger.
-pub(super) fn settled(selected: SourceId, since_boot_ns: u64) -> SelectionMemo {
+pub(super) const fn settled(selected: SourceId, since_boot_ns: u64) -> SelectionMemo {
     SelectionMemo {
         selected: Some(selected),
         selected_since_boot_ns: since_boot_ns,
@@ -121,7 +121,7 @@ mod tests {
     fn challenger_needs_three_wins_and_five_seconds() {
         let current = source_id("b");
         let challenger = source_id("a");
-        let mut memo = settled(current.clone(), 0);
+        let mut memo = settled(current, 0);
         let mut switched_at = None;
         for second in 1..=10u64 {
             let verdict = decide(&input(Some(&memo), &challenger, true, second * SECOND));

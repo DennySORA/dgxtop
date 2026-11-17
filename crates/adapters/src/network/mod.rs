@@ -1,6 +1,7 @@
-//! Network adapter (`network`, read group `fast`, paged): per-interface
-//! kernel counters from `/sys/class/net/<if>/statistics/*` on entity
-//! `netif:<netns>:<ifindex>` (netns from `/proc/self/ns/net`), scope
+//! Network adapter (`network`, read group `fast`, paged).
+//!
+//! Per-interface kernel counters from `/sys/class/net/<if>/statistics/*` on
+//! entity `netif:<netns>:<ifindex>` (netns from `/proc/self/ns/net`), scope
 //! `interface`. Loopback is included and marked by the `loopback` attribute.
 //! A removed interface is removed from the catalog; a re-created one (new
 //! ifindex, even under the same name) is a new entity and generation, so a
@@ -26,7 +27,7 @@ use self::interfaces::{
     read_interface,
 };
 use crate::common::{RecordFactory, SystemFiles};
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 use crate::procfs::CatalogStats;
 use crate::procfs::availability_of;
 use crate::procfs::catalog::{
@@ -49,11 +50,13 @@ const MINIMUM_SAMPLE_MS: u32 = 100;
 const NET_NAMESPACE_PATH: &str = "/proc/self/ns/net";
 
 /// Static manifest with default options.
+#[must_use]
 pub fn manifest() -> AdapterManifest {
     manifest_with(&AdapterOptions::default())
 }
 
-/// Manifest for `options` (source limit = min(max_sources, 2048)).
+/// Manifest for `options` (source limit = `min(max_sources`, 2048)).
+#[must_use]
 pub fn manifest_with(options: &AdapterOptions) -> AdapterManifest {
     kernel_file_manifest(
         adapters::NETWORK,
@@ -75,6 +78,14 @@ pub struct NetworkAdapter {
     read_gate: ReprobeGate,
     pagers: GroupPagers,
     shut_down: bool,
+}
+
+impl std::fmt::Debug for NetworkAdapter {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NetworkAdapter")
+            .finish_non_exhaustive()
+    }
 }
 
 impl NetworkAdapter {
@@ -106,7 +117,8 @@ impl NetworkAdapter {
     }
 
     /// Size of the catalog bookkeeping (boundedness tests).
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
     pub fn catalog_stats(&self) -> CatalogStats {
         self.book.stats()
     }
@@ -126,20 +138,17 @@ impl NetworkAdapter {
             ..
         } = self;
         let mut builder = book.begin_snapshot(now_boot_ns);
-        let availability = match net_namespace.as_deref() {
-            Some(namespace) => {
-                let discovery = InterfaceDiscovery {
-                    keys: &keys,
-                    files: &**files,
-                    net_namespace: namespace,
-                };
-                enumerate(&mut builder, &discovery)
-            }
-            None => {
-                builder.carry_over_family(FAMILY_INTERFACE);
-                builder.error("NET_NAMESPACE_UNKNOWN");
-                Availability::Unavailable
-            }
+        let availability = if let Some(namespace) = net_namespace.as_deref() {
+            let discovery = InterfaceDiscovery {
+                keys: &keys,
+                files: &**files,
+                net_namespace: namespace,
+            };
+            enumerate(&mut builder, &discovery)
+        } else {
+            builder.carry_over_family(FAMILY_INTERFACE);
+            builder.error("NET_NAMESPACE_UNKNOWN");
+            Availability::Unavailable
         };
         builder.capability(statistics_capability(availability));
         builder.finish(request, availability)

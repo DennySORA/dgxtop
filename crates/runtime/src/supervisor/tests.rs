@@ -67,12 +67,12 @@ fn start(config: SupervisorConfig, specs: Vec<HostSpec>, ingress_bytes: u64) -> 
         ledger.clone(),
         Partition::Ingress,
     );
-    let (sender, completions) = crossbeam_channel::bounded(256);
+    let (sender, completions) = bounded(256);
     let clock: Arc<dyn TimeProvider> = Arc::new(BootClock::new().unwrap());
     let handle = Supervisor::start(
         config,
         specs,
-        ledger.clone(),
+        &ledger,
         gate.clone(),
         sender,
         Arc::clone(&clock),
@@ -106,7 +106,7 @@ impl Harness {
         }
     }
 
-    fn wait_state(&self, adapter: &str, state: HostState) -> dgxtop_core::view::HostStatus {
+    fn wait_state(&self, adapter: &str, state: HostState) -> HostStatus {
         let completion = self.wait_for(|completion| {
             matches!(completion, IngestionCompletion::HostStatus(status)
                 if status.adapter_id == adapter && status.state == state)
@@ -145,7 +145,7 @@ impl Harness {
         }
     }
 
-    fn dispatch_when_ready(&self, job: AdapterJob) {
+    fn dispatch_when_ready(&self, job: &AdapterJob) {
         let deadline = Instant::now() + WAIT;
         loop {
             match self.handle.try_dispatch(job.clone()) {
@@ -182,7 +182,7 @@ fn in_process_round_trip_accounts_and_releases_ingress_bytes() {
         previous_generation: 0,
         page: 0,
     };
-    harness.dispatch_when_ready(AdapterJob::Discover(discover.clone()));
+    harness.dispatch_when_ready(&AdapterJob::Discover(discover.clone()));
     let catalog = harness.wait_for(|completion| {
         matches!(completion, IngestionCompletion::Catalog { request_id, .. } if *request_id == discover.request_id)
     });
@@ -191,7 +191,7 @@ fn in_process_round_trip_accounts_and_releases_ingress_bytes() {
         IngestionCompletion::Catalog { result: Ok(ref delta), .. } if delta.complete
     ));
     let plan = harness.plan("replay", 1, 1, 300);
-    harness.dispatch_when_ready(AdapterJob::Read(plan.clone()));
+    harness.dispatch_when_ready(&AdapterJob::Read(plan.clone()));
     let batch = harness.batch_for(plan.request_id).unwrap();
     assert_eq!(batch.records.len(), 2);
     assert_eq!(batch.request_id, plan.request_id);
@@ -211,7 +211,7 @@ fn in_process_round_trip_accounts_and_releases_ingress_bytes() {
     }
     let report = harness.handle.shutdown(Duration::from_secs(2));
     assert!(report.completed_within_deadline);
-    assert!(report.unreaped().is_empty());
+    assert_eq!(report.unreaped().len(), 0);
     assert_eq!(calls.shutdowns.load(Ordering::SeqCst), 1);
     assert_eq!(
         harness
@@ -235,7 +235,7 @@ fn busy_while_in_flight_and_capacity_when_credit_is_missing() {
     );
     harness.wait_state("replay", HostState::Healthy);
     let first = harness.plan("replay", 1, 1, 2_000);
-    harness.dispatch_when_ready(AdapterJob::Read(first.clone()));
+    harness.dispatch_when_ready(&AdapterJob::Read(first.clone()));
     let second = harness.plan("replay", 1, 2, 2_000);
     assert_eq!(
         harness.handle.try_dispatch(AdapterJob::Read(second)),
@@ -326,7 +326,7 @@ fn identical_reads_are_joined_and_served_from_the_recycle_area() {
     let first = harness.plan("replay", 1, 5, 3_000);
     let mut duplicate = first.clone();
     duplicate.request_id = Uuid::new_v4();
-    harness.dispatch_when_ready(AdapterJob::Read(first.clone()));
+    harness.dispatch_when_ready(&AdapterJob::Read(first.clone()));
     harness
         .handle
         .try_dispatch(AdapterJob::Read(duplicate.clone()))
@@ -335,7 +335,7 @@ fn identical_reads_are_joined_and_served_from_the_recycle_area() {
     let joined = harness.batch_for(duplicate.request_id).unwrap();
     assert!(Arc::ptr_eq(&original, &joined));
     assert_eq!(calls.reads.load(Ordering::SeqCst), 1);
-    let mut late_duplicate = first.clone();
+    let mut late_duplicate = first;
     late_duplicate.request_id = Uuid::new_v4();
     harness
         .handle
@@ -349,7 +349,7 @@ fn identical_reads_are_joined_and_served_from_the_recycle_area() {
         "no second host request"
     );
     let next_cycle = harness.plan("replay", 1, 6, 3_000);
-    harness.dispatch_when_ready(AdapterJob::Read(next_cycle.clone()));
+    harness.dispatch_when_ready(&AdapterJob::Read(next_cycle.clone()));
     let fresh = harness.batch_for(next_cycle.request_id).unwrap();
     assert!(!Arc::ptr_eq(&original, &fresh));
     assert_eq!(calls.reads.load(Ordering::SeqCst), 2);
@@ -376,7 +376,7 @@ fn timeout_reports_failure_and_discards_the_late_reply() {
     );
     harness.wait_state("replay", HostState::Healthy);
     let slow = harness.plan("replay", 1, 1, 200);
-    harness.dispatch_when_ready(AdapterJob::Read(slow.clone()));
+    harness.dispatch_when_ready(&AdapterJob::Read(slow.clone()));
     let failure = harness.batch_for(slow.request_id).unwrap_err();
     // The failure is emitted at the deadline, before the late reply arrives.
     assert_eq!(failure.kind, AdapterFailureKind::TimedOut);
@@ -390,7 +390,7 @@ fn timeout_reports_failure_and_discards_the_late_reply() {
         Err(DispatchError::Busy)
     );
     let recovered = harness.plan("replay", 1, 3, 2_000);
-    harness.dispatch_when_ready(AdapterJob::Read(recovered.clone()));
+    harness.dispatch_when_ready(&AdapterJob::Read(recovered.clone()));
     assert!(harness.batch_for(recovered.request_id).is_ok());
     harness.wait_state("replay", HostState::Healthy);
     harness.handle.shutdown(Duration::from_secs(2));
@@ -414,7 +414,7 @@ fn hung_in_process_host_can_only_be_quarantined() {
     );
     harness.wait_state("replay", HostState::Healthy);
     let plan = harness.plan("replay", 1, 1, 100);
-    harness.dispatch_when_ready(AdapterJob::Read(plan.clone()));
+    harness.dispatch_when_ready(&AdapterJob::Read(plan.clone()));
     assert_eq!(
         harness.batch_for(plan.request_id).unwrap_err().kind,
         AdapterFailureKind::TimedOut
@@ -454,7 +454,7 @@ fn crashed_host_is_restarted_with_a_new_generation() {
     );
     harness.wait_state("replay", HostState::Healthy);
     let plan = harness.plan("replay", 1, 1, 2_000);
-    harness.dispatch_when_ready(AdapterJob::Read(plan.clone()));
+    harness.dispatch_when_ready(&AdapterJob::Read(plan.clone()));
     // The host replies with a failed batch, then exits: the batch is
     // forwarded (it is a valid reply) and the crash triggers a restart.
     let reply = harness.batch_for(plan.request_id).unwrap();
@@ -480,11 +480,11 @@ fn start_rejects_too_many_or_duplicate_hosts() {
     let gate = QueueGate::new("ingress", 32, 8 * MIB, ledger.clone(), Partition::Ingress);
     let clock: Arc<dyn TimeProvider> = Arc::new(BootClock::new().unwrap());
     let attempt = |config: SupervisorConfig, specs: Vec<HostSpec>| {
-        let (sender, _receiver) = crossbeam_channel::bounded(8);
+        let (sender, _receiver) = bounded(8);
         Supervisor::start(
             config,
             specs,
-            ledger.clone(),
+            &ledger.clone(),
             gate.clone(),
             sender,
             Arc::clone(&clock),
@@ -530,7 +530,7 @@ fn first_success_reaches_the_manager_as_a_host_status() {
     let healthy = harness.wait_state("replay", HostState::Healthy);
     assert_eq!(healthy.last_success_boot_ns, None);
     let plan = harness.plan("replay", 1, 1, 2_000);
-    harness.dispatch_when_ready(AdapterJob::Read(plan.clone()));
+    harness.dispatch_when_ready(&AdapterJob::Read(plan.clone()));
     harness.batch_for(plan.request_id).unwrap();
     // The Settings tab's LAST OK column reads the Manager's copy, which only
     // HostStatus completions update (D-91).

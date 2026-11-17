@@ -36,7 +36,7 @@ pub struct CapabilityTracker {
 }
 
 impl CapabilityTracker {
-    pub fn new(unsupported_probe_ms: u64) -> Self {
+    pub const fn new(unsupported_probe_ms: u64) -> Self {
         Self {
             probe_interval_ns: ms_to_ns(unsupported_probe_ms),
             states: BTreeMap::new(),
@@ -93,13 +93,14 @@ impl CapabilityTracker {
 
     /// Current support and reason for one query of one device.
     pub fn support_of(&self, uuid: &str, query_key: &str) -> (Support, Option<String>) {
-        match self.states.get(&key(uuid, query_key)) {
-            Some(state) => (
-                state.support,
-                state.failure.as_ref().map(BackendError::reason_code),
-            ),
-            None => (Support::Unknown, None),
-        }
+        self.states
+            .get(&key(uuid, query_key))
+            .map_or((Support::Unknown, None), |state| {
+                (
+                    state.support,
+                    state.failure.as_ref().map(BackendError::reason_code),
+                )
+            })
     }
 
     /// Driver reload / generation change: everything is probed again.

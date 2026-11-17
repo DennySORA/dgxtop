@@ -1,8 +1,9 @@
-//! Theoretical GPU bandwidths from what the driver reports (D-48): the
-//! device memory's peak from its maximum clock and bus width, and a PCIe
-//! link's per-direction capacity from its generation and width. These are
-//! capabilities of the hardware, never measurements of traffic: the memory
-//! controller's busy share is not turned into bytes per second
+//! Theoretical GPU bandwidths from what the driver reports (D-48).
+//!
+//! The device memory's peak from its maximum clock and bus width, and a
+//! `PCIe` link's per-direction capacity from its generation and width.
+//! These are capabilities of the hardware, never measurements of traffic:
+//! the memory controller's busy share is not turned into bytes per second
 //! (D-11: no bandwidth is estimated without a validated model).
 
 /// Bits per byte.
@@ -15,13 +16,14 @@ const TRANSFERS_PER_CLOCK: f64 = 2.0;
 /// Peak device-memory bandwidth in bytes per second: maximum memory clock
 /// (MHz) × 2 transfers × bus width (bits) / 8. `None` without a positive
 /// clock and width.
+#[must_use]
 pub fn memory_peak_bytes_per_second(max_memory_clock_mhz: f64, bus_width_bits: f64) -> Option<f64> {
     let valid = |value: f64| value.is_finite() && value > 0.0;
     (valid(max_memory_clock_mhz) && valid(bus_width_bits))
         .then(|| max_memory_clock_mhz * 1e6 * TRANSFERS_PER_CLOCK * bus_width_bits / BITS_PER_BYTE)
 }
 
-/// Usable bytes per second of one PCIe lane in one direction, by
+/// Usable bytes per second of one `PCIe` lane in one direction, by
 /// generation: the transfer rate less the line encoding (8b/10b up to
 /// Gen 2, 128b/130b for Gen 3 to 5, 242/256 FLIT for Gen 6).
 fn lane_bytes_per_second(generation: u64) -> Option<f64> {
@@ -37,8 +39,9 @@ fn lane_bytes_per_second(generation: u64) -> Option<f64> {
     Some(giga_transfers * 1e9 * payload_bits / encoded_bits / BITS_PER_BYTE)
 }
 
-/// Capacity of a PCIe link in one direction, in bytes per second; `None`
+/// Capacity of a `PCIe` link in one direction, in bytes per second; `None`
 /// for an unknown generation or a zero width.
+#[must_use]
 pub fn pcie_bytes_per_second(generation: u64, width: u64) -> Option<f64> {
     let lanes = u32::try_from(width).ok().filter(|lanes| *lanes > 0)?;
     Some(lane_bytes_per_second(generation)? * f64::from(lanes))

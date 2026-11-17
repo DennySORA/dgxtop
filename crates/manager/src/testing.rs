@@ -1,7 +1,9 @@
 //! Test doubles of the Manager's ports for the suites that assemble a
-//! Manager (feature `test-support`): each site names only the ports it
-//! wires for real and takes the rest with `..inert_ports(...)`, so adding
-//! or removing a port changes this one place.
+//! Manager (feature `testing`).
+//!
+//! Each site names only the ports it wires for real and takes the rest
+//! with `..inert_ports(...)`, so adding or removing a port changes this
+//! one place.
 
 use std::sync::Arc;
 

@@ -1,4 +1,4 @@
-//! Projection micro benchmark: the Manager's PresentationService builders
+//! Projection micro benchmark: the Manager's `PresentationService` builders
 //! (`build_view_model_measured`) over a store snapshot of the seeded REF
 //! workload, and the Viewer turning each immutable projection into a frame
 //! through the real terminal runner (`TuiLoop`) at the REF 160×50 size.
@@ -15,6 +15,7 @@
 //! it as a necessary condition. Publishing (permit + slot swap) is internal
 //! to the Manager and covered end to end by the `ref` bench.
 
+#[expect(dead_code, reason = "each bench uses its part of the shared helpers")]
 #[path = "../common/mod.rs"]
 mod common;
 
@@ -44,6 +45,7 @@ use dgxtop_core::config::{Config, ValueOrigin};
 use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::identity::{EntityId, MetricKey, SessionId};
 use dgxtop_core::metric::{CanonicalUnit, descriptor, ids};
+use dgxtop_core::num::ToF64Lossy;
 use dgxtop_core::observation::EntityKind;
 use dgxtop_core::ports::{
     LoadOrigin, ProcessHistoryInput, ProcessHistoryReader, SessionPort, SnapshotReader, StoreWriter,
@@ -93,15 +95,18 @@ const fn sizes(mode: BenchMode) -> Sizes {
 }
 
 fn main() -> ExitCode {
-    common::run_bench(BENCH, run)
+    common::run_bench(BENCH, false, run)
 }
 
-fn run() -> BenchResult<PathBuf> {
-    let args = common::parse_args(BENCH, false)?;
+#[expect(
+    clippy::too_many_lines,
+    reason = "one bench from its inputs to its report, in the order it runs"
+)]
+fn run(args: &common::BenchArgs) -> BenchResult<PathBuf> {
     let inputs = common::load_inputs()?;
     let config = common::reference_config()?;
     let sizes = sizes(args.mode);
-    let paths = common::output_paths(BENCH, &args);
+    let paths = common::output_paths(BENCH, args);
     let _isolation = isolate_terminal_input()?;
     let environment = common::environment(
         "headless 160x50 TuiLoop, ANSI encoded into memory, null transport",
@@ -196,7 +201,7 @@ fn run() -> BenchResult<PathBuf> {
         ],
     };
     common::finish(
-        outcome,
+        &outcome,
         &inputs,
         &config,
         environment,
@@ -279,11 +284,8 @@ impl SnapshotWorld {
             };
             let ack = self.writer.commit_collection(batch, &guard, now);
             if ack.status.is_committed() {
-                self.pipeline.adopt_state(
-                    plan.collector_id.clone(),
-                    next_state,
-                    ack.state_revision,
-                );
+                self.pipeline
+                    .adopt_state(plan.collector_id, next_state, ack.state_revision);
             } else {
                 let reason = format!(
                     "{}: {}",
@@ -395,7 +397,7 @@ impl StaticInputs {
                 namespace_label: Some("replay (simulated data)".to_owned()),
                 utc_offset_s: 0,
                 any_user: false,
-                users: Default::default(),
+                users: dgxtop_core::users::UserNames::default(),
             },
             first_gpu: catalog
                 .entities
@@ -463,10 +465,9 @@ impl StaticInputs {
     }
 }
 
-/// A 1 h history as the HistoryService would hand it over for the fixture
+/// A 1 h history as the `HistoryService` would hand it over for the fixture
 /// (D-46): charts of the CPU, the memory, every GPU's utilization and the
 /// rates of one disk and one interface, 161 points each with two gaps.
-#[allow(clippy::cast_precision_loss)]
 fn history_view(snapshot: &ImmutableSnapshot, now_ns: u64) -> HistoryView {
     const SPAN_NS: u64 = 3_600_000_000_000;
     const POINTS: u64 = 161;
@@ -476,7 +477,7 @@ fn history_view(snapshot: &ImmutableSnapshot, now_ns: u64) -> HistoryView {
     let points: Vec<HistoryPointView> = (0..POINTS)
         .map(|index| {
             let gap = (40..44).contains(&index) || (120..122).contains(&index);
-            let mean = 40.0 + 30.0 * ((index as f64) / 20.0).sin();
+            let mean = 40.0 + 30.0 * (index.to_f64_lossy() / 20.0).sin();
             HistoryPointView {
                 start_utc_ns: start + index * step,
                 end_utc_ns: start + (index + 1) * step,

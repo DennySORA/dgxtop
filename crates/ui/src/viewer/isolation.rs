@@ -16,9 +16,12 @@ thread_local! {
     static ISOLATION_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
 
-/// True while this thread renders a module inside isolation; the panic hook
-/// installed by [`crate::install_panic_hook`] stays quiet then, because the
-/// panic is caught and drawn as a module error instead of ending the TUI.
+/// True while this thread renders a module inside isolation.
+///
+/// The panic hook installed by [`crate::install_panic_hook`] stays quiet
+/// then, because the panic is caught and drawn as a module error instead of
+/// ending the TUI.
+#[must_use]
 pub fn in_isolated_render() -> bool {
     ISOLATION_DEPTH.with(|depth| depth.get() > 0)
 }

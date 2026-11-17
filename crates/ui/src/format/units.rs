@@ -11,6 +11,7 @@ const BINARY_PREFIXES: [&str; 7] = ["", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei"];
 const SI_PREFIXES: [&str; 7] = ["", "k", "M", "G", "T", "P", "E"];
 
 /// Formats a scalar in its canonical unit. Exact `u64` counts stay exact.
+#[must_use]
 pub fn format_scalar(value: Scalar, unit: CanonicalUnit) -> String {
     match value.view() {
         ScalarView::U64(exact) if unit == CanonicalUnit::Count => exact.to_string(),
@@ -19,6 +20,7 @@ pub fn format_scalar(value: Scalar, unit: CanonicalUnit) -> String {
 }
 
 /// Formats a finite value with the unit symbol.
+#[must_use]
 pub fn format_value(value: f64, unit: CanonicalUnit) -> String {
     if !value.is_finite() {
         return NOT_AVAILABLE.to_owned();
@@ -38,6 +40,7 @@ pub fn format_value(value: f64, unit: CanonicalUnit) -> String {
 }
 
 /// Percent with one decimal below 100 (`45.3%`), none at or above (`100%`).
+#[must_use]
 pub fn format_percent(value: f64) -> String {
     if !value.is_finite() {
         return NOT_AVAILABLE.to_owned();
@@ -55,6 +58,7 @@ pub fn format_optional_percent(value: Option<f64>) -> String {
 }
 
 /// Exact byte count with binary prefixes (`1.5 GiB`).
+#[must_use]
 pub fn format_bytes(bytes: u64) -> String {
     format_scalar(Scalar::from_u64(bytes), CanonicalUnit::Bytes)
 }
@@ -66,6 +70,7 @@ pub fn format_optional_bytes(bytes: Option<u64>) -> String {
 
 /// Joules in the units of an electricity bill: watt-hours below 1 kWh
 /// (`0.05 Wh`, `80.0 Wh`, `990 Wh`), then kilowatt-hours (`9.25 kWh`).
+#[must_use]
 pub fn format_energy(joules: f64) -> String {
     const JOULES_PER_WH: f64 = 3_600.0;
     if !joules.is_finite() {
@@ -86,7 +91,8 @@ pub fn format_energy(joules: f64) -> String {
 }
 
 /// Bytes per second in decimal units (`960 GB/s`, `63.0 GB/s`), the way
-/// GPU and PCIe data sheets state peak bandwidths.
+/// GPU and `PCIe` data sheets state peak bandwidths.
+#[must_use]
 pub fn format_si_rate(bytes_per_second: f64) -> String {
     if !bytes_per_second.is_finite() {
         return NOT_AVAILABLE.to_owned();
@@ -96,6 +102,7 @@ pub fn format_si_rate(bytes_per_second: f64) -> String {
 
 /// A duration in the largest unit that reads well: `219 ms`, `12.3 s`,
 /// then minutes, hours and days (`3m 39s`, `1h 35m`).
+#[must_use]
 pub fn format_duration_ms(milliseconds: f64) -> String {
     if !milliseconds.is_finite() || milliseconds < 0.0 {
         return NOT_AVAILABLE.to_owned();
@@ -114,6 +121,7 @@ pub fn format_duration_ms(milliseconds: f64) -> String {
 
 /// A count in a few columns: exact below 1000, then SI prefixes without a
 /// space (`412`, `12.3k`, `654k`, `1.2M`), for totals beside each other.
+#[must_use]
 pub fn format_compact_count(value: f64) -> String {
     if !value.is_finite() {
         return NOT_AVAILABLE.to_owned();
@@ -125,6 +133,7 @@ pub fn format_compact_count(value: f64) -> String {
 }
 
 /// Fixed decimals without a `-0` artifact for values that round to zero.
+#[must_use]
 pub fn fixed(value: f64, decimals: usize) -> String {
     let text = format!("{value:.decimals$}");
     match text.strip_prefix('-') {

@@ -257,7 +257,7 @@ fn system_ram_total(reader: &MetricReader<'_>, gpu: &GpuIdentity<'_>) -> MetricC
 }
 
 /// What the GPU view shows of `card` beyond it (D-48): capabilities, slow
-/// health, the theoretical bandwidths, the driver's PCIe reading while its
+/// health, the theoretical bandwidths, the driver's `PCIe` reading while its
 /// unit is unverified, and the identity and software attributes.
 fn build_details(reader: &MetricReader<'_>, gpu: &GpuIdentity<'_>, card: &GpuCard) -> GpuDetails {
     let entity_id = gpu.entity_id.as_str();
@@ -314,7 +314,7 @@ fn unified_memory(reader: &MetricReader<'_>, gpu: &GpuIdentity<'_>) -> Option<Un
     })
 }
 
-/// The driver's own reading of a PCIe throughput the collector withheld
+/// The driver's own reading of a `PCIe` throughput the collector withheld
 /// for its unverified unit (D-11, D-48).
 fn driver_reading(
     reader: &MetricReader<'_>,
@@ -334,7 +334,7 @@ fn driver_reading(
         .find_map(|candidate| candidate.native_value.map(Scalar::to_f64_lossy))
 }
 
-/// NVML's PCIe throughput unit, whose KB is not proven 1000 or 1024 bytes.
+/// NVML's `PCIe` throughput unit, whose KB is not proven 1000 or 1024 bytes.
 fn is_unverified_unit(native_unit: &str) -> bool {
     native_unit == native::KB_UNVERIFIED_PER_SECOND
 }
@@ -423,9 +423,8 @@ fn unavailable_reason(no_cards: bool, environment: GpuEnvironment<'_>) -> Option
     }
     if let Some(status) = environment.nvml_status {
         match status.state {
-            HostState::Healthy | HostState::Degraded => {}
             HostState::Starting if no_cards => return Some(DISCOVERY_REASON.to_owned()),
-            HostState::Starting => {}
+            HostState::Healthy | HostState::Degraded | HostState::Starting => {}
             HostState::CircuitOpen
             | HostState::Quarantined
             | HostState::Disabled
@@ -475,7 +474,7 @@ mod tests {
         let reader = MetricReader::new(&fixture.snapshot, &fixture.catalog, NOW)
             .with_trends(&fixture.trends);
         let index = SnapshotLookup::new(&fixture.snapshot);
-        let directory = GpuDirectory::new(&fixture.catalog, &index);
+        let directory = GpuDirectory::new(&fixture.catalog, index);
         let requested = requested.map(|id| EntityId::new(id).unwrap());
         build_gpu_view(
             &reader,
@@ -493,8 +492,8 @@ mod tests {
     /// history kept in memory only, which restarts with dgxtop.
     #[test]
     fn cards_carry_the_power_the_history_recorded() {
-        let mut view = build(&two_gpus(), None, enabled());
         const DAY: u64 = 86_400 * 1_000_000_000;
+        let mut view = build(&two_gpus(), None, enabled());
         let day = |index: u64| HistoryPointView {
             start_utc_ns: index * DAY,
             end_utc_ns: (index + 1) * DAY,
@@ -849,7 +848,7 @@ mod tests {
         // A GPU that reports neither has no fans and no reading, never 0.
         let view = build(&fixture, Some(GPU_A), enabled());
         let other = view.cards[0].details.as_deref().unwrap();
-        assert!(other.fans.is_empty());
+        assert_eq!(other.fans.len(), 0);
         assert_eq!(other.power_instant.value, None);
     }
 

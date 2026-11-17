@@ -34,7 +34,9 @@ use crate::viewer::{HitMap, RenderInput, Viewer};
 pub const RESULT_POLL: Duration = Duration::from_millis(50);
 /// Input poll while a signal is on its way (D-109): its token and outcome
 /// are taken within a few milliseconds, as a kill is never something to
-/// wait for. Results do not wake the loop, so this bounds the delay.
+/// wait for.
+///
+/// Results do not wake the loop, so this bounds the delay.
 pub const SIGNAL_POLL: Duration = Duration::from_millis(5);
 /// Longest input poll once a new projection could be drawn. Projections
 /// and the Manager's shutdown request arrive without waking the loop, so
@@ -148,11 +150,15 @@ impl std::fmt::Debug for TuiLoop {
             .field("viewport", &self.viewport)
             .field("rendered_revision", &self.rendered_revision)
             .field("output", &self.output)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl TuiLoop {
+    /// # Errors
+    ///
+    /// Returns a `TuiError` when the terminal's input or output fails or the
+    /// terminal cannot be set up.
     pub fn new(
         session: Box<dyn SessionPort>,
         transport: Box<dyn TerminalTransport>,
@@ -174,7 +180,11 @@ impl TuiLoop {
 
     /// Like [`Self::new`] with a custom (smaller) output cap, for tests and
     /// constrained harnesses. The cap never exceeds 1 MiB.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Errors
+    ///
+    /// Returns a `TuiError` when the terminal's input or output fails or the
+    /// terminal cannot be set up.
     pub fn with_output_capacity(
         session: Box<dyn SessionPort>,
         transport: Box<dyn TerminalTransport>,
@@ -213,33 +223,48 @@ impl TuiLoop {
         })
     }
 
-    pub fn stats(&self) -> &FrameStats {
+    #[must_use]
+    pub const fn stats(&self) -> &FrameStats {
         &self.stats
     }
 
-    pub fn controller(&self) -> &Controller {
+    #[must_use]
+    pub const fn controller(&self) -> &Controller {
         &self.controller
     }
 
     /// Recent frames written (frames never interleave).
     #[cfg(test)]
+    #[must_use]
     pub fn frame_records(&self) -> Vec<super::FrameRecord> {
         self.output.frames().copied().collect()
     }
 
     /// Queues alternate screen, hidden cursor, clear and mouse capture as
     /// the first output; it is written before the first frame is drawn.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `TuiError` when the terminal's input or output fails or the
+    /// terminal cannot be set up.
     pub fn enter_screen(&mut self) -> Result<(), TuiError> {
         let mut writer = self.output.writer();
         writer
             .write_all(&setup::enter_sequence(self.options.mouse))
             .map_err(TuiError::Output)?;
-        let _ = self.output.begin_frame(self.clock.now());
+        self.output
+            .begin_frame(self.clock.now())
+            .unwrap_or_default();
         Ok(())
     }
 
     /// Runs until quit, Manager shutdown or a terminal failure; always
     /// attempts the bounded terminal restore before returning.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `TuiError` when the terminal's input or output fails or the
+    /// terminal cannot be set up.
     pub fn run(&mut self) -> Result<TuiExit, TuiError> {
         loop {
             match self.step() {
@@ -255,6 +280,11 @@ impl TuiLoop {
     }
 
     /// One loop iteration; `Some(reason)` means the loop must end.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `TuiError` when the terminal's input or output fails or the
+    /// terminal cannot be set up.
     pub fn step(&mut self) -> Result<Option<TuiExitReason>, TuiError> {
         match self.poll_input() {
             Ok(()) => {}
@@ -301,7 +331,7 @@ impl TuiLoop {
         let mut event = self.input.poll_event(self.next_poll)?;
         let mut handled = 0usize;
         while let Some(current) = event.take() {
-            self.route_event(current);
+            self.route_event(&current);
             handled += 1;
             if handled >= MAX_EVENTS_PER_STEP || self.controller.quit_requested() {
                 break;
@@ -312,24 +342,24 @@ impl TuiLoop {
         Ok(())
     }
 
-    fn route_event(&mut self, event: Event) {
+    fn route_event(&mut self, event: &Event) {
         if let Event::Resize(columns, rows) = event {
-            self.session.set_viewport(columns, rows);
-            self.pending_resize = Some((columns, rows));
+            self.session.set_viewport(*columns, *rows);
+            self.pending_resize = Some((*columns, *rows));
             return;
         }
         let now = self.clock.now();
         let context = controller_context!(self, self.active.as_deref(), now);
         self.controller
-            .handle_event(&event, &context, &*self.session);
+            .handle_event(event, &context, &*self.session);
     }
 
-    fn output_closed(&mut self, error: &std::io::Error) -> TuiExitReason {
+    fn output_closed(&self, error: &std::io::Error) -> TuiExitReason {
         self.session.request_shutdown("terminal output closed");
         TuiExitReason::OutputClosed(error.to_string())
     }
 
-    fn input_closed(&mut self) -> TuiExitReason {
+    fn input_closed(&self) -> TuiExitReason {
         self.session.request_shutdown("terminal hung up");
         TuiExitReason::InputClosed
     }
@@ -389,10 +419,8 @@ impl TuiLoop {
         // A copied command line goes out with this frame (D-76); a frame
         // that fails takes it with it, as a terminal would lose it anyway.
         if let Some(text) = self.controller.take_clipboard() {
-            let _ = std::io::Write::write_all(
-                &mut self.output.writer(),
-                &crate::clipboard::osc52(&text),
-            );
+            Write::write_all(&mut self.output.writer(), &crate::clipboard::osc52(&text))
+                .unwrap_or_default();
         }
         let started = self.clock.now();
         let cleared = !full_redraw || self.terminal.clear().is_ok();
@@ -516,7 +544,7 @@ impl TuiLoop {
                         .unwrap_or(false)
             }
         };
-        let _ = self.output.restore_transport();
+        self.output.restore_transport().unwrap_or_default();
         self.finished = true;
         self.stats.peak_output_bytes = self.output.peak_bytes();
         self.stats.bytes_written = self.output.bytes_written();
@@ -532,7 +560,7 @@ impl Drop for TuiLoop {
     fn drop(&mut self) {
         if !self.finished {
             // Restoring descriptor flags is idempotent by contract.
-            let _ = self.output.restore_transport();
+            self.output.restore_transport().unwrap_or_default();
         }
     }
 }

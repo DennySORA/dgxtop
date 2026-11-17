@@ -1,4 +1,4 @@
-//! DeviceCatalog: merges discovery pages (`CatalogDelta`) of every adapter
+//! `DeviceCatalog`: merges discovery pages (`CatalogDelta`) of every adapter
 //! into one immutable [`CatalogSnapshot`].
 //!
 //! * Upserts apply page by page; removals are explicit and are committed only
@@ -32,7 +32,7 @@ const MAX_CAPABILITIES_PER_ADAPTER: usize = 512;
 struct PublishedCatalog(Mutex<Arc<CatalogSnapshot>>);
 
 impl PublishedCatalog {
-    fn new(snapshot: Arc<CatalogSnapshot>) -> Self {
+    const fn new(snapshot: Arc<CatalogSnapshot>) -> Self {
         Self(Mutex::new(snapshot))
     }
 
@@ -142,7 +142,7 @@ impl DeviceCatalog {
         Arc::clone(&self.published) as Arc<dyn CatalogReader>
     }
 
-    pub(crate) fn revision(&self) -> u32 {
+    pub(crate) const fn revision(&self) -> u32 {
         self.revision
     }
 
@@ -172,16 +172,13 @@ impl DeviceCatalog {
 
     /// Base read groups of the adapter's sources (page suffix removed).
     pub(crate) fn read_groups_of(&self, adapter_id: &AdapterId) -> BTreeSet<String> {
-        self.adapters
-            .get(adapter_id)
-            .map(|catalog| {
-                catalog
-                    .sources
-                    .values()
-                    .map(|source| split_page(source.read_group.as_str()).0.to_owned())
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.adapters.get(adapter_id).map_or_default(|catalog| {
+            catalog
+                .sources
+                .values()
+                .map(|source| split_page(source.read_group.as_str()).0.to_owned())
+                .collect()
+        })
     }
 
     /// Drops removals buffered by an unfinished discovery round.

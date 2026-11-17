@@ -7,6 +7,7 @@
 
 use dgxtop_core::clock::NANOS_PER_SECOND;
 use dgxtop_core::metric::{Scalar, ScalarView};
+use dgxtop_core::num::ToF64Lossy;
 
 /// Width of one rollup bucket. `store.aggregate_seconds` is fixed at 60 by
 /// configuration validation, so the bucket width is a constant; where the
@@ -92,10 +93,9 @@ impl GaugeBucket {
     }
 
     /// Adds `covered_ns` of a step holding `value`.
-    #[allow(clippy::cast_precision_loss)]
     pub(crate) fn add_step(&mut self, value: f64, covered_ns: u64) {
         self.covered_ns = self.covered_ns.saturating_add(covered_ns);
-        self.weighted_sum += value * covered_ns as f64;
+        self.weighted_sum += value * covered_ns.to_f64_lossy();
         self.minimum = self.minimum.min(value);
         self.maximum = self.maximum.max(value);
     }
@@ -133,13 +133,12 @@ impl CounterTotal {
         }
     }
 
-    fn add_exact(&mut self, value: u128) {
-        match self.exact.checked_add(value) {
-            Some(sum) => self.exact = sum,
-            None => {
-                self.exact = u128::MAX;
-                self.overflowed = true;
-            }
+    const fn add_exact(&mut self, value: u128) {
+        if let Some(sum) = self.exact.checked_add(value) {
+            self.exact = sum;
+        } else {
+            self.exact = u128::MAX;
+            self.overflowed = true;
         }
     }
 

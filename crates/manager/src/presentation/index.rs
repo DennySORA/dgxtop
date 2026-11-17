@@ -25,14 +25,14 @@ impl<'a> SnapshotLookup<'a> {
         }
     }
 
-    pub(crate) fn get(&self, metric: &str, entity: &str, scope: &str) -> Option<&'a SnapshotEntry> {
+    pub(crate) fn get(self, metric: &str, entity: &str, scope: &str) -> Option<&'a SnapshotEntry> {
         self.shared.get(metric, entity, scope)
     }
 
     /// The preferred scope when reported, else the first scope (in order)
     /// reported for the entity.
     pub(crate) fn find(
-        &self,
+        self,
         metric: &str,
         entity: &str,
         preferred_scope: &str,
@@ -41,14 +41,14 @@ impl<'a> SnapshotLookup<'a> {
     }
 
     pub(crate) fn entries_of_metric(
-        &self,
+        self,
         metric: &str,
     ) -> impl Iterator<Item = &'a SnapshotEntry> + use<'a> {
         entries(self.shared.entries_of_metric(metric))
     }
 
     pub(crate) fn entries_of_entity(
-        &self,
+        self,
         metric: &str,
         entity: &str,
     ) -> impl Iterator<Item = &'a SnapshotEntry> + use<'a> {
@@ -57,7 +57,7 @@ impl<'a> SnapshotLookup<'a> {
 
     /// Distinct entities (sorted by id) reporting any of `metrics` whose id
     /// starts with `prefix`.
-    pub(crate) fn entities_reporting(&self, metrics: &[&str], prefix: &str) -> Vec<&'a EntityId> {
+    pub(crate) fn entities_reporting(self, metrics: &[&str], prefix: &str) -> Vec<&'a EntityId> {
         let mut entities: Vec<&'a EntityId> = metrics
             .iter()
             .flat_map(|metric| self.shared.entries_of_metric(metric))
@@ -70,11 +70,11 @@ impl<'a> SnapshotLookup<'a> {
     }
 
     /// Distinct entities (sorted by id) whose id starts with `prefix`.
-    pub(crate) fn entities_with_prefix(&self, prefix: &str) -> Vec<&'a EntityId> {
+    pub(crate) fn entities_with_prefix(self, prefix: &str) -> Vec<&'a EntityId> {
         self.shared.entities_with_prefix(prefix).iter().collect()
     }
 
-    fn any_key(&self) -> Option<&'a MetricKey> {
+    fn any_key(self) -> Option<&'a MetricKey> {
         self.shared.any_key()
     }
 }
@@ -87,7 +87,7 @@ pub(crate) struct KeyResolver {
 impl KeyResolver {
     /// Committed samples name the live host/boot best; the catalog is the
     /// fallback before the first commit.
-    pub(crate) fn new(catalog: &CatalogSnapshot, index: &SnapshotLookup<'_>) -> Self {
+    pub(crate) fn new(catalog: &CatalogSnapshot, index: SnapshotLookup<'_>) -> Self {
         let from_samples = index
             .any_key()
             .map(|key| (key.host_id.clone(), key.boot_id.clone()));
@@ -189,7 +189,7 @@ mod tests {
     fn key_resolver_prefers_samples_then_catalog() {
         let fixture = fixture();
         let index = SnapshotLookup::new(&fixture.snapshot);
-        let resolver = KeyResolver::new(&fixture.catalog, &index);
+        let resolver = KeyResolver::new(&fixture.catalog, index);
         let key = resolver.key("memory.used", "memory", "system").unwrap();
         assert_eq!(key.host_id.as_str(), "test-host");
 
@@ -197,13 +197,13 @@ mod tests {
         let empty_index = SnapshotLookup::new(&empty.snapshot);
         let mut catalog = CatalogSnapshot::default();
         assert!(
-            KeyResolver::new(&catalog, &empty_index)
+            KeyResolver::new(&catalog, empty_index)
                 .key("memory.used", "memory", "system")
                 .is_none()
         );
         catalog.host_id = Some(host_id("catalog-host"));
         catalog.boot_id = Some(boot_id("catalog-boot"));
-        let resolver = KeyResolver::new(&catalog, &empty_index);
+        let resolver = KeyResolver::new(&catalog, empty_index);
         let key = resolver.key("memory.used", "memory", "system").unwrap();
         assert_eq!(key.host_id.as_str(), "catalog-host");
         assert!(resolver.key("Bad Metric", "memory", "system").is_none());

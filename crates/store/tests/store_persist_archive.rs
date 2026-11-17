@@ -3,8 +3,9 @@
 //! (expiry with cascade, eviction when full; D-96) and nothing else, and
 //! ENOSPC/budget/WAL failures that leave the caller running (AT06).
 
-// Test helpers panic on setup failures; the lints target production code.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -46,8 +47,7 @@ impl TempDir {
         std::fs::create_dir_all(&path).unwrap();
         // Like the real state directory: a file is recreated only in a
         // private one (D-85).
-        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o700))
-            .unwrap();
+        std::fs::set_permissions(&path, PermissionsExt::from_mode(0o700)).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         Self(path)
     }
@@ -59,7 +59,7 @@ impl TempDir {
 
 impl Drop for TempDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        std::fs::remove_dir_all(&self.0).unwrap_or_default();
     }
 }
 
@@ -234,12 +234,12 @@ fn batch_insert_writes_every_table_in_bounded_transactions() {
         .query_row("PRAGMA journal_mode", [], |row| row.get(0))
         .unwrap();
     assert_eq!(journal_mode, "wal");
-    let status = archive.status();
-    assert_eq!(status.kind, PersistenceKind::Archive);
-    assert_eq!(status.state, PersistenceState::Healthy);
-    assert_eq!(status.bytes_limit, 1024 * MIB);
+    let reported = archive.status();
+    assert_eq!(reported.kind, PersistenceKind::Archive);
+    assert_eq!(reported.state, PersistenceState::Healthy);
+    assert_eq!(reported.bytes_limit, 1024 * MIB);
     assert_eq!(
-        status.bytes_used,
+        reported.bytes_used,
         StorageFootprint::measure(&fixture.dir.database())
             .unwrap()
             .total()

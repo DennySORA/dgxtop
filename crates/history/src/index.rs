@@ -13,10 +13,11 @@ use super::output::HistoryReport;
 use super::state::{HistoryAppends, HistoryState};
 use crate::overview::OverviewTiers;
 
-/// Read side of the history (`OverviewReader`). Cheap to clone; safe to
-/// read from several history workers while the state keeps committing. A
-/// read holds the state's lock only while it cuts one series' minutes not
-/// finalized yet.
+/// Read side of the history (`OverviewReader`).
+///
+/// Cheap to clone; safe to read from several history workers while the
+/// state keeps committing. A read holds the state's lock only while it
+/// cuts one series' minutes not finalized yet.
 #[derive(Clone)]
 pub struct HistoryIndex {
     shared: Arc<RwLock<HistoryState>>,
@@ -60,7 +61,8 @@ impl HistoryIndex {
 
     /// The Overview series in every size (D-82): composition sets its local
     /// clock and attaches its store; the readers ask it.
-    pub fn overview(&self) -> &OverviewTiers {
+    #[must_use]
+    pub const fn overview(&self) -> &OverviewTiers {
         &self.overview
     }
 
@@ -75,7 +77,7 @@ pub(crate) struct HistoryWriter {
 }
 
 impl HistoryWriter {
-    pub(crate) fn new(shared: Arc<RwLock<HistoryState>>) -> Self {
+    pub(crate) const fn new(shared: Arc<RwLock<HistoryState>>) -> Self {
         Self { shared }
     }
 

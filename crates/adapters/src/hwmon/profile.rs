@@ -27,7 +27,7 @@ pub(crate) enum ChannelKind {
 
 impl ChannelKind {
     /// sysfs attribute type prefix (`temp`, `power`, ...).
-    pub(crate) fn prefix(self) -> &'static str {
+    pub(crate) const fn prefix(self) -> &'static str {
         match self {
             Self::Temperature => "temp",
             Self::PowerInput | Self::PowerAverage => "power",
@@ -35,19 +35,19 @@ impl ChannelKind {
     }
 
     /// Value attribute suffix (`input` or `average`).
-    pub(crate) fn suffix(self) -> &'static str {
+    pub(crate) const fn suffix(self) -> &'static str {
         match self {
             Self::PowerAverage => "average",
             _ => "input",
         }
     }
 
-    fn is_power(self) -> bool {
+    const fn is_power(self) -> bool {
         matches!(self, Self::PowerInput | Self::PowerAverage)
     }
 
     /// Input before average: different semantics, never merged into one source.
-    fn power_rank(self) -> u16 {
+    const fn power_rank(self) -> u16 {
         match self {
             Self::PowerAverage => 1,
             _ => 0,
@@ -67,7 +67,7 @@ pub(crate) const NVIDIA_GB10: ProfileSpec = ProfileSpec {
     id: "nvidia-gb10-hwmon",
     revision: 1,
 };
-/// A drive's own temperature on its block devices (D-92): NVMe
+/// A drive's own temperature on its block devices (D-92): `NVMe`
 /// `Composite` and `drivetemp`, both defined by the drive's interface.
 pub(crate) const DRIVE: ProfileSpec = ProfileSpec {
     id: "hwmon-drive",
@@ -255,7 +255,7 @@ fn power_origin(device: &DeviceFacts<'_>, channel: &ChannelFacts<'_>) -> String 
 mod tests {
     use super::*;
 
-    fn device<'a>(name: &'a str) -> DeviceFacts<'a> {
+    fn device(name: &str) -> DeviceFacts<'_> {
         DeviceFacts {
             name,
             device_key: "dev",

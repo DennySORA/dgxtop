@@ -81,14 +81,14 @@ impl Iterator for StepIter<'_, '_> {
             let Some(value) = record.value else {
                 continue;
             };
-            let mut end = record.stale_deadline_ns;
-            let mut ended_by_deadline = true;
-            if let Some(next) = following
-                && next.time_ns <= end
-            {
-                end = next.time_ns;
-                ended_by_deadline = false;
-            }
+            // The next record ends the step, when it comes before the
+            // record goes stale.
+            let next_ns = following
+                .as_ref()
+                .map(|next| next.time_ns)
+                .filter(|next_ns| *next_ns <= record.stale_deadline_ns);
+            let (mut end, mut ended_by_deadline) =
+                next_ns.map_or((record.stale_deadline_ns, true), |next_ns| (next_ns, false));
             if self.limit_ns < end {
                 end = self.limit_ns;
                 ended_by_deadline = false;
@@ -180,7 +180,7 @@ mod tests {
     fn limit_caps_the_open_step() {
         let log = log(&[record(0, 30, Some(1.0))]);
         assert_eq!(steps(&log, None, 0, 0, 12), vec![(0, 12, 1.0, false)]);
-        assert!(steps(&log, None, 0, 0, 0).is_empty());
+        assert_eq!(steps(&log, None, 0, 0, 0).len(), 0);
     }
 
     #[test]

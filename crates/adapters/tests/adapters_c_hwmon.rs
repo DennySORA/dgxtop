@@ -1,6 +1,9 @@
 //! hwmon adapter integration tests over fake sysfs trees (no real drivers).
-#![allow(clippy::unwrap_used, clippy::expect_used)] // tests may unwrap
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
+#[expect(dead_code, reason = "each suite uses its part of the shared helpers")]
 #[path = "fixtures/adapters_c/support.rs"]
 mod support;
 
@@ -27,7 +30,7 @@ const CORETEMP_KEY: &str = "coretemp@platform/coretemp.0";
 fn adapter(
     sysfs: &FakeSysfs,
     clock: &Arc<dgxtop_core::testing::FakeClock>,
-    options: AdapterOptions,
+    options: &AdapterOptions,
 ) -> HwmonAdapter {
     HwmonAdapter::new(time(clock), host(), sysfs.files(), options)
 }
@@ -84,7 +87,7 @@ fn coretemp_package_and_cores_map_to_cpu_metrics_with_confirmed_origins() {
     let sysfs = FakeSysfs::new("hwmon-coretemp");
     coretemp(&sysfs, 2);
     let clock = clock();
-    let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
+    let mut hwmon = adapter(&sysfs, &clock, &AdapterOptions::default());
     let (_, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let catalog = sources(&pages);
 
@@ -130,7 +133,7 @@ fn coretemp_package_and_cores_map_to_cpu_metrics_with_confirmed_origins() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     let package_reading = record(&readings, &source_id(CORETEMP_KEY, "temp1"));
     assert_eq!(package_reading.read_status, ReadStatus::Ok);
@@ -138,7 +141,7 @@ fn coretemp_package_and_cores_map_to_cpu_metrics_with_confirmed_origins() {
     assert_eq!(package_reading.quality, Quality::Verified);
     assert_eq!(package_reading.device_sample_boot_ns, None);
     assert_eq!(package_reading.provenance.channel, "temp1_input");
-    assert!(package_reading.reason_codes.is_empty());
+    assert_eq!(package_reading.reason_codes, [] as [String; 0]);
 }
 
 #[test]
@@ -146,7 +149,7 @@ fn zero_celsius_is_kept_as_a_valid_reading() {
     let sysfs = FakeSysfs::new("hwmon-zero");
     coretemp(&sysfs, 0);
     let clock = clock();
-    let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
+    let mut hwmon = adapter(&sysfs, &clock, &AdapterOptions::default());
     discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let readings = records(&read_all(
         &mut hwmon,
@@ -154,7 +157,7 @@ fn zero_celsius_is_kept_as_a_valid_reading() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     let zero = record(&readings, &source_id(CORETEMP_KEY, "temp3"));
     assert_eq!(zero.read_status, ReadStatus::Ok);
@@ -185,9 +188,12 @@ fn unproven_channels_are_neither_catalogued_nor_read() {
     let counting = Arc::new(CountingFiles::new(sysfs.rooted()));
     let files: Arc<dyn SystemFiles> = counting.clone();
     let clock = clock();
-    let mut hwmon = HwmonAdapter::new(time(&clock), host(), files, AdapterOptions::default());
+    let mut hwmon = HwmonAdapter::new(time(&clock), host(), files, &AdapterOptions::default());
     let (_, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
-    assert!(sources(&pages).is_empty());
+    assert_eq!(
+        sources(&pages),
+        [] as [dgxtop_core::observation::SourceDescriptor; 0]
+    );
     assert!(
         pages
             .iter()
@@ -199,9 +205,9 @@ fn unproven_channels_are_neither_catalogued_nor_read() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
-    assert!(readings.is_empty());
+    assert_eq!(readings, [] as [dgxtop_core::observation::Observation; 0]);
     for value in ["_input", "_average"] {
         assert_eq!(
             counting.reads_matching(value),
@@ -229,7 +235,7 @@ fn thermal_zone_mirrors_are_left_to_the_thermal_adapter() {
     let counting = Arc::new(CountingFiles::new(sysfs.rooted()));
     let files: Arc<dyn SystemFiles> = counting.clone();
     let clock = clock();
-    let mut hwmon = HwmonAdapter::new(time(&clock), host(), files, AdapterOptions::default());
+    let mut hwmon = HwmonAdapter::new(time(&clock), host(), files, &AdapterOptions::default());
 
     let (_, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let catalog = sources(&pages);
@@ -246,7 +252,7 @@ fn thermal_zone_mirrors_are_left_to_the_thermal_adapter() {
             "fast",
             cycle,
             deadline(&clock),
-            Vec::new(),
+            &Vec::new(),
         ));
         assert_eq!(readings.len(), 1, "only the package sensor is read");
         discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
@@ -269,7 +275,7 @@ fn fault_flag_keeps_value_but_marks_quality_invalid() {
     let directory = coretemp(&sysfs, 0);
     sysfs.write(&format!("{directory}/temp1_fault"), "1\n");
     let clock = clock();
-    let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
+    let mut hwmon = adapter(&sysfs, &clock, &AdapterOptions::default());
     discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let readings = records(&read_all(
         &mut hwmon,
@@ -277,7 +283,7 @@ fn fault_flag_keeps_value_but_marks_quality_invalid() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     let faulted = record(&readings, &source_id(CORETEMP_KEY, "temp1"));
     assert_eq!(faulted.read_status, ReadStatus::Ok);
@@ -296,7 +302,7 @@ fn alarm_flag_keeps_high_reading_and_quality() {
     sysfs.write(&format!("{directory}/temp1_alarm"), "1\n");
     sysfs.write(&format!("{directory}/temp1_fault"), "0\n");
     let clock = clock();
-    let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
+    let mut hwmon = adapter(&sysfs, &clock, &AdapterOptions::default());
     discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let readings = records(&read_all(
         &mut hwmon,
@@ -304,11 +310,11 @@ fn alarm_flag_keeps_high_reading_and_quality() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     let hot = record(&readings, &source_id(CORETEMP_KEY, "temp1"));
     assert_eq!(hot.read_status, ReadStatus::Ok);
-    assert_eq!(value_of(hot), 105000.0);
+    assert_eq!(value_of(hot), 105_000.0);
     assert_eq!(hot.quality, Quality::Verified, "an alarm is not a fault");
     assert!(hot.reason_codes.contains(&"ALARM".to_owned()));
     assert!(hot.reason_codes.contains(&"ALARM_CRIT".to_owned()));
@@ -320,7 +326,7 @@ fn renumbered_hwmon_keeps_source_ids_and_slots_and_bumps_generation() {
     let sysfs = FakeSysfs::new("hwmon-renumber");
     coretemp(&sysfs, 3);
     let clock = clock();
-    let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
+    let mut hwmon = adapter(&sysfs, &clock, &AdapterOptions::default());
     let (generation, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let before = sources(&pages);
 
@@ -351,7 +357,7 @@ fn renumbered_hwmon_keeps_source_ids_and_slots_and_bumps_generation() {
         "fast",
         2,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     assert_eq!(
         value_of(record(&readings, &source_id(CORETEMP_KEY, "temp1"))),
@@ -381,7 +387,7 @@ fn gb10_labels_map_clusters_and_platform_power() {
     sysfs.write(&format!("{directory}/power1_average"), "20500000\n");
     sysfs.write(&format!("{directory}/temp1_input"), "52000\n");
     let clock = clock();
-    let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
+    let mut hwmon = adapter(&sysfs, &clock, &AdapterOptions::default());
     let (_, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let catalog = sources(&pages);
     let key = "spbm@platform/spbm.0";
@@ -432,7 +438,7 @@ fn gb10_labels_map_clusters_and_platform_power() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     let reading = record(&readings, &source_id(key, "power1"));
     assert_eq!(
@@ -454,7 +460,7 @@ fn gb10_profile_needs_both_cluster_labels() {
     sysfs.write(&format!("{directory}/power1_label"), "cpu_p\n");
     sysfs.write(&format!("{directory}/power1_input"), "21000000\n");
     let clock = clock();
-    let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
+    let mut hwmon = adapter(&sysfs, &clock, &AdapterOptions::default());
     let (_, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     assert!(
         sources(&pages).is_empty(),
@@ -473,7 +479,7 @@ fn amd_tdie_maps_on_single_socket_and_tctl_is_only_a_fallback() {
     sysfs.write(&format!("{directory}/temp3_label"), "Tccd1\n");
     sysfs.write(&format!("{directory}/temp3_input"), "59000\n");
     let clock = clock();
-    let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
+    let mut hwmon = adapter(&sysfs, &clock, &AdapterOptions::default());
     let (_, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let catalog = sources(&pages);
     let key = "k10temp@pci0000:00/0000:00:18.3";
@@ -490,7 +496,10 @@ fn amd_tdie_maps_on_single_socket_and_tctl_is_only_a_fallback() {
     sysfs.write(&format!("{second}/temp1_label"), "Tdie\n");
     sysfs.write(&format!("{second}/temp1_input"), "60000\n");
     let (_, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
-    assert!(sources(&pages).is_empty());
+    assert_eq!(
+        sources(&pages),
+        [] as [dgxtop_core::observation::SourceDescriptor; 0]
+    );
 }
 
 #[test]
@@ -500,7 +509,7 @@ fn amd_tctl_is_usable_fallback_without_tdie() {
     sysfs.write(&format!("{directory}/temp1_label"), "Tctl\n");
     sysfs.write(&format!("{directory}/temp1_input"), "71000\n");
     let clock = clock();
-    let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
+    let mut hwmon = adapter(&sysfs, &clock, &AdapterOptions::default());
     let (_, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let catalog = sources(&pages);
     let tctl = source(
@@ -514,7 +523,7 @@ fn amd_tctl_is_usable_fallback_without_tdie() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     assert_eq!(readings[0].quality, Quality::Usable);
 }
@@ -533,7 +542,7 @@ fn unsupported_channel_is_reprobed_at_most_once_per_interval() {
         unsupported_probe_ms: 60_000,
         ..AdapterOptions::default()
     };
-    let mut hwmon = HwmonAdapter::new(time(&clock), host(), files, options);
+    let mut hwmon = HwmonAdapter::new(time(&clock), host(), files, &options);
     let (_, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let capability = pages
         .iter()
@@ -553,7 +562,7 @@ fn unsupported_channel_is_reprobed_at_most_once_per_interval() {
             "fast",
             cycle,
             deadline(&clock),
-            Vec::new(),
+            &Vec::new(),
         ));
         let core = record(&readings, &source_id(CORETEMP_KEY, "temp2"));
         assert_eq!(core.read_status, ReadStatus::Unsupported);
@@ -567,7 +576,14 @@ fn unsupported_channel_is_reprobed_at_most_once_per_interval() {
     );
 
     clock.advance_ms(60_000);
-    read_all(&mut hwmon, ADAPTER, "fast", 6, deadline(&clock), Vec::new());
+    read_all(
+        &mut hwmon,
+        ADAPTER,
+        "fast",
+        6,
+        deadline(&clock),
+        &Vec::new(),
+    );
     assert_eq!(
         counting.reads_of(&value_path),
         2,
@@ -584,7 +600,7 @@ fn reprobe_recovers_a_channel_after_the_interval() {
     faulty.fail(&value_path, Failure::Kind(io::ErrorKind::PermissionDenied));
     let files: Arc<dyn SystemFiles> = faulty.clone();
     let clock = clock();
-    let mut hwmon = HwmonAdapter::new(time(&clock), host(), files, AdapterOptions::default());
+    let mut hwmon = HwmonAdapter::new(time(&clock), host(), files, &AdapterOptions::default());
     discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let first = records(&read_all(
         &mut hwmon,
@@ -592,7 +608,7 @@ fn reprobe_recovers_a_channel_after_the_interval() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     assert_eq!(
         record(&first, &source_id(CORETEMP_KEY, "temp2")).read_status,
@@ -606,7 +622,7 @@ fn reprobe_recovers_a_channel_after_the_interval() {
         "fast",
         2,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     let core = record(&healed, &source_id(CORETEMP_KEY, "temp2"));
     assert_eq!(core.read_status, ReadStatus::Ok);
@@ -622,7 +638,7 @@ fn paging_bounds_catalog_pages_and_read_batches() {
         page_size: 3,
         ..AdapterOptions::default()
     };
-    let mut hwmon = adapter(&sysfs, &clock, options);
+    let mut hwmon = adapter(&sysfs, &clock, &options);
     let pages = discover_all(&mut hwmon, ADAPTER, 0, deadline(&clock));
     assert!(pages.len() >= 3, "8 sources + 1 entity in pages of 3");
     for (index, page) in pages.iter().enumerate() {
@@ -633,7 +649,14 @@ fn paging_bounds_catalog_pages_and_read_batches() {
     }
     assert_eq!(sources(&pages).len(), 8);
 
-    let batches = read_all(&mut hwmon, ADAPTER, "fast", 1, deadline(&clock), Vec::new());
+    let batches = read_all(
+        &mut hwmon,
+        ADAPTER,
+        "fast",
+        1,
+        deadline(&clock),
+        &Vec::new(),
+    );
     assert_eq!(batches.len(), 3);
     assert_eq!(batches[0].records.len(), 3);
     assert_eq!(batches[0].error_code.as_deref(), Some("PAGE_CONTINUES"));
@@ -661,7 +684,7 @@ fn interrupted_discovery_never_removes_sources() {
         page_size: 2,
         ..AdapterOptions::default()
     };
-    let mut hwmon = adapter(&sysfs, &clock, options);
+    let mut hwmon = adapter(&sysfs, &clock, &options);
     let (generation, _) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     sysfs.remove(&format!("{directory}/temp4_input"));
     let first = hwmon.discover(&discover_request(ADAPTER, generation, 0, deadline(&clock)));
@@ -677,7 +700,10 @@ fn interrupted_discovery_never_removes_sources() {
         stray.error_code.as_deref(),
         Some("DISCOVERY_RESTART_REQUIRED")
     );
-    assert!(stray.removed_sources.is_empty());
+    assert_eq!(
+        stray.removed_sources,
+        [] as [dgxtop_core::identity::SourceId; 0]
+    );
 }
 
 #[test]
@@ -686,7 +712,7 @@ fn vanished_device_reads_removed_then_is_removed_from_the_catalog() {
     coretemp(&sysfs, 0);
     second_package(&sysfs, 1);
     let clock = clock();
-    let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
+    let mut hwmon = adapter(&sysfs, &clock, &AdapterOptions::default());
     let (generation, _) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let gone_id = source_id(SECOND_PACKAGE_KEY, "temp1");
 
@@ -697,7 +723,7 @@ fn vanished_device_reads_removed_then_is_removed_from_the_catalog() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     let gone = record(&readings, &gone_id);
     assert_eq!(gone.read_status, ReadStatus::Removed);
@@ -717,7 +743,7 @@ fn vanished_device_reads_removed_then_is_removed_from_the_catalog() {
         "fast",
         2,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     assert!(
         after
@@ -730,9 +756,12 @@ fn vanished_device_reads_removed_then_is_removed_from_the_catalog() {
 fn missing_hwmon_class_is_unavailable_and_empty() {
     let sysfs = FakeSysfs::new("hwmon-missing");
     let clock = clock();
-    let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
+    let mut hwmon = adapter(&sysfs, &clock, &AdapterOptions::default());
     let (_, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
-    assert!(sources(&pages).is_empty());
+    assert_eq!(
+        sources(&pages),
+        [] as [dgxtop_core::observation::SourceDescriptor; 0]
+    );
     assert_eq!(pages[0].availability, Some(Availability::Unavailable));
     let batch = hwmon.read(&read_plan(
         ADAPTER,
@@ -742,7 +771,10 @@ fn missing_hwmon_class_is_unavailable_and_empty() {
         deadline(&clock),
         Vec::new(),
     ));
-    assert!(batch.records.is_empty());
+    assert_eq!(
+        batch.records,
+        [] as [dgxtop_core::observation::Observation; 0]
+    );
 }
 
 #[test]
@@ -752,12 +784,15 @@ fn unreadable_class_directory_keeps_the_previous_catalog() {
     let faulty = Arc::new(FaultyFiles::new(sysfs.rooted()));
     let files: Arc<dyn SystemFiles> = faulty.clone();
     let clock = clock();
-    let mut hwmon = HwmonAdapter::new(time(&clock), host(), files, AdapterOptions::default());
+    let mut hwmon = HwmonAdapter::new(time(&clock), host(), files, &AdapterOptions::default());
     let (generation, _) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     faulty.fail("/sys/class/hwmon", Failure::Os(5));
     let failed = hwmon.discover(&discover_request(ADAPTER, generation, 0, deadline(&clock)));
     assert!(!failed.complete);
-    assert!(failed.removed_sources.is_empty());
+    assert_eq!(
+        failed.removed_sources,
+        [] as [dgxtop_core::identity::SourceId; 0]
+    );
     assert_eq!(failed.error_code.as_deref(), Some("HWMON_CLASS_IO_ERROR_5"));
     assert_eq!(failed.generation, generation);
     let readings = records(&read_all(
@@ -766,7 +801,7 @@ fn unreadable_class_directory_keeps_the_previous_catalog() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     assert_eq!(readings.len(), 3, "sources stay readable");
 }
@@ -781,7 +816,7 @@ fn labels_are_sanitized() {
     );
     sysfs.write(&format!("{directory}/temp1_input"), "30000\n");
     let clock = clock();
-    let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
+    let mut hwmon = adapter(&sysfs, &clock, &AdapterOptions::default());
     let (_, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let catalog = sources(&pages);
     let descriptor = source(&catalog, &source_id(CORETEMP_KEY, "temp1"));
@@ -798,7 +833,7 @@ fn source_limit_truncates_and_reports_the_limit() {
         max_sources: 2,
         ..AdapterOptions::default()
     };
-    let mut hwmon = adapter(&sysfs, &clock, options);
+    let mut hwmon = adapter(&sysfs, &clock, &options);
     let (_, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let catalog = sources(&pages);
     assert_eq!(catalog.len(), 2);
@@ -815,7 +850,7 @@ fn plans_with_slots_read_only_those_sources() {
     let sysfs = FakeSysfs::new("hwmon-slots");
     coretemp(&sysfs, 0);
     let clock = clock();
-    let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
+    let mut hwmon = adapter(&sysfs, &clock, &AdapterOptions::default());
     let (_, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let package = source(&sources(&pages), &source_id(CORETEMP_KEY, "temp1")).slot;
     let batches = read_all(
@@ -824,7 +859,7 @@ fn plans_with_slots_read_only_those_sources() {
         "fast",
         1,
         deadline(&clock),
-        vec![package, 999],
+        &[package, 999],
     );
     let readings = records(&batches);
     assert_eq!(readings.len(), 1);
@@ -853,7 +888,7 @@ fn proven_power_keeps_native_units_and_skips_energy_and_fans() {
     );
     sysfs.write(&format!("{directory}/fan1_input"), "1180\n");
     let clock = clock();
-    let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
+    let mut hwmon = adapter(&sysfs, &clock, &AdapterOptions::default());
     let (_, pages) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let catalog = sources(&pages);
     let channels: Vec<&str> = catalog
@@ -873,7 +908,7 @@ fn garbage_values_fail_without_numbers() {
     sysfs.write(&format!("{directory}/temp1_label"), "Package id 0\n");
     sysfs.write(&format!("{directory}/temp1_input"), "not-a-number\n");
     let clock = clock();
-    let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
+    let mut hwmon = adapter(&sysfs, &clock, &AdapterOptions::default());
     discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let readings = records(&read_all(
         &mut hwmon,
@@ -881,7 +916,7 @@ fn garbage_values_fail_without_numbers() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     assert_eq!(readings[0].read_status, ReadStatus::Error);
     assert!(readings[0].value.is_none());
@@ -893,7 +928,7 @@ fn invalid_requests_fail_without_records() {
     let sysfs = FakeSysfs::new("hwmon-invalid");
     coretemp(&sysfs, 0);
     let clock = clock();
-    let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
+    let mut hwmon = adapter(&sysfs, &clock, &AdapterOptions::default());
     discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let expired = hwmon.read(&read_plan(
         ADAPTER,
@@ -959,7 +994,7 @@ fn hotplug_churn_keeps_identity_and_generations_monotonic() {
     coretemp(&sysfs, 0);
     let plugged_id = source_id(SECOND_PACKAGE_KEY, "temp1");
     let clock = clock();
-    let mut hwmon = adapter(&sysfs, &clock, AdapterOptions::default());
+    let mut hwmon = adapter(&sysfs, &clock, &AdapterOptions::default());
     let (mut generation, _) = discover(&mut hwmon, ADAPTER, 0, deadline(&clock));
     let mut slot = None;
     let mut source_generation = 0;

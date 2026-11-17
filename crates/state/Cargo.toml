@@ -13,7 +13,7 @@ dgxtop-core.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-dgxtop-core = { workspace = true, features = ["test-support"] }
+dgxtop-core = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

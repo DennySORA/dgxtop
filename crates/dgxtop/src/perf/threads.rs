@@ -1,7 +1,8 @@
-//! CPU time of the calling thread (`/proc/thread-self/stat`). The REF bench
-//! runs its measuring threads inside the measured process; the measurer's
-//! own cost must stay out of the dgxtop CPU figure
-//! (and be reported), so those threads account for themselves here.
+//! CPU time of the calling thread (`/proc/thread-self/stat`).
+//!
+//! The REF bench runs its measuring threads inside the measured process;
+//! the measurer's own cost must stay out of the dgxtop CPU figure (and be
+//! reported), so those threads account for themselves here.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,6 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const UTIME_AFTER_NAME: usize = 14 - 3;
 
 /// `utime + stime` in clock ticks from one `/proc/.../stat` line.
+#[must_use]
 pub fn parse_thread_cpu_ticks(stat: &str) -> Option<u64> {
     let close = stat.rfind(')')?;
     let mut fields = stat
@@ -24,6 +26,7 @@ pub fn parse_thread_cpu_ticks(stat: &str) -> Option<u64> {
 }
 
 /// Command name and `utime + stime` of one `/proc/.../stat` line.
+#[must_use]
 pub fn parse_named_cpu_ticks(stat: &str) -> Option<(String, u64)> {
     let open = stat.find('(')?;
     let close = stat.rfind(')')?;
@@ -57,6 +60,7 @@ pub fn process_thread_ticks() -> Vec<ThreadTicks> {
 }
 
 /// CPU ticks used so far by the calling thread.
+#[must_use]
 pub fn current_thread_cpu_ticks() -> Option<u64> {
     std::fs::read_to_string("/proc/thread-self/stat")
         .ok()
@@ -72,6 +76,7 @@ pub struct HarnessCpu {
 impl HarnessCpu {
     /// A slot for one harness thread; it calls [`ThreadCpuSlot::refresh`]
     /// after each unit of work.
+    #[must_use]
     pub fn register(&self) -> ThreadCpuSlot {
         let slot = Arc::new(AtomicU64::new(current_thread_cpu_ticks().unwrap_or(0)));
         if let Ok(mut slots) = self.slots.lock() {
@@ -81,6 +86,7 @@ impl HarnessCpu {
     }
 
     /// Sum of the latest totals of every registered thread.
+    #[must_use]
     pub fn total_ticks(&self) -> u64 {
         self.slots.lock().map_or(0, |slots| {
             slots

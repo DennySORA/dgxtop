@@ -37,7 +37,7 @@ use crate::common::SystemFiles;
 
 pub(crate) const DISKSTATS_PATH: &str = "/proc/diskstats";
 const DEVICE_RECREATED: &str = "DEVICE_RECREATED";
-/// Kernel block device names are short (DISK_NAME_LEN is 32).
+/// Kernel block device names are short (`DISK_NAME_LEN` is 32).
 const MAX_DEVICE_NAME_BYTES: usize = 64;
 /// Where the kernel puts block devices no hardware backs: zram, nbd, and
 /// device-mapper and md, which their slaves tell apart first.
@@ -70,7 +70,7 @@ enum BlockLayer {
 }
 
 impl BlockLayer {
-    fn attribute_value(self) -> &'static str {
+    const fn attribute_value(self) -> &'static str {
         match self {
             Self::Disk => block_layer::DISK,
             Self::Partition => block_layer::PARTITION,
@@ -339,16 +339,12 @@ struct DiskstatsRead {
 impl DiskstatsRead {
     fn read(files: &dyn SystemFiles, clock: &dyn TimeProvider) -> Self {
         let read = timed(clock, || files.read_to_string(DISKSTATS_PATH));
-        let lines = read
-            .result
-            .as_ref()
-            .map(|text| {
-                parse_diskstats(text)
-                    .into_iter()
-                    .map(|line| ((line.major, line.minor), line))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let lines = read.result.as_ref().map_or_default(|text| {
+            parse_diskstats(text)
+                .into_iter()
+                .map(|line| ((line.major, line.minor), line))
+                .collect()
+        });
         Self { read, lines }
     }
 

@@ -11,6 +11,11 @@ use dgxtop_core::errors::InfraError;
 
 /// Bytes available to unprivileged writers on the filesystem of `path`.
 pub trait FreeSpaceProbe: Send + Sync + fmt::Debug {
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     fn available_bytes(&self, path: &Path) -> Result<u64, InfraError>;
 }
 
@@ -30,7 +35,10 @@ impl FreeSpaceProbe for StatvfsFreeSpace {
 
 // `fsblkcnt_t` and `c_ulong` are already u64 on the 64-bit GNU targets but
 // narrower elsewhere, so the conversions are identity on some platforms.
-#[allow(clippy::useless_conversion)]
+#[expect(
+    clippy::useless_conversion,
+    reason = "`fsblkcnt_t` and `c_ulong` are u64 on the 64-bit GNU targets but narrower elsewhere, where the conversions widen"
+)]
 fn available(blocks: libc::fsblkcnt_t, fragment_size: libc::c_ulong) -> u64 {
     u64::from(blocks).saturating_mul(u64::from(fragment_size))
 }

@@ -31,6 +31,7 @@ impl HiddenBanners {
     }
 
     /// Whether the user hid every cause `topic` tells.
+    #[must_use]
     pub fn hides(&self, topic: &BannerTopic) -> bool {
         let hidden = self
             .causes_by_subject
@@ -41,6 +42,7 @@ impl HiddenBanners {
     }
 
     /// Whether `banner` is shown.
+    #[must_use]
     pub fn shows(&self, banner: &Banner) -> bool {
         banner.topic.as_ref().is_none_or(|topic| !self.hides(topic))
     }

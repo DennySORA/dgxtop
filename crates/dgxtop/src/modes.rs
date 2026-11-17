@@ -10,6 +10,7 @@ use dgxtop_core::ports::LoadOrigin;
 use crate::cli::Cli;
 use crate::startup::{self, StartupError};
 use crate::version::{self, BuildInfo, RuntimeFacts};
+use std::fmt::Write as _;
 
 /// Exit status for invalid input or configuration.
 pub const EXIT_INVALID: u8 = 2;
@@ -17,6 +18,7 @@ pub const EXIT_INVALID: u8 = 2;
 pub const EXIT_FAILURE: u8 = 1;
 
 /// SQLite runtime facts for the verbose version report.
+#[must_use]
 pub fn sqlite_facts() -> RuntimeFacts {
     match dgxtop_store::sqlite::ensure_sqlite_version() {
         Ok(version) => RuntimeFacts {
@@ -54,22 +56,22 @@ fn render_check_config(cli: &Cli) -> Result<String, StartupError> {
     let (loaded, _repository) =
         startup::load_configuration(cli, &paths, startup::real_filesystem())?;
     let mut text = String::new();
-    text.push_str(&format!("config file: {}\n", paths.config_file.display()));
+    writeln!(text, "config file: {}", paths.config_file.display()).unwrap_or_default();
     match &loaded.load_origin {
         LoadOrigin::Defaults => {
-            text.push_str("origin: built-in defaults (no file yet; nothing written)\n")
+            text.push_str("origin: built-in defaults (no file yet; nothing written)\n");
         }
         LoadOrigin::File { sha256, .. } => {
-            text.push_str(&format!("origin: saved file (sha256 {sha256})\n"))
+            writeln!(text, "origin: saved file (sha256 {sha256})").unwrap_or_default();
         }
     }
-    text.push_str(&format!("revision: {}\n", loaded.saved.revision));
-    text.push_str(&format!("state dir: {}\n", paths.state_dir.display()));
+    writeln!(text, "revision: {}", loaded.saved.revision).unwrap_or_default();
+    writeln!(text, "state dir: {}", paths.state_dir.display()).unwrap_or_default();
     for note in &paths.notes {
-        text.push_str(&format!("note: {note}\n"));
+        writeln!(text, "note: {note}").unwrap_or_default();
     }
     for notice in startup::retired_key_notices(&loaded.saved) {
-        text.push_str(&format!("note: {notice}\n"));
+        writeln!(text, "note: {notice}").unwrap_or_default();
     }
     text.push_str("validation: ok\n");
     let differences = startup::effective_differences(&loaded.saved, &loaded.effective);
@@ -78,20 +80,16 @@ fn render_check_config(cli: &Cli) -> Result<String, StartupError> {
     } else {
         text.push_str("command-line overrides (this run only, never persisted):\n");
         for (path, saved, effective) in differences {
-            text.push_str(&format!(
-                "  {path}: saved {saved} -> effective {effective}\n"
-            ));
+            writeln!(text, "  {path}: saved {saved} -> effective {effective}").unwrap_or_default();
         }
     }
     let sampling = &loaded.effective.sampling;
-    text.push_str(&format!(
-        "sampling: fast {} ms, capacity {} ms, slow health {} ms, discovery {} ms, read deadline {} ms\n",
+    writeln!(text, "sampling: fast {} ms, capacity {} ms, slow health {} ms, discovery {} ms, read deadline {} ms",
         sampling.interval_ms,
         sampling.capacity_interval_ms,
         sampling.slow_health_interval_ms,
         sampling.discovery_interval_ms,
-        sampling.read_deadline_ms
-    ));
+        sampling.read_deadline_ms).unwrap_or_default();
     text.push_str(
         "effective periods are max(configured, adapter minimum) and may be raised by overload control at runtime\n",
     );
@@ -119,16 +117,18 @@ pub fn import_legacy(cli: &Cli) -> ExitCode {
         Ok(report) => {
             let mut text = render_import_report(&report);
             if cli.apply {
-                text.push_str(&format!("written: {}\n", paths.config_file.display()));
+                writeln!(text, "written: {}", paths.config_file.display()).unwrap_or_default();
             } else {
                 text.push_str(
                     "dry run: nothing was written; re-run with --apply to write the v2 file\n",
                 );
             }
-            text.push_str(&format!(
-                "legacy file left unchanged: {}\n",
+            writeln!(
+                text,
+                "legacy file left unchanged: {}",
                 legacy_path.display()
-            ));
+            )
+            .unwrap_or_default();
             print_stdout(&text)
         }
         Err(error) => fail(EXIT_FAILURE, &error.to_string()),
@@ -150,13 +150,15 @@ fn render_import_report(report: &LegacyImportReport) -> String {
             (Some(field), None) => format!("{field} (unchanged)"),
             _ => "-".to_owned(),
         };
-        text.push_str(&format!(
-            "  {:<22} {:<12} -> {:<40} [{status}] {}\n",
+        writeln!(
+            text,
+            "  {:<22} {:<12} -> {:<40} [{status}] {}",
             mapping.legacy_field, mapping.legacy_value, target, mapping.note
-        ));
+        )
+        .unwrap_or_default();
     }
     for warning in &report.warnings {
-        text.push_str(&format!("warning: {warning}\n"));
+        writeln!(text, "warning: {warning}").unwrap_or_default();
     }
     text
 }
@@ -175,10 +177,11 @@ pub(crate) fn print_stdout(text: &str) -> ExitCode {
 
 /// Prints a sanitized error to stderr and returns the exit status.
 pub fn fail(code: u8, message: &str) -> ExitCode {
-    let _ = writeln!(
+    writeln!(
         std::io::stderr(),
         "dgxtop: {}",
         dgxtop_core::text::sanitize_message(message)
-    );
+    )
+    .unwrap_or_default();
     ExitCode::from(code)
 }

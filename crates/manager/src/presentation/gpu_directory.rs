@@ -45,7 +45,7 @@ pub(crate) struct GpuDirectory<'a> {
 impl<'a> GpuDirectory<'a> {
     /// GPUs known to the catalog or reporting samples, ordered by NVML
     /// index (unknown index last), then by entity id.
-    pub(crate) fn new(catalog: &'a CatalogSnapshot, index: &SnapshotLookup<'a>) -> Self {
+    pub(crate) fn new(catalog: &'a CatalogSnapshot, index: SnapshotLookup<'a>) -> Self {
         let mut records: BTreeMap<EntityId, Option<&'a EntityRecord>> = BTreeMap::new();
         for (entity_id, record) in &catalog.entities {
             if is_gpu_entity(entity_id.as_str()) {
@@ -161,7 +161,7 @@ mod tests {
     fn gpus_are_ordered_by_nvml_index_but_identified_by_uuid() {
         let fixture = directory_fixture();
         let index = SnapshotLookup::new(&fixture.snapshot);
-        let directory = GpuDirectory::new(&fixture.catalog, &index);
+        let directory = GpuDirectory::new(&fixture.catalog, index);
         let labels: Vec<(&str, &str)> = directory
             .gpus()
             .iter()

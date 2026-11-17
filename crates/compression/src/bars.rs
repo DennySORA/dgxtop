@@ -11,13 +11,17 @@ use crate::series::TieredSeries;
 use crate::whole::chart_tier;
 
 /// The bars of a series at one size.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bars<B> {
     pub bar: BarSize,
     pub step_ns: i64,
     /// `[start, end)` of the window, UTC.
     pub window: (i64, i64),
     /// The bars holding a sample, oldest first.
+    #[expect(
+        clippy::struct_field_names,
+        reason = "the bars are what the struct is about; the other fields say what they span"
+    )]
     pub bars: Vec<B>,
 }
 
@@ -75,10 +79,12 @@ fn window_of<B: Bucket>(
     tier.window_ending_at(span.last, series.shift_ns(), columns)
 }
 
-/// The buckets of `tier` that start in the window `[start, end)`, each with
-/// what the finer sizes still fill of its time and the `extra` pieces
-/// (finer buckets the series was not given yet, in any order) it holds;
-/// the ones holding nothing are left out (a gap). The Overview's charts
+/// The buckets of `tier` that start in the window `[start, end)`.
+///
+/// Each comes with what the finer sizes still fill of its time and the
+/// `extra` pieces (finer buckets the series was not given yet, in any
+/// order) it holds; the ones holding nothing are left out (a gap). The
+/// Overview's charts
 /// share one window, the bars of the local clock ending with the one being
 /// filled now (D-82).
 pub fn bars_in<'a, B: Bucket + 'a>(
@@ -304,7 +310,7 @@ mod tests {
             (0, HOUR),
             std::iter::empty(),
         );
-        assert!(none.is_empty());
+        assert_eq!(none.len(), 0);
     }
 
     /// An empty bucket is no bar: a size can hold a bucket with no sample.

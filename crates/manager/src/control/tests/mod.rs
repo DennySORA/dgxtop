@@ -4,6 +4,10 @@
 //! idempotency), AT30 (overload effects), AT39 (bounded shutdown) and
 //! projection pacing/accounting.
 
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -80,11 +84,11 @@ fn group_of(plan: &ReadPlan) -> String {
 }
 
 /// Harness with procfs up and its first discovery answered.
-fn ready_harness(options: HarnessOptions) -> Harness {
+fn ready_harness(options: &HarnessOptions) -> Harness {
     let mut harness = Harness::new(options);
     harness.host_up("procfs", 1, Some(5000));
-    let reads = harness.answer_discovery(Vec::new());
-    assert!(reads.is_empty());
+    let reads = harness.answer_discovery(&Vec::new());
+    assert_eq!(reads.len(), 0);
     harness
 }
 
@@ -208,7 +212,7 @@ fn with_process_table(harness: &Harness, pids: &[i64]) {
 
 #[test]
 fn at22_at08_late_reply_of_the_old_epoch_is_dropped_after_a_config_change() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     let stale_plan = next_read_of(&mut harness, "memory");
     let request = harness
         .submit(CommandBody::SetSamplingInterval {
@@ -300,7 +304,7 @@ fn applied_samplings(harness: &Harness) -> Vec<u32> {
 /// finalize grace), so a durable interval change must reach it.
 #[test]
 fn a_sampling_change_is_sent_to_the_state() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     harness.ports.state.take();
     apply_interval(&mut harness, 2000);
     assert_eq!(applied_samplings(&harness), vec![2000]);
@@ -310,11 +314,11 @@ fn a_sampling_change_is_sent_to_the_state() {
 /// timing for the rest of the run.
 #[test]
 fn a_sampling_change_refused_by_a_busy_store_is_sent_again() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     harness.ports.state.take();
     harness.ports.state.set_busy(true);
     apply_interval(&mut harness, 2000);
-    assert!(applied_samplings(&harness).is_empty());
+    assert_eq!(applied_samplings(&harness).len(), 0);
     harness.ports.state.set_busy(false);
     harness.ports.clock.advance_ms(1_100);
     harness.settle();
@@ -326,7 +330,7 @@ fn a_sampling_change_refused_by_a_busy_store_is_sent_again() {
 
 #[test]
 fn at22_host_restart_drops_the_request_records_a_gap_and_rediscovers() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     let lost = next_read_of(&mut harness, "cpu");
     harness.ports.state.take();
     harness.ports.clock.advance_ms(2_000);
@@ -359,7 +363,7 @@ fn at22_host_restart_drops_the_request_records_a_gap_and_rediscovers() {
 
 #[test]
 fn a_refused_read_dispatch_is_deferred_and_retried() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     harness.ports.state.take();
     harness.ports.adapters.set_busy(true);
     for _ in 0..200 {
@@ -400,7 +404,7 @@ fn a_refused_read_dispatch_is_deferred_and_retried() {
 
 #[test]
 fn at05_pages_accumulate_into_one_job_and_state_advances_only_after_the_ack() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     let first = next_read_of(&mut harness, "cpu");
     harness.ports.collectors.take();
     let now = harness.now_ns();
@@ -486,7 +490,7 @@ fn at05_pages_accumulate_into_one_job_and_state_advances_only_after_the_ack() {
 
 #[test]
 fn at23_iteration_is_fair_8_control_8_commands_4_ingestion() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     for _ in 0..20 {
         harness.control(ControlCompletion::History {
             request_id: Uuid::new_v4(),
@@ -528,7 +532,7 @@ fn at23_iteration_is_fair_8_control_8_commands_4_ingestion() {
 
 #[test]
 fn at23_command_flood_is_busy_without_blocking_timers_and_shutdown_still_run() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     let started = Instant::now();
     let mut accepted = BTreeSet::new();
     let mut answered = BTreeSet::new();
@@ -595,7 +599,7 @@ fn at23_command_flood_is_busy_without_blocking_timers_and_shutdown_still_run() {
 /// a stale revision conflicts.
 #[test]
 fn at08_replaced_configurations_and_stale_revisions_never_persist() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     let mut candidate = Config::defaults().unwrap();
     candidate.store.max_series = 100;
     let replace = harness
@@ -627,7 +631,7 @@ fn at08_replaced_configurations_and_stale_revisions_never_persist() {
 
 #[test]
 fn at08_persist_failure_keeps_the_running_configuration() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     let request = harness
         .submit(CommandBody::SetSamplingInterval {
             interval_ms: 3000,
@@ -678,7 +682,7 @@ fn prepared_for(key: &ProcessKey) -> PreparedProcess {
 
 #[test]
 fn at10_full_action_path_through_commands_sends_once() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     with_process_table(&harness, &[4242]);
     let key = target(4242);
     let select = harness
@@ -702,7 +706,7 @@ fn at10_full_action_path_through_commands_sends_once() {
     harness.settle();
     let prepared = harness.result_for(prepare);
     assert_eq!(prepared.action_state, Some(ActionState::Prepared));
-    let token = prepared.confirmation_token.clone().unwrap();
+    let token = prepared.confirmation_token.unwrap();
     harness.ports.audit.take();
     let confirm = harness
         .submit(CommandBody::ConfirmSignal {
@@ -735,14 +739,17 @@ fn at10_full_action_path_through_commands_sends_once() {
         }),
     }));
     harness.settle();
-    let sends: Vec<_> = harness
-        .ports
-        .actions
-        .take()
-        .into_iter()
-        .filter(|op| matches!(op, ActionOp::Send { .. }))
-        .collect();
-    assert_eq!(sends.len(), 1);
+
+    assert_eq!(
+        harness
+            .ports
+            .actions
+            .take()
+            .into_iter()
+            .filter(|op| matches!(op, ActionOp::Send { .. }))
+            .count(),
+        1
+    );
     harness.control(ControlCompletion::Action(ActionCompletion::Sent {
         request_id: confirm,
         intent_id: intent.intent_id,
@@ -760,7 +767,7 @@ fn at10_full_action_path_through_commands_sends_once() {
 /// waiting for the next sampling (D-109).
 #[test]
 fn an_observed_exit_reads_the_process_table_at_once() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     with_process_table(&harness, &[4242]);
     let key = target(4242);
     harness
@@ -780,11 +787,7 @@ fn an_observed_exit_reads_the_process_table_at_once() {
         result: Ok(prepared_for(&key)),
     }));
     harness.settle();
-    let token = harness
-        .result_for(prepare)
-        .confirmation_token
-        .clone()
-        .unwrap();
+    let token = harness.result_for(prepare).confirmation_token.unwrap();
     harness.ports.audit.take();
     let confirm = harness
         .submit(CommandBody::ConfirmSignal {
@@ -849,7 +852,7 @@ fn an_observed_exit_reads_the_process_table_at_once() {
 
 #[test]
 fn at13_absent_or_unselected_targets_are_rejected_and_never_retargeted() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     with_process_table(&harness, &[10, 11]);
     let gone = harness
         .submit(CommandBody::PrepareSignal {
@@ -886,7 +889,7 @@ fn at13_absent_or_unselected_targets_are_rejected_and_never_retargeted() {
 
 #[test]
 fn at10_managed_host_pids_are_protected_targets() {
-    let mut harness = Harness::new(HarnessOptions::default());
+    let mut harness = Harness::new(&HarnessOptions::default());
     harness.host_up("procfs", 1, Some(4242));
     with_process_table(&harness, &[4242]);
     let request = harness
@@ -907,12 +910,12 @@ fn at10_managed_host_pids_are_protected_targets() {
 
 #[test]
 fn at39_clean_shutdown_finishes_at_once() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     harness.manager.shutdown_trigger().trigger("test");
     harness.step();
     let summary = harness.manager.summary().expect("finished");
     assert!(!summary.timed_out);
-    assert!(summary.unfinished.is_empty());
+    assert_eq!(summary.unfinished.len(), 0);
     assert_eq!(summary.reason, "test");
     assert!(harness.session.shutdown_requested());
     let late = harness.submit(navigation(ViewKind::Overview, None, ""));
@@ -921,7 +924,7 @@ fn at39_clean_shutdown_finishes_at_once() {
 
 #[test]
 fn at39_shutdown_waits_at_most_three_seconds_and_reports_unfinished_work() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     let persist = harness
         .submit(CommandBody::SetSamplingInterval {
             interval_ms: 2000,
@@ -1012,7 +1015,7 @@ fn projections(harness: &Harness) -> usize {
 /// cycle now share one, built as soon as the last has committed.
 #[test]
 fn the_commits_of_one_cycle_share_one_projection() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     let plans = jobs_of_every_collector(&mut harness);
     // Past the input spacing, so only the pacing can hold a frame back.
     harness.ports.clock.advance_ms(60);
@@ -1035,7 +1038,7 @@ fn the_commits_of_one_cycle_share_one_projection() {
 /// the settle window.
 #[test]
 fn a_slow_collector_delays_the_projection_by_at_most_the_settle_window() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     let plans = jobs_of_every_collector(&mut harness);
     projections(&harness);
     commit(&mut harness, &plans[0], 2);
@@ -1050,7 +1053,7 @@ fn a_slow_collector_delays_the_projection_by_at_most_the_settle_window() {
 /// Input never waits for a settling cycle.
 #[test]
 fn a_view_change_gets_a_projection_while_a_cycle_settles() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     let plans = jobs_of_every_collector(&mut harness);
     harness.ports.clock.advance_ms(50);
     harness.settle();
@@ -1069,7 +1072,7 @@ fn a_view_change_gets_a_projection_while_a_cycle_settles() {
 
 #[test]
 fn history_view_queries_and_drops_stale_generations() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     // The history view charts the series the snapshot reports (D-46).
     let cpu = metric_key("cpu", "cpu.utilization.total", "host");
     let now = harness.now_ns();
@@ -1134,7 +1137,7 @@ fn invalid_setups_and_session_limits_are_rejected() {
     restart.effective.store.max_series = 100;
     let (ports, _) = harness_ports(&restart);
     assert!(Manager::new(harness_setup(&restart), ports).is_err());
-    let mut harness = Harness::new(HarnessOptions::default());
+    let mut harness = Harness::new(&HarnessOptions::default());
     let _second = harness.manager.open_session().unwrap();
     assert_eq!(
         harness.manager.open_session().unwrap_err(),
@@ -1149,7 +1152,7 @@ mod process_history;
 /// frontend shows from its first frame after a restart.
 #[test]
 fn saved_folds_reach_every_projection() {
-    let mut harness = ready_harness(HarnessOptions::default());
+    let mut harness = ready_harness(&HarnessOptions::default());
     let request = harness
         .submit(CommandBody::SetFolded {
             panels: vec!["network".into(), "disk".into()],

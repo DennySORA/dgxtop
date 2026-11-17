@@ -1,7 +1,9 @@
-//! Network collector: per-interface byte rates from exact counter deltas
-//! (with `CounterInterval`s in bytes) and cumulative packet/error/drop
-//! counts, which stay totals and are never shown as per-second values. An
-//! interface re-created with a new entity or generation restarts at warmup.
+//! Network collector.
+//!
+//! Per-interface byte rates from exact counter deltas (with
+//! `CounterInterval`s in bytes) and cumulative packet/error/drop counts,
+//! which stay totals and are never shown as per-second values. An interface
+//! re-created with a new entity or generation restarts at warmup.
 
 use dgxtop_core::canonical::{CollectionBatch, CollectionPlan};
 use dgxtop_core::identity::{AdapterId, CollectorId, IdentityError};
@@ -52,6 +54,10 @@ pub struct NetworkCollector {
 }
 
 impl NetworkCollector {
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn new() -> Result<Self, IdentityError> {
         Ok(Self {
             id: CollectorId::new(naming::collectors::NETWORK)?,
@@ -155,7 +161,10 @@ mod tests {
         let warmup = value_of(&first, &key(eth, ids::NET_RX_BPS)).unwrap();
         assert_eq!(warmup.value, None);
         assert_eq!(warmup.reason_codes, vec![reasons::WARMUP.to_owned()]);
-        assert!(first.counter_intervals.is_empty());
+        assert_eq!(
+            first.counter_intervals,
+            [] as [dgxtop_core::canonical::CounterInterval; 0]
+        );
 
         let second = collect(
             &collector,
@@ -179,10 +188,16 @@ mod tests {
         );
         // Packets stay a cumulative count, never a per-second figure.
         let packets = value_of(&second, &key(eth, ids::NET_RX_PACKETS)).unwrap();
-        assert_eq!(packets.value.and_then(|value| value.as_u64()), Some(9));
+        assert_eq!(
+            packets.value.and_then(dgxtop_core::metric::Scalar::as_u64),
+            Some(9)
+        );
         assert_eq!(packets.unit, CanonicalUnit::Count);
         let errors = value_of(&second, &key(eth, ids::NET_RX_ERRORS)).unwrap();
-        assert_eq!(errors.value.and_then(|value| value.as_u64()), Some(0));
+        assert_eq!(
+            errors.value.and_then(dgxtop_core::metric::Scalar::as_u64),
+            Some(0)
+        );
     }
 
     #[test]
@@ -269,7 +284,10 @@ mod tests {
             rate.reason_codes,
             vec![reasons::GENERATION_CHANGED.to_owned()]
         );
-        assert!(recreated.counter_intervals.is_empty());
+        assert_eq!(
+            recreated.counter_intervals,
+            [] as [dgxtop_core::canonical::CounterInterval; 0]
+        );
     }
 
     #[test]
@@ -304,8 +322,7 @@ mod tests {
             let mut records = interface(eth, value, 1, at, 1);
             for record in &mut records {
                 record.sample_kind = dgxtop_core::quality::SampleKind::Replay;
-                record.provenance.adapter_id =
-                    dgxtop_core::identity::AdapterId::new("replay").unwrap();
+                record.provenance.adapter_id = AdapterId::new("replay").unwrap();
             }
             records
         };
@@ -327,9 +344,15 @@ mod tests {
                 .build(),
         );
         let rate = value_of(&second, &key(eth, ids::NET_RX_BPS)).unwrap();
-        assert_eq!(rate.value.map(|value| value.to_f64_lossy()), Some(500.0));
+        assert_eq!(
+            rate.value.map(dgxtop_core::metric::Scalar::to_f64_lossy),
+            Some(500.0)
+        );
         assert_eq!(rate.sample_kind, dgxtop_core::quality::SampleKind::Replay);
         assert!(!rate.eligible_for_history);
-        assert!(second.counter_intervals.is_empty());
+        assert_eq!(
+            second.counter_intervals,
+            [] as [dgxtop_core::canonical::CounterInterval; 0]
+        );
     }
 }

@@ -46,7 +46,8 @@ pub struct GapSparkline<'a> {
 }
 
 impl<'a> GapSparkline<'a> {
-    pub fn new(points: &'a [Option<f64>], style: Style) -> Self {
+    #[must_use]
+    pub const fn new(points: &'a [Option<f64>], style: Style) -> Self {
         Self {
             points,
             max: None,
@@ -63,7 +64,8 @@ impl<'a> GapSparkline<'a> {
     /// and the rest of it, so however low the column, both colors show; a
     /// column of one color or reaching that row's top keeps its height
     /// (D-134). Not for a chart of one row, which has no full row.
-    pub fn raise_low_columns(mut self) -> Self {
+    #[must_use]
+    pub const fn raise_low_columns(mut self) -> Self {
         self.raise_low_columns = true;
         self
     }
@@ -73,19 +75,22 @@ impl<'a> GapSparkline<'a> {
     /// foot of the column in order in its style, a part above zero at
     /// least an eighth while the column has room; together capped at the
     /// column, whose own style shows above them.
+    #[must_use]
     pub fn parts(mut self, parts: Vec<Part<'a>>) -> Self {
         self.parts = parts;
         self
     }
 
     /// Fixed scale maximum (e.g. 100 for percentages); otherwise the visible maximum.
+    #[must_use]
     pub fn max(mut self, max: Option<f64>) -> Self {
         self.max = max.filter(|value| value.is_finite() && *value > 0.0);
         self
     }
 
     /// Colors every column by its share of the scale, like a gauge.
-    pub fn level_colors(mut self, palette: &'a ThemePalette) -> Self {
+    #[must_use]
+    pub const fn level_colors(mut self, palette: &'a ThemePalette) -> Self {
         self.levels = Some(palette);
         self
     }
@@ -93,7 +98,8 @@ impl<'a> GapSparkline<'a> {
     /// With [`Self::level_colors`], colors every column by where its value
     /// sits on `scale` instead: a temperature stays green up to 50 °C
     /// (D-126).
-    pub fn level_scale(mut self, scale: LevelScale) -> Self {
+    #[must_use]
+    pub const fn level_scale(mut self, scale: LevelScale) -> Self {
         self.level_scale = Some(scale);
         self
     }

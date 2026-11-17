@@ -26,6 +26,7 @@ pub enum Slot {
 }
 
 impl Slot {
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Overview => "overview",
@@ -69,6 +70,11 @@ pub struct DisplayModuleManifest {
 impl DisplayModuleManifest {
     /// Enforces every kept schema constraint (`module_id` length is
     /// guaranteed by [`ModuleId`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ManifestError` when a field of the manifest is out of its
+    /// bounds.
     pub fn validate(&self) -> Result<(), ManifestError> {
         if self.api_version != DISPLAY_MODULE_API_VERSION {
             return Err(ManifestError::ApiVersion(self.api_version));
@@ -91,6 +97,7 @@ impl DisplayModuleManifest {
         Ok(())
     }
 
+    #[must_use]
     pub fn has_slot(&self, slot: Slot) -> bool {
         self.slots.contains(&slot)
     }
@@ -127,6 +134,8 @@ fn first_duplicate<T: Copy + PartialEq>(items: &[T]) -> Option<T> {
 
 #[cfg(test)]
 fn json_string(text: &str) -> String {
+    use std::fmt::Write as _;
+
     let mut encoded = String::with_capacity(text.len() + 2);
     encoded.push('"');
     for character in text.chars() {
@@ -137,7 +146,7 @@ fn json_string(text: &str) -> String {
             '\r' => encoded.push_str("\\r"),
             '\t' => encoded.push_str("\\t"),
             control if control.is_control() => {
-                encoded.push_str(&format!("\\u{:04x}", u32::from(control)));
+                write!(encoded, "\\u{:04x}", u32::from(control)).unwrap_or_default();
             }
             other => encoded.push(other),
         }

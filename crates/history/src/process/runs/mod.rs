@@ -42,6 +42,7 @@ use dgxtop_core::tiers::Tier;
 
 use self::ending::{EndEvidence, end_cause};
 use crate::process::Now;
+use dgxtop_core::num::ToF64Lossy;
 
 const NANOS_PER_SECOND: u64 = 1_000_000_000;
 /// A live run the table stops listing ends after this long even when no
@@ -95,20 +96,20 @@ pub(crate) struct Run {
 }
 
 impl Run {
-    pub(crate) fn info(&self) -> &RunInfo {
+    pub(crate) const fn info(&self) -> &RunInfo {
         &self.info
     }
 
-    pub(crate) fn series(&self) -> &RunSeries {
+    pub(crate) const fn series(&self) -> &RunSeries {
         &self.series
     }
 
     /// The run's figures over its whole life (module docs).
-    pub(crate) fn whole(&self) -> &RunBucket {
+    pub(crate) const fn whole(&self) -> &RunBucket {
         &self.whole
     }
 
-    pub(crate) fn is_live(&self) -> bool {
+    pub(crate) const fn is_live(&self) -> bool {
         self.live.is_some()
     }
 
@@ -193,7 +194,7 @@ impl ProcessHistoryBook {
     }
 
     /// Moves whenever what a run shows may have changed.
-    pub(crate) fn revision(&self) -> u64 {
+    pub(crate) const fn revision(&self) -> u64 {
         self.revision
     }
 
@@ -467,7 +468,7 @@ impl ProcessHistoryBook {
     }
 
     /// Whether the journal holds deletions not sent yet.
-    pub(crate) fn has_unsent_deletions(&self) -> bool {
+    pub(crate) const fn has_unsent_deletions(&self) -> bool {
         !self.journal.forget.is_empty() || self.journal.keep_runs.is_some()
     }
 
@@ -540,7 +541,7 @@ impl ProcessHistoryBook {
             oom_rose,
             while_away: live.restored,
         };
-        self.end(&reading.key, &evidence, now);
+        self.end(&reading.key, evidence, now);
     }
 
     fn signal_of(&self, key: &ProcessKey, now: Now) -> Option<Signal> {
@@ -573,11 +574,11 @@ impl ProcessHistoryBook {
                 oom_rose: false,
                 while_away: restored,
             };
-            self.end(&key, &evidence, now);
+            self.end(&key, evidence, now);
         }
     }
 
-    fn end(&mut self, key: &ProcessKey, evidence: &EndEvidence, now: Now) {
+    fn end(&mut self, key: &ProcessKey, evidence: EndEvidence, now: Now) {
         let Some(run) = self.runs.get_mut(key) else {
             return;
         };
@@ -665,7 +666,7 @@ impl ProcessHistoryBook {
 fn series_bytes(series: &RunSeries) -> usize {
     series
         .allocated_buckets()
-        .saturating_mul(std::mem::size_of::<RunBucket>())
+        .saturating_mul(size_of::<RunBucket>())
 }
 
 fn utc_of(now: Now) -> i64 {
@@ -769,13 +770,12 @@ fn sample_run(
     let probed = run.probed();
     let mut sample: RunSample = [None; RUN_METRICS];
     sample[RunMetric::Cpu.index()] = row.cpu_percent;
-    #[allow(clippy::cast_precision_loss)]
     {
-        sample[RunMetric::Memory.index()] = row.rss_bytes.map(|bytes| bytes as f64);
+        sample[RunMetric::Memory.index()] = row.rss_bytes.map(ToF64Lossy::to_f64_lossy);
         sample[RunMetric::GpuMemory.index()] = sum_present(
             row.gpu
                 .iter()
-                .map(|link| link.memory_bytes.map(|bytes| bytes as f64)),
+                .map(|link| link.memory_bytes.map(ToF64Lossy::to_f64_lossy)),
         );
     }
     sample[RunMetric::GpuUtilization.index()] =
@@ -785,11 +785,11 @@ fn sample_run(
     sample[RunMetric::HostNetworkReceive.index()] = inputs.host_network[0];
     sample[RunMetric::HostNetworkTransmit.index()] = inputs.host_network[1];
     sample[RunMetric::Threads.index()] = probed.threads;
-    #[allow(clippy::cast_precision_loss)]
     if let Some(descendants) = row.descendants {
-        sample[RunMetric::Children.index()] = Some(descendants.processes as f64);
+        sample[RunMetric::Children.index()] = Some(descendants.processes.to_f64_lossy());
         sample[RunMetric::ChildrenCpu.index()] = descendants.cpu_percent;
-        sample[RunMetric::ChildrenMemory.index()] = descendants.rss_bytes.map(|bytes| bytes as f64);
+        sample[RunMetric::ChildrenMemory.index()] =
+            descendants.rss_bytes.map(ToF64Lossy::to_f64_lossy);
     }
     sample[RunMetric::Swap.index()] = probed.swap;
     sample[RunMetric::OpenFiles.index()] = probed.open_files;
@@ -819,12 +819,11 @@ fn gpu_figures(
         let Some(slot) = gpus.iter().position(|known| *known == label) else {
             continue;
         };
-        #[allow(clippy::cast_precision_loss)]
         let figures = [
             (GpuFigure::Utilization, link.utilization_percent),
             (
                 GpuFigure::Memory,
-                link.memory_bytes.map(|bytes| bytes as f64),
+                link.memory_bytes.map(ToF64Lossy::to_f64_lossy),
             ),
             (
                 GpuFigure::Device,

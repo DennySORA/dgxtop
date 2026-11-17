@@ -1,10 +1,10 @@
 //! Versioned thermal-zone profiles. A zone type alone never proves a CPU
 //! package: `x86_pkg_temp` and ARM `cpu-thermal` only map to
 //! `cpu.temperature.package` when the host has exactly one physical package
-//! and exactly one such zone; SoC zones map to `soc.temperature`. GB10
+//! and exactly one such zone; `SoC` zones map to `soc.temperature`. GB10
 //! (D-68) names its `acpitz` zones by ACPI path: on one package with all
 //! four of its CPU cluster zones, those map to `cpu.temperature.cluster`
-//! and its SoC zone to `soc.temperature`. Everything else (acpitz, INT3400,
+//! and its `SoC` zone to `soc.temperature`. Everything else (acpitz, INT3400,
 //! pch_*, iwlwifi_*, B0D4, TCPU, ...) has no mapping and is not catalogued
 //! (D-92).
 
@@ -42,7 +42,7 @@ const GB10_CLUSTERS: [(&str, &str); 4] = [
     ("\\_TZ_.TS1E", "cluster:1e"),
     ("\\_TZ_.TS1P", "cluster:1p"),
 ];
-/// GB10's SoC zone.
+/// GB10's `SoC` zone.
 const GB10_SOC: &str = "\\_TZ_.TSOC";
 
 /// The package-temperature zone type of Intel CPUs.
@@ -77,12 +77,12 @@ pub(crate) fn gb10_cluster(acpi_path: &str) -> Option<&'static str> {
         .map(|(_, scope)| *scope)
 }
 
-/// ARM SoC CPU zone types.
+/// ARM `SoC` CPU zone types.
 pub(crate) fn is_arm_cpu_zone(zone_type: &str) -> bool {
     zone_type == "cpu-thermal" || zone_type == "cpu_thermal"
 }
 
-/// SoC zone rank: whole-SoC zones before `soc_max`.
+/// `SoC` zone rank: whole-SoC zones before `soc_max`.
 fn soc_rank(zone_type: &str) -> Option<u16> {
     let lower = zone_type.to_ascii_lowercase();
     match lower.as_str() {
@@ -131,7 +131,7 @@ pub(crate) fn classify(
         .then(|| package(None, Quality::Usable, ARM_CPU, 2))
 }
 
-/// A GB10 zone with a meaning: a CPU cluster or the SoC.
+/// A GB10 zone with a meaning: a CPU cluster or the `SoC`.
 fn gb10_zone(acpi_path: &str) -> Option<Mapping> {
     let (entity, metric, scope) = match gb10_cluster(acpi_path) {
         Some(scope) => ("cpu.package.0", ids::CPU_TEMPERATURE_CLUSTER, scope),

@@ -1,6 +1,8 @@
-//! Latency evidence: nearest-rank summaries over *all* raw samples, the
-//! start/finish matching of asynchronous requests (commands, history jobs)
-//! and the "adapter read finished → projection published" tracker.
+//! Latency evidence.
+//!
+//! Nearest-rank summaries over *all* raw samples, the start/finish
+//! matching of asynchronous requests (commands, history jobs) and the
+//! "adapter read finished → projection published" tracker.
 //!
 //! Everything is bounded: a request that never finishes is evicted and
 //! counted, never kept forever, and a sample is never invented for it.
@@ -12,6 +14,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use super::nearest_rank;
+use dgxtop_core::num::ToF64Lossy;
 
 /// Nearest-rank summary of one latency stream (milliseconds).
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -25,14 +28,13 @@ pub struct LatencySummary {
 }
 
 /// Summary of raw microsecond samples; `None` when there is no sample.
-#[allow(clippy::cast_precision_loss)]
 pub fn summarize_us(samples_us: &[u64]) -> Option<LatencySummary> {
     if samples_us.is_empty() {
         return None;
     }
     let mut sorted: Vec<f64> = samples_us
         .iter()
-        .map(|value| *value as f64 / 1000.0)
+        .map(|value| (*value).to_f64_lossy() / 1000.0)
         .collect();
     sorted.sort_by(f64::total_cmp);
     let total: f64 = sorted.iter().sum();
@@ -42,11 +44,12 @@ pub fn summarize_us(samples_us: &[u64]) -> Option<LatencySummary> {
         p95_ms: nearest_rank(&sorted, 0.95)?,
         p99_ms: nearest_rank(&sorted, 0.99)?,
         max_ms: sorted.last().copied()?,
-        mean_ms: total / sorted.len() as f64,
+        mean_ms: total / sorted.len().to_f64_lossy(),
     })
 }
 
 /// Microseconds of a duration, saturating.
+#[must_use]
 pub fn duration_us(duration: Duration) -> u64 {
     u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
 }
@@ -60,6 +63,7 @@ pub struct PendingRequests<K> {
 }
 
 impl<K: Eq + Hash + Clone> PendingRequests<K> {
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             started: HashMap::new(),
@@ -93,6 +97,7 @@ impl<K: Eq + Hash + Clone> PendingRequests<K> {
     }
 
     /// Longest wait among the pending requests at `now`.
+    #[must_use]
     pub fn oldest_wait(&self, now: Instant) -> Option<Duration> {
         self.started
             .values()
@@ -100,16 +105,19 @@ impl<K: Eq + Hash + Clone> PendingRequests<K> {
             .max()
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.started.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.started.is_empty()
     }
 
     /// Requests dropped from the table without an answer.
-    pub fn evicted(&self) -> u64 {
+    #[must_use]
+    pub const fn evicted(&self) -> u64 {
         self.evicted
     }
 }
@@ -130,6 +138,7 @@ pub struct ProjectionLatencyTracker {
 }
 
 impl ProjectionLatencyTracker {
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             pending: BTreeMap::new(),
@@ -179,16 +188,19 @@ impl ProjectionLatencyTracker {
     }
 
     /// Revisions still waiting for a projection.
+    #[must_use]
     pub fn unresolved(&self) -> usize {
         self.pending.len()
     }
 
-    pub fn evicted(&self) -> u64 {
+    #[must_use]
+    pub const fn evicted(&self) -> u64 {
         self.evicted
     }
 
     /// Projections whose generation time preceded their data's read time.
-    pub fn clock_skew(&self) -> u64 {
+    #[must_use]
+    pub const fn clock_skew(&self) -> u64 {
         self.clock_skew
     }
 }

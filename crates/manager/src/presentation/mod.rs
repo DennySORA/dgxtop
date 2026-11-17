@@ -1,4 +1,4 @@
-//! PresentationService view building.
+//! `PresentationService` view building.
 //!
 //! Contract between the Manager control loop (which owns state and calls
 //! [`build_view_model_measured`]) and the projection builders (pure functions over
@@ -111,9 +111,9 @@ pub struct PresentationContext<'a> {
     pub hosts: &'a [HostStatus],
     pub intervals: &'a [IntervalView],
     pub overload: OverloadState,
-    /// Built by the ProcessService.
+    /// Built by the `ProcessService`.
     pub actions: Arc<ActionsView>,
-    /// Built by the HistoryService for this session.
+    /// Built by the `HistoryService` for this session.
     pub history: Arc<HistoryView>,
     /// The state's short trends (D-99).
     pub trends: &'a dyn TrendReader,
@@ -127,6 +127,14 @@ pub struct PresentationContext<'a> {
     pub archive: Option<&'a PersistenceStatus>,
     /// The GPUs their driver slows down now or did a moment ago (D-146).
     pub slowdowns: &'a [GpuSlowdown],
+}
+
+impl std::fmt::Debug for PresentationContext<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PresentationContext")
+            .finish_non_exhaustive()
+    }
 }
 
 /// Builds the header shown on every view.
@@ -160,18 +168,20 @@ fn build_header(context: &PresentationContext<'_>, reader: &MetricReader<'_>) ->
     }
 }
 
-/// Builds one immutable projection for one session: only the modules
-/// visible in the session's view (and enabled) are filled, large tables are
-/// windowed, and the result is kept within `runtime.max_projection_bytes`.
-/// Returns it with the size it is accounted at
-/// ([`ViewModel::accounted_bytes`]), so the caller can size its byte permit
-/// without measuring the projection a second time.
+/// Builds one immutable projection for one session.
+///
+/// Only the modules visible in the session's view (and enabled) are filled,
+/// large tables are windowed, and the result is kept within
+/// `runtime.max_projection_bytes`. Returns it with the size it is accounted
+/// at ([`ViewModel::accounted_bytes`]), so the caller can size its byte
+/// permit without measuring the projection a second time.
+#[must_use]
 pub fn build_view_model_measured(context: &PresentationContext<'_>) -> (ViewModel, usize) {
     let plan = ViewPlan::new(context.session.view, context.enabled_modules);
     let layout = ViewportLayout::new(context.viewport);
     let reader = MetricReader::new(context.snapshot, context.catalog, context.now_boot_ns)
         .with_trends(context.trends);
-    let directory = GpuDirectory::new(context.catalog, reader.index());
+    let directory = GpuDirectory::new(context.catalog, *reader.index());
     let visible_process_rows = processes::visible_process_rows(layout.rows);
     let gpu_count = if plan.shows(plan::GPU) {
         directory.gpus().len()
@@ -283,7 +293,7 @@ fn build_modules(
         // The service's view, with the processes' parts the history joined
         // with its memory charts (D-99).
         modules.history = Some(Arc::clone(&context.history));
-        let opened = run_history::run_request(context.session, context.viewport);
+        let opened = run_request(context.session, context.viewport);
         modules.process_history = Some(Arc::new(run_history::build_process_history_view(
             &run_history::RunHistoryInputs {
                 model: inputs.processes,

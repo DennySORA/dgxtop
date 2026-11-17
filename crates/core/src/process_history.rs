@@ -1,7 +1,9 @@
-//! The process history (D-76): every GPU process dgxtop saw, as a *run*
-//! (one [`ProcessKey`]: a PID with its start time on one boot), with what it
-//! ran, where, on which GPUs, when it started and ended and why, and the
-//! averages and peaks of what it used over its life.
+//! The process history (D-76).
+//!
+//! Every GPU process dgxtop saw, as a *run* (one [`ProcessKey`]: a PID with
+//! its start time on one boot), with what it ran, where, on which GPUs, when
+//! it started and ended and why, and the averages and peaks of what it used
+//! over its life.
 //!
 //! What it used is kept as [`RunBucket`]s of the shared bar sizes
 //! ([`crate::tiers`], D-77): each size keeps its latest
@@ -122,12 +124,14 @@ impl RunMetric {
         Self::Gpu3Device,
     ];
 
+    #[must_use]
     pub const fn index(self) -> usize {
         self as usize
     }
 
     /// The `figure` of the run's GPU in `slot`, its place in
     /// [`RunInfo::gpus`]; `None` past the GPUs kept apart.
+    #[must_use]
     pub const fn of_gpu(slot: usize, figure: GpuFigure) -> Option<Self> {
         if slot >= RUN_GPU_SLOTS {
             return None;
@@ -137,6 +141,7 @@ impl RunMetric {
 
     /// The slot and figure of the run's GPU this metric is of; `None` for
     /// a metric of the whole run.
+    #[must_use]
     pub const fn gpu_slot(self) -> Option<(usize, GpuFigure)> {
         let Some(offset) = self.index().checked_sub(SHARED_METRICS) else {
             return None;
@@ -146,6 +151,7 @@ impl RunMetric {
     }
 
     /// Stable column stem in the database.
+    #[must_use]
     pub const fn column(self) -> &'static str {
         match self {
             Self::Cpu => "cpu",
@@ -199,7 +205,10 @@ pub struct Aggregate {
 }
 
 impl Aggregate {
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a run's aggregate keeps f32 precision: seven digits of a mean or a peak"
+    )]
     pub fn add(&mut self, value: f64) {
         let value = value as f32;
         if !value.is_finite() {
@@ -228,16 +237,22 @@ impl Aggregate {
     }
 
     /// `None` without a sample.
+    #[must_use]
     pub fn mean(&self) -> Option<f64> {
         (self.count > 0).then(|| f64::from(self.sum) / f64::from(self.count))
     }
 
+    #[must_use]
     pub fn peak(&self) -> Option<f64> {
         (self.count > 0).then_some(f64::from(self.max))
     }
 
     /// Rebuilt from a stored mean, peak and count.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "rebuilt at the f32 precision it was stored with"
+    )]
+    #[must_use]
     pub fn from_parts(count: u32, mean: f64, max: f64) -> Self {
         Self {
             count,
@@ -290,6 +305,7 @@ where
 }
 
 impl RunBucket {
+    #[must_use]
     pub fn new(start_utc_ns: i64) -> Self {
         Self {
             start_utc_ns,
@@ -297,7 +313,8 @@ impl RunBucket {
         }
     }
 
-    pub fn value(&self, metric: RunMetric) -> &Aggregate {
+    #[must_use]
+    pub const fn value(&self, metric: RunMetric) -> &Aggregate {
         &self.values[metric.index()]
     }
 
@@ -313,6 +330,7 @@ impl RunBucket {
         }
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.values.iter().all(|value| value.count == 0)
     }
@@ -342,13 +360,14 @@ pub enum EndCause {
 
 impl EndCause {
     /// Short text for the list and the detail page.
+    #[must_use]
     pub fn text(self) -> String {
         match self {
             Self::SignaledByDgxtop(signal) => format!("{} by dgxtop", signal.name()),
-            Self::Signal(signal) => match signal_name(signal) {
-                Some(name) => format!("killed by {name}"),
-                None => format!("killed by signal {signal}"),
-            },
+            Self::Signal(signal) => signal_name(signal).map_or_else(
+                || format!("killed by signal {signal}"),
+                |name| format!("killed by {name}"),
+            ),
             Self::Exit(0) => "exited (code 0)".to_owned(),
             Self::Exit(code) => format!("exited with code {code}"),
             Self::OutOfMemory => "OOM killer (likely)".to_owned(),
@@ -360,6 +379,7 @@ impl EndCause {
 
     /// Whether it says a signal ended the run (dgxtop's, another's or the
     /// kernel's).
+    #[must_use]
     pub const fn was_killed(self) -> bool {
         matches!(
             self,
@@ -369,6 +389,7 @@ impl EndCause {
 }
 
 /// The names of the signals that commonly end a process.
+#[must_use]
 pub const fn signal_name(signal: u8) -> Option<&'static str> {
     Some(match signal {
         1 => "SIGHUP",
@@ -432,6 +453,7 @@ pub struct RunDetails {
 
 impl RunInfo {
     /// How long it ran (so far, while it runs).
+    #[must_use]
     pub fn runtime_ns(&self) -> u64 {
         let until = self.end.map_or(self.last_seen_utc_ns, |end| end.utc_ns);
         u64::try_from(until.saturating_sub(self.started_utc_ns)).unwrap_or(0)
@@ -448,7 +470,9 @@ pub struct RunBucketRow {
 
 /// What the history hands its long-term store (D-94): runs that changed
 /// and buckets that closed, and what the history decided the store no
-/// longer keeps. The store applies them in this order, in one transaction.
+/// longer keeps.
+///
+/// The store applies them in this order, in one transaction.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ProcessHistoryJournal {
     pub runs: Vec<RunInfo>,
@@ -462,7 +486,8 @@ pub struct ProcessHistoryJournal {
 }
 
 impl ProcessHistoryJournal {
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.runs.is_empty()
             && self.buckets.is_empty()
             && self.keep_latest.is_empty()
@@ -628,7 +653,7 @@ mod tests {
         let back: RunBucket = serde_json::from_value(written).unwrap();
         assert_eq!(back, bucket);
         let empty = serde_json::to_value(RunBucket::new(0)).unwrap();
-        assert!(empty["values"].as_array().unwrap().is_empty());
+        assert_eq!(empty["values"].as_array().unwrap().len(), 0);
     }
 
     #[test]

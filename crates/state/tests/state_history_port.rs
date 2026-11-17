@@ -3,7 +3,7 @@
 //! to the history, and how the outcome reaches the published snapshot.
 
 // Test helpers outside #[test] functions may unwrap: a broken fixture must fail loudly.
-#![allow(clippy::unwrap_used)]
+#![cfg(test)]
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -237,7 +237,7 @@ fn a_rejected_commit_never_reaches_the_history() {
     let mut rig = rig(false);
     let ack = rig.commit(0, SECOND);
     assert_ne!(ack.status, AckStatus::Committed);
-    assert!(rig.history.calls().is_empty());
+    assert_eq!(rig.history.calls(), [] as [Call; 0]);
 }
 
 #[test]
@@ -287,7 +287,7 @@ fn an_empty_gap_is_refused_before_the_history() {
     let mut empty = gap("adapter_timeout");
     empty.end_boot_ns = empty.start_boot_ns;
     rig.writer.record_gap(empty);
-    assert!(rig.history.calls().is_empty());
+    assert_eq!(rig.history.calls(), [] as [Call; 0]);
     assert_eq!(rig.snapshots.counters().invalid_gaps_total, 1);
 }
 
@@ -314,7 +314,7 @@ fn maintenance_sampling_and_clock_are_forwarded() {
 fn journals_are_drained_only_when_the_archive_is_on() {
     let mut off = rig(false);
     assert!(off.writer.take_archive_journal(1 << 20).is_none());
-    assert!(off.history.calls().is_empty());
+    assert_eq!(off.history.calls(), [] as [Call; 0]);
     let mut on = rig(true);
     assert!(on.writer.take_archive_journal(1 << 20).is_some());
     assert_eq!(on.history.calls(), vec![Call::TakeJournal]);
@@ -328,7 +328,7 @@ fn a_committed_read_is_a_trend_point() {
     let mut rig = rig(false);
     let trends = rig.writer.trends();
     let key = temperature_key();
-    assert!(trends.trend(&key, 10).points.is_empty());
+    assert_eq!(trends.trend(&key, 10).points, [] as [Option<f64>; 0]);
     rig.commit(1, SECOND);
     assert_eq!(trends.trend(&key, 10).points, vec![Some(50.0)]);
     rig.commit(0, 2 * SECOND);
@@ -340,5 +340,5 @@ fn a_committed_read_is_a_trend_point() {
     let mut sampling = Config::defaults().unwrap().sampling;
     sampling.interval_ms *= 2;
     rig.writer.set_sampling(&sampling);
-    assert!(trends.trend(&key, 10).points.is_empty());
+    assert_eq!(trends.trend(&key, 10).points, [] as [Option<f64>; 0]);
 }

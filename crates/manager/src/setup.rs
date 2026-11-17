@@ -3,7 +3,7 @@
 //! Every port is a `dgxtop_core` abstraction: the Manager never names a
 //! runtime, store, adapter or UI type. Each service receives only the ports
 //! it needs (the scheduler the adapter port, ingestion the collector/state
-//! ports, the ProcessService the audit and action ports, ...).
+//! ports, the `ProcessService` the audit and action ports, ...).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -31,6 +31,7 @@ pub use crate::process_link::ProcessHistoryHandles;
 /// the ingress `QueueGate` permits the batches carry.
 pub const INGESTION_INBOX_CAPACITY: usize = 256;
 /// Capacity of the control completion inbox (config, audit, action, history).
+///
 /// The Manager bounds its outstanding control jobs far below this, so workers
 /// may use a blocking send without ever waiting long: control completions are
 /// never droppable.
@@ -59,6 +60,14 @@ pub struct ManagerPorts {
     pub ledger: ByteLedger,
     /// Ingress admission gate shared with the runtime (observed for overload).
     pub ingress: QueueGate,
+}
+
+impl std::fmt::Debug for ManagerPorts {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ManagerPorts")
+            .finish_non_exhaustive()
+    }
 }
 
 /// Static facts and configuration of this run.
@@ -104,8 +113,7 @@ pub(crate) fn validate(setup: &ManagerSetup, ports: &ManagerPorts) -> Result<(),
         if let Err(issues) = config.validate() {
             let first = issues
                 .first()
-                .map(|issue| format!("{}: {}", issue.path, issue.message))
-                .unwrap_or_default();
+                .map_or_default(|issue| format!("{}: {}", issue.path, issue.message));
             return Err(invalid(format!("{name} is invalid ({first})")));
         }
     }

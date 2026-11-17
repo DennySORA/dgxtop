@@ -43,6 +43,7 @@ pub enum ErrorCode {
 impl ErrorCode {
     /// Whether a caller may retry the same request unchanged.
     /// `UnknownOutcome` is never retryable for destructive operations.
+    #[must_use]
     pub const fn default_retryable(self) -> bool {
         matches!(
             self,
@@ -50,6 +51,7 @@ impl ErrorCode {
         )
     }
 
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ValidationFailed => "ValidationFailed",
@@ -96,10 +98,12 @@ pub enum OkCode {
 impl ResultCode {
     pub const OK: Self = Self::Ok(OkCode::Ok);
 
+    #[must_use]
     pub const fn is_ok(self) -> bool {
         matches!(self, Self::Ok(_))
     }
 
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Ok(_) => "Ok",
@@ -143,11 +147,13 @@ impl ErrorDetail {
         }
     }
 
-    pub fn with_request(mut self, request_id: Uuid) -> Self {
+    #[must_use]
+    pub const fn with_request(mut self, request_id: Uuid) -> Self {
         self.request_id = Some(request_id);
         self
     }
 
+    #[must_use]
     pub fn with_affected(mut self, id: impl AsRef<str>) -> Self {
         if self.affected_ids.len() < MAX_AFFECTED_IDS {
             self.affected_ids.push(sanitize_message(id.as_ref()));
@@ -155,7 +161,8 @@ impl ErrorDetail {
         self
     }
 
-    pub fn uncertain(mut self) -> Self {
+    #[must_use]
+    pub const fn uncertain(mut self) -> Self {
         self.commit_uncertain = true;
         self.retryable = false;
         self
@@ -191,16 +198,20 @@ pub enum InfraError {
 }
 
 impl InfraError {
-    pub fn code(&self) -> ErrorCode {
+    #[must_use]
+    pub const fn code(&self) -> ErrorCode {
         match self {
-            Self::Io { .. } | Self::DiskFull { .. } | Self::Database(_) => ErrorCode::PersistFailed,
             Self::Protocol(_) | Self::Unavailable(_) => ErrorCode::Unavailable,
             Self::Timeout { .. } => ErrorCode::TimedOut,
-            Self::Uncertain { .. } => ErrorCode::PersistFailed,
+            Self::Io { .. }
+            | Self::DiskFull { .. }
+            | Self::Database(_)
+            | Self::Uncertain { .. } => ErrorCode::PersistFailed,
         }
     }
 
     /// Builds an I/O error, mapping `ENOSPC` to [`InfraError::DiskFull`].
+    #[must_use]
     pub fn from_io(operation: &'static str, error: &std::io::Error) -> Self {
         if error.raw_os_error() == Some(28) {
             return Self::DiskFull { operation };
@@ -215,7 +226,7 @@ impl InfraError {
 impl From<InfraError> for ErrorDetail {
     fn from(error: InfraError) -> Self {
         let uncertain = matches!(error, InfraError::Uncertain { .. });
-        let detail = ErrorDetail::new(error.code(), error.to_string());
+        let detail = Self::new(error.code(), error.to_string());
         if uncertain {
             detail.uncertain()
         } else {

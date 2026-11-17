@@ -79,6 +79,7 @@ impl FailpointFileSystem {
     }
 
     /// Wraps the real filesystem.
+    #[must_use]
     pub fn over_real() -> Self {
         Self::new(Arc::new(RealFileSystem))
     }

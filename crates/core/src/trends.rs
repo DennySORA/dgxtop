@@ -1,8 +1,9 @@
 //! Short trends (D-79, D-99): the latest points of the series the overview
 //! draws as sparklines, one point per new read, a read without a value a
-//! gap (`None`). The state keeps the one [`TrendBook`] of a run, filled at
-//! commit, and the presentation reads it through
-//! [`crate::ports::TrendReader`].
+//! gap (`None`).
+//!
+//! The state keeps the one [`TrendBook`] of a run, filled at commit, and
+//! the presentation reads it through [`crate::ports::TrendReader`].
 //!
 //! Beside each new point of `memory.used` the book records what each GPU's
 //! processes hold (`gpu.memory.process_allocated`) and what each listed
@@ -14,6 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::identity::{EntityId, MetricKey, ProcessKey};
+use crate::num::ToF64Lossy;
 use crate::ports::TrendReader;
 use crate::view::Trend;
 
@@ -51,6 +53,7 @@ impl Default for TrendBook {
 
 impl TrendBook {
     /// `capacity` points per series.
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity: capacity.max(1),
@@ -85,8 +88,7 @@ impl TrendBook {
             push_bounded(points, capacity, *value);
         }
         for (key, points) in &mut beside.processes {
-            #[allow(clippy::cast_precision_loss)]
-            let held = processes.get(key).map(|bytes| *bytes as f64);
+            let held = processes.get(key).map(|bytes| (*bytes).to_f64_lossy());
             push_bounded(points, capacity, held);
         }
         beside
@@ -101,14 +103,14 @@ impl TrendBook {
         let room = MAX_PROCESS_SERIES.saturating_sub(beside.processes.len());
         for (key, bytes) in newcomers.into_iter().take(room) {
             let mut points = Points::new();
-            #[allow(clippy::cast_precision_loss)]
-            let held = bytes as f64;
+            let held = bytes.to_f64_lossy();
             push_bounded(&mut points, capacity, Some(held));
             beside.processes.insert(key.clone(), points);
         }
     }
 
     /// Whether a series has points.
+    #[must_use]
     pub fn contains(&self, key: &MetricKey) -> bool {
         self.series.contains_key(key)
     }
@@ -120,10 +122,12 @@ impl TrendBook {
         self.beside.retain(|key, _| keep(key));
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.series.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.series.is_empty()
     }
@@ -249,7 +253,7 @@ mod tests {
         assert_eq!(book.trend(&key, 10).points, vec![None, None, Some(4.0)]);
         assert_eq!(book.trend(&key, 1).points, vec![Some(4.0)]);
         let other = metric_key("memory", "memory.used", "system");
-        assert!(book.trend(&other, 10).points.is_empty());
+        assert_eq!(book.trend(&other, 10).points.len(), 0);
         book.retain(|kept| *kept == other);
         assert!(book.is_empty() && !book.contains(&key));
     }
@@ -268,7 +272,7 @@ mod tests {
         book.push_beside_memory(&used, &both, &none);
         let gap = BTreeMap::from([(one.clone(), Some(5.0)), (two.clone(), None)]);
         book.push_beside_memory(&used, &gap, &none);
-        let asked = BTreeSet::from([one.clone(), two.clone()]);
+        let asked = BTreeSet::from([one.clone(), two]);
         assert_eq!(
             book.gpu_memory_beside(&used, &asked, 10).points,
             vec![None, Some(5.0), None]
@@ -278,10 +282,11 @@ mod tests {
                 .points,
             vec![Some(4.0), Some(5.0)]
         );
-        assert!(
+        assert_eq!(
             book.gpu_memory_beside(&used, &BTreeSet::new(), 10)
                 .points
-                .is_empty()
+                .len(),
+            0
         );
         let missing = BTreeSet::from([one, gpu("gpu:GPU-9")]);
         assert_eq!(
@@ -314,7 +319,7 @@ mod tests {
             book.process_memory_beside(&used, &train, &on, 10).points,
             vec![Some(6.0), None]
         );
-        let all = BTreeSet::from([unified.clone(), discrete.clone()]);
+        let all = BTreeSet::from([unified, discrete]);
         assert_eq!(
             book.process_memory_beside(&used, &train, &all, 10).points,
             vec![Some(1.0), Some(7.0), Some(1.0)]

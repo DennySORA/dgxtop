@@ -47,7 +47,7 @@ pub enum ModeView {
 pub struct UiState {
     pub mode: ModeView,
     pub notices: Vec<Notice>,
-    /// A PrepareSignal was accepted and its token has not arrived yet.
+    /// A `PrepareSignal` was accepted and its token has not arrived yet.
     pub awaiting_confirmation: bool,
     /// The answer given before the token arrived: true sends, false
     /// cancels (D-109).
@@ -72,7 +72,8 @@ pub struct UiState {
 }
 
 impl UiState {
-    pub fn is_confirming(&self) -> bool {
+    #[must_use]
+    pub const fn is_confirming(&self) -> bool {
         matches!(
             self.mode,
             ModeView::Confirm { .. } | ModeView::ConfirmDelete { .. }

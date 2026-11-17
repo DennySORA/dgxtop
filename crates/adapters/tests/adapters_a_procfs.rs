@@ -1,5 +1,10 @@
 //! Procfs adapter: `cpu`, `memory` and `disk` groups against fake trees.
 
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
+
+#[expect(dead_code, reason = "each suite uses its part of the shared helpers")]
 #[path = "fixtures/adapters_a/support.rs"]
 mod support;
 
@@ -116,7 +121,11 @@ fn cpufreq_sources_exist_only_where_supported() {
         .iter()
         .find(|capability| {
             capability.capability_id == ids::CPU_FREQUENCY_CURRENT
-                && capability.entity_id.as_ref().map(|id| id.as_str()) == Some("cpu.core.3")
+                && capability
+                    .entity_id
+                    .as_ref()
+                    .map(dgxtop_core::identity::EntityId::as_str)
+                    == Some("cpu.core.3")
         })
         .unwrap();
     assert_eq!(unsupported.support, Support::Unsupported);
@@ -296,7 +305,11 @@ fn the_frequency_limit_follows_each_discovery() {
         .iter()
         .find(|capability| {
             capability.capability_id == ids::CPU_FREQUENCY_LIMIT
-                && capability.entity_id.as_ref().map(|id| id.as_str()) == Some("cpu.core.1")
+                && capability
+                    .entity_id
+                    .as_ref()
+                    .map(dgxtop_core::identity::EntityId::as_str)
+                    == Some("cpu.core.1")
         })
         .unwrap();
     assert_eq!(missing.support, Support::Unsupported);
@@ -388,7 +401,11 @@ fn offline_cpu_only_affects_itself() {
     );
     let pages = parent.sync(&mut adapter, ADAPTER);
     let last = pages.last().unwrap();
-    let removed_entities: Vec<&str> = last.removed_entities.iter().map(|id| id.as_str()).collect();
+    let removed_entities: Vec<&str> = last
+        .removed_entities
+        .iter()
+        .map(dgxtop_core::identity::EntityId::as_str)
+        .collect();
     assert_eq!(removed_entities, vec!["cpu.core.3"]);
     assert_eq!(last.removed_sources.len(), 8);
     assert!(
@@ -837,7 +854,7 @@ fn a_partition_hangs_below_the_disk_holding_it() {
             .entity("blockdev:259:1")
             .parent_id
             .as_ref()
-            .map(|id| id.as_str()),
+            .map(dgxtop_core::identity::EntityId::as_str),
         Some("host")
     );
 }
@@ -886,7 +903,7 @@ fn block_devices_name_their_layer_and_hang_below_what_they_stack_on() {
     slave("md0", "sda", "/sys/class/block/sda");
     let class_links = [
         ("nvme0n1", disk.to_owned()),
-        ("nvme0n1p1", partition.clone()),
+        ("nvme0n1p1", partition),
         ("dm-0", format!("{virtual_block}/dm-0")),
         ("dm-1", format!("{virtual_block}/dm-1")),
         ("md0", format!("{virtual_block}/md0")),
@@ -1002,7 +1019,10 @@ fn unreadable_enumeration_file_keeps_previous_devices() {
         last.removed_entities.is_empty(),
         "a failed read is not a disappearance"
     );
-    assert!(last.removed_sources.is_empty());
+    assert_eq!(
+        last.removed_sources,
+        [] as [dgxtop_core::identity::SourceId; 0]
+    );
     let code = last.error_code.as_deref().unwrap();
     assert!(
         code.contains("DISKSTATS_UNREADABLE:SOURCE_REMOVED"),
@@ -1047,7 +1067,10 @@ fn guards_reject_unservable_plans() {
     let mut adapter = procfs_with(&clock, tree.files());
     let failed_code = |batch: &ObservationBatch| {
         assert_eq!(batch.status, BatchStatus::Failed);
-        assert!(batch.records.is_empty());
+        assert_eq!(
+            batch.records,
+            [] as [dgxtop_core::observation::Observation; 0]
+        );
         batch.error_code.clone().unwrap()
     };
     let before = adapter.read(&read_plan(ADAPTER, "cpu", 1, 0, Vec::new()));
@@ -1068,7 +1091,10 @@ fn guards_reject_unservable_plans() {
     let delta = adapter.discover(&discover_request(ADAPTER, 1, 0));
     assert_eq!(delta.error_code.as_deref(), Some("ADAPTER_SHUT_DOWN"));
     assert!(!delta.complete);
-    assert!(delta.removed_sources.is_empty());
+    assert_eq!(
+        delta.removed_sources,
+        [] as [dgxtop_core::identity::SourceId; 0]
+    );
 }
 
 #[test]
@@ -1114,7 +1140,7 @@ fn denied_proc_stat_reports_permission_denied_availability() {
     let faulty = tree.faulty();
     faulty.inject("/proc/stat", 13);
     let clock = FakeClock::new(DISCOVERY_NS);
-    let mut adapter = procfs_with(&clock, faulty.clone());
+    let mut adapter = procfs_with(&clock, faulty);
     let pages = ParentCatalog::default().sync(&mut adapter, ADAPTER);
     assert_eq!(pages[0].availability, Some(Availability::PermissionDenied));
     assert!(

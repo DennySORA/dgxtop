@@ -10,7 +10,7 @@ publish = false
 
 [features]
 # Deterministic fakes (clock, ports) shared by every crate's unit tests.
-test-support = []
+testing = []
 
 [dependencies]
 serde.workspace = true

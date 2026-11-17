@@ -1,6 +1,8 @@
-//! Collector outputs and committed state: canonical values, arbitration
-//! explanations, counter intervals, process tables, bounded collector state,
-//! collection plans/batches, store acknowledgements and immutable snapshots.
+//! Collector outputs and committed state.
+//!
+//! Canonical values, arbitration explanations, counter intervals, process
+//! tables, bounded collector state, collection plans/batches, store
+//! acknowledgements and immutable snapshots.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
@@ -64,6 +66,11 @@ pub struct CanonicalValue {
 
 impl CanonicalValue {
     /// Enforces the `canonical.schema.json` conditional rules.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `CanonicalError` when the value breaks a rule of the canonical
+    /// model.
     pub fn validate(&self) -> Result<(), CanonicalError> {
         let fail = |message: &str| Err(CanonicalError::Invalid(message.to_owned()));
         if self.candidate_source_ids.len() > MAX_CANDIDATE_IDS {
@@ -106,6 +113,7 @@ impl CanonicalValue {
     }
 
     /// Time the value is attributed to: hardware time if known, else read time.
+    #[must_use]
     pub fn sample_time_boot_ns(&self) -> u64 {
         self.observed_boot_ns.unwrap_or(self.read_finished_boot_ns)
     }
@@ -144,6 +152,7 @@ pub struct CanonicalSample {
 
 impl CanonicalSample {
     /// Stamps a collector value with the commit revision and time.
+    #[must_use]
     pub fn commit(value: CanonicalValue, snapshot_revision: u64, committed_boot_ns: u64) -> Self {
         Self {
             schema_version: CANONICAL_SCHEMA_VERSION,
@@ -169,6 +178,7 @@ impl CanonicalSample {
         }
     }
 
+    #[must_use]
     pub fn sample_time_boot_ns(&self) -> u64 {
         self.observed_boot_ns.unwrap_or(self.read_finished_boot_ns)
     }
@@ -201,7 +211,8 @@ pub enum RejectReason {
 }
 
 impl RejectReason {
-    pub fn code(&self) -> &'static str {
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
         match self {
             Self::DifferentScope => "different_scope",
             Self::DifferentNamespace => "different_namespace",
@@ -334,7 +345,7 @@ pub struct ProcessRow {
     pub command: String,
     pub uid: Option<u32>,
     pub state: Option<char>,
-    /// `None` during warmup (first sample of a ProcessKey) or when unreadable.
+    /// `None` during warmup (first sample of a `ProcessKey`) or when unreadable.
     pub cpu_percent: Option<f64>,
     pub rss_bytes: Option<u64>,
     pub missing_reason: Option<String>,
@@ -384,6 +395,7 @@ impl ProcessTable {
     /// Whether the table's bound may have dropped a GPU process or one of
     /// its GPUs. The collector keeps GPU processes first, so a kept row
     /// without a GPU proves every GPU process was kept.
+    #[must_use]
     pub fn gpu_rows_incomplete(&self) -> bool {
         self.gpu_links_truncated
             || (self.truncated && self.rows.iter().all(|row| !row.gpu.is_empty()))
@@ -444,6 +456,7 @@ pub struct CollectorState {
 
 impl CollectorState {
     /// Entry count used for bound checks.
+    #[must_use]
     pub fn entries(&self) -> usize {
         self.counters.len()
             + self.selections.len()
@@ -453,6 +466,7 @@ impl CollectorState {
     }
 
     /// Approximate retained bytes (for the catalog/state partition ledger).
+    #[must_use]
     pub fn estimated_bytes(&self) -> usize {
         // Conservative per-entry costs including keys and map node overhead.
         self.counters.len() * 192
@@ -464,29 +478,32 @@ impl CollectorState {
 }
 
 /// Immutable catalog view handed to collectors.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CatalogSnapshot {
     pub revision: u32,
     pub host_id: Option<HostId>,
     pub boot_id: Option<BootId>,
     pub sources: BTreeMap<SourceId, Arc<SourceDescriptor>>,
     pub entities: BTreeMap<EntityId, Arc<EntityRecord>>,
-    /// Sources grouped by MetricKey, built once per catalog revision.
+    /// Sources grouped by `MetricKey`, built once per catalog revision.
     pub by_metric: BTreeMap<MetricKey, Vec<SourceId>>,
     pub capabilities: BTreeMap<AdapterId, Vec<Capability>>,
 }
 
 impl CatalogSnapshot {
+    #[must_use]
     pub fn source(&self, source_id: &SourceId) -> Option<&Arc<SourceDescriptor>> {
         self.sources.get(source_id)
     }
 
+    #[must_use]
     pub fn entity(&self, entity_id: &EntityId) -> Option<&Arc<EntityRecord>> {
         self.entities.get(entity_id)
     }
 
     /// Clock ticks per second the host entity publishes (`clk_tck`), which
     /// place a process's start; never defaulted.
+    #[must_use]
     pub fn clk_tck(&self) -> Option<u64> {
         let host = EntityId::new(entity::HOST).ok()?;
         self.entity(&host)?
@@ -499,6 +516,7 @@ impl CatalogSnapshot {
 
     /// The NVML index the adapter gave `gpu`; it orders and labels GPUs,
     /// the `gpu:<UUID>` entity identifies them.
+    #[must_use]
     pub fn nvml_index(&self, gpu: &EntityId) -> Option<u32> {
         self.entity(gpu)?
             .attribute(attributes::NVML_INDEX)?
@@ -509,12 +527,14 @@ impl CatalogSnapshot {
 
     /// `gpu`'s label: `GPU 0` by its NVML index, else `GPU 1a2b3c4d` from
     /// its UUID (a GPU that vanished keeps that one).
+    #[must_use]
     pub fn gpu_label(&self, gpu: &EntityId) -> String {
         entity::gpu_label(gpu.as_str(), self.nvml_index(gpu))
     }
 
     /// An interface's name: its `ifname`, else its display name, else its
     /// entity id.
+    #[must_use]
     pub fn interface_name<'a>(&'a self, interface: &'a EntityId) -> &'a str {
         let record = self.entity(interface);
         record
@@ -578,6 +598,7 @@ impl PolicySnapshot {
     }
 
     /// Freshness deadline for a source read at `read_boot_ns`.
+    #[must_use]
     pub fn fresh_deadline(
         &self,
         adapter: &AdapterId,
@@ -595,6 +616,10 @@ impl PolicySnapshot {
 
 /// Bounds a collector must respect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the fields are the keys of the wire contract"
+)]
 pub struct CollectionLimits {
     pub max_series: u32,
     pub max_sources: u32,
@@ -694,6 +719,11 @@ pub struct CollectionBatch {
 
 impl CollectionBatch {
     /// Validates every canonical value before the batch reaches the Store.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `CanonicalError` when the value breaks a rule of the canonical
+    /// model.
     pub fn validate(&self) -> Result<(), CanonicalError> {
         for value in &self.canonical {
             value.validate()?;
@@ -701,9 +731,10 @@ impl CollectionBatch {
         Ok(())
     }
 
-    /// Content fingerprint used to detect "same batch_id, different
+    /// Content fingerprint used to detect "same `batch_id`, different
     /// payload". It is compared in memory only, never stored or shown, so a
     /// structural hash replaces the JSON summary's SHA-256 (D-84).
+    #[must_use]
     pub fn content_fingerprint(&self) -> BatchFingerprint {
         let lane = |seed: u64| {
             let mut hasher = std::hash::DefaultHasher::new();
@@ -755,9 +786,9 @@ pub struct CommitGuard {
 #[serde(rename_all = "snake_case")]
 pub enum AckStatus {
     Committed,
-    /// Same batch_id and content already committed; original Ack returned.
+    /// Same `batch_id` and content already committed; original Ack returned.
     Duplicate,
-    /// Same batch_id with different content.
+    /// Same `batch_id` with different content.
     Conflict,
     RejectedStaleEpoch,
     RejectedStaleBase,
@@ -766,6 +797,7 @@ pub enum AckStatus {
 }
 
 impl AckStatus {
+    #[must_use]
     pub const fn is_committed(self) -> bool {
         matches!(self, Self::Committed | Self::Duplicate)
     }
@@ -828,7 +860,7 @@ pub struct DomainSnapshot {
 }
 
 /// Health of the live state.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct StoreHealth {
     pub ledger: Option<LedgerSnapshot>,
     pub series: u32,
@@ -955,7 +987,7 @@ mod tests {
 
     #[test]
     fn spec_conflict_example_round_trips() {
-        let text = include_str!("../../../contracts/examples/canonical.conflict.json");
+        let text = include_str!("../../../../contracts/examples/canonical.conflict.json");
         let sample: CanonicalSample = serde_json::from_str(text).unwrap();
         assert_eq!(sample.selection_state, SelectionState::Conflict);
         assert!(sample.value.is_none());
@@ -1045,8 +1077,8 @@ mod tests {
     fn fingerprint_is_stable_for_the_same_content_and_ignores_the_rest() {
         let original = batch(vec![selected()]);
         let fingerprint = original.content_fingerprint();
-        assert_eq!(original.clone().content_fingerprint(), fingerprint);
-        let mut annotated = original.clone();
+        assert_eq!(original.content_fingerprint(), fingerprint);
+        let mut annotated = original;
         annotated.config_revision = 9;
         annotated.failures.push(CollectionFailure {
             source_id: None,

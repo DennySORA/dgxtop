@@ -1,7 +1,9 @@
 //! `--diagnostics-json`: version, dependency, SQLite, capability and bounded
-//! health summary. Capabilities come from a real catalog discovery through
-//! the isolated adapter hosts (never from in-process driver calls); output
-//! contains no secrets (host identity is already a hash, no command lines).
+//! health summary.
+//!
+//! Capabilities come from a real catalog discovery through the isolated
+//! adapter hosts (never from in-process driver calls); output contains no
+//! secrets (host identity is already a hash, no command lines).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -70,7 +72,7 @@ pub fn run(cli: &Cli) -> ExitCode {
     match collect(cli) {
         Ok(report) => match serde_json::to_string_pretty(&report) {
             Ok(text) => {
-                println!("{text}");
+                crate::output::line(&text);
                 ExitCode::SUCCESS
             }
             Err(error) => fail(EXIT_FAILURE, &error.to_string()),
@@ -99,7 +101,7 @@ fn collect(cli: &Cli) -> Result<DiagnosticsReport, String> {
         .copied()
         .filter(|adapter| effective.sampling.gpu_enabled || *adapter != naming::adapters::NVML)
         .collect();
-    let reports = discover_adapters(&adapters, &effective, Arc::clone(&clock))?;
+    let reports = discover_adapters(&adapters, &effective, &Arc::clone(&clock))?;
     Ok(DiagnosticsReport {
         version: build.version.to_owned(),
         commit: build.commit.to_owned(),
@@ -123,7 +125,7 @@ fn collect(cli: &Cli) -> Result<DiagnosticsReport, String> {
 fn discover_adapters(
     adapters: &[&str],
     config: &dgxtop_core::config::Config,
-    clock: Arc<dyn TimeProvider>,
+    clock: &Arc<dyn TimeProvider>,
 ) -> Result<Vec<AdapterReport>, String> {
     let program = std::env::current_exe().map_err(|error| error.to_string())?;
     let ledger = ByteLedger::new(config.partition_limits());
@@ -138,10 +140,10 @@ fn discover_adapters(
     let handle = Supervisor::start(
         SupervisorConfig::from_config(config),
         host_specs(adapters, &program)?,
-        ledger,
+        &ledger,
         ingress,
         sender,
-        Arc::clone(&clock),
+        Arc::clone(clock),
         Arc::new(NullLogger),
     )
     .map_err(|error| error.to_string())?;
@@ -164,7 +166,7 @@ fn discover_adapters(
     }
     let shutdown = handle.shutdown(Duration::from_secs(3));
     if !shutdown.completed_within_deadline {
-        eprintln!("dgxtop: warning: adapter hosts did not all stop within 3 s");
+        crate::output::error_line("dgxtop: warning: adapter hosts did not all stop within 3 s");
     }
     Ok(reports)
 }
@@ -201,7 +203,7 @@ fn wait_for_host(
         if settled || Instant::now() >= deadline {
             return status;
         }
-        let _ = completions.recv_timeout(Duration::from_millis(50));
+        drop(completions.recv_timeout(Duration::from_millis(50)));
     }
 }
 

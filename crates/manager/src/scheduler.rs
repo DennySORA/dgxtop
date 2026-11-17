@@ -1,4 +1,4 @@
-//! SamplingScheduler: multi-rate, absolute-deadline scheduling of adapter
+//! `SamplingScheduler`: multi-rate, absolute-deadline scheduling of adapter
 //! reads and discovery.
 //!
 //! * Every read group follows its period class (`fast` → `sampling.interval_ms`,
@@ -82,7 +82,7 @@ struct SchedulerSettings {
 }
 
 impl SchedulerSettings {
-    fn from_config(config: &Config) -> Self {
+    const fn from_config(config: &Config) -> Self {
         let sampling = &config.sampling;
         Self {
             interval_ms: sampling.interval_ms,
@@ -95,7 +95,7 @@ impl SchedulerSettings {
         }
     }
 
-    fn configured_ms(&self, class: PeriodClass) -> u32 {
+    const fn configured_ms(&self, class: PeriodClass) -> u32 {
         match class {
             PeriodClass::Fast => self.interval_ms,
             PeriodClass::Capacity => self.capacity_interval_ms,
@@ -319,10 +319,20 @@ struct HostSchedule {
     rr_cursor: usize,
     generation: Option<u32>,
     dispatchable: bool,
-    unsupported: bool,
-    discovered: bool,
+    support: Support,
     catalog_groups: BTreeSet<String>,
     catalog_generation: u32,
+}
+
+/// What an adapter's discovery said so far.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Support {
+    /// No discovery finished yet.
+    Unknown,
+    /// The adapter reads this machine.
+    Supported,
+    /// The adapter has nothing to read here: only probed, slowly.
+    Unsupported,
 }
 
 impl HostSchedule {
@@ -348,8 +358,7 @@ impl HostSchedule {
             rr_cursor: 0,
             generation: None,
             dispatchable: false,
-            unsupported: false,
-            discovered: false,
+            support: Support::Unknown,
             catalog_groups: BTreeSet::new(),
             catalog_generation: 0,
         };
@@ -357,7 +366,11 @@ impl HostSchedule {
         host
     }
 
-    fn inputs<'a>(&self, settings: &'a SchedulerSettings, multiplier: u32) -> PeriodInputs<'a> {
+    const fn inputs<'a>(
+        &self,
+        settings: &'a SchedulerSettings,
+        multiplier: u32,
+    ) -> PeriodInputs<'a> {
         PeriodInputs {
             settings,
             minimum_ms: self.minimum_ms,
@@ -400,9 +413,10 @@ impl HostSchedule {
         let wanted = self.wanted_groups(settings);
         self.groups = wanted
             .into_iter()
-            .map(|spec| match previous.remove(&spec.0) {
-                Some(existing) => existing,
-                None => GroupSchedule::new(&adapter, spec, inputs, now_ns),
+            .map(|spec| {
+                previous
+                    .remove(&spec.0)
+                    .unwrap_or_else(|| GroupSchedule::new(&adapter, spec, inputs, now_ns))
             })
             .collect();
         self.rr_cursor %= self.groups.len() + 1;
@@ -425,13 +439,17 @@ impl HostSchedule {
             }
         }
         let pending = self.discovery.pending_since_ns;
-        self.discovery
-            .replan(&adapter, settings, self.unsupported, now_ns);
+        self.discovery.replan(
+            &adapter,
+            settings,
+            self.support == Support::Unsupported,
+            now_ns,
+        );
         self.discovery.pending_since_ns = pending;
     }
 
     fn reads_active(&self) -> bool {
-        self.generation.is_some() && self.discovered && !self.unsupported
+        self.generation.is_some() && self.support == Support::Supported
     }
 
     fn expire(&mut self, now_ns: u64, report: &mut TickReport) {
@@ -519,7 +537,7 @@ impl HostSchedule {
             }
         }
         // Metadata is deferred under overload once a first catalog exists.
-        let discovery_allowed = !(defer_metadata && self.discovered);
+        let discovery_allowed = !(defer_metadata && self.support != Support::Unknown);
         if discovery_allowed && let Some(since) = self.discovery.pending_since_ns {
             consider(since, self.groups.len(), Work::Discover);
         }
@@ -859,7 +877,7 @@ pub(crate) struct SamplingScheduler {
 impl SamplingScheduler {
     /// Adapters with a read request in flight: more groups of their current
     /// cycle may still arrive.
-    pub(crate) fn busy_adapters(&self) -> std::collections::BTreeSet<AdapterId> {
+    pub(crate) fn busy_adapters(&self) -> BTreeSet<AdapterId> {
         self.hosts
             .iter()
             .filter(|host| host.reads())
@@ -894,12 +912,12 @@ impl SamplingScheduler {
         }
     }
 
-    pub(crate) fn epoch(&self) -> u64 {
+    pub(crate) const fn epoch(&self) -> u64 {
         self.epoch
     }
 
     /// Records a configuration change that does not affect scheduling.
-    pub(crate) fn set_config_revision(&mut self, revision: u32) {
+    pub(crate) const fn set_config_revision(&mut self, revision: u32) {
         self.config_revision = revision;
     }
 
@@ -929,7 +947,7 @@ impl SamplingScheduler {
     }
 
     /// Stops all further dispatching (shutdown).
-    pub(crate) fn stop(&mut self) {
+    pub(crate) const fn stop(&mut self) {
         self.stopped = true;
     }
 
@@ -1121,12 +1139,16 @@ impl SamplingScheduler {
             availability,
             Some(Availability::Unavailable | Availability::PermissionDenied)
         );
-        host.discovered = true;
+        let was_unsupported = host.support == Support::Unsupported;
+        host.support = if unsupported {
+            Support::Unsupported
+        } else {
+            Support::Supported
+        };
         host.catalog_generation = catalog_generation;
         let groups_changed = host.catalog_groups != catalog_groups;
         host.catalog_groups = catalog_groups;
-        if host.unsupported != unsupported {
-            host.unsupported = unsupported;
+        if was_unsupported != unsupported {
             let pending = host.discovery.pending_since_ns;
             host.discovery
                 .replan(adapter_id.as_str(), &settings, unsupported, now_ns);
@@ -1198,13 +1220,13 @@ impl SamplingScheduler {
         let mut views = Vec::new();
         for host in self.hosts.iter().filter(|host| host.enabled) {
             let adapter = host.adapter_id.to_string();
-            if !host.unsupported {
+            if host.support != Support::Unsupported {
                 views.extend(host.groups.iter().map(|group| IntervalView {
                     adapter_id: adapter.clone(),
                     read_group: group.name.clone(),
                     configured_ms: group.configured_ms,
                     effective_ms: group.effective_ms,
-                    reason: if host.discovered {
+                    reason: if host.support == Support::Supported {
                         group.reason.clone()
                     } else {
                         format!("{}; awaiting discovery", group.reason)
@@ -1216,7 +1238,7 @@ impl SamplingScheduler {
                 read_group: DISCOVERY_GROUP.to_owned(),
                 configured_ms: host.discovery.configured_ms,
                 effective_ms: host.discovery.effective_ms,
-                reason: if host.unsupported {
+                reason: if host.support == Support::Unsupported {
                     format!(
                         "adapter unavailable; probing every {} ms",
                         host.discovery.effective_ms
@@ -1249,7 +1271,7 @@ impl SamplingScheduler {
     pub(crate) fn effective_fast_interval_ms(&self) -> u32 {
         self.hosts
             .iter()
-            .filter(|host| host.enabled && !host.unsupported)
+            .filter(|host| host.enabled && host.support != Support::Unsupported)
             .flat_map(|host| host.groups.iter())
             .filter(|group| group.class == PeriodClass::Fast)
             .map(|group| group.effective_ms)
@@ -1508,7 +1530,7 @@ mod tests {
         bench.host_up("network");
         bench.drive(1, 1, true); // discovery round
         // Never reply to reads: the first read stays in flight.
-        let mut config_long_deadline = config.clone();
+        let mut config_long_deadline = config;
         config_long_deadline.sampling.read_deadline_ms = 10_000;
         bench
             .scheduler
@@ -1587,7 +1609,7 @@ mod tests {
             bench.now += 10 * MS;
         }
         let plan = plan.unwrap();
-        let mut faster = config.clone();
+        let mut faster = config;
         faster.sampling.interval_ms = 500;
         assert_eq!(bench.scheduler.reconfigure(&faster, bench.now), 2);
         assert_eq!(
@@ -1951,7 +1973,7 @@ mod tests {
             bench.port.take();
             bench.now += 10 * MS;
         }
-        assert!(!expired.is_empty());
+        assert_ne!(expired.len(), 0);
         assert!(matches!(expired[0].kind, RequestKind::Read { .. }));
         bench
             .scheduler

@@ -4,7 +4,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 use dgxtop_core::action::ActionRecordSummary;
 use dgxtop_core::action::{
     ActionAttempt, ActionIntent, ActionOutcomeRecord, ActionState, AuditExpiryReport, AuditFailure,
@@ -22,13 +22,13 @@ use super::queries::{
     StoredIntent, UnresolvedIntent, find_attempt, find_event, find_intent, insert_attempt,
     insert_event, insert_intent, unresolved_intents, update_status,
 };
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 use super::queries::{latest_result_any, latest_result_since};
 use super::records::{
     AttemptRow, EventRow, IntentRow, StoredTarget, failure, invalid, parse_signal,
     transition_allowed, uuid_text,
 };
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 use super::records::{attempt_state, state_from_status};
 use super::retention::delete_expired;
 use crate::fs::{FileSystemOps, RealFileSystem};
@@ -99,13 +99,12 @@ impl fmt::Debug for SqliteAuditRepository {
 }
 
 fn validate_path(path: &Path) -> Result<(), AuditOpenError> {
-    match path_problem(path) {
-        Some(reason) => Err(AuditOpenError::InvalidPath {
+    path_problem(path).map_or(Ok(()), |reason| {
+        Err(AuditOpenError::InvalidPath {
             path: path.display().to_string(),
             reason: reason.to_owned(),
-        }),
-        None => Ok(()),
-    }
+        })
+    })
 }
 
 fn unusable_failure(unusable: &Unusable) -> AuditFailure {
@@ -144,8 +143,8 @@ fn resolve_duplicate(
         ));
     }
     let intent_id = Uuid::parse_str(&existing.intent_id)
-        .map_err(|_| failure(ErrorCode::InternalError, "stored intent_id is not a UUID"))?;
-    let committed_boot_ns = parse_fixed_width(&existing.created_boot_ns).map_err(|_| {
+        .map_err(|_cause| failure(ErrorCode::InternalError, "stored intent_id is not a UUID"))?;
+    let committed_boot_ns = parse_fixed_width(&existing.created_boot_ns).map_err(|_cause| {
         failure(
             ErrorCode::InternalError,
             "stored created_boot_ns is invalid",
@@ -172,6 +171,11 @@ fn recovered_intent(row: &UnresolvedIntent) -> Option<RecoveredIntent> {
 impl SqliteAuditRepository {
     /// Opens (creating with mode 0600 when missing) and verifies the audit
     /// database. `Err` only for invalid arguments; see the type docs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `AuditOpenError` when the limits or the path are invalid; a
+    /// database problem opens a repository that reports its status instead.
     pub fn open(
         path: &Path,
         limits: AuditLimits,
@@ -222,7 +226,7 @@ impl SqliteAuditRepository {
         &self.path
     }
 
-    pub fn limits(&self) -> &AuditLimits {
+    pub const fn limits(&self) -> &AuditLimits {
         &self.limits
     }
 
@@ -305,7 +309,7 @@ impl SqliteAuditRepository {
             measured.map_err(|error| self.sqlite_failure("audit capacity", &error))?;
         let free_disk_bytes = match class {
             WriteClass::NewRecord => {
-                let directory = self.path.parent().unwrap_or(Path::new("/"));
+                let directory = self.path.parent().unwrap_or_else(|| Path::new("/"));
                 self.free_space
                     .available_bytes(directory)
                     .map_err(|error| {
@@ -341,7 +345,7 @@ impl SqliteAuditRepository {
             })
     }
 
-    fn deadline(&self) -> std::time::Duration {
+    const fn deadline(&self) -> std::time::Duration {
         self.limits.busy_deadline()
     }
 
@@ -371,18 +375,24 @@ impl SqliteAuditRepository {
                 )),
             );
         }
-        match &self.last_issue {
-            Some(issue) => (PersistenceState::Degraded, Some(issue.clone())),
-            None => (PersistenceState::Healthy, None),
-        }
+        self.last_issue
+            .as_ref()
+            .map_or((PersistenceState::Healthy, None), |issue| {
+                (PersistenceState::Degraded, Some(issue.clone()))
+            })
     }
 }
 
 /// Reading a request's audit record back is a test aid: the Manager never
 /// asks (single-use tokens make a replayed confirmation harmless, D-93).
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 impl SqliteAuditRepository {
     /// The audit record of `request_id`: its intent, else its attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `AuditFailure` when the audit cannot record or read the
+    /// entry; its code says why.
     pub fn lookup(
         &mut self,
         request_id: Uuid,
@@ -615,7 +625,7 @@ impl AuditRepository for SqliteAuditRepository {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 /// Result code when no event was found since the intent's creation: an
 /// intent still waiting for its first outcome reports `Ok`; otherwise the
 /// wall clock stepped back and the unbounded scan is used.
@@ -633,7 +643,7 @@ fn latest_result(
     Ok(latest_result_any(connection, request)?.unwrap_or_else(|| "Ok".to_owned()))
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 fn lookup_summary(
     connection: &Connection,
     request: &str,
@@ -748,7 +758,7 @@ mod tests {
     }
 
     /// The audit classifies SQLite failures like every partition and stops
-    /// on corruption (sqlite::Writer); it keeps its own codes and its
+    /// on corruption (`sqlite::Writer`); it keeps its own codes and its
     /// stricter commit rule.
     #[test]
     fn corruption_stops_the_audit_and_fails_closed() {

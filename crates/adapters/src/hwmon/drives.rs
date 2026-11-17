@@ -1,14 +1,14 @@
 //! Drive temperatures (D-92): which block devices an hwmon drive sensor
 //! measures, proven through sysfs links and never guessed from names.
 //!
-//! * NVMe (`nvme` driver): the hwmon `device` is the controller
+//! * `NVMe` (`nvme` driver): the hwmon `device` is the controller
 //!   (`.../nvme/nvmeN`) and its `Composite` channel is the drive's
-//!   temperature (the NVMe composite temperature). Every namespace block
+//!   temperature (the `NVMe` composite temperature). Every namespace block
 //!   device below the controller (`.../nvme/nvmeN/nvmeNnM`) is that drive.
 //! * SATA/SAS (`drivetemp`): the hwmon `device` is the SCSI device
 //!   (`.../targetH:C:T/H:C:T:L`) and `temp1` is the drive's temperature; the
 //!   disk below it (`.../H:C:T:L/block/sdX`) is that drive.
-//! * Native NVMe multipath: a namespace head (`.../nvme-subsysK/nvmeKnM`)
+//! * Native `NVMe` multipath: a namespace head (`.../nvme-subsysK/nvmeKnM`)
 //!   lies below no controller; its `multipath/` entries link its paths. The
 //!   head is the drive of a sensor only when every path lies below that
 //!   sensor's controller.
@@ -45,7 +45,7 @@ impl DriveDriver {
         }
     }
 
-    /// Whether a channel is the drive's own temperature: NVMe's
+    /// Whether a channel is the drive's own temperature: `NVMe`'s
     /// `Composite` (its `Sensor N` channels are single points inside the
     /// drive), or drivetemp's only channel.
     pub(crate) fn is_drive_temperature(
@@ -129,10 +129,10 @@ impl BlockCache {
             let Ok(instance) = canonical(files, &format!("{BLOCK_CLASS}/{name}")) else {
                 continue;
             };
-            let facts = match self.facts.get(&instance) {
-                Some(facts) => *facts,
-                None => read_facts(files, &instance),
-            };
+            let facts = self
+                .facts
+                .get(&instance)
+                .map_or_else(|| read_facts(files, &instance), |facts| *facts);
             live.insert(instance.clone(), facts);
             if let Some(disk) = facts.disk {
                 placed.push(PlacedDisk {
@@ -159,13 +159,15 @@ fn placed_below(placed: &PlacedDisk, sensor_device: &str) -> bool {
 /// A multipath head is placed by its paths; any other disk by itself.
 fn placements(files: &dyn SystemFiles, instance: &str) -> Vec<String> {
     let multipath = format!("{instance}/multipath");
-    match list_names(files, &multipath) {
-        Ok(paths) => paths
-            .iter()
-            .filter_map(|path| canonical(files, &format!("{multipath}/{path}")).ok())
-            .collect(),
-        Err(_) => vec![instance.to_owned()],
-    }
+    list_names(files, &multipath).map_or_else(
+        |_| vec![instance.to_owned()],
+        |paths| {
+            paths
+                .iter()
+                .filter_map(|path| canonical(files, &format!("{multipath}/{path}")).ok())
+                .collect()
+        },
+    )
 }
 
 fn read_facts(files: &dyn SystemFiles, instance: &str) -> BlockFacts {

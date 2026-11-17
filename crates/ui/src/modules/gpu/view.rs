@@ -69,7 +69,7 @@ pub(super) fn render_gpu_view(
     }
     let body = rows
         .rest()
-        .unwrap_or(Rect::new(inner.x, inner.bottom(), inner.width, 0));
+        .unwrap_or_else(|| Rect::new(inner.x, inner.bottom(), inner.width, 0));
     let plan = pages.plan(page, &blocks, (body.width, body.height));
     let hidden = pages.hidden_note(&blocks, &plan, selector_room(selector, gpu));
     render_selector(
@@ -165,7 +165,7 @@ struct Pages {
 }
 
 impl Pages {
-    fn count(&self) -> usize {
+    const fn count(&self) -> usize {
         self.starts.len()
     }
 
@@ -406,7 +406,7 @@ mod tests {
         assert_eq!(covered, (0..all.len()).collect::<Vec<_>>());
         let next = pages.range(1, all.len()).len();
         assert_eq!(pages.titles(1, &all), vec!["Block"; next]);
-        assert!(pages.titles(pages.count(), &all).is_empty());
+        assert_eq!(pages.titles(pages.count(), &all).len(), 0);
         let first = pages.plan(0, &all, (78, 14));
         assert_eq!(pages.hidden_note(&all, &first, 200), None);
         // Every section fits: one page, under the divider.
@@ -442,6 +442,8 @@ mod tests {
     #[test]
     fn the_divider_names_the_pages_under_the_fixed_bars() {
         use crate::registry::DisplayModule;
+        // The title, the selector and four bars, then the divider.
+        const DIVIDER: usize = 6;
         let draw = |offset: u16, (width, height): (u16, u16)| -> Vec<String> {
             let mut context = crate::test_fixtures::display_context();
             context.slot = crate::registry::Slot::Detail;
@@ -461,8 +463,6 @@ mod tests {
                 .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
                 .collect()
         };
-        // The title, the selector and four bars, then the divider.
-        const DIVIDER: usize = 6;
         let first = draw(0, (137, 38));
         let text = first.join("\n");
         assert!(first[0].contains("(h/l/←/→ switch GPU)"), "{text}");
@@ -514,7 +514,7 @@ mod tests {
         let row: String = (0..137).map(|x| buffer[(x, 1)].symbol()).collect();
         for (number, chip) in [(0, "[GPU 0 · GB10]"), (1, " GPU 1 · GB10 ")] {
             let at = row.find(chip).unwrap_or_else(|| panic!("{chip} in {row}"));
-            let x = u16::try_from(row[..at].chars().count()).unwrap() + 1;
+            let x = u16::try_from(row.get(..at).unwrap().chars().count()).unwrap() + 1;
             assert_eq!(buffer[(x, 1)].fg, theme.gpu_color(number), "{chip}");
         }
         let selected = &buffer[(2, 1)];

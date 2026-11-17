@@ -25,23 +25,27 @@ pub trait TimeProvider: Send + Sync {
 }
 
 /// Converts milliseconds to nanoseconds, saturating at `u64::MAX`.
+#[must_use]
 pub const fn ms_to_ns(milliseconds: u64) -> u64 {
     milliseconds.saturating_mul(NANOS_PER_MILLI)
 }
 
 /// Converts a nanosecond count to whole milliseconds (floor).
+#[must_use]
 pub const fn ns_to_ms(nanoseconds: u64) -> u64 {
     nanoseconds / NANOS_PER_MILLI
 }
 
 /// Duration until `deadline_boot_ns`, zero if already due.
-pub fn until(now_boot_ns: u64, deadline_boot_ns: u64) -> Duration {
+#[must_use]
+pub const fn until(now_boot_ns: u64, deadline_boot_ns: u64) -> Duration {
     Duration::from_nanos(deadline_boot_ns.saturating_sub(now_boot_ns))
 }
 
 /// Returns the first `base + k*period` strictly greater than `now` (k >= 1 when
 /// `now >= base`). Missed slots are skipped, never replayed.
-pub fn next_due_after(base_boot_ns: u64, period_ns: u64, now_boot_ns: u64) -> u64 {
+#[must_use]
+pub const fn next_due_after(base_boot_ns: u64, period_ns: u64, now_boot_ns: u64) -> u64 {
     if period_ns == 0 {
         return now_boot_ns.saturating_add(1);
     }
@@ -54,6 +58,7 @@ pub fn next_due_after(base_boot_ns: u64, period_ns: u64, now_boot_ns: u64) -> u6
 
 /// Deterministic phase offset in `[0, period)` derived from a stable label, so
 /// that hosts do not all fire on the same instant.
+#[must_use]
 pub fn stable_phase(label: &str, period_ns: u64) -> u64 {
     if period_ns == 0 {
         return 0;
@@ -79,6 +84,7 @@ pub struct Backoff {
 
 impl Backoff {
     /// `jitter_permille` of 100 means +/-10 %.
+    #[must_use]
     pub fn new(base_ms: u64, max_ms: u64, jitter_permille: u64, seed: u64) -> Self {
         Self {
             base_ms: base_ms.max(1),
@@ -110,19 +116,23 @@ impl Backoff {
     }
 
     /// Resets to the first delay after a successful probe.
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.attempt = 0;
     }
 
+    #[must_use]
     pub const fn attempt(&self) -> u32 {
         self.attempt
     }
 }
 
-/// `YYYY-MM-DDTHH:MM:SSZ` for a wall-clock instant in nanoseconds since the
-/// Unix epoch, clamped to years 0000..=9999 so the text keeps a fixed width
-/// and its lexical order (audit/archive `*_utc` columns and retention cutoffs).
-/// UTC is display/index only; it never yields a duration inside a boot.
+/// `YYYY-MM-DDTHH:MM:SSZ` for a wall-clock instant.
+///
+/// The instant is in nanoseconds since the Unix epoch, clamped to years
+/// 0000..=9999 so the text keeps a fixed width and its lexical order
+/// (audit/archive `*_utc` columns and retention cutoffs). UTC is
+/// display/index only; it never yields a duration inside a boot.
+#[must_use]
 pub fn format_utc_rfc3339(unix_ns: i128) -> String {
     const SECONDS_PER_DAY: i64 = 86_400;
     const MIN_UNIX_SECONDS: i64 = -62_167_219_200;
@@ -146,9 +156,12 @@ pub fn format_utc_rfc3339(unix_ns: i128) -> String {
     )
 }
 
-/// RFC 3339 UTC text with nanoseconds, e.g. `2026-10-04T12:00:00.000000000Z`,
-/// as the archive stores boot-time rows; `None` past the representable range
-/// (no clamping, so a stored instant always reads back as itself).
+/// RFC 3339 UTC text with nanoseconds, as the archive stores boot-time rows.
+///
+/// For example `2026-10-04T12:00:00.000000000Z`; `None` past the
+/// representable range (no clamping, so a stored instant always reads back
+/// as itself).
+#[must_use]
 pub fn format_utc_ns(utc_ns: i128) -> Option<String> {
     let seconds = utc_ns.div_euclid(i128::from(NANOS_PER_SECOND));
     let nanos = utc_ns.rem_euclid(i128::from(NANOS_PER_SECOND));
@@ -167,6 +180,7 @@ pub fn format_utc_ns(utc_ns: i128) -> Option<String> {
 
 /// Gregorian date of a day count since 1970-01-01 (Howard Hinnant's
 /// `civil_from_days`).
+#[must_use]
 pub fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let shifted = days + 719_468;
     let era = shifted.div_euclid(146_097);
@@ -185,7 +199,8 @@ pub fn civil_from_days(days: i64) -> (i64, i64, i64) {
     (year, month, day)
 }
 
-/// SplitMix64 step; small deterministic PRNG for jitter and fixtures.
+/// `SplitMix64` step; small deterministic PRNG for jitter and fixtures.
+#[must_use]
 pub const fn splitmix64(state: u64) -> u64 {
     let mut z = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);

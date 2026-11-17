@@ -25,6 +25,7 @@ use super::{
     Budgets, Environment, EvidenceFile, PerformanceReport, ReportKind, RunMetrics, RunResult,
     SampleCounts, SoakResult, SoakScenario, Workload,
 };
+use dgxtop_core::num::ToF64Lossy;
 
 /// Runs a report must contain (schema `runs`: exactly three).
 pub const REQUIRED_RUNS: usize = 3;
@@ -58,6 +59,7 @@ pub enum BenchMode {
 }
 
 impl BenchMode {
+    #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Smoke => "smoke",
@@ -86,6 +88,11 @@ pub struct RunRecord {
 impl RunRecord {
     /// Records a REF metric measured from `samples` samples. A non-finite
     /// value or an unknown name is rejected rather than stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns what is wrong, as text for the report: the name is not a REF
+    /// metric, or the value is not finite.
     pub fn set(&mut self, metric: &'static str, value: f64, samples: u64) -> Result<(), String> {
         if !REF_METRICS.contains(&metric) {
             return Err(format!("{metric} is not a REF report metric"));
@@ -99,10 +106,12 @@ impl RunRecord {
         Ok(())
     }
 
+    #[must_use]
     pub fn metric(&self, name: &str) -> Option<MetricValue> {
         self.metrics.get(name).copied()
     }
 
+    #[must_use]
     pub fn missing_metrics(&self) -> Vec<&'static str> {
         REF_METRICS
             .iter()
@@ -112,6 +121,7 @@ impl RunRecord {
     }
 
     /// Schema run; unmeasured metrics become `0` placeholders.
+    #[must_use]
     pub fn to_schema(&self) -> RunResult {
         let value = |name: &str| self.metric(name).map_or(0.0, |metric| metric.value);
         RunResult {
@@ -143,6 +153,7 @@ impl RunRecord {
 
 /// Soak entries for a report without soak measurements: zero-length runs
 /// that the evaluator fails on its duration/warm-up minimums.
+#[must_use]
 pub fn soak_not_run() -> Vec<SoakResult> {
     [SoakScenario::Fixed, SoakScenario::Churn]
         .into_iter()
@@ -208,6 +219,7 @@ pub fn assemble(inputs: ReportInputs) -> AssembledReport {
 }
 
 /// Why `inputs` would not make a `measured` report (empty = it would).
+#[must_use]
 pub fn acceptance_blockers(inputs: &ReportInputs) -> Vec<String> {
     let mut blockers = Vec::new();
     if inputs.mode == BenchMode::Smoke {
@@ -268,7 +280,7 @@ pub fn acceptance_blockers(inputs: &ReportInputs) -> Vec<String> {
 
 /// Every budget gate of one run: the limits, the minimum duration and the
 /// minimum sample counts. Unmeasured limits are `not_measured`.
-#[allow(clippy::cast_precision_loss)]
+#[must_use]
 pub fn run_gates(budgets: &Budgets, run: &RunRecord) -> Vec<BudgetVerdict> {
     let mut gates: Vec<BudgetVerdict> = budgets
         .limits
@@ -308,8 +320,8 @@ pub fn run_gates(budgets: &Budgets, run: &RunRecord) -> Vec<BudgetVerdict> {
         if let Some(required) = budgets.minimum_samples.get(stream) {
             gates.push(minimum(
                 format!("minimum_samples.{stream}"),
-                *required as f64,
-                count as f64,
+                (*required).to_f64_lossy(),
+                count.to_f64_lossy(),
             ));
         }
     }
@@ -403,7 +415,7 @@ mod tests {
             "{:?}",
             complete.blockers
         );
-        assert!(complete.blockers.is_empty());
+        assert_eq!(complete.blockers, [] as [String; 0]);
         let smoke = assemble(inputs(BenchMode::Smoke, runs.clone(), Some(soak())));
         assert_eq!(smoke.report.kind, ReportKind::SyntheticExample);
         assert!(smoke.blockers[0].starts_with("smoke mode"));

@@ -32,6 +32,7 @@ use crate::registry::{
     DisplayContext, DisplayModule, DisplayModuleManifest, OverviewCell, RenderOutput, Slot,
     controls,
 };
+use std::fmt::Write as _;
 
 /// Its id; expanded, it takes the whole Overview (`z`, D-121).
 pub const PROCESSES_MODULE_ID: &str = "processes";
@@ -76,14 +77,19 @@ const COLUMNS: [ColumnSpec; COLUMN_COUNT] = [
     ColumnSpec::left("NAME", 10, 96).flexible().attached(),
 ];
 
+#[derive(Debug)]
 pub struct ProcessesModule {
     manifest: DisplayModuleManifest,
 }
 
 impl ProcessesModule {
+    /// # Errors
+    ///
+    /// Returns a `ModuleBuildError` when the module's static manifest is
+    /// invalid, which is a build defect.
     pub fn new() -> Result<Self, ModuleBuildError> {
         Ok(Self {
-            manifest: build_manifest(ManifestSpec {
+            manifest: build_manifest(&ManifestSpec {
                 id: PROCESSES_MODULE_ID,
                 title: "Processes (GPU first)",
                 min_columns: 40,
@@ -195,9 +201,10 @@ impl DisplayModule for ProcessesModule {
             let Some(rect) = cursor.next_row() else { break };
             let style = selected.then(|| context.theme.selected_row_style());
             draw_table_row(frame.buffer_mut(), rect, &columns, &cells, style);
-            let separator = style.map_or(context.theme.muted_style(), |row| {
-                context.theme.muted_style().patch(row)
-            });
+            let separator = style.map_or_else(
+                || context.theme.muted_style(),
+                |row| context.theme.muted_style().patch(row),
+            );
             draw_column_separators(frame.buffer_mut(), rect, &columns, separator);
             let control = if selected {
                 controls::PROCESS_ROW_SELECTED
@@ -309,13 +316,13 @@ impl DisplayWindow {
 fn title_text(view: &ProcessesView) -> String {
     let mut title = "GPU Processes".to_owned();
     let arrow = if view.ascending { "▲" } else { "▼" };
-    title.push_str(&format!(" · sort {} {arrow}", view.sort.label()));
+    write!(title, " · sort {} {arrow}", view.sort.label()).unwrap_or_default();
     // The filter's label is the GPU's own (`GPU 0`).
     if let Some((_, label)) = &view.gpu_filter {
-        title.push_str(&format!(" · {}", clean(label)));
+        write!(title, " · {}", clean(label)).unwrap_or_default();
     }
     if !view.filter.is_empty() {
-        title.push_str(&format!(" · filter \"{}\"", clean(&view.filter)));
+        write!(title, " · filter \"{}\"", clean(&view.filter)).unwrap_or_default();
     }
     title
 }
@@ -352,7 +359,7 @@ fn joined<'a>(
 }
 
 /// `C`, `G` or `C+G`: the contexts a process holds on a GPU.
-fn usage_code(usage: GpuUsageKind) -> &'static str {
+const fn usage_code(usage: GpuUsageKind) -> &'static str {
     match usage {
         GpuUsageKind::Compute => "C",
         GpuUsageKind::Graphics => "G",
@@ -506,10 +513,10 @@ fn gpu_cell(gpus: &[&ProcessGpuView], context: &DisplayContext) -> TableCell {
 /// `■` in the process's color when it is tracked, kept on the selected
 /// row, else nothing.
 fn swatch_cell(row: &ProcessRowView, context: &DisplayContext) -> TableCell {
-    match row.color_slot {
-        Some(slot) => TableCell::colored(COLOR_SWATCH, context.theme.process_color(slot)),
-        None => TableCell::new("", context.theme.text_style()),
-    }
+    row.color_slot.map_or_else(
+        || TableCell::new("", context.theme.text_style()),
+        |slot| TableCell::colored(COLOR_SWATCH, context.theme.process_color(slot)),
+    )
 }
 
 /// The row in words; the encoder's and decoder's shares only while the
@@ -561,26 +568,30 @@ fn status_text(view: &ProcessesView, window: &DisplayWindow, filter: Option<&Ent
         .and_then(|key| view.rows.iter().find(|row| &row.key == key))
     {
         Some(row) => {
-            text.push_str(&format!(
+            write!(
+                text,
                 " · selected pid {} {} · start {}",
                 row.key.pid,
                 clean(&row.name),
                 row.key.start_time_ticks
-            ));
+            )
+            .unwrap_or_default();
             if let Some(reason) = row.missing_reason.as_deref() {
-                text.push_str(&format!(" · missing: {}", clean(reason)));
+                write!(text, " · missing: {}", clean(reason)).unwrap_or_default();
             }
             let gpus = gpu_entries(row, filter);
             if gpus.len() > 1 {
-                text.push_str(&format!(" · {} GPUs", gpus.len()));
+                write!(text, " · {} GPUs", gpus.len()).unwrap_or_default();
             }
         }
         None if view.selected.is_some() => text.push_str(" · selection outside the visible rows"),
         None => match &view.selected_missing {
-            Some(gone) => text.push_str(&format!(
+            Some(gone) => write!(
+                text,
                 " · selected pid {} exited; its values are unavailable",
                 gone.pid
-            )),
+            )
+            .unwrap_or_default(),
             None => text.push_str(" · no selection (j/k to select)"),
         },
     }

@@ -1,4 +1,4 @@
-//! Command routing (CommandPort). Semantic validation lives in the owning
+//! Command routing (`CommandPort`). Semantic validation lives in the owning
 //! services; this module checks idempotency, records the result route and
 //! maps the typed command to its service. Every accepted command gets
 //! exactly one result.
@@ -73,7 +73,7 @@ impl ControlCore {
     }
 
     /// Answers a command accepted before shutdown started.
-    pub(super) fn reject_for_shutdown(&mut self, envelope: &CommandEnvelope) {
+    pub(super) fn reject_for_shutdown(&self, envelope: &CommandEnvelope) {
         let result = CommandResult::rejected(
             envelope.request_id,
             ErrorCode::Unavailable,
@@ -149,7 +149,7 @@ impl ControlCore {
             CommandBody::ConfirmSignal { confirmation_token } => {
                 let mut fx = Effects::default();
                 self.process.confirm(
-                    TokenCommand {
+                    &TokenCommand {
                         request_id,
                         session_id: &session_id,
                         token: &confirmation_token,
@@ -163,7 +163,7 @@ impl ControlCore {
             CommandBody::CancelSignal { confirmation_token } => {
                 let mut fx = Effects::default();
                 self.process.cancel(
-                    TokenCommand {
+                    &TokenCommand {
                         request_id,
                         session_id: &session_id,
                         token: &confirmation_token,

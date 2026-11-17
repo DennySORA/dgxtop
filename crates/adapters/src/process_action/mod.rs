@@ -95,7 +95,8 @@ impl PidfdActionAdapter {
     }
 
     /// Number of descriptors currently held (descriptor-leak tests).
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
     pub fn held_count(&self) -> usize {
         self.held.len()
     }
@@ -163,7 +164,7 @@ fn display_summary(signal: Signal, basename: &str, key: &ProcessKey) -> String {
     )
 }
 
-fn outcome_of_send(result: Result<(), Errno>) -> SignalOutcome {
+const fn outcome_of_send(result: Result<(), Errno>) -> SignalOutcome {
     match result {
         Ok(()) => SignalOutcome::Sent,
         Err(Errno::ESRCH) => SignalOutcome::Exited,

@@ -1,7 +1,8 @@
-//! Evidence directory of one bench report: every raw file is written once,
-//! fingerprinted (SHA-256) and listed with a path relative to the
-//! directory, which is what `tools/evaluate_performance.py --evidence-dir`
-//! verifies.
+//! Evidence directory of one bench report.
+//!
+//! Every raw file is written once, fingerprinted (SHA-256) and listed with
+//! a path relative to the directory, which is what
+//! `tools/evaluate_performance.py --evidence-dir` verifies.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -56,6 +57,9 @@ pub struct EvidenceWriter {
 }
 
 impl EvidenceWriter {
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     pub fn create(root: &Path) -> std::io::Result<Self> {
         std::fs::create_dir_all(root)?;
         Ok(Self {
@@ -64,11 +68,16 @@ impl EvidenceWriter {
         })
     }
 
+    #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
 
     /// Writes `bytes` at `relative` (a plain relative path without `..`).
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     pub fn write_bytes(&mut self, relative: &str, bytes: &[u8]) -> std::io::Result<()> {
         let path = self.checked_path(relative)?;
         if self.files.len() >= MAX_EVIDENCE_FILES
@@ -92,12 +101,17 @@ impl EvidenceWriter {
     }
 
     /// Pretty JSON evidence file.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     pub fn write_json<T: Serialize>(&mut self, relative: &str, value: &T) -> std::io::Result<()> {
         let mut bytes = serde_json::to_vec_pretty(value).map_err(std::io::Error::other)?;
         bytes.push(b'\n');
         self.write_bytes(relative, &bytes)
     }
 
+    #[must_use]
     pub fn files(&self) -> &[EvidenceFile] {
         &self.files
     }

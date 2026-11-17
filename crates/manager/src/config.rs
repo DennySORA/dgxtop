@@ -1,4 +1,4 @@
-//! ConfigurationService: CAS-protected configuration changes (AT08).
+//! `ConfigurationService`: CAS-protected configuration changes (AT08).
 //!
 //! Flow: validate → stage candidate → `ConfigJob::Persist` → receipt →
 //! infallible swap of saved + effective → caller applies the new epoch /
@@ -61,7 +61,7 @@ pub(crate) enum ConfigRequest {
 impl ConfigRequest {
     /// The revision the request was made against; none for one applied on
     /// whatever is saved.
-    fn expected_revision(&self) -> Option<u32> {
+    const fn expected_revision(&self) -> Option<u32> {
         match self {
             Self::SetInterval {
                 expected_revision, ..
@@ -162,19 +162,19 @@ impl ConfigurationService {
         }
     }
 
-    pub(crate) fn saved(&self) -> &Config {
+    pub(crate) const fn saved(&self) -> &Config {
         &self.saved
     }
 
-    pub(crate) fn effective(&self) -> &Config {
+    pub(crate) const fn effective(&self) -> &Config {
         &self.effective
     }
 
-    pub(crate) fn origins(&self) -> &BTreeMap<String, ValueOrigin> {
+    pub(crate) const fn origins(&self) -> &BTreeMap<String, ValueOrigin> {
         &self.origins
     }
 
-    pub(crate) fn status(&self) -> &PersistenceStatus {
+    pub(crate) const fn status(&self) -> &PersistenceStatus {
         &self.status
     }
 
@@ -203,7 +203,7 @@ impl ConfigurationService {
             .map(|pending| format!("saving: {}", pending.description))
     }
 
-    pub(crate) fn has_pending(&self) -> bool {
+    pub(crate) const fn has_pending(&self) -> bool {
         self.pending.is_some()
     }
 
@@ -229,7 +229,7 @@ impl ConfigurationService {
 
     /// Validates a request into `(candidate, description)`; `None` = no-op.
     fn stage(
-        &mut self,
+        &self,
         request_id: Uuid,
         request: ConfigRequest,
         catalog: &CatalogSnapshot,
@@ -370,7 +370,7 @@ impl ConfigurationService {
                 }))
             }
             Err(PersistError::Uncertain { message, on_disk }) => {
-                self.uncertain(request_id, pending, &message, on_disk)
+                self.uncertain(request_id, &pending, &message, on_disk)
             }
             Err(error) => self.failed(request_id, &pending, &error),
         }
@@ -379,49 +379,46 @@ impl ConfigurationService {
     fn uncertain(
         &mut self,
         request_id: Uuid,
-        pending: PendingPersist,
+        pending: &PendingPersist,
         message: &str,
         on_disk: Option<Box<Config>>,
     ) -> PersistOutcome {
         self.status = self.file_status(PersistenceState::Degraded, Some(message));
         let adoptable = on_disk.filter(|config| config.validate().is_ok());
-        match adoptable {
-            Some(config) => {
-                let explicit = changed_paths(&self.saved, &config);
-                let revision = config.revision;
-                let previous = self.adopt(*config, &explicit);
-                self.last_result = Some(format!(
-                    "commit uncertain; adopted on-disk revision {revision}"
-                ));
-                PersistOutcome::Applied(Box::new(AppliedChange {
-                    request_id,
-                    previous,
-                    revision,
-                    uncertain: Some(sanitize_message(message)),
-                    reply_pending: !pending.answered,
-                }))
+        if let Some(config) = adoptable {
+            let explicit = changed_paths(&self.saved, &config);
+            let revision = config.revision;
+            let previous = self.adopt(*config, &explicit);
+            self.last_result = Some(format!(
+                "commit uncertain; adopted on-disk revision {revision}"
+            ));
+            PersistOutcome::Applied(Box::new(AppliedChange {
+                request_id,
+                previous,
+                revision,
+                uncertain: Some(sanitize_message(message)),
+                reply_pending: !pending.answered,
+            }))
+        } else {
+            // The rename may have replaced the file, so neither the old
+            // nor the new document can be claimed to be on disk: only the
+            // running configuration is known.
+            self.last_result = Some(format!(
+                "commit uncertain; on-disk state unknown (running revision {} kept)",
+                self.saved.revision
+            ));
+            if pending.answered {
+                return PersistOutcome::LateFailure;
             }
-            None => {
-                // The rename may have replaced the file, so neither the old
-                // nor the new document can be claimed to be on disk: only the
-                // running configuration is known.
-                self.last_result = Some(format!(
-                    "commit uncertain; on-disk state unknown (running revision {} kept)",
-                    self.saved.revision
-                ));
-                if pending.answered {
-                    return PersistOutcome::LateFailure;
-                }
-                let detail = ErrorDetail::new(
-                    ErrorCode::PersistFailed,
-                    format!(
-                        "commit outcome uncertain (commit_uncertain): {message}; the on-disk configuration could not be reloaded and is unknown; the running configuration is kept"
-                    ),
-                )
-                .with_request(request_id)
-                .uncertain();
-                PersistOutcome::Failed(request_id, CommandResult::from_error(request_id, &detail))
-            }
+            let detail = ErrorDetail::new(
+                ErrorCode::PersistFailed,
+                format!(
+                    "commit outcome uncertain (commit_uncertain): {message}; the on-disk configuration could not be reloaded and is unknown; the running configuration is kept"
+                ),
+            )
+            .with_request(request_id)
+            .uncertain();
+            PersistOutcome::Failed(request_id, CommandResult::from_error(request_id, &detail))
         }
     }
 
@@ -525,9 +522,7 @@ impl ConfigurationService {
 
 /// Result of a successfully applied change.
 pub(crate) fn applied_result(change: &AppliedChange, effective_interval_ms: u32) -> CommandResult {
-    let mut result = match &change.uncertain {
-        None => CommandResult::completed(change.request_id, "configuration applied"),
-        Some(message) => {
+    let mut result = change.uncertain.as_ref().map_or_else(|| CommandResult::completed(change.request_id, "configuration applied"), |message| {
             let detail = ErrorDetail::new(
                 ErrorCode::PersistFailed,
                 format!(
@@ -537,8 +532,7 @@ pub(crate) fn applied_result(change: &AppliedChange, effective_interval_ms: u32)
             .with_request(change.request_id)
             .uncertain();
             CommandResult::from_error(change.request_id, &detail)
-        }
-    };
+        });
     result.config_revision = Some(change.revision);
     result.effective_interval_ms = Some(effective_interval_ms);
     result
@@ -731,13 +725,13 @@ mod tests {
         bench_with(config.clone(), config, BTreeMap::new())
     }
 
-    fn receipt(revision: u32) -> Result<PersistReceipt, PersistError> {
-        Ok(PersistReceipt {
+    fn receipt(revision: u32) -> PersistReceipt {
+        PersistReceipt {
             revision,
             sha256: "0".repeat(64),
             path: "/tmp/config.json".into(),
             file_bytes: 2_048,
-        })
+        }
     }
 
     /// The loaded file as the repository reports it.
@@ -820,7 +814,7 @@ mod tests {
             .service
             .submit(Uuid::new_v4(), fold(&[]), &catalog(), NOW);
         assert_eq!(rejected_code(&busy), ResultCode::from(ErrorCode::Busy));
-        let PersistOutcome::Applied(_) = bench.service.on_persist_result(id, receipt(2)) else {
+        let PersistOutcome::Applied(_) = bench.service.on_persist_result(id, Ok(receipt(2))) else {
             panic!("applied expected");
         };
         assert_eq!(
@@ -870,7 +864,7 @@ mod tests {
         // Nothing changed before the receipt; the settings view shows pending.
         assert_eq!(bench.service.effective().sampling.interval_ms, 1000);
         assert!(bench.service.pending_label().unwrap().contains("2000"));
-        let PersistOutcome::Applied(change) = bench.service.on_persist_result(id, receipt(2))
+        let PersistOutcome::Applied(change) = bench.service.on_persist_result(id, Ok(receipt(2)))
         else {
             panic!("applied expected");
         };
@@ -886,7 +880,7 @@ mod tests {
         assert_eq!(result.effective_interval_ms, Some(2000));
         // A duplicate receipt is stale.
         assert_eq!(
-            bench.service.on_persist_result(id, receipt(2)),
+            bench.service.on_persist_result(id, Ok(receipt(2))),
             PersistOutcome::Stale
         );
     }
@@ -906,7 +900,7 @@ mod tests {
         bench
             .service
             .submit(saved, interval(2000, 1), &catalog(), NOW);
-        bench.service.on_persist_result(saved, receipt(2));
+        bench.service.on_persist_result(saved, Ok(receipt(2)));
         let status = bench.service.status();
         assert_eq!(status.state, PersistenceState::Healthy);
         assert_eq!((status.bytes_used, status.bytes_limit), (2_048, 1_048_576));
@@ -1146,7 +1140,7 @@ mod tests {
             "CLI values never persist"
         );
         assert!(!candidate.actions.read_only);
-        bench.service.on_persist_result(id, receipt(2));
+        bench.service.on_persist_result(id, Ok(receipt(2)));
         let effective = bench.service.effective();
         assert_eq!(effective.sampling.interval_ms, 500, "explicit change wins");
         assert_eq!(
@@ -1188,7 +1182,7 @@ mod tests {
         assert!(result.message.contains("commit_uncertain"));
         assert!(bench.service.next_deadline().is_none());
         assert_eq!(bench.service.pending_request(), Some(id));
-        let PersistOutcome::Applied(change) = bench.service.on_persist_result(id, receipt(2))
+        let PersistOutcome::Applied(change) = bench.service.on_persist_result(id, Ok(receipt(2)))
         else {
             panic!();
         };
@@ -1212,6 +1206,6 @@ mod tests {
         moved.store.process_history_enabled = Some(!running.store.process_history_on_disk());
         assert_eq!(running.restart_required_changes(&moved).len(), 10);
         pin_restart_only(&mut moved, &running);
-        assert!(running.restart_required_changes(&moved).is_empty());
+        assert_eq!(running.restart_required_changes(&moved).len(), 0);
     }
 }

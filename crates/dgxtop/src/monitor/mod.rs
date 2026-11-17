@@ -22,6 +22,7 @@ mod workers;
 
 use std::fmt;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -74,10 +75,12 @@ pub fn run(cli: &Cli) -> ExitCode {
 }
 
 /// Prints one snapshot of what the monitor reads as JSON and exits
-/// (`--snapshot-json`, D-140): the readers run headless in a private
-/// state until their readings are complete, and standard output carries
-/// the document alone, without what names the host, its hardware and its
-/// users where `--redact` asks so (D-145).
+/// (`--snapshot-json`, D-140).
+///
+/// The readers run headless in a private state until their readings are
+/// complete, and standard output carries the document alone, without
+/// what names the host, its hardware and its users where `--redact` asks
+/// so (D-145).
 pub fn snapshot(cli: &Cli) -> ExitCode {
     let mut application = match Application::start(cli) {
         Ok(application) => application,
@@ -181,7 +184,7 @@ impl Application {
         if cli.snapshot_json {
             snapshot::read_slow_groups_soon(&mut loaded.effective.sampling);
         }
-        let clock: Arc<dyn dgxtop_core::clock::TimeProvider> = Arc::new(BootClock::new()?);
+        let clock: Arc<dyn TimeProvider> = Arc::new(BootClock::new()?);
         let logger = Arc::new(FileLogger::start(
             &paths.log_file,
             usize::try_from(loaded.effective.queues.log_bytes).unwrap_or(1 << 20),
@@ -261,18 +264,19 @@ impl Application {
         // The terminal may be gone (hang-up), so stderr failures are ignored.
         let mut stderr = std::io::stderr();
         for warning in summary {
-            let _ = writeln!(
+            writeln!(
                 stderr,
                 "dgxtop: {}",
                 dgxtop_core::text::sanitize_message(&warning)
-            );
+            )
+            .unwrap_or_default();
         }
         self.fail_stop
             .reason()
             .map(|reason| fail(EXIT_FAILURE, &format!("fail-stop: {reason}")))
     }
 
-    fn run_frontend(&mut self) -> ExitCode {
+    fn run_frontend(&self) -> ExitCode {
         dgxtop_ui::install_panic_hook();
         let terminal = NonBlockingTerminal::from_borrowed(std::io::stdout())
             .and_then(|transport| Ok((transport, TtyInputGate::controlling_terminal()?)));
@@ -325,7 +329,7 @@ impl Application {
                 }
                 Some(None) => warnings.push("manager stopped by a fail-stop".to_owned()),
                 None => {
-                    warnings.push("manager did not stop within the 3 s shutdown budget".to_owned())
+                    warnings.push("manager did not stop within the 3 s shutdown budget".to_owned());
                 }
             }
         }
@@ -378,12 +382,12 @@ fn join_within<T: Send + 'static>(
     let joiner = std::thread::Builder::new()
         .name("dgxtop-join".to_owned())
         .spawn(move || {
-            let _ = sender.send(thread.join());
+            sender.send(thread.join()).unwrap_or_default();
         })
         .ok()?;
-    let joined = receiver.recv_timeout(timeout).ok()?.ok();
+    let outcome = receiver.recv_timeout(timeout).ok()?.ok();
     drop(joiner);
-    joined
+    outcome
 }
 
 /// The private temporary state root of a replay or a snapshot (never the
@@ -407,7 +411,7 @@ impl PrivateRoot {
 
     fn remove(&mut self) {
         if let Some(root) = self.0.take() {
-            let _ = std::fs::remove_dir_all(root);
+            std::fs::remove_dir_all(root).unwrap_or_default();
         }
     }
 }
@@ -426,13 +430,11 @@ fn private_state_root(cli: &Cli) -> Result<PathBuf, StartError> {
     };
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_nanos())
-        .unwrap_or_default();
+        .map_or_default(|elapsed| elapsed.as_nanos());
     let root = std::env::temp_dir().join(format!("dgxtop-{label}-{}-{unique}", std::process::id()));
     let failed =
         |error: std::io::Error| StartError::failure(format!("{label} state directory: {error}"));
     std::fs::create_dir(&root).map_err(failed)?;
-    use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).map_err(failed)?;
     Ok(root)
 }
@@ -451,16 +453,16 @@ fn copy_saved_configuration(cli: &Cli, private: &StatePaths) -> Result<(), Start
 }
 
 fn resolve_paths(cli: &Cli, private_root: Option<&Path>) -> Result<StatePaths, StartError> {
-    match private_root {
-        Some(root) => {
+    private_root.map_or_else(
+        || startup::resolve_paths(cli).map_err(|error| StartError::invalid(error.to_string())),
+        |root| {
             let mut private_cli = cli.clone();
             private_cli.config = Some(root.join("config/config.json"));
             private_cli.state_dir = Some(root.join("state"));
             startup::resolve_paths(&private_cli)
                 .map_err(|error| StartError::invalid(error.to_string()))
-        }
-        None => startup::resolve_paths(cli).map_err(|error| StartError::invalid(error.to_string())),
-    }
+        },
+    )
 }
 
 #[cfg(test)]

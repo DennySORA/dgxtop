@@ -1,7 +1,9 @@
 //! Internal `--adapter-host <id>` mode: the process the supervisor launches
-//! for one live (or replay) adapter. It speaks only the framed IPC protocol on
-//! stdin/stdout after the nonce handshake; it never opens a terminal, never
-//! reads arbitrary paths and never performs process actions.
+//! for one live (or replay) adapter.
+//!
+//! It speaks only the framed IPC protocol on stdin/stdout after the nonce
+//! handshake; it never opens a terminal, never reads arbitrary paths and never
+//! performs process actions.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -60,7 +62,7 @@ fn prepare(cli: &Cli) -> Result<Prepared, String> {
         let slice = cli.replay_slice().map_err(|error| error.to_string())?;
         let adapter_id = AdapterId::new(adapter_name).map_err(|error| error.to_string())?;
         Box::new(
-            ReplayAdapter::from_path(fixture, adapter_id, Arc::clone(&clock), host_id, slice)
+            ReplayAdapter::from_path(fixture, adapter_id, Arc::clone(&clock), &host_id, slice)
                 .map_err(|error| error.to_string())?,
         )
     } else {

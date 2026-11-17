@@ -1,7 +1,9 @@
 //! What a probe reading of a followed GPU process gives its run's samples
 //! (D-76, D-77, D-79): disk read and write rates from the IO counters, and
-//! the threads, swap and open files as read. The descendants come with the
-//! process table ([`crate::process::table`]), which scans every process.
+//! the threads, swap and open files as read.
+//!
+//! The descendants come with the process table
+//! ([`crate::process::table`]), which scans every process.
 //!
 //! Like every collector it keeps nothing between calls: the previous
 //! reading's [`ProbeState`] comes in and the next one goes out, as
@@ -12,6 +14,7 @@ use dgxtop_core::ports::ProbeDeriver;
 use dgxtop_core::process_probe::{IoCounters, ProbeReading, ProbeState};
 
 use crate::shared::counter;
+use dgxtop_core::num::ToF64Lossy;
 
 /// Derives the probed values of a running process's reading from the
 /// previous reading's state.
@@ -34,9 +37,8 @@ impl ProbeDeriver for ProcessProbeDeriver {
     }
 }
 
-#[allow(clippy::cast_precision_loss)]
 fn as_count(value: u64) -> f64 {
-    value as f64
+    value.to_f64_lossy()
 }
 
 /// The disk rates since the previous reading; a counter that went back

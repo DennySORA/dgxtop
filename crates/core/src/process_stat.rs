@@ -1,6 +1,8 @@
 //! The compact per-process record of the procfs `process` group (D-79,
-//! D-86): one `process.cpu.ticks` observation per process instead of one
-//! per metric, its other `stat` facts riding along as `proc.<field>:<value>`
+//! D-86).
+//!
+//! One `process.cpu.ticks` observation per process instead of one per
+//! metric, its other `stat` facts riding along as `proc.<field>:<value>`
 //! reason codes. The observation schema stays as it is: a record already
 //! carries free tags this way (NVML's `gpu_usage:*`), and a tag costs a few
 //! bytes where a separate record repeats the whole key and provenance.
@@ -85,6 +87,7 @@ impl ProcessStat {
 
     /// Whether `code` is one tag of this format exactly as the encoder
     /// writes it (a replay fixture may carry it as a sample reason).
+    #[must_use]
     pub fn is_tag(code: &str) -> bool {
         let mut stat = Self::default();
         stat.take(code);

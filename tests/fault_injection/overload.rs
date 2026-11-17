@@ -152,12 +152,15 @@ impl OverloadRig {
     /// A stale control completion wakes the loop at once instead of after
     /// its idle poll (dropped as stale, `history` label).
     fn wake_control_loop(&self) {
-        let _ = self.inboxes.control.try_send(ControlCompletion::History {
-            request_id: Uuid::new_v4(),
-            session_id: SessionId::new("session-wake").expect("session id"),
-            session_generation: 0,
-            result: Err(ErrorDetail::new(ErrorCode::Cancelled, "wake")),
-        });
+        self.inboxes
+            .control
+            .try_send(ControlCompletion::History {
+                request_id: Uuid::new_v4(),
+                session_id: SessionId::new("session-wake").expect("session id"),
+                session_generation: 0,
+                result: Err(ErrorDetail::new(ErrorCode::Cancelled, "wake")),
+            })
+            .unwrap_or_default();
     }
 
     /// Holds `percent` of the ingress byte budget, as in-flight adapter
@@ -207,7 +210,7 @@ impl OverloadRig {
     }
 }
 
-fn level(model: &ViewModel) -> Level {
+const fn level(model: &ViewModel) -> Level {
     (model.header.overload, model.header.effective_interval_ms)
 }
 

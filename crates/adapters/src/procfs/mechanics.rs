@@ -24,6 +24,10 @@ const MAX_NAMESPACE_BYTES: usize = 64;
 
 /// Unwraps an identity built from a compile-time literal. Such literals are
 /// covered by unit tests, so a failure is a programming error, not input.
+#[expect(
+    clippy::panic,
+    reason = "a built-in constant: invalid only in a broken build, which the tests catch"
+)]
 pub(crate) fn invariant<T, E: Display>(result: Result<T, E>, what: &str) -> T {
     match result {
         Ok(value) => value,
@@ -181,7 +185,7 @@ pub(crate) struct ReprobeGate {
 }
 
 impl ReprobeGate {
-    pub(crate) fn new(unsupported_probe_ms: u64) -> Self {
+    pub(crate) const fn new(unsupported_probe_ms: u64) -> Self {
         Self {
             interval_ms: unsupported_probe_ms,
             throttle: ProbeThrottle::new(unsupported_probe_ms),
@@ -219,7 +223,7 @@ impl ReprobeGate {
         }
         if let Some(existing) = self.failing.get_mut(key) {
             existing.status = status;
-            existing.reason = reason.to_owned();
+            reason.clone_into(&mut existing.reason);
             return;
         }
         // Stamps the first probe of this failure episode.
@@ -264,7 +268,7 @@ impl ReprobeGate {
     }
 }
 
-fn is_sticky(status: ReadStatus) -> bool {
+const fn is_sticky(status: ReadStatus) -> bool {
     matches!(
         status,
         ReadStatus::Unsupported | ReadStatus::PermissionDenied

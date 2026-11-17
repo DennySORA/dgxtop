@@ -1,9 +1,9 @@
-//! Series the HistoryService queries for a session on the history view.
+//! Series the `HistoryService` queries for a session on the history view.
 //! The charts (D-46, D-50) are the overview's series over a longer window:
 //! the CPU total against 100 %, the RAM in use against the RAM total and
 //! the memory's stall pressure against its peak (D-135), the host's total
 //! power and each CPU package's power against their peaks (D-106), each
-//! CPU package's and the SoC's temperature against 100 °C (D-137), each
+//! CPU package's and the `SoC`'s temperature against 100 °C (D-137), each
 //! GPU's utilization, memory activity, memory in use, temperature, first
 //! fan's speed and power against their scales ([`gpu_series`], D-148), and
 //! the read/write and receive/transmit rates of one disk and one
@@ -13,7 +13,7 @@
 //! never jump between devices. A memory chart names the GPUs whose tracked processes' parts it
 //! stacks (D-64): a GPU's memory its GPU, the RAM used the GPUs that share
 //! the RAM; the history joins them (D-99). On the GPU view the
-//! HistoryService reads only the power of each GPU that reports no power
+//! `HistoryService` reads only the power of each GPU that reports no power
 //! limit, whose recorded peak scales its power bar (D-118).
 
 use std::collections::BTreeSet;
@@ -35,7 +35,7 @@ use crate::history::{ChartRequest, HistoryChartSpec, HistoryPicks, MAX_CHARTS};
 /// number: a host has one or two.
 const CPU_PACKAGE_CHARTS: usize = 2;
 /// Charts besides the GPUs: CPU, memory and its two stall pressures, the
-/// total power, the SoC's temperature, two rates each of a disk and an
+/// total power, the `SoC`'s temperature, two rates each of a disk and an
 /// interface, that disk's temperature, and the CPU packages' power and
 /// temperature; the GPUs get the rest of [`MAX_CHARTS`].
 const HOST_CHARTS: usize = 11 + 2 * CPU_PACKAGE_CHARTS;
@@ -71,7 +71,7 @@ fn unlimited_power(reader: &MetricReader<'_>, catalog: &CatalogSnapshot) -> Vec<
         reader,
         specs: Vec::new(),
     };
-    let directory = GpuDirectory::new(catalog, reader.index());
+    let directory = GpuDirectory::new(catalog, *reader.index());
     for gpu in directory.gpus().iter().take(MAX_CHARTS) {
         let entity_id = gpu.entity_id.as_str();
         let limit = reader
@@ -124,7 +124,7 @@ fn dashboard(
     charts.add_memory_pressure();
     charts.add_power();
     charts.add_temperatures();
-    let directory = GpuDirectory::new(catalog, reader.index());
+    let directory = GpuDirectory::new(catalog, *reader.index());
     for gpu in directory
         .gpus()
         .iter()
@@ -297,7 +297,7 @@ impl Charts<'_, '_> {
         self.add_packages(HistoryChartKind::CpuPower, ids::CPU_POWER_PACKAGE, None);
     }
 
-    /// Adds the temperature of the first CPU packages and of the SoC
+    /// Adds the temperature of the first CPU packages and of the `SoC`
     /// (D-137), against the 100 °C every temperature is drawn against.
     fn add_temperatures(&mut self) {
         let scale = Some(TEMPERATURE_SCALE_C);
@@ -696,7 +696,7 @@ mod tests {
     }
 
     /// The memory's stall pressure, each CPU package's temperature and the
-    /// SoC's, as a GB10 reports them.
+    /// `SoC`'s, as a GB10 reports them.
     fn pressure_and_temperatures(fixture: &mut Fixture) {
         for (metric, percent) in [
             (ids::MEMORY_PRESSURE_SOME_AVG10, 2.4),
@@ -717,7 +717,7 @@ mod tests {
     }
 
     /// The memory's 10 s stall pressure follows the RAM in use, scaled to
-    /// its peak (D-135), and each CPU package's and the SoC's temperature
+    /// its peak (D-135), and each CPU package's and the `SoC`'s temperature
     /// are charted against 100 °C like a GPU's (D-137); the longer
     /// averages and the cluster sensors are not charted, and a host whose
     /// kernel reports none of them has none of the charts.

@@ -116,7 +116,7 @@ impl Wiring {
         )?;
         // The probe and the stores answer only jobs the actor sends, so the
         // inbox is set before any answer can come.
-        let _ = inbox.set(handle.clone());
+        inbox.set(handle.clone()).unwrap_or_default();
         let published = Arc::new(published);
         Ok(ProcessHistoryParts {
             handles: ProcessHistoryHandles {
@@ -211,7 +211,7 @@ fn deliver_process_input(
 }
 
 /// What answer `input` is, for the log.
-fn answer_name(input: &ProcessHistoryInput) -> &'static str {
+const fn answer_name(input: &ProcessHistoryInput) -> &'static str {
     match input {
         ProcessHistoryInput::Probe(_) => "probe report",
         ProcessHistoryInput::Store(ProcessHistoryCompletion::Loaded(_)) => "load answer",
@@ -235,7 +235,9 @@ mod tests {
         let inbox: ProcessInbox = Arc::new(OnceLock::new());
         deliver_process_input(
             &inbox,
-            ProcessHistoryInput::Store(ProcessHistoryCompletion::Appended(Ok(Default::default()))),
+            ProcessHistoryInput::Store(ProcessHistoryCompletion::Appended(Ok(
+                dgxtop_core::process_history::StoreUsage::default(),
+            ))),
             &logger,
         );
         let records = memory.records();

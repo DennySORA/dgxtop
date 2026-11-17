@@ -35,7 +35,7 @@ pub struct SyscallSpy<K> {
 }
 
 impl<K> SyscallSpy<K> {
-    pub fn new(kernel: K, journal: Journal) -> Self {
+    pub const fn new(kernel: K, journal: Journal) -> Self {
         Self { kernel, journal }
     }
 }
@@ -100,7 +100,7 @@ pub struct ActionPortSpy {
 }
 
 impl ActionPortSpy {
-    pub fn new(adapter: PidfdActionAdapter, journal: Journal) -> Self {
+    pub const fn new(adapter: PidfdActionAdapter, journal: Journal) -> Self {
         Self { adapter, journal }
     }
 }
@@ -331,7 +331,7 @@ pub struct RecordingDispatch<J> {
 }
 
 impl<J> RecordingDispatch<J> {
-    pub fn new(queue: PoolHandle<J>, journal: Journal, work: Arc<WorkCounter>) -> Self {
+    pub const fn new(queue: PoolHandle<J>, journal: Journal, work: Arc<WorkCounter>) -> Self {
         Self {
             queue,
             journal,

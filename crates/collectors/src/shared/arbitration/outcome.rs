@@ -45,7 +45,7 @@ pub(super) fn build(parts: Parts<'_, '_, '_>) -> Outcome {
     }
 }
 
-fn selection_state(decision: &Decision) -> SelectionState {
+const fn selection_state(decision: &Decision) -> SelectionState {
     match decision {
         Decision::Selected { degraded: true, .. } => SelectionState::Degraded,
         Decision::Selected { .. } => SelectionState::Selected,

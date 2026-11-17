@@ -1,6 +1,7 @@
-//! Views the interface offers, as tabs in order (D-36, D-75, D-91). Process
-//! work (select, sort, filter, terminate) happens in the overview's process
-//! table; a pending confirmation is a banner in every view and each
+//! Views the interface offers, as tabs in order (D-36, D-75, D-91).
+//!
+//! Process work (select, sort, filter, terminate) happens in the overview's
+//! process table; a pending confirmation is a banner in every view and each
 //! signal's outcome a notice. The Processes, Sources and Actions view kinds
 //! stay in the command contract but are removed: no tab shows them and the
 //! Manager refuses them (D-91).
@@ -44,11 +45,13 @@ pub const GPU_HISTORY_PAGE: u8 = 3;
 
 /// Whether `page` of the history module charts the history's series (the
 /// Overview History and the GPU History) rather than GPU process runs.
+#[must_use]
 pub const fn is_chart_page(page: u8) -> bool {
     matches!(page, OVERVIEW_HISTORY_PAGE | GPU_HISTORY_PAGE)
 }
 
 impl Tab {
+    #[must_use]
     pub const fn view(self) -> ViewKind {
         match self {
             Self::Overview => ViewKind::Overview,
@@ -58,6 +61,7 @@ impl Tab {
         }
     }
 
+    #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
             Self::Overview => "Overview",
@@ -70,6 +74,7 @@ impl Tab {
     }
 
     /// Control id of the tab's hit target.
+    #[must_use]
     pub const fn control_id(self) -> &'static str {
         match self {
             Self::Overview => "tab.overview",
@@ -82,6 +87,7 @@ impl Tab {
     }
 
     /// Inverse of [`Tab::control_id`].
+    #[must_use]
     pub fn for_control(control_id: &str) -> Option<Self> {
         OFFERED_TABS
             .into_iter()
@@ -89,7 +95,8 @@ impl Tab {
     }
 
     /// The tab showing `view` on history `page`; `None` for a hidden view.
-    pub fn of(view: ViewKind, page: u8) -> Option<Self> {
+    #[must_use]
+    pub const fn of(view: ViewKind, page: u8) -> Option<Self> {
         match view {
             ViewKind::Overview => Some(Self::Overview),
             ViewKind::GpuDetail => Some(Self::Gpu),
@@ -102,6 +109,7 @@ impl Tab {
     }
 
     /// 1-based tab number.
+    #[must_use]
     pub fn number(self) -> usize {
         OFFERED_TABS
             .iter()
@@ -117,11 +125,12 @@ pub fn next_tab(tab: Option<Tab>) -> Tab {
 }
 
 /// The tab before `tab`, wrapping; from a hidden view, the first.
+#[must_use]
 pub fn previous_tab(tab: Option<Tab>) -> Tab {
-    match tab {
-        Some(tab) => OFFERED_TABS[(tab.number() + OFFERED_TABS.len() - 2) % OFFERED_TABS.len()],
-        None => OFFERED_TABS[0],
-    }
+    tab.map_or_else(
+        || OFFERED_TABS[0],
+        |tab| OFFERED_TABS[(tab.number() + OFFERED_TABS.len() - 2) % OFFERED_TABS.len()],
+    )
 }
 
 #[cfg(test)]

@@ -1,9 +1,10 @@
 //! Replay adapter (`replay` / `replay-N`): serves recorded or synthetic
-//! fixtures in the **replay namespace** only. Every source of a
-//! fixture must be `replay` or `simulated`; live sample kinds are rejected
-//! at validation, so replay can never inject live data. Read groups mirror
-//! the live groups as `<live adapter>.<group>` (`naming::replay_group`) and
-//! are routed to the same collectors.
+//! fixtures in the **replay namespace** only.
+//!
+//! Every source of a fixture must be `replay` or `simulated`; live sample
+//! kinds are rejected at validation, so replay can never inject live data.
+//! Read groups mirror the live groups as `<live adapter>.<group>`
+//! (`naming::replay_group`) and are routed to the same collectors.
 //!
 //! * [`ReplayFixture`]: format `dgxtop-replay-fixture/1` (see `fixture`).
 //! * [`ReplayAdapter`]: `TelemetryPort` over a fixture (see `adapter`).
@@ -34,6 +35,7 @@ const REPLAY_MINIMUM_SAMPLE_MS: u32 = 100;
 
 /// Manifest of a replay adapter: `in_process_replay` isolation for
 /// `--replay`, or a persistent host process (benchmark slices).
+#[must_use]
 pub fn manifest(adapter_id: &AdapterId, in_process: bool) -> AdapterManifest {
     AdapterManifest {
         api_version: 1,

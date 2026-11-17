@@ -467,10 +467,10 @@ mod tests {
             |journal: &mut ArchiveJournal| journal.buckets[0].method = HistoryMethod::BoundaryGap,
             |journal: &mut ArchiveJournal| journal.buckets[0].covered_ns = MAX_COVERED_NS + 1,
             |journal: &mut ArchiveJournal| {
-                journal.buckets[0].end_boot_ns = journal.buckets[0].start_boot_ns
+                journal.buckets[0].end_boot_ns = journal.buckets[0].start_boot_ns;
             },
             |journal: &mut ArchiveJournal| {
-                journal.bridges[0].end_boot_ns = journal.bridges[0].start_boot_ns
+                journal.bridges[0].end_boot_ns = journal.bridges[0].start_boot_ns;
             },
             |journal: &mut ArchiveJournal| journal.gaps[0].affected_count = 0,
             |journal: &mut ArchiveJournal| journal.gaps[0].reason = String::new(),

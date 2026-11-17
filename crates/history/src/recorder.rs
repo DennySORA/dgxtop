@@ -74,7 +74,7 @@ impl HistoryRecorder {
     /// clock (known: the grid, and so every finished minute, comes only
     /// from the first pairing); one it cannot place becomes a gap in
     /// `report`, never a silent hole in the bars.
-    fn feed_overview(&mut self, rows: &[ArchiveRow], report: &mut HistoryReport) {
+    fn feed_overview(&self, rows: &[ArchiveRow], report: &mut HistoryReport) {
         let minutes = overview_minutes(rows, &self.clock);
         debug_assert!(
             self.clock.is_known() || minutes.placed.is_empty() && minutes.unplaced.is_empty(),
@@ -568,9 +568,9 @@ mod tests {
             memory.asked(),
             vec![(BTreeSet::from([gpu.clone()]), window, 24)]
         );
-        assert!(parts(&joined, BTreeSet::new()).is_empty());
+        assert_eq!(parts(&joined, BTreeSet::new()).len(), 0);
         assert_eq!(memory.asked().len(), 1, "no GPU, nothing asked");
-        assert!(parts(&history.index, BTreeSet::from([gpu])).is_empty());
+        assert_eq!(parts(&history.index, BTreeSet::from([gpu])).len(), 0);
     }
 
     /// A finished Overview minute the wall clock cannot place (here: its

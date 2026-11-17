@@ -148,12 +148,11 @@ impl Tracking {
                 continue;
             }
             let name = self.holders[index].name.clone();
-            match self.color_for(&name) {
-                Some(color) => self.holders[index].color = color,
-                None => {
-                    self.holders.remove(index);
-                    lost.push(key.clone());
-                }
+            if let Some(color) = self.color_for(&name) {
+                self.holders[index].color = color;
+            } else {
+                self.holders.remove(index);
+                lost.push(key.clone());
             }
         }
         lost
@@ -271,13 +270,13 @@ pub(crate) fn preferred_color(name: &str) -> u8 {
 }
 
 /// Processes in the order they started.
-fn start_order(key: &ProcessKey) -> (u64, i32) {
+const fn start_order(key: &ProcessKey) -> (u64, i32) {
     (key.start_time_ticks, key.pid.get())
 }
 
 /// Whether a newcomer holding `size` bytes takes the place of a listed
 /// holder holding `smallest`.
-fn displaces(size: u64, smallest: u64) -> bool {
+const fn displaces(size: u64, smallest: u64) -> bool {
     size >= smallest.saturating_mul(DISPLACE_FACTOR)
         && size.saturating_sub(smallest) >= DISPLACE_MIN_BYTES
 }
@@ -403,7 +402,7 @@ mod tests {
             .collect();
         assert_eq!(colors.len(), 8, "all different");
         processes.push((9, "small", 300 * MIB));
-        assert!(update(&mut tracking, &processes, 2).is_empty());
+        assert_eq!(update(&mut tracking, &processes, 2).len(), 0);
         assert_eq!(tracking.color_of(&key(9)), None);
         processes.push((10, "big", 20 * GIB));
         assert_eq!(update(&mut tracking, &processes, 3), vec![key(8)]);
@@ -425,7 +424,7 @@ mod tests {
         let names: Vec<String> = (1..=17).map(|pid| format!("job{pid}")).collect();
         for pid in 1..=16 {
             let name = names[usize::try_from(pid).unwrap() - 1].as_str();
-            assert!(update(&mut tracking, &[(pid, name, GIB)], now).is_empty());
+            assert_eq!(update(&mut tracking, &[(pid, name, GIB)], now).len(), 0);
             now += 1;
             update(&mut tracking, &[], now);
             now += 1;

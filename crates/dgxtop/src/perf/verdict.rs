@@ -31,6 +31,7 @@ pub struct BudgetVerdict {
 impl Budgets {
     /// Verdict of `metric` (a key of `limits`); `None` if the budgets do not
     /// define that metric.
+    #[must_use]
     pub fn verdict(
         &self,
         metric: &str,

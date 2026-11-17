@@ -40,14 +40,19 @@ const DROPS_WIDTH: usize = 8;
 const RX_COLUMN: usize = 1;
 const TX_COLUMN: usize = 2;
 
+#[derive(Debug)]
 pub struct NetworkModule {
     manifest: DisplayModuleManifest,
 }
 
 impl NetworkModule {
+    /// # Errors
+    ///
+    /// Returns a `ModuleBuildError` when the module's static manifest is
+    /// invalid, which is a build defect.
     pub fn new() -> Result<Self, ModuleBuildError> {
         Ok(Self {
-            manifest: build_manifest(ManifestSpec {
+            manifest: build_manifest(&ManifestSpec {
                 id: "network",
                 title: "Network interfaces",
                 min_columns: 36,

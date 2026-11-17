@@ -21,17 +21,17 @@ fn entity_of(pid: i32, start: u64) -> String {
 /// with RSS (KiB here, sent in bytes), uid 1000 and the rest of `stat` as
 /// tags.
 fn host(pid: i32, start: u64, ticks: u64, rss_kib: u64, at: u64) -> Vec<Observation> {
-    let stat = ProcessStat {
+    let record = ProcessStat {
         rss_bytes: Some(rss_kib * 1024),
         uid: Some(1000),
         ppid: Some(1),
         state: Some('S'),
         reaped_ticks: Some(0),
     };
-    vec![compact(pid, start, ticks, stat, at)]
+    vec![compact(pid, start, ticks, record, at)]
 }
 
-fn compact(pid: i32, start: u64, ticks: u64, stat: ProcessStat, at: u64) -> Observation {
+fn compact(pid: i32, start: u64, ticks: u64, record: ProcessStat, at: u64) -> Observation {
     let entity = entity_of(pid, start);
     let mut observation = reading(
         &metric_key(&entity, ids::PROCESS_CPU_TICKS, "process"),
@@ -43,7 +43,7 @@ fn compact(pid: i32, start: u64, ticks: u64, stat: ProcessStat, at: u64) -> Obse
     .u64(ticks)
     .build();
     observation.provenance.channel = format!("worker-{pid}").into();
-    observation.reason_codes = stat.reason_codes();
+    observation.reason_codes = record.reason_codes();
     observation
 }
 
@@ -247,7 +247,7 @@ fn a_process_name_keeps_its_folder() {
 /// (D-73): the row keeps both apart, the command cleaned.
 #[test]
 fn a_process_row_carries_its_command_line() {
-    let separator = dgxtop_core::naming::PROCESS_COMMAND_SEPARATOR;
+    let separator = naming::PROCESS_COMMAND_SEPARATOR;
     let mut procfs = host(7, 100, 0, 10, SECOND);
     procfs[0].provenance.channel =
         format!("worker-7{separator}python train.py --lr 3e-4\u{1b}[2J").into();
@@ -554,7 +554,7 @@ fn the_table_keeps_what_each_gpus_list_holds_in_all() {
             .limits(table_limits(0, 0))
             .build(),
     );
-    assert!(rows(&bounded).is_empty());
+    assert_eq!(rows(&bounded), []);
     assert_eq!(listed(&bounded)[0], ("gpu:GPU-a".to_owned(), 350));
 
     // No GPU list: nothing is listed.
@@ -562,7 +562,7 @@ fn the_table_keeps_what_each_gpus_list_holds_in_all() {
         &collector,
         &plan(host(9, 100, 10, 10, at), vec![], at + 1).build(),
     );
-    assert!(listed(&alone).is_empty());
+    assert_eq!(listed(&alone), [] as [(String, u64); 0]);
 }
 
 #[test]
@@ -577,7 +577,7 @@ fn gpu_entry_of_an_older_instance_is_not_linked_to_a_reused_pid() {
             vec![gpu_memory("GPU-a", 42, reasons::GPU_USAGE_COMPUTE, 300, at)],
         ),
     );
-    assert!(row(&batch, 42).gpu.is_empty());
+    assert_eq!(row(&batch, 42).gpu, [] as [ProcessGpuLink; 0]);
 }
 
 /// A replay's processes start on the boot clock of the host its fixture
@@ -1019,7 +1019,7 @@ fn processes_without_parents_have_no_descendants() {
         &collector,
         &plan(vec![orphan(42), orphan(50)], on_gpu(42, SECOND), SECOND + 1).build(),
     );
-    assert!(!row(&batch, 42).gpu.is_empty());
+    assert_ne!(row(&batch, 42).gpu, [] as [ProcessGpuLink; 0]);
     assert_eq!(row(&batch, 42).descendants, None);
 }
 
@@ -1064,7 +1064,7 @@ fn an_unread_rss_keeps_the_adapters_reason() {
             .retain(|code| !code.starts_with("proc.rss:"));
         record
             .reason_codes
-            .insert(0, dgxtop_core::process_stat::RSS_PARSE_ERROR.to_owned());
+            .insert(0, process_stat::RSS_PARSE_ERROR.to_owned());
         vec![record]
     };
     let batch = two_cycles(
@@ -1076,7 +1076,7 @@ fn an_unread_rss_keeps_the_adapters_reason() {
     assert_eq!(process.rss_bytes, None);
     assert_eq!(
         process.missing_reason.as_deref(),
-        Some(dgxtop_core::process_stat::RSS_PARSE_ERROR)
+        Some(process_stat::RSS_PARSE_ERROR)
     );
 }
 
@@ -1103,7 +1103,7 @@ fn a_compact_record_of_another_namespace_makes_no_row() {
     record.sample_kind = SampleKind::Replay;
     let collector = ProcessCollector::new().unwrap();
     let batch = collect(&collector, &plan(vec![record], vec![], SECOND + 1).build());
-    assert!(rows(&batch).is_empty());
+    assert_eq!(rows(&batch), []);
 }
 
 /// RSS read longer ago than its freshness window is stale, not shown.
@@ -1138,7 +1138,7 @@ fn an_invalid_gpu_process_entity_is_reported() {
             vec![gpu_memory("GPU-a", 0, reasons::GPU_USAGE_COMPUTE, 300, at)],
         ),
     );
-    assert!(row(&batch, 9).gpu.is_empty());
+    assert_eq!(row(&batch, 9).gpu, [] as [ProcessGpuLink; 0]);
     assert!(
         batch
             .failures

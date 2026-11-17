@@ -13,6 +13,10 @@ use thiserror::Error;
 #[derive(Debug, Clone, Parser)]
 #[command(name = "dgxtop", about, disable_version_flag = true)]
 #[command(group(ArgGroup::new("import_mode").args(["dry_run", "apply"]).multiple(false)))]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a switch of the command line"
+)]
 pub struct Cli {
     /// Sampling interval in seconds (0.1-60); overrides the saved value for this run only.
     #[arg(short = 'i', long, value_name = "SECONDS")]
@@ -131,6 +135,11 @@ pub enum CliError {
 
 impl Cli {
     /// Explicit overrides only; absent flags stay `None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `CliError` when a command line value is out of its range or
+    /// not of its form.
     pub fn overrides(&self) -> Result<CliOverrides, CliError> {
         Ok(CliOverrides {
             interval_ms: self.interval.map(interval_seconds_to_ms).transpose()?,
@@ -155,6 +164,11 @@ impl Cli {
     }
 
     /// Validates path flags (absolute only; symlink/owner checks happen at open).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `CliError` when a command line value is out of its range or
+    /// not of its form.
     pub fn validate_paths(&self) -> Result<(), CliError> {
         for (flag, path) in [("--config", &self.config), ("--state-dir", &self.state_dir)] {
             if let Some(path) = path
@@ -172,11 +186,17 @@ impl Cli {
     /// Whether this run keeps its state in a private temporary root and
     /// may start no process action: a replay's data is simulated, and a
     /// snapshot runs beside the monitor and keeps nothing (D-140).
-    pub fn keeps_private_state(&self) -> bool {
+    #[must_use]
+    pub const fn keeps_private_state(&self) -> bool {
         self.replay.is_some() || self.snapshot_json
     }
 
     /// Parsed `--replay-slice`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `CliError` when a command line value is out of its range or
+    /// not of its form.
     pub fn replay_slice(&self) -> Result<Option<(u32, u32)>, CliError> {
         let Some(text) = self.replay_slice.as_deref() else {
             return Ok(None);
@@ -202,8 +222,11 @@ fn interval_seconds_to_ms(seconds: f64) -> Result<u32, CliError> {
     if !(100.0..=60_000.0).contains(&milliseconds) {
         return Err(CliError::Interval(seconds.to_string()));
     }
-    // Range-checked above, so the conversion is exact.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "range-checked above, so the conversion is exact"
+    )]
     Ok(milliseconds as u32)
 }
 

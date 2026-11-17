@@ -86,6 +86,10 @@ pub struct MemoryCollector {
 }
 
 impl MemoryCollector {
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn new() -> Result<Self, IdentityError> {
         Ok(Self {
             id: CollectorId::new(naming::collectors::MEMORY)?,
@@ -168,7 +172,7 @@ mod tests {
         let batch = collect(&collector, &plan);
         let used = value_of(&batch, &key(ids::MEMORY_USED)).unwrap();
         assert_eq!(
-            used.value.and_then(|value| value.as_u64()),
+            used.value.and_then(dgxtop_core::metric::Scalar::as_u64),
             Some(10_000 * 1024)
         );
         assert_eq!(used.selection_state, SelectionState::Selected);
@@ -176,7 +180,7 @@ mod tests {
         assert_eq!(
             value_of(&batch, &key(ids::MEMORY_TOTAL))
                 .and_then(|value| value.value)
-                .and_then(|value| value.as_u64()),
+                .and_then(dgxtop_core::metric::Scalar::as_u64),
             Some(16_000 * 1024)
         );
         assert_eq!(
@@ -274,19 +278,28 @@ mod tests {
             .build();
         let batch = collect(&collector, &plan);
         let some = value_of(&batch, &key(ids::MEMORY_PRESSURE_SOME_AVG10)).unwrap();
-        assert_eq!(some.value.map(|value| value.to_f64_lossy()), Some(2.4));
-        assert_eq!(some.unit, dgxtop_core::metric::CanonicalUnit::Percent);
+        assert_eq!(
+            some.value.map(dgxtop_core::metric::Scalar::to_f64_lossy),
+            Some(2.4)
+        );
+        assert_eq!(some.unit, CanonicalUnit::Percent);
         assert_eq!(some.selection_state, SelectionState::Selected);
         assert!(some.eligible_for_history);
         let long = value_of(&batch, &key(ids::MEMORY_PRESSURE_SOME_AVG300)).unwrap();
-        assert_eq!(long.value.map(|value| value.to_f64_lossy()), Some(0.2));
+        assert_eq!(
+            long.value.map(dgxtop_core::metric::Scalar::to_f64_lossy),
+            Some(0.2)
+        );
         assert!(!long.eligible_for_history);
         assert_eq!(
             number(&batch, &key(ids::MEMORY_PRESSURE_FULL_AVG10)),
             Some(0.8)
         );
         let kills = value_of(&batch, &key(ids::MEMORY_OOM_KILLS)).unwrap();
-        assert_eq!(kills.value.and_then(|value| value.as_u64()), Some(4));
+        assert_eq!(
+            kills.value.and_then(dgxtop_core::metric::Scalar::as_u64),
+            Some(4)
+        );
     }
 
     /// What is swapped in and out each second is the exact movement of the
@@ -365,7 +378,10 @@ mod tests {
                 .at(SECOND + 2)
                 .build(),
         );
-        assert!(second.canonical.is_empty());
+        assert_eq!(
+            second.canonical,
+            [] as [dgxtop_core::canonical::CanonicalValue; 0]
+        );
         assert_eq!(
             second.next_state.candidates.len(),
             first.next_state.candidates.len()

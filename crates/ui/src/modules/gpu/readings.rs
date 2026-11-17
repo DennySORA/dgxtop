@@ -73,13 +73,13 @@ impl GpuReading<'_> {
 }
 
 /// The overview's bars: utilization and memory.
-pub(super) fn overview_readings<'a>(card: &'a GpuCard) -> [GpuReading<'a>; OVERVIEW_READINGS] {
+pub(super) fn overview_readings(card: &GpuCard) -> [GpuReading<'_>; OVERVIEW_READINGS] {
     [utilization(card), memory(card)]
 }
 
 /// The GPU view's status: utilization, memory, temperature and power; a
 /// bar the GPU neither reports nor charted is left out.
-pub(super) fn status_readings<'a>(card: &'a GpuCard) -> Vec<GpuReading<'a>> {
+pub(super) fn status_readings(card: &GpuCard) -> Vec<GpuReading<'_>> {
     [
         utilization(card),
         memory(card),
@@ -162,14 +162,16 @@ fn power(card: &GpuCard) -> GpuReading<'_> {
             .filter(|value| value.is_finite())
             .fold(recorded, f64::max)
     });
-    let value = match peak {
-        Some(peak) => format!(
-            "{} · peak {}",
-            value_text(&card.power_draw),
-            format_value(peak, card.power_draw.unit)
-        ),
-        None => value_text(&card.power_draw),
-    };
+    let value = peak.map_or_else(
+        || value_text(&card.power_draw),
+        |peak| {
+            format!(
+                "{} · peak {}",
+                value_text(&card.power_draw),
+                format_value(peak, card.power_draw.unit)
+            )
+        },
+    );
     GpuReading {
         label: "pwr",
         current: &card.power_draw,
@@ -182,10 +184,10 @@ fn power(card: &GpuCard) -> GpuReading<'_> {
 
 /// `value / total` when the total is known.
 fn with_total(current: &MetricCell, total: Option<&MetricCell>) -> String {
-    match total.filter(|total| has_value(total)) {
-        Some(total) => format!("{} / {}", value_text(current), value_text(total)),
-        None => value_text(current),
-    }
+    total.filter(|total| has_value(total)).map_or_else(
+        || value_text(current),
+        |total| format!("{} / {}", value_text(current), value_text(total)),
+    )
 }
 
 /// A bar on the first row of `area`, its value padded on the left to

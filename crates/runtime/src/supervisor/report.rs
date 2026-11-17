@@ -18,6 +18,7 @@ pub enum StopStage {
 }
 
 impl StopStage {
+    #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Protocol => "protocol",
@@ -62,6 +63,7 @@ pub struct ShutdownReport {
 
 impl ShutdownReport {
     /// Hosts that may still be running or are zombies.
+    #[must_use]
     pub fn unreaped(&self) -> Vec<(AdapterId, Option<i32>)> {
         self.hosts
             .iter()

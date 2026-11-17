@@ -10,6 +10,7 @@ use serde::Serialize;
 use super::probes::{HistoryWindow, ProjectionWindow};
 use super::sampler::ResourceSample;
 use crate::common::BenchResult;
+use dgxtop_core::num::ToF64Lossy;
 
 const MIB: f64 = 1_048_576.0;
 
@@ -74,7 +75,6 @@ pub struct ProcessUsage {
 }
 
 /// Per-process attribution (parent vs. each adapter host).
-#[allow(clippy::cast_precision_loss)]
 pub fn usage_by_process(
     resources: &[ResourceSample],
     clock_ticks_per_second: u64,
@@ -110,7 +110,7 @@ pub fn usage_by_process(
                 },
                 cpu_percent: delta
                     .and_then(|ticks| cpu_percent_of_one_core(ticks, clock_ticks_per_second, wall)),
-                peak_rss_mib: peak.map(|bytes| bytes as f64 / MIB),
+                peak_rss_mib: peak.map(|bytes| bytes.to_f64_lossy() / MIB),
             }
         })
         .collect()
@@ -160,13 +160,12 @@ pub fn usage_by_thread(
 /// queue or budget plus completions the composition could not deliver.
 /// Deferred adapter dispatches are not drops, because the scheduler retries
 /// them (D-37).
-pub fn unexplained_drops(data: &WindowData) -> u64 {
+pub const fn unexplained_drops(data: &WindowData) -> u64 {
     data.logged_drops.saturating_add(data.completion_drops)
 }
 
-#[allow(clippy::cast_precision_loss)]
 fn as_f64(value: u64) -> f64 {
-    value as f64
+    value.to_f64_lossy()
 }
 
 /// The schema run of a window; only metrics with samples are set.

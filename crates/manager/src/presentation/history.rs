@@ -2,8 +2,9 @@
 //! shrink to its byte budget: pixel buckets keep
 //! min/max/mean, never bridge a gap or a time discontinuity, and leave the
 //! authoritative result untouched. A chart is never downsampled to its
-//! width: the HistoryService asks one bar per plot column already (D-50).
+//! width: the `HistoryService` asks one bar per plot column already (D-50).
 
+use dgxtop_core::num::ToF64Lossy;
 use dgxtop_core::view::HistoryPointView;
 
 /// Merges contiguous points of one pixel bucket. Gap points (no mean) only
@@ -65,18 +66,21 @@ impl Bucket {
         bucket
     }
 
-    fn can_absorb(&self, point: &HistoryPointView) -> bool {
+    const fn can_absorb(&self, point: &HistoryPointView) -> bool {
         point.start_utc_ns == self.end_utc_ns && point.mean.is_none() == self.is_gap
     }
 
     // Durations are at most a 24 h window in ns (< 2^47), exact in f64.
-    #[allow(clippy::cast_precision_loss)]
     fn absorb(&mut self, point: &HistoryPointView) {
         self.end_utc_ns = point.end_utc_ns.max(self.end_utc_ns);
         let Some(mean) = point.mean.filter(|mean| mean.is_finite()) else {
             return;
         };
-        let duration = point.end_utc_ns.saturating_sub(point.start_utc_ns).max(1) as f64;
+        let duration = point
+            .end_utc_ns
+            .saturating_sub(point.start_utc_ns)
+            .max(1)
+            .to_f64_lossy();
         self.weighted_sum += mean * duration;
         self.weight_ns += duration;
         let low = point.min.filter(|value| value.is_finite()).unwrap_or(mean);
@@ -159,6 +163,6 @@ mod tests {
                 (20, 21, Some(2.0)),
             ]
         );
-        assert!(downsample(&[], 10).is_empty());
+        assert_eq!(downsample(&[], 10).len(), 0);
     }
 }

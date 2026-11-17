@@ -23,6 +23,7 @@ use crate::shared::counter_inputs;
 use crate::shared::formulas;
 use crate::shared::reasons;
 use crate::shared::values::{self, Evidence};
+use dgxtop_core::num::ToF64Lossy;
 
 /// `/proc/stat` fields in formula order.
 const FIELDS: [&str; 8] = [
@@ -55,10 +56,10 @@ pub(super) fn publish(session: &mut Session<'_>) {
         }
         match evaluate(session, &fields) {
             Evaluation::Ready(breakdown) => {
-                publish_breakdown(session, &scope_key, &fields, &breakdown)
+                publish_breakdown(session, &scope_key, &fields, &breakdown);
             }
             Evaluation::Unavailable(code) => {
-                publish_unavailable(session, &scope_key, &fields, code)
+                publish_unavailable(session, &scope_key, &fields, code);
             }
             Evaluation::Wait | Evaluation::AlreadyConsumed => {}
         }
@@ -184,10 +185,10 @@ fn advance_together(
     if !one_sample_set(session, starts.iter().copied()) {
         return Evaluation::Unavailable(reasons::INCOMPLETE_SAMPLE_SET);
     }
-    match Breakdown::from_deltas(deltas) {
-        Some(breakdown) => Evaluation::Ready(breakdown),
-        None => Evaluation::Unavailable(reasons::NO_ELAPSED_TICKS),
-    }
+    Breakdown::from_deltas(deltas).map_or(
+        Evaluation::Unavailable(reasons::NO_ELAPSED_TICKS),
+        Evaluation::Ready,
+    )
 }
 
 /// Percentages of one interval.
@@ -209,8 +210,7 @@ impl Breakdown {
         if all == 0 {
             return None;
         }
-        #[allow(clippy::cast_precision_loss)]
-        let percent = |ticks: u128| ticks as f64 / all as f64 * 100.0;
+        let percent = |ticks: u128| ticks.to_f64_lossy() / all.to_f64_lossy() * 100.0;
         Some(Self {
             total: percent(busy),
             user: percent(user + nice),
@@ -220,7 +220,7 @@ impl Breakdown {
         })
     }
 
-    fn percentages(&self) -> [f64; 5] {
+    const fn percentages(&self) -> [f64; 5] {
         [self.total, self.user, self.system, self.iowait, self.steal]
     }
 }

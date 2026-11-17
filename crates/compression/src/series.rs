@@ -34,6 +34,7 @@ impl<B: Bucket> Default for TieredSeries<B> {
 }
 
 impl<B: Bucket> TieredSeries<B> {
+    #[must_use]
     pub fn new(shift_ns: i64) -> Self {
         Self {
             kept: std::array::from_fn(|_| VecDeque::new()),
@@ -42,7 +43,7 @@ impl<B: Bucket> TieredSeries<B> {
         }
     }
 
-    pub fn shift_ns(&self) -> i64 {
+    pub const fn shift_ns(&self) -> i64 {
         self.shift_ns
     }
 
@@ -169,7 +170,7 @@ impl<B: Bucket> TieredSeries<B> {
     }
 
     /// The bucket of `tier` being filled.
-    pub(crate) fn filling_of(&self, tier: Tier) -> Option<&B> {
+    pub(crate) const fn filling_of(&self, tier: Tier) -> Option<&B> {
         self.filling[tier.level()].as_ref()
     }
 
@@ -204,7 +205,7 @@ impl<B: Bucket> TieredSeries<B> {
 
     /// Puts back a stored bucket that was being filled (startup): it
     /// resumes.
-    pub fn restore_filling(&mut self, tier: Tier, bucket: B) {
+    pub const fn restore_filling(&mut self, tier: Tier, bucket: B) {
         self.filling[tier.level()] = Some(bucket);
     }
 
@@ -478,7 +479,7 @@ mod tests {
         let tiers: Vec<Tier> = closed.iter().map(|(tier, _)| *tier).collect();
         assert_eq!(tiers, Tier::ALL[1..].to_vec());
         assert_eq!(closed[0].1.value(RunMetric::Cpu).mean(), Some(20.0));
-        assert!(series.filling_buckets().is_empty());
+        assert_eq!(series.filling_buckets().len(), 0);
         assert!(series.close_all().is_empty(), "nothing left to close");
         assert_eq!(cpu_means(&series, Tier::OneDay), vec![(0, 20.0)]);
     }
@@ -587,7 +588,7 @@ mod tests {
         series.restore_closed(Tier::OneMinute, bucket);
         let made = series.backfill(false);
         assert_eq!(made.len(), Tier::ALL.len() - 2);
-        assert!(series.filling_buckets().is_empty());
+        assert_eq!(series.filling_buckets().len(), 0);
         assert_eq!(cpu_means(&series, Tier::OneDay), vec![(0, 1.0)]);
     }
 
@@ -685,10 +686,11 @@ mod tests {
             closed.extend(series.add_bucket(Tier::OneMinute, &minute_tally(minute, 1)));
         }
         closed.extend(series.add_bucket(Tier::OneMinute, &minute_tally(179, 2)));
-        assert!(
+        assert_eq!(
             series
                 .add_bucket(Tier::OneMinute, &minute_tally(100, 5))
-                .is_empty()
+                .len(),
+            0
         );
         assert_eq!(
             tallies(&series, Tier::OneHour),
@@ -799,10 +801,11 @@ mod tests {
             .map(|tally| tally.start_utc_ns / SECOND)
             .collect();
         assert_eq!(starts, vec![-2, 3, 8]);
-        assert!(
+        assert_eq!(
             series
                 .record_span((20 * SECOND, 20 * SECOND), |_, _| panic!("no piece"))
-                .is_empty()
+                .len(),
+            0
         );
         series.record_span((30 * SECOND, 25 * SECOND), |_, _| panic!("no piece"));
         assert_eq!(series.buckets(Tier::Recent).count(), 3);

@@ -1,10 +1,12 @@
 //! What the history keeps of the GPU processes, as the Manager reads it
-//! (D-79): the history follows the runs and what each GPU process holds
-//! over time on its own actor and publishes a bounded read model (like the
-//! state's snapshot), which the Manager's presentation only shapes into
-//! views. The Manager hands it the committed process tables with the
-//! snapshot and catalog they came with ([`ProcessTableSample`]) and the
-//! runs a session shows ([`RunRequest`]).
+//! (D-79).
+//!
+//! The history follows the runs and what each GPU process holds over time
+//! on its own actor and publishes a bounded read model (like the state's
+//! snapshot), which the Manager's presentation only shapes into views. The
+//! Manager hands it the committed process tables with the snapshot and
+//! catalog they came with ([`ProcessTableSample`]) and the runs a session
+//! shows ([`RunRequest`]).
 
 use std::sync::Arc;
 
@@ -14,10 +16,11 @@ use crate::process_history::{RunBucket, RunEnd, RunInfo};
 use crate::tiers::BarSize;
 
 /// A committed process table, new since the last one handed over, as the
-/// Manager hands it on unchanged (D-99): the snapshot it is new in and the
-/// catalog of that moment, from which the history takes what a sample of
-/// the runs needs beside the table (the GPUs' labels, the host's clock
-/// ticks and network rates).
+/// Manager hands it on unchanged (D-99).
+///
+/// The snapshot it is new in and the catalog of that moment, from which
+/// the history takes what a sample of the runs needs beside the table (the
+/// GPUs' labels, the host's clock ticks and network rates).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProcessTableSample {
     /// The committed snapshot whose `process_table` is new.
@@ -30,6 +33,7 @@ pub struct ProcessTableSample {
 
 impl ProcessTableSample {
     /// The new table.
+    #[must_use]
     pub fn table(&self) -> &Arc<ProcessTable> {
         &self.snapshot.process_table
     }
@@ -106,7 +110,8 @@ impl TrackedProcess {
             .fold(0, |sum, (_, bytes)| sum.saturating_add(*bytes))
     }
 
-    pub fn is_listed(&self) -> bool {
+    #[must_use]
+    pub const fn is_listed(&self) -> bool {
         !self.current.is_empty()
     }
 }
@@ -123,7 +128,8 @@ pub struct WriteProgress {
 
 impl WriteProgress {
     /// Whether `flushes` flushes were handled and their writes answered.
-    pub fn settled_after(&self, flushes: u64) -> bool {
+    #[must_use]
+    pub const fn settled_after(&self, flushes: u64) -> bool {
         self.flushes >= flushes && self.pending == 0
     }
 }
@@ -169,6 +175,7 @@ impl ProcessHistoryModel {
     }
 
     /// The color of `key` while it holds one.
+    #[must_use]
     pub fn slot_of(&self, key: &ProcessKey) -> Option<u8> {
         self.tracked
             .iter()
@@ -179,6 +186,7 @@ impl ProcessHistoryModel {
     /// The detail answering `request`; until it is answered, the latest
     /// one of the same run (another size or width: the request is on its
     /// way), so an opened run never flickers back to the list.
+    #[must_use]
     pub fn detail_for(&self, request: &RunRequest) -> Option<&RunDetail> {
         self.details
             .iter()
@@ -192,6 +200,7 @@ impl ProcessHistoryModel {
     }
 
     /// Whether `request` is answered exactly.
+    #[must_use]
     pub fn answers(&self, request: &RunRequest) -> bool {
         self.details.iter().any(|detail| detail.request == *request)
     }
@@ -293,7 +302,7 @@ mod tests {
         assert!(tracked.is_listed());
         let model = ProcessHistoryModel {
             tracked: vec![tracked],
-            other_gpu_bytes: vec![(gpu.clone(), 5), (other.clone(), 6)],
+            other_gpu_bytes: vec![(gpu, 5), (other.clone(), 6)],
             ..ProcessHistoryModel::default()
         };
         assert_eq!(model.slot_of(&key(9)), Some(2));

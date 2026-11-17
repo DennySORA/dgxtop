@@ -1,7 +1,7 @@
 //! Settings module: saved / effective / origin per field, restart-required
 //! and overload notes, pending change and last result, persistence status,
 //! the adapter hosts (the data sources block, D-91) and the module list
-//! (toggled with SetModuleEnabled through the controller).
+//! (toggled with `SetModuleEnabled` through the controller).
 
 use dgxtop_core::action::{PersistenceState, PersistenceStatus};
 use dgxtop_core::config::ValueOrigin;
@@ -23,6 +23,7 @@ use crate::num::saturate_u16;
 use crate::registry::{
     DisplayContext, DisplayModule, DisplayModuleManifest, RenderOutput, Slot, controls,
 };
+use std::fmt::Write as _;
 
 const MODULE_LIST_WIDTH: u16 = 26;
 const NANOS_PER_MILLI: u64 = 1_000_000;
@@ -40,14 +41,19 @@ const FIELD_COLUMNS: [ColumnSpec; 6] = [
 /// The keys acting on the view, at the right of its title (D-70).
 const SETTINGS_KEYS: &str = "j/k/↑/↓ select · Space enable / disable";
 
+#[derive(Debug)]
 pub struct SettingsModule {
     manifest: DisplayModuleManifest,
 }
 
 impl SettingsModule {
+    /// # Errors
+    ///
+    /// Returns a `ModuleBuildError` when the module's static manifest is
+    /// invalid, which is a build defect.
     pub fn new() -> Result<Self, ModuleBuildError> {
         Ok(Self {
-            manifest: build_manifest(ManifestSpec {
+            manifest: build_manifest(&ManifestSpec {
                 id: "settings",
                 title: "Settings",
                 min_columns: 40,
@@ -139,7 +145,7 @@ impl DisplayModule for SettingsModule {
     }
 }
 
-fn persistence_word(state: PersistenceState) -> &'static str {
+const fn persistence_word(state: PersistenceState) -> &'static str {
     match state {
         PersistenceState::Disabled => "disabled",
         PersistenceState::Healthy => "healthy",
@@ -153,27 +159,29 @@ fn persistence_word(state: PersistenceState) -> &'static str {
 fn persistence_text(label: &str, status: &PersistenceStatus) -> String {
     let mut text = format!("{label} {}", persistence_word(status.state));
     if status.bytes_limit > 0 {
-        text.push_str(&format!(
+        write!(
+            text,
             " · {} of {}",
             format_bytes(status.bytes_used),
             format_bytes(status.bytes_limit)
-        ));
+        )
+        .unwrap_or_default();
     }
     if status.wal_bytes > 0 {
-        text.push_str(&format!(" · WAL {}", format_bytes(status.wal_bytes)));
+        write!(text, " · WAL {}", format_bytes(status.wal_bytes)).unwrap_or_default();
     }
     if let Some(detail) = status.detail.as_deref() {
-        text.push_str(&format!(" · {}", clean(detail)));
+        write!(text, " · {}", clean(detail)).unwrap_or_default();
     }
     text
 }
 
 fn status_lines(settings: &SettingsView) -> Vec<String> {
     let mut lines = vec![persistence_text("config", &settings.config_status)];
-    lines.push(match settings.pending.as_deref() {
-        Some(pending) => format!("pending: {}", clean(pending)),
-        None => "pending: none".to_owned(),
-    });
+    lines.push(settings.pending.as_deref().map_or_else(
+        || "pending: none".to_owned(),
+        |pending| format!("pending: {}", clean(pending)),
+    ));
     if let Some(result) = settings.last_result.as_deref() {
         lines.push(format!("last result: {}", clean(result)));
     }

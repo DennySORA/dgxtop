@@ -16,6 +16,7 @@ use dgxtop_core::testing::{
 use dgxtop_core::tiers::Tier;
 
 use super::*;
+use dgxtop_core::num::ToF64Lossy;
 
 const SECOND: u64 = NANOS_PER_SECOND;
 const GIB: u64 = 1 << 30;
@@ -177,8 +178,7 @@ fn each_gpu_of_a_run_keeps_its_own_figures() {
         let metric = RunMetric::of_gpu(slot, figure).unwrap();
         whole.value(metric).mean()
     };
-    #[allow(clippy::cast_precision_loss)]
-    let gib = |count: u64| (count * GIB) as f64;
+    let gib = |count: u64| (count * GIB).to_f64_lossy();
     assert_eq!(figure(0, GpuFigure::Utilization), Some(25.0));
     assert_eq!(figure(0, GpuFigure::Memory), Some(gib(2)));
     assert_eq!(figure(0, GpuFigure::Device), Some(30.0));
@@ -210,8 +210,7 @@ fn samples_aggregate_the_run_and_minutes_reach_the_journal() {
     let minute = minutes[0];
     assert_eq!(minute.value(RunMetric::Cpu).count, 60);
     assert_eq!(minute.value(RunMetric::Cpu).peak(), Some(100.0));
-    #[allow(clippy::cast_precision_loss)]
-    let gib4 = (4 * GIB) as f64;
+    let gib4 = (4 * GIB).to_f64_lossy();
     assert_eq!(minute.value(RunMetric::GpuMemory).mean(), Some(gib4));
     assert_eq!(
         minute.value(RunMetric::HostNetworkReceive).mean(),
@@ -251,8 +250,7 @@ impl ProbeDeriver for RecordingDeriver {
         read_boot_ns: u64,
     ) -> ProbeState {
         self.calls.lock().unwrap().push((*previous, read_boot_ns));
-        #[allow(clippy::cast_precision_loss)]
-        let as_value = |value: u64| value as f64;
+        let as_value = |value: u64| value.to_f64_lossy();
         let mut next = *previous;
         next.values.disk = [Some(as_value(read_boot_ns / SECOND)), None];
         next.values.threads = reading.threads.map(as_value);
@@ -346,7 +344,7 @@ fn readings_of_ended_processes_are_not_derived() {
         now(2),
         &deriver,
     );
-    assert!(deriver.calls().is_empty());
+    assert_eq!(deriver.calls().len(), 0);
     assert_eq!(end_of(&book, 9), Some(EndCause::NotVisible));
     assert_eq!(book.run(&key(9)).unwrap().probed(), ProbedValues::default());
 }
@@ -407,7 +405,7 @@ fn runs_end_with_the_cause_the_probe_shows() {
         i128::from(ended.info().end.unwrap().utc_ns),
         BOOT_UTC + i128::from(3 * SECOND)
     );
-    assert!(book.probe_targets().is_empty());
+    assert_eq!(book.probe_targets().len(), 0);
     let journal = book.take_journal();
     assert!(
         journal
@@ -735,8 +733,7 @@ fn the_rows_descendants_become_the_samples() {
         .unwrap();
     assert_eq!(bucket.value(RunMetric::Children).mean(), Some(3.0));
     assert_eq!(bucket.value(RunMetric::ChildrenCpu).mean(), Some(150.0));
-    #[allow(clippy::cast_precision_loss)]
-    let held = GIB as f64;
+    let held = GIB.to_f64_lossy();
     assert_eq!(bucket.value(RunMetric::ChildrenMemory).mean(), Some(held));
     assert_eq!(
         bucket.value(RunMetric::Children).count,
@@ -778,8 +775,7 @@ fn whole_figures_follow_the_samples_and_outlive_the_buckets() {
     let pids: Vec<i64> = (1..=33).collect();
     let mut book = with_series_budget(book(), 32 * ended_run_bytes(&pids) + 1);
     for second in 0..130 {
-        #[allow(clippy::cast_precision_loss)]
-        let cpu = (second % 7) as f64 * 10.0;
+        let cpu = (second % 7).to_f64_lossy() * 10.0;
         observe(
             &mut book,
             second,
@@ -841,5 +837,5 @@ fn a_deletion_forgets_the_ended_runs_asked_for() {
         revision + 1,
         "nothing went, nothing changed"
     );
-    assert!(book.take_journal().forget.is_empty());
+    assert_eq!(book.take_journal().forget.len(), 0);
 }

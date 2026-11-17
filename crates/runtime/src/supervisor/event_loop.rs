@@ -53,7 +53,7 @@ impl EventLoop {
         });
         self.fail_leftovers();
         let report = self.report(completed);
-        let _ = self.finished.try_send(report);
+        self.finished.try_send(report).unwrap_or_default();
         drop(self.working_set);
     }
 

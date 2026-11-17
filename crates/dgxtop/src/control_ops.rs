@@ -1,8 +1,9 @@
 //! Execution of the Manager's control jobs (audit, process action,
-//! configuration, history read) on their worker threads. Shared by the
-//! composition root, the integration rigs and the benches, so they exercise
-//! the production code path (including the last deadline check before a
-//! signal is sent).
+//! configuration, history read) on their worker threads.
+//!
+//! Shared by the composition root, the integration rigs and the benches, so
+//! they exercise the production code path (including the last deadline
+//! check before a signal is sent).
 
 use dgxtop_core::action::{ActionCompletion, ActionOp, AuditCompletion, AuditOp, SignalOutcome};
 use dgxtop_core::clock::TimeProvider;
@@ -97,17 +98,20 @@ pub fn run_action_op(
         } => {
             // Re-check fail-stop and the token deadline right before the
             // single send.
-            let outcome = if let Some(reason) = halted {
-                SignalOutcome::NotSent {
+            let outcome = halted.map_or_else(
+                || {
+                    if clock.now_boot_ns() >= send_deadline_boot_ns {
+                        SignalOutcome::NotSent {
+                            reason: "confirmation deadline passed before sending".to_owned(),
+                        }
+                    } else {
+                        port.send(handle, signal, &receipt)
+                    }
+                },
+                |reason| SignalOutcome::NotSent {
                     reason: format!("fail-stop ({reason}); signal not sent"),
-                }
-            } else if clock.now_boot_ns() >= send_deadline_boot_ns {
-                SignalOutcome::NotSent {
-                    reason: "confirmation deadline passed before sending".to_owned(),
-                }
-            } else {
-                port.send(handle, signal, &receipt)
-            };
+                },
+            );
             ActionCompletion::Sent {
                 request_id,
                 intent_id,

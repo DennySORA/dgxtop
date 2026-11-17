@@ -158,8 +158,8 @@ impl DeviceMetadata {
                 .cloned()
                 .unwrap_or(Err(BackendError::NotSupported))
                 .map(u64::from),
-            Channel::TemperatureThreshold(threshold) => cached(&self.thresholds, threshold),
-            Channel::MaxPcieLink(link) => cached(&self.max_pcie_link, link),
+            Channel::TemperatureThreshold(threshold) => cached(&self.thresholds, &threshold),
+            Channel::MaxPcieLink(link) => cached(&self.max_pcie_link, &link),
             Channel::Static(fact) => self
                 .facts
                 .get(&fact)
@@ -209,9 +209,9 @@ impl DeviceMetadata {
 }
 
 /// The cached value of `key`, or unsupported when it was never read.
-fn cached<K: Ord>(values: &BTreeMap<K, BackendResult<u32>>, key: K) -> BackendResult<u64> {
+fn cached<K: Ord>(values: &BTreeMap<K, BackendResult<u32>>, key: &K) -> BackendResult<u64> {
     values
-        .get(&key)
+        .get(key)
         .cloned()
         .unwrap_or(Err(BackendError::NotSupported))
         .map(u64::from)
@@ -233,7 +233,7 @@ pub fn framebuffer_size(backend: &dyn GpuTelemetry, uuid: &str) -> BackendResult
 
 /// A zero-sized framebuffer is reported as unsupported because it describes
 /// a device without dedicated memory, not "0 bytes free".
-pub fn framebuffer_size_from(memory: FramebufferMemory) -> BackendResult<FramebufferSize> {
+pub const fn framebuffer_size_from(memory: FramebufferMemory) -> BackendResult<FramebufferSize> {
     if memory.total == 0 {
         return Err(BackendError::NotSupported);
     }
@@ -243,7 +243,7 @@ pub fn framebuffer_size_from(memory: FramebufferMemory) -> BackendResult<Framebu
     })
 }
 
-fn memory_model_of(framebuffer: &BackendResult<FramebufferSize>) -> MemoryModel {
+const fn memory_model_of(framebuffer: &BackendResult<FramebufferSize>) -> MemoryModel {
     match framebuffer {
         Ok(_) => MemoryModel::Framebuffer,
         Err(BackendError::NotSupported) => MemoryModel::Unified,
@@ -375,7 +375,7 @@ impl Inventory {
         Self::default()
     }
 
-    pub fn generation(&self) -> u32 {
+    pub const fn generation(&self) -> u32 {
         self.generation
     }
 
@@ -383,7 +383,7 @@ impl Inventory {
         self.software.driver_version.as_deref()
     }
 
-    pub fn software(&self) -> &HostSoftware {
+    pub const fn software(&self) -> &HostSoftware {
         &self.software
     }
 

@@ -23,9 +23,9 @@ const FALLBACK_SIZE: (u16, u16) = (80, 24);
 pub(crate) fn enter_sequence(mouse: bool) -> Vec<u8> {
     let mut bytes = Vec::new();
     // Writing into a Vec cannot fail.
-    let _ = queue!(bytes, EnterAlternateScreen, Hide, Clear(ClearType::All));
+    queue!(bytes, EnterAlternateScreen, Hide, Clear(ClearType::All)).unwrap_or_default();
     if mouse {
-        let _ = queue!(bytes, EnableMouseCapture);
+        queue!(bytes, EnableMouseCapture).unwrap_or_default();
     }
     bytes
 }
@@ -33,14 +33,15 @@ pub(crate) fn enter_sequence(mouse: bool) -> Vec<u8> {
 /// Bytes that undo [`enter_sequence`].
 pub(crate) fn restore_sequence() -> Vec<u8> {
     let mut bytes = Vec::new();
-    let _ = queue!(
+    queue!(
         bytes,
         DisableMouseCapture,
         ResetColor,
         SetAttribute(Attribute::Reset),
         Show,
         LeaveAlternateScreen
-    );
+    )
+    .unwrap_or_default();
     bytes
 }
 
@@ -56,7 +57,7 @@ impl RawModeGuard {
 
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
-        let _ = crossterm::terminal::disable_raw_mode();
+        crossterm::terminal::disable_raw_mode().unwrap_or_default();
     }
 }
 
@@ -67,6 +68,11 @@ impl Drop for RawModeGuard {
 /// `input_gate` and the injected non-blocking transport, and always
 /// restores the terminal before returning. The caller should also install
 /// [`install_panic_hook`].
+///
+/// # Errors
+///
+/// Returns a `TuiError` when the terminal's input or output fails or the
+/// terminal cannot be set up.
 pub fn run_tui(
     session: Box<dyn SessionPort>,
     transport: Box<dyn TerminalTransport>,
@@ -94,12 +100,13 @@ pub fn run_tui(
 
 /// Best-effort terminal restore for panic hooks and fatal paths: leaves the
 /// alternate screen, shows the cursor, disables mouse capture and raw mode.
+///
 /// If the terminal accepts no bytes the sequence may not become visible.
 pub fn restore_terminal() {
-    let _ = crossterm::terminal::disable_raw_mode();
+    crossterm::terminal::disable_raw_mode().unwrap_or_default();
     let mut stdout = std::io::stdout();
-    let _ = stdout.write_all(&restore_sequence());
-    let _ = stdout.flush();
+    stdout.write_all(&restore_sequence()).unwrap_or_default();
+    stdout.flush().unwrap_or_default();
 }
 
 /// Installs a panic hook that restores the terminal before the previous

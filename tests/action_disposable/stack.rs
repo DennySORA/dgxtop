@@ -111,7 +111,7 @@ impl StateDir {
 
 impl Drop for StateDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
+        std::fs::remove_dir_all(&self.root).unwrap_or_default();
     }
 }
 
@@ -180,7 +180,7 @@ pub struct SessionDriver {
 }
 
 impl SessionDriver {
-    fn new(handle: SessionHandle) -> Self {
+    const fn new(handle: SessionHandle) -> Self {
         Self {
             handle,
             results: Mutex::new(Vec::new()),
@@ -430,12 +430,12 @@ pub struct ActionStack {
 }
 
 impl ActionStack {
-    pub fn start(options: StackOptions) -> Self {
+    pub fn start(options: &StackOptions) -> Self {
         Self::start_in(StateDir::create("stack"), options)
     }
 
     /// Starts on an existing state directory (a restart of a previous stack).
-    pub fn start_in(state: Arc<StateDir>, options: StackOptions) -> Self {
+    pub fn start_in(state: Arc<StateDir>, options: &StackOptions) -> Self {
         let clock = TestClock::following_real_time();
         let time: Arc<dyn TimeProvider> = Arc::clone(&clock) as _;
         let config = options.config();
@@ -444,7 +444,7 @@ impl ActionStack {
         let identity = Identity::of_this_process(&clock, options.caller_euid);
         let channels = ManagerChannels::create();
         let workers = Workers::spawn(&WorkerPlan {
-            options: &options,
+            options,
             state: &state,
             config: &config,
             clock: &time,
@@ -493,7 +493,7 @@ impl ActionStack {
         &self.clock
     }
 
-    pub fn faults(&self) -> &Faults {
+    pub const fn faults(&self) -> &Faults {
         &self.faults
     }
 
@@ -502,15 +502,15 @@ impl ActionStack {
     }
 
     /// The caller euid the Manager authorizes actions with.
-    pub fn caller_euid(&self) -> u32 {
+    pub const fn caller_euid(&self) -> u32 {
         self.identity.euid
     }
 
-    pub fn session(&self) -> &SessionDriver {
+    pub const fn session(&self) -> &SessionDriver {
         &self.session
     }
 
-    pub fn bystander(&self) -> &SessionDriver {
+    pub const fn bystander(&self) -> &SessionDriver {
         self.bystander
             .as_ref()
             .expect("stack started with bystander_session")
@@ -711,7 +711,7 @@ impl Drop for ActionStack {
                 thread::sleep(POLL);
             }
             if thread.is_finished() {
-                let _ = thread.join();
+                drop(thread.join());
             }
         }
         self.workers.stop();
@@ -843,9 +843,9 @@ struct Completions {
 impl Completions {
     fn deliver(&self, completion: ControlCompletion) {
         // A closed inbox means the Manager already stopped.
-        let _ = self
-            .control
-            .send_timeout(completion, COMPLETION_SEND_TIMEOUT);
+        self.control
+            .send_timeout(completion, COMPLETION_SEND_TIMEOUT)
+            .unwrap_or_default();
     }
 }
 

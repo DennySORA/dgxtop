@@ -3,9 +3,15 @@
 //! on (D-90): the Overview's reads for gauges and the archive's finished
 //! minutes and bridges for exact counter totals.
 
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
+
+#[expect(dead_code, reason = "each suite uses its part of the shared helpers")]
 #[path = "store_hot_support.rs"]
 mod support;
 
+use dgxtop_core::num::ToF64Lossy;
 use dgxtop_core::ports::ArchivedBucket;
 use dgxtop_core::testing::UTC_ON_A_WHOLE_MINUTE_NS;
 use dgxtop_core::tiers::Tier;
@@ -107,7 +113,7 @@ fn at07_coverage_is_exact_and_gaps_are_never_zero_filled() {
     // Steps of 1 s, the last one held until its stale deadline (3 s).
     let held = harness.window(&key, EVERYTHING_NS);
     assert_eq!(held.covered_ns, 12 * SECOND);
-    let expected = ((50..=58).sum::<u32>() as f64 + 59.0 * 3.0) / 12.0;
+    let expected = (f64::from((50..=58).sum::<u32>()) + 59.0 * 3.0) / 12.0;
     assert!((held.mean().unwrap() - expected).abs() < 1e-12);
     assert_eq!(held.minimum, 50.0, "missing time is not a zero");
     assert_eq!(held.maximum, 59.0);
@@ -160,7 +166,11 @@ fn at07_two_hour_gap_does_not_leak_into_the_last_hour() {
     assert_eq!(last_hour.mean(), Some(40.0));
     let minutes = harness.bars(&key, Tier::OneMinute, (now - 60 * MINUTE, now));
     assert_eq!(minutes.len(), 5, "only the minutes since the gap");
-    assert!(minutes.iter().all(|bar| bar.maximum == 40.0));
+    assert!(
+        minutes
+            .iter()
+            .all(|bar| (bar.maximum - 40.0).abs() < f64::EPSILON)
+    );
     // The old samples are still answered from their finished minutes.
     let old = harness.bars(&key, Tier::OneMinute, (start, start + 11 * MINUTE));
     let old_covered: u64 = old.iter().map(|bar| bar.covered_ns).sum();
@@ -188,7 +198,7 @@ fn at07_generation_changes_cut_segments_and_utc_steps_are_discontinuities() {
         if second == 5 {
             harness.writer.observe_wall_clock(
                 5 * SECOND,
-                UTC_ON_A_WHOLE_MINUTE_NS + 5 * SECOND as i128 - 86_400 * SECOND as i128,
+                UTC_ON_A_WHOLE_MINUTE_NS + 5 * i128::from(SECOND) - 86_400 * i128::from(SECOND),
             );
         }
     }
@@ -227,7 +237,7 @@ fn bridged_counters(count: u64) -> (Harness, dgxtop_core::identity::MetricKey) {
         let start = k * SECOND + 500 * MILLI;
         let end = start + SECOND;
         harness.commit(
-            vec![gauge(&key, (k + 1) as f64, end)],
+            vec![gauge(&key, (k + 1).to_f64_lossy(), end)],
             vec![interval(&key, start, end, k + 1)],
             end,
         );
@@ -283,7 +293,7 @@ fn at27_minutes_on_whole_utc_minutes_keep_every_window_exact() {
         let start = k * SECOND + 500 * MILLI;
         let end = start + SECOND;
         harness.commit(
-            vec![gauge(&key, (k + 1) as f64, end)],
+            vec![gauge(&key, (k + 1).to_f64_lossy(), end)],
             vec![interval(&key, start, end, k + 1)],
             end,
         );
@@ -354,6 +364,9 @@ fn at27_interval_ending_on_a_minute_boundary_is_counted_in_the_total() {
         counter_minutes(&journal.buckets),
         vec![(0, 60, 1), (60, 120, 0)]
     );
-    assert!(journal.bridges.is_empty());
+    assert_eq!(
+        journal.bridges,
+        [] as [dgxtop_core::ports::ArchivedBridge; 0]
+    );
     assert_eq!(archived_total(&journal), 1);
 }

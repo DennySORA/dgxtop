@@ -213,7 +213,7 @@ fn gauges_are_normalized_and_true_zero_is_kept() {
     assert_eq!(
         value_of(&batch, &gpu_key(GPU_A, ids::GPU_MEMORY_FB_USED))
             .and_then(|value| value.value)
-            .and_then(|value| value.as_u64()),
+            .and_then(Scalar::as_u64),
         Some(1 << 30)
     );
 }
@@ -417,10 +417,10 @@ fn process_allocations_are_summed_per_gpu_and_deduplicated_by_pid() {
         ],
     );
     let a = value_of(&batch, &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED)).unwrap();
-    assert_eq!(a.value.and_then(|value| value.as_u64()), Some(500));
+    assert_eq!(a.value.and_then(Scalar::as_u64), Some(500));
     assert_eq!(a.selection_state, SelectionState::Selected);
     assert_eq!(a.quality, Quality::Usable);
-    assert!(a.reason_codes.is_empty());
+    assert_eq!(a.reason_codes, [] as [String; 0]);
     assert_eq!(
         a.candidate_source_ids,
         vec![dgxtop_core::testing::source_id(&format!(
@@ -428,7 +428,7 @@ fn process_allocations_are_summed_per_gpu_and_deduplicated_by_pid() {
         ))]
     );
     let b = value_of(&batch, &gpu_key(GPU_B, ids::GPU_MEMORY_PROCESS_ALLOCATED)).unwrap();
-    assert_eq!(b.value.and_then(|value| value.as_u64()), Some(7));
+    assert_eq!(b.value.and_then(Scalar::as_u64), Some(7));
 }
 
 /// What the driver samples of a process (its utilization and its encoder's
@@ -453,7 +453,7 @@ fn sampled_process_shares_never_enter_the_gpu_sum() {
     );
     let batch = run(vec![], records);
     let sum = value_of(&batch, &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED)).unwrap();
-    assert_eq!(sum.value.and_then(|value| value.as_u64()), Some(500));
+    assert_eq!(sum.value.and_then(Scalar::as_u64), Some(500));
     assert_eq!(sum.selection_state, SelectionState::Selected);
     assert!(sum.reason_codes.is_empty(), "{:?}", sum.reason_codes);
     for (metric_id, _) in shares {
@@ -496,7 +496,7 @@ fn incomplete_process_lists_flag_the_sum_as_partial() {
             .build(),
     );
     let sum = value_of(&partial, &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED)).unwrap();
-    assert_eq!(sum.value.and_then(|value| value.as_u64()), Some(400));
+    assert_eq!(sum.value.and_then(Scalar::as_u64), Some(400));
     assert!(
         sum.reason_codes
             .contains(&reasons::PARTIAL_PROCESS_VISIBILITY.to_owned())
@@ -565,8 +565,8 @@ fn incomplete_process_lists_flag_the_sum_as_partial() {
         &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED),
     )
     .unwrap();
-    assert_eq!(sum.value.and_then(|value| value.as_u64()), Some(500));
-    assert!(sum.reason_codes.is_empty());
+    assert_eq!(sum.value.and_then(Scalar::as_u64), Some(500));
+    assert_eq!(sum.reason_codes, [] as [String; 0]);
 }
 
 #[test]
@@ -586,7 +586,10 @@ fn failed_process_list_is_never_a_zero_sum() {
             )
             .build(),
     );
-    assert!(batch.canonical.is_empty());
+    assert_eq!(
+        batch.canonical,
+        [] as [dgxtop_core::canonical::CanonicalValue; 0]
+    );
     assert_eq!(batch.failures[0].code, reasons::BATCH_FAILED);
 }
 
@@ -600,7 +603,7 @@ fn unknown_process_allocations_are_flagged_never_counted_as_zero() {
         ],
     );
     let partial = value_of(&batch, &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED)).unwrap();
-    assert_eq!(partial.value.and_then(|value| value.as_u64()), Some(400));
+    assert_eq!(partial.value.and_then(Scalar::as_u64), Some(400));
     assert!(
         partial
             .reason_codes
@@ -670,7 +673,7 @@ fn exited_processes_from_an_older_list_are_not_summed() {
             .build(),
     );
     let value = value_of(&second, &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED)).unwrap();
-    assert_eq!(value.value.and_then(|value| value.as_u64()), Some(450));
+    assert_eq!(value.value.and_then(Scalar::as_u64), Some(450));
 }
 
 /// The newest list decides (D-119): once the last process exits, the list
@@ -700,10 +703,7 @@ fn a_list_that_names_no_process_reads_zero_at_once() {
     );
     let held = |batch: &CollectionBatch| {
         let value = value_of(batch, &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED)).unwrap();
-        (
-            value.selection_state,
-            value.value.and_then(|value| value.as_u64()),
-        )
+        (value.selection_state, value.value.and_then(Scalar::as_u64))
     };
     assert_eq!(held(&busy), (SelectionState::Selected, Some(400)));
     let idle = collect(
@@ -736,7 +736,7 @@ fn a_process_listed_after_an_empty_list_is_summed_at_once() {
         value_of(batch, &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED))
             .unwrap()
             .value
-            .and_then(|value| value.as_u64())
+            .and_then(Scalar::as_u64)
     };
     assert_eq!(held(&idle), Some(0));
     let busy = collect(
@@ -771,27 +771,26 @@ fn every_change_of_the_list_reads_at_once() {
     let collector = GpuCollector::new().unwrap();
     let held = |batch: &CollectionBatch| {
         let value = value_of(batch, &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED)).unwrap();
-        (
-            value.selection_state,
-            value.value.and_then(|value| value.as_u64()),
-        )
+        (value.selection_state, value.value.and_then(Scalar::as_u64))
     };
     let lists: [Option<u64>; 5] = [Some(400), None, Some(300), None, Some(200)];
     let mut previous: Option<CollectionBatch> = None;
     for (index, list) in lists.into_iter().enumerate() {
         let cycle = u64::try_from(index).unwrap() + 1;
         let at = cycle * SECOND;
-        let records = match list {
-            Some(bytes) => vec![process_memory(
-                GPU_A,
-                10 + i32::try_from(index).unwrap(),
-                reasons::GPU_USAGE_COMPUTE,
-                Some(bytes),
-                at,
-                cycle,
-            )],
-            None => vec![no_processes(GPU_A, at, cycle)],
-        };
+        let records = list.map_or_else(
+            || vec![no_processes(GPU_A, at, cycle)],
+            |bytes| {
+                vec![process_memory(
+                    GPU_A,
+                    10 + i32::try_from(index).unwrap(),
+                    reasons::GPU_USAGE_COMPUTE,
+                    Some(bytes),
+                    at,
+                    cycle,
+                )]
+            },
+        );
         let mut plan = PlanBuilder::new("gpu")
             .catalog(nvml_catalog())
             .cycle(cycle)
@@ -894,10 +893,7 @@ fn a_failed_list_beside_listed_processes_holds_nothing_after() {
     let collector = GpuCollector::new().unwrap();
     let held = |batch: &CollectionBatch| {
         let value = value_of(batch, &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED)).unwrap();
-        (
-            value.selection_state,
-            value.value.and_then(|value| value.as_u64()),
-        )
+        (value.selection_state, value.value.and_then(Scalar::as_u64))
     };
     let failed = reading(
         &gpu_key(GPU_A, ids::GPU_MEMORY_PROCESS_ALLOCATED),

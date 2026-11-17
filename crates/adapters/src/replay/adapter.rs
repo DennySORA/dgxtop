@@ -139,25 +139,43 @@ pub struct ReplayAdapter {
     shut_down: bool,
 }
 
+impl std::fmt::Debug for ReplayAdapter {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ReplayAdapter")
+            .finish_non_exhaustive()
+    }
+}
+
 impl ReplayAdapter {
     /// Loads, validates and serves a fixture file.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ReplayError` when the fixture cannot be read or encoded, or
+    /// breaks a rule of replay.
     pub fn from_path(
         path: &Path,
         adapter_id: AdapterId,
         clock: Arc<dyn TimeProvider>,
-        host_id: HostId,
+        host_id: &HostId,
         slice: Option<(u32, u32)>,
     ) -> Result<Self, ReplayError> {
         let fixture = ReplayFixture::load(path)?;
-        Self::from_fixture(fixture, adapter_id, clock, host_id, slice)
+        Self::from_fixture(&fixture, adapter_id, clock, host_id, slice)
     }
 
     /// Serves an in-memory fixture (validated here).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ReplayError` when the fixture cannot be read or encoded, or
+    /// breaks a rule of replay.
     pub fn from_fixture(
-        fixture: ReplayFixture,
+        fixture: &ReplayFixture,
         adapter_id: AdapterId,
         clock: Arc<dyn TimeProvider>,
-        host_id: HostId,
+        host_id: &HostId,
         slice: Option<(u32, u32)>,
     ) -> Result<Self, ReplayError> {
         if !naming::is_replay_adapter(adapter_id.as_str()) {
@@ -169,7 +187,7 @@ impl ReplayAdapter {
         let builder = Builder {
             fixture: &fixture,
             adapter_id: &adapter_id,
-            host_id: &host_id,
+            host_id,
             clock: &clock,
         };
         let (sources, positions) = builder.sources();
@@ -201,22 +219,26 @@ impl ReplayAdapter {
     }
 
     /// Declares in-process isolation (`--replay`) instead of a host process.
+    #[must_use]
     pub fn with_in_process(mut self, in_process: bool) -> Self {
         self.manifest = manifest(&self.manifest.adapter_id, in_process);
         self
     }
 
     /// Seed recorded in the fixture.
-    pub fn seed(&self) -> u64 {
+    #[must_use]
+    pub const fn seed(&self) -> u64 {
         self.seed
     }
 
     /// Number of fixture cycles before the replay loops.
-    pub fn cycle_count(&self) -> usize {
+    #[must_use]
+    pub const fn cycle_count(&self) -> usize {
         self.cycles.len()
     }
 
     /// Number of sources served by this host (removed ones excluded).
+    #[must_use]
     pub fn source_count(&self) -> usize {
         self.sources.iter().filter(|source| !source.removed).count()
     }
@@ -392,17 +414,14 @@ impl ReplayAdapter {
         effects: &FaultEffects,
     ) -> Observation {
         let started = self.clock.now_boot_ns();
-        let key = match &sample.entity {
-            Some(entity_id) => MetricKey {
+        let key = sample.entity.as_ref().map_or_else(
+            || source.record_key.clone(),
+            |entity_id| MetricKey {
                 entity_id: entity_id.clone(),
                 ..source.record_key.clone()
             },
-            None => source.record_key.clone(),
-        };
-        let outcome = match effects.fail {
-            Some(status) => SampleOutcome::Failed(status),
-            None => sample.outcome,
-        };
+        );
+        let outcome = effects.fail.map_or(sample.outcome, SampleOutcome::Failed);
         let mut record = match outcome {
             SampleOutcome::Value(value) => RecordFactory::ok(
                 plan,

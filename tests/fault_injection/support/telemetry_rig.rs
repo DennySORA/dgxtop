@@ -1,5 +1,5 @@
 //! The telemetry path of the composition root: adapter-host supervisor →
-//! Manager (scheduler, ingestion) → real collectors → real LiveState, with
+//! Manager (scheduler, ingestion) → real collectors → real `LiveState`, with
 //! replay hosts as the only data sources.
 
 use std::sync::Arc;
@@ -147,9 +147,9 @@ impl TelemetryRig {
         let supervisor = Supervisor::start_with_launcher(
             supervisor_config,
             plan.specs,
-            ledger.clone(),
+            &ledger,
             ingress.clone(),
-            inboxes.ingestion.clone(),
+            inboxes.ingestion,
             Arc::clone(&clock),
             logger.clone(),
             plan.launcher,

@@ -13,7 +13,7 @@
 //!   bus and its theoretical peak; on unified memory, what the processes
 //!   hold, the system RAM still available and the memory's stall pressure
 //!   (D-135).
-//! - PCIe: the link and its theoretical capacity now and at most, transmit
+//! - `PCIe`: the link and its theoretical capacity now and at most, transmit
 //!   over receive, replays.
 //! - Thermal: temperature and fans, then the device's thresholds in rising
 //!   order.
@@ -26,8 +26,8 @@
 //!   persistence, compute mode.
 //! - Device: architecture, brand, CUDA cores, board part, serial, UUID,
 //!   device node.
-//! - PCI & firmware: bus id, device id, subsystem, VBIOS, InfoROM, GSP.
-//! - Health: ECC, retired pages, NVLink, on the GPUs that keep them.
+//! - PCI & firmware: bus id, device id, subsystem, VBIOS, `InfoROM`, GSP.
+//! - Health: ECC, retired pages, `NVLink`, on the GPUs that keep them.
 //! - Topology (D-54): the NUMA node and CPUs nearest the GPU, and the path
 //!   and direct (P2P) access to each other GPU.
 //!
@@ -678,10 +678,10 @@ impl CardInfo<'_> {
 
     /// nvcc's version, or `not installed` beside a toolkit without one.
     fn nvcc(&self, has_toolkit: bool) -> Option<BlockRow> {
-        match attribute(self.card, attributes::NVCC_VERSION) {
-            Some(version) => Some(BlockRow::new("nvcc", vec![self.text(version)])),
-            None => has_toolkit.then(|| BlockRow::new("nvcc", vec![self.muted("not installed")])),
-        }
+        attribute(self.card, attributes::NVCC_VERSION).map_or_else(
+            || has_toolkit.then(|| BlockRow::new("nvcc", vec![self.muted("not installed")])),
+            |version| Some(BlockRow::new("nvcc", vec![self.text(version)])),
+        )
     }
 
     /// Toolkits besides the default one.
@@ -765,19 +765,18 @@ impl CardInfo<'_> {
             self.attribute("NUMA node", attributes::NUMA_NODES),
             self.attribute("CPU affinity", attributes::CPU_AFFINITY),
         ];
-        let peers = attribute(self.card, attributes::GPU_PEERS)
-            .map(|peers| parse_peers(&peers))
-            .unwrap_or_default();
+        let peers =
+            attribute(self.card, attributes::GPU_PEERS).map_or_default(|peers| parse_peers(&peers));
         rows.extend(peers.iter().enumerate().map(|(position, peer)| {
             let key = if position == 0 { "peers" } else { "" };
-            Some(BlockRow::new(key, self.peer(peer)))
+            Some(BlockRow::new(key, self.peer(*peer)))
         }));
         rows
     }
 
     /// `GPU 1 · host bridge (PHB) · no P2P`, the peer in its GPU's color
     /// (D-123); the selector above names each GPU's model (D-122).
-    fn peer(&self, peer: &GpuPeer) -> Value {
+    fn peer(&self, peer: GpuPeer) -> Value {
         let path = peer.link.map_or_else(
             || "path unknown".to_owned(),
             |link: GpuLink| format!("{} ({})", link.label(), link.code()),
@@ -794,7 +793,7 @@ impl CardInfo<'_> {
         ]
     }
 
-    /// ECC errors, retired pages and NVLink links.
+    /// ECC errors, retired pages and `NVLink` links.
     fn health(&self) -> Rows {
         let card = self.card;
         vec![
@@ -933,12 +932,12 @@ mod tests {
         assert_eq!(color("0.4%"), Some(context.theme.gauge_low));
         assert_ne!(color("12.0%"), Some(context.theme.gauge_low));
         let discrete = gpu_view().cards.remove(0);
-        let memory = block(&super::tests::texts(&discrete), "Memory").to_owned();
+        let memory = block(&tests::texts(&discrete), "Memory").to_owned();
         assert!(!memory.contains("pressure") && !memory.contains("available"));
     }
 
-    /// GB10 moves its data over NVLink-C2C, not its PCIe link: both are
-    /// shown, the C2C links in a block of their own after the PCIe block.
+    /// GB10 moves its data over NVLink-C2C, not its `PCIe` link: both are
+    /// shown, the C2C links in a block of their own after the `PCIe` block.
     #[test]
     fn a_gpu_with_chip_to_chip_links_shows_them_beside_pcie() {
         let mut card = gpu_view().cards.remove(1);

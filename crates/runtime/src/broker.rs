@@ -33,6 +33,7 @@ pub struct BrokerKey {
 }
 
 impl BrokerKey {
+    #[must_use]
     pub fn from_plan(plan: &ReadPlan) -> Self {
         Self {
             adapter_id: plan.adapter_id.clone(),
@@ -94,6 +95,7 @@ pub struct ReadBroker {
 impl ReadBroker {
     /// `capacity` bounds entries (in flight + recycle area); `max_requesters`
     /// bounds the requesters sharing one in-flight read.
+    #[must_use]
     pub fn new(capacity: usize, max_requesters: usize) -> Self {
         Self {
             capacity: capacity.max(1),
@@ -104,14 +106,17 @@ impl ReadBroker {
         }
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
+    #[must_use]
     pub const fn stats(&self) -> BrokerStats {
         self.stats
     }
@@ -237,6 +242,10 @@ impl ReadBroker {
     /// Fails every in-flight entry (supervisor shutdown) and returns the
     /// requesters per key.
     pub fn fail_all_in_flight(&mut self, failure: &AdapterFailure) -> Vec<(BrokerKey, Vec<Uuid>)> {
+        #[expect(
+            clippy::needless_collect,
+            reason = "the keys are collected first: completing an entry needs the map back"
+        )]
         let keys: Vec<BrokerKey> = self
             .entries
             .iter()
@@ -450,6 +459,6 @@ mod tests {
         assert_eq!(failed.len(), 2);
         assert_eq!(failed[0].1, vec![a]);
         assert_eq!(failed[1].1, vec![b]);
-        assert!(broker.complete(&key(2), Err(failure)).is_empty());
+        assert_eq!(broker.complete(&key(2), Err(failure)).len(), 0);
     }
 }

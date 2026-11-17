@@ -115,7 +115,7 @@ impl Frontend {
         let flag = Arc::clone(&stop);
         let thread = std::thread::Builder::new()
             .name("bench-frontend".to_owned())
-            .spawn(move || run_frontend(inputs, &flag))
+            .spawn(move || run_frontend(&inputs, &flag))
             .map_err(|error| error.to_string())?;
         Ok(Self {
             stop,
@@ -132,7 +132,7 @@ impl Frontend {
     }
 }
 
-fn run_frontend(inputs: FrontendInputs, stop: &AtomicBool) -> FrontendReport {
+fn run_frontend(inputs: &FrontendInputs, stop: &AtomicBool) -> FrontendReport {
     let mut report = FrontendReport::default();
     let waited_ns = Arc::new(AtomicU64::new(0));
     let last_projection = Arc::new(Mutex::new(None));
@@ -173,7 +173,7 @@ fn run_frontend(inputs: FrontendInputs, stop: &AtomicBool) -> FrontendReport {
         let started = Instant::now();
         let outcome = tui.step();
         let elapsed_us = duration_us(started.elapsed());
-        let waited_us = waited_ns
+        let wait_micros = waited_ns
             .load(Ordering::Relaxed)
             .saturating_sub(waited_before)
             / 1_000;
@@ -190,7 +190,7 @@ fn run_frontend(inputs: FrontendInputs, stop: &AtomicBool) -> FrontendReport {
         }
         let measuring = inputs.probes.is_measuring();
         if measuring && tui.stats().frames_drawn > drawn_before {
-            report.frame_us.push(elapsed_us.saturating_sub(waited_us));
+            report.frame_us.push(elapsed_us.saturating_sub(wait_micros));
         }
         let gap = last_projection
             .lock()

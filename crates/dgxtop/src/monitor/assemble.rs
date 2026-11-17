@@ -87,10 +87,14 @@ impl Wiring {
     }
 
     /// The archive (and the Overview's sizes kept beside it) is on.
-    pub(super) fn archive_on(&self, effective: &Config) -> bool {
+    pub(super) const fn archive_on(&self, effective: &Config) -> bool {
         effective.store.archive_enabled && self.sqlite_ok
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the composition root: each step builds one part from the ones before it, in order"
+    )]
     pub(super) fn assemble(self, inputs: AssembleInputs<'_>) -> Result<Application, StartError> {
         let AssembleInputs {
             cli,
@@ -105,7 +109,7 @@ impl Wiring {
         let host_id = host_identity(Path::new("/"))?;
         let boot_id = self.clock.boot_id();
         let self_pid = i32::try_from(std::process::id())
-            .map_err(|_| StartError::failure("pid out of range"))?;
+            .map_err(|_cause| StartError::failure("pid out of range"))?;
         let pid_namespace = pid_namespace_of(self_pid)?;
         let channels = ManagerChannels::create();
         let inboxes = channels.inboxes();
@@ -152,14 +156,14 @@ impl Wiring {
             &mut workers,
         )?;
         let collector_registry = default_collectors();
-        let collectors = self.spawn_collectors(
+        let collectors = Self::spawn_collectors(
             effective,
             collector_registry.clone(),
             completions.clone(),
             &mut workers,
         )?;
         let config_file = config_repository.status();
-        let config = self.spawn_config(config_repository, completions.clone(), &mut workers)?;
+        let config = Self::spawn_config(config_repository, completions.clone(), &mut workers)?;
         let audit = self.spawn_audit(effective, paths, completions.clone(), &mut workers)?;
         let actions = self.spawn_actions(completions.clone(), &mut workers)?;
         let facts = host_facts(self.namespace, cli.any_user);
@@ -182,9 +186,9 @@ impl Wiring {
         let supervisor = Supervisor::start(
             SupervisorConfig::from_config(effective),
             specs,
-            self.ledger.clone(),
+            &self.ledger.clone(),
             self.ingress.clone(),
-            inboxes.ingestion.clone(),
+            inboxes.ingestion,
             Arc::clone(&self.clock),
             Arc::clone(&self.logger),
         )?;

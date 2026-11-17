@@ -30,6 +30,7 @@ const HISTORY_TIERS_USER_VERSION: i64 = 1;
 const FORMAT_MAGIC: i32 = 0x4447_0000;
 
 /// The `application_id` that marks `format_version` as dgxtop's.
+#[must_use]
 pub fn format_stamp(format_version: u16) -> i32 {
     FORMAT_MAGIC | i32::from(format_version)
 }
@@ -54,6 +55,7 @@ pub enum SchemaKind {
 }
 
 impl SchemaKind {
+    #[must_use]
     pub const fn ddl(self) -> &'static str {
         match self {
             Self::Audit => AUDIT_DDL,
@@ -64,6 +66,7 @@ impl SchemaKind {
     }
 
     /// The `user_version` its DDL writes.
+    #[must_use]
     pub const fn user_version(self) -> i64 {
         match self {
             Self::Audit | Self::History => SCHEMA_USER_VERSION,
@@ -80,6 +83,7 @@ impl SchemaKind {
     /// appended to a process bucket keep its format (D-120): a bucket of
     /// fewer reads with them empty, so the update keeps the history, while
     /// an older version reads the longer buckets as another format.
+    #[must_use]
     pub const fn format_version(self) -> u16 {
         match self {
             Self::Audit | Self::History | Self::ProcessHistory => 1,
@@ -89,10 +93,12 @@ impl SchemaKind {
     }
 
     /// The `application_id` its files carry.
+    #[must_use]
     pub fn format_stamp(self) -> i32 {
         format_stamp(self.format_version())
     }
 
+    #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Audit => "audit",
@@ -103,6 +109,7 @@ impl SchemaKind {
     }
 
     /// Tables and indexes the DDL creates.
+    #[must_use]
     pub const fn objects(self) -> &'static [&'static str] {
         match self {
             Self::Audit => &[

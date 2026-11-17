@@ -1,8 +1,9 @@
-//! The Overview History's store (D-82): a SQLite database of dgxtop's own
-//! (`history_tiers.sqlite3`, its own `user_version` 1, format 2) holding each
-//! Overview series' closed buckets of every bar size, the latest
-//! [`dgxtop_core::tiers::TIER_BUCKETS`] of each (series, size), as
-//! the history asks ([`TierJournal::keep_latest`]).
+//! The Overview History's store (D-82).
+//!
+//! A SQLite database of dgxtop's own (`history_tiers.sqlite3`, its own
+//! `user_version` 1, format 2) holding each Overview series' closed buckets
+//! of every bar size, the latest [`dgxtop_core::tiers::TIER_BUCKETS`] of each
+//! (series, size), as the history asks ([`TierJournal::keep_latest`]).
 //!
 //! Opened like the other partitions (0600, no symlinks, format, schema and
 //! integrity checked before any write, a file of another format recreated

@@ -49,6 +49,10 @@ pub(crate) fn live_manifest(adapter: &'static str, implementation: &str) -> Adap
 }
 
 /// Typed id of a compile-time adapter name (the literals are covered by tests).
+#[expect(
+    clippy::panic,
+    reason = "a built-in constant: invalid only in a broken build, which the tests catch"
+)]
 fn static_adapter_id(adapter: &'static str) -> AdapterId {
     match AdapterId::new(adapter) {
         Ok(id) => id,
@@ -57,6 +61,10 @@ fn static_adapter_id(adapter: &'static str) -> AdapterId {
 }
 
 /// Typed read group of a compile-time group name (`naming::groups`).
+#[expect(
+    clippy::panic,
+    reason = "a built-in constant: invalid only in a broken build, which the tests catch"
+)]
 pub(crate) fn static_group(group: &'static str) -> ReadGroup {
     match ReadGroup::new(group) {
         Ok(group) => group,

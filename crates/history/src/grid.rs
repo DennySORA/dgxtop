@@ -43,12 +43,12 @@ impl MinuteGrid {
 
     /// Boot time of the first whole minute after boot 0.
     #[cfg(test)]
-    pub(crate) const fn phase_ns(&self) -> u64 {
+    pub(crate) const fn phase_ns(self) -> u64 {
         self.phase_ns
     }
 
     /// Start of the minute containing `time_ns`.
-    pub(crate) const fn floor(&self, time_ns: u64) -> u64 {
+    pub(crate) const fn floor(self, time_ns: u64) -> u64 {
         if time_ns < self.phase_ns {
             0
         } else {
@@ -58,7 +58,7 @@ impl MinuteGrid {
 
     /// End of the minute starting at (or containing) `start_ns`: the first
     /// boundary after it.
-    pub(crate) const fn end_of(&self, start_ns: u64) -> u64 {
+    pub(crate) const fn end_of(self, start_ns: u64) -> u64 {
         if start_ns < self.phase_ns {
             self.phase_ns
         } else {
@@ -67,7 +67,7 @@ impl MinuteGrid {
     }
 
     /// First boundary at or after `time_ns`.
-    pub(crate) const fn ceil(&self, time_ns: u64) -> u64 {
+    pub(crate) const fn ceil(self, time_ns: u64) -> u64 {
         if self.floor(time_ns) == time_ns {
             time_ns
         } else {
@@ -77,7 +77,7 @@ impl MinuteGrid {
 
     /// Whether `time_ns` is a minute boundary.
     #[cfg(test)]
-    pub(crate) const fn is_boundary(&self, time_ns: u64) -> bool {
+    pub(crate) const fn is_boundary(self, time_ns: u64) -> bool {
         self.floor(time_ns) == time_ns
     }
 }

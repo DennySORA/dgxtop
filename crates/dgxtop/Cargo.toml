@@ -21,7 +21,7 @@ path = "src/main.rs"
 
 [features]
 # The benchmark harness (`dgxtop::perf`); the benches require it.
-bench-support = ["dgxtop-core/test-support"]
+benchmarks = ["dgxtop-core/testing"]
 
 [dependencies]
 dgxtop-core.workspace = true
@@ -41,13 +41,15 @@ thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-dgxtop-core = { workspace = true, features = ["test-support"] }
-dgxtop-store = { workspace = true, features = ["test-support"] }
-dgxtop-manager = { workspace = true, features = ["test-support"] }
+dgxtop-core = { workspace = true, features = ["testing"] }
+dgxtop-store = { workspace = true, features = ["testing"] }
+dgxtop-manager = { workspace = true, features = ["testing"] }
 jsonschema.workspace = true
 nix.workspace = true
 libc.workspace = true
 proptest.workspace = true
+# The PTY suite sets its terminal's size.
+rustix = { workspace = true, features = ["termios"] }
 
 # Integration suites live at the repository root;
 # the composition root owns them so they may assemble several concrete crates
@@ -105,25 +107,25 @@ path = "../../tests/live_store/store_hot_query_limits.rs"
 name = "ref"
 path = "../../benches/ref/main.rs"
 harness = false
-required-features = ["bench-support"]
+required-features = ["benchmarks"]
 
 [[bench]]
 name = "history"
 path = "../../benches/history/main.rs"
 harness = false
-required-features = ["bench-support"]
+required-features = ["benchmarks"]
 
 [[bench]]
 name = "arbitration"
 path = "../../benches/arbitration/main.rs"
 harness = false
-required-features = ["bench-support"]
+required-features = ["benchmarks"]
 
 [[bench]]
 name = "projection"
 path = "../../benches/projection/main.rs"
 harness = false
-required-features = ["bench-support"]
+required-features = ["benchmarks"]
 
 [lints]
 workspace = true

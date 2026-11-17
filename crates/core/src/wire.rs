@@ -26,6 +26,11 @@ pub enum DecimalError {
 }
 
 /// Parses canonical decimal text: no sign, no leading zero, value <= `u64::MAX`.
+///
+/// # Errors
+///
+/// Returns a `DecimalError` when the text is not a canonical decimal `u64`:
+/// empty, with a leading zero or a non-digit, or too large.
 pub fn parse_decimal_u64(text: &str) -> Result<u64, DecimalError> {
     if text.is_empty() {
         return Err(DecimalError::Empty);
@@ -36,15 +41,21 @@ pub fn parse_decimal_u64(text: &str) -> Result<u64, DecimalError> {
     if text.len() > 1 && text.starts_with('0') {
         return Err(DecimalError::LeadingZero);
     }
-    text.parse::<u64>().map_err(|_| DecimalError::Overflow)
+    text.parse::<u64>().map_err(|_cause| DecimalError::Overflow)
 }
 
 /// Formats a value as the 20-digit zero padded SQLite sort key.
+#[must_use]
 pub fn format_fixed_width(value: u64) -> String {
-    format!("{value:0width$}", width = FIXED_DECIMAL_WIDTH)
+    format!("{value:0FIXED_DECIMAL_WIDTH$}")
 }
 
 /// Parses a 20-digit zero padded SQLite sort key back into a `u64`.
+///
+/// # Errors
+///
+/// Returns a `DecimalError` when the text is not a canonical decimal `u64`:
+/// empty, with a leading zero or a non-digit, or too large.
 pub fn parse_fixed_width(text: &str) -> Result<u64, DecimalError> {
     if text.len() != FIXED_DECIMAL_WIDTH {
         return Err(DecimalError::WrongWidth);
@@ -52,7 +63,7 @@ pub fn parse_fixed_width(text: &str) -> Result<u64, DecimalError> {
     if !text.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(DecimalError::NonDigit);
     }
-    text.parse::<u64>().map_err(|_| DecimalError::Overflow)
+    text.parse::<u64>().map_err(|_cause| DecimalError::Overflow)
 }
 
 /// Serde adapter: `u64` <-> canonical decimal string.
@@ -77,11 +88,22 @@ pub fn format_decimal_u64(value: u64, buffer: &mut [u8; 20]) -> &str {
 pub mod u64_decimal {
     use serde::{Deserialize, Deserializer, Serializer, de::Error};
 
+    /// # Errors
+    ///
+    /// Returns the serializer's error when the value cannot be written.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "the signature serde's `with` calls: it hands the field by reference"
+    )]
     pub fn serialize<S: Serializer>(value: &u64, serializer: S) -> Result<S::Ok, S::Error> {
         let mut buffer = [0u8; 20];
         serializer.serialize_str(super::format_decimal_u64(*value, &mut buffer))
     }
 
+    /// # Errors
+    ///
+    /// Returns the deserializer's error when the input is not of the expected
+    /// form.
     pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
         let text = std::borrow::Cow::<str>::deserialize(deserializer)?;
         super::parse_decimal_u64(&text).map_err(D::Error::custom)
@@ -92,6 +114,13 @@ pub mod u64_decimal {
 pub mod opt_u64_decimal {
     use serde::{Deserialize, Deserializer, Serializer, de::Error};
 
+    /// # Errors
+    ///
+    /// Returns the serializer's error when the value cannot be written.
+    #[expect(
+        clippy::ref_option,
+        reason = "serde hands a field's serializer a reference to the field"
+    )]
     pub fn serialize<S: Serializer>(value: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error> {
         let mut buffer = [0u8; 20];
         match value {
@@ -100,10 +129,14 @@ pub mod opt_u64_decimal {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns the deserializer's error when the input is not of the expected
+    /// form.
     pub fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Option<u64>, D::Error> {
-        let text = Option::<std::borrow::Cow<str>>::deserialize(deserializer)?;
+        let text = Option::<std::borrow::Cow<'_, str>>::deserialize(deserializer)?;
         text.map(|inner| super::parse_decimal_u64(&inner).map_err(D::Error::custom))
             .transpose()
     }
@@ -113,6 +146,9 @@ pub mod opt_u64_decimal {
 pub mod vec_u64_decimal {
     use serde::{Deserialize, Deserializer, Serializer, de::Error, ser::SerializeSeq};
 
+    /// # Errors
+    ///
+    /// Returns the serializer's error when the value cannot be written.
     pub fn serialize<S: Serializer>(values: &[u64], serializer: S) -> Result<S::Ok, S::Error> {
         let mut sequence = serializer.serialize_seq(Some(values.len()))?;
         for value in values {
@@ -121,8 +157,12 @@ pub mod vec_u64_decimal {
         sequence.end()
     }
 
+    /// # Errors
+    ///
+    /// Returns the deserializer's error when the input is not of the expected
+    /// form.
     pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u64>, D::Error> {
-        let texts = Vec::<std::borrow::Cow<str>>::deserialize(deserializer)?;
+        let texts = Vec::<std::borrow::Cow<'_, str>>::deserialize(deserializer)?;
         texts
             .iter()
             .map(|text| super::parse_decimal_u64(text).map_err(D::Error::custom))

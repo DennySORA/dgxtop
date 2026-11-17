@@ -19,6 +19,7 @@ use dgxtop_core::tiers::{TIER_BUCKETS, Tier};
 use super::book::{MAX_PENDING_BYTES, TierMinute};
 use super::budget::STORE_BUDGET_BYTES;
 use super::*;
+use dgxtop_core::num::ToF64Lossy;
 
 const SECOND: i64 = 1_000_000_000;
 const MINUTE: i64 = 60 * SECOND;
@@ -52,19 +53,17 @@ fn power() -> SeriesInEveryBoot {
     SeriesInEveryBoot::from(&metric_key("gpu:0", "gpu.power.draw", "gpu"))
 }
 
-#[allow(clippy::cast_precision_loss)]
 fn watts(minute: i64) -> f64 {
-    100.0 + (minute % 53) as f64
+    100.0 + (minute % 53).to_f64_lossy()
 }
 
 /// A boot minute starting 17 s past the wall clock's minute, fully held.
-#[allow(clippy::cast_precision_loss)]
 fn minute_at(start: i64, value: f64) -> OverviewBucket {
     let covered = MINUTE.unsigned_abs();
     OverviewBucket::gauge(
         start + 17 * SECOND,
         covered,
-        value * covered as f64,
+        value * covered.to_f64_lossy(),
         (value, value),
         12,
     )
@@ -278,11 +277,9 @@ fn bars_are_local_clock_buckets_holding_only_what_was_recorded() {
     let gaps = tiers.bars(&power(), Tier::OneMinute, window, &[]);
     assert_eq!(gaps.bars.len(), 95, "the missing ten minutes are gaps");
     let unknown = SeriesInEveryBoot::from(&metric_key("gpu:9", "gpu.power.draw", "gpu"));
-    assert!(
-        tiers
-            .bars(&unknown, Tier::OneHour, window, &[])
-            .bars
-            .is_empty()
+    assert_eq!(
+        tiers.bars(&unknown, Tier::OneHour, window, &[]).bars.len(),
+        0
     );
 }
 
@@ -697,7 +694,7 @@ fn a_series_let_go_during_the_startup_is_not_read_back() {
 #[derive(Clone, Default)]
 struct StoppingPort {
     jobs: CapturingDispatch<HistoryTierJob>,
-    closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    closed: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl StoppingPort {
@@ -745,7 +742,9 @@ fn the_startup_ends_when_the_store_stops() {
         }
         tiers.feed(vec![live(1)]);
         tiers.with_book(|book| {
-            let held = book.tiers_of(&power()).map_or(0, |tiers| tiers.len());
+            let held = book
+                .tiers_of(&power())
+                .map_or(0, dgxtop_compression::TieredSeries::len);
             assert!(held > 0, "{step}: the series is fed live");
         });
         let bars = tiers.bars(&power(), Tier::OneHour, window, &[]);
@@ -782,7 +781,7 @@ fn the_store_budget_lets_the_series_seen_longest_ago_go() {
         .on_store(HistoryTierCompletion::Appended(Ok(over)));
     run.tiers
         .with_book(|book| assert_eq!(book.len(), 2, "the deletion is unanswered"));
-    assert!(appends(&run.port.take()).is_empty());
+    assert_eq!(appends(&run.port.take()).len(), 0);
     let within = TierStoreUsage {
         used_bytes: STORE_BUDGET_BYTES,
         series: 2,
@@ -810,7 +809,7 @@ fn waiting_minutes_are_bounded_by_bytes() {
         (MIDNIGHT, MIDNIGHT + 48 * HOUR),
         &[],
     );
-    let kept = MAX_PENDING_BYTES / std::mem::size_of::<OverviewBucket>();
+    let kept = MAX_PENDING_BYTES / size_of::<OverviewBucket>();
     assert_eq!(bars.bars.len(), kept);
     assert_eq!(
         bars.bars.last().map(|bar| bar.start_utc_ns),
@@ -831,7 +830,7 @@ fn unsent_buckets_are_bounded_by_bytes() {
     }
     let all = book.unsent_bytes();
     let rows = book.take_unsent();
-    let per_row = std::mem::size_of::<TierRow>() + "test-hostgpu:0gpu.power.drawgpu".len();
+    let per_row = size_of::<TierRow>() + "test-hostgpu:0gpu.power.drawgpu".len();
     assert_eq!(all, rows.len() * per_row, "rows and their strings");
     let latest = rows.last().cloned();
     book.return_unsent(rows);
@@ -902,7 +901,7 @@ fn store_issues_are_logged_with_their_codes() {
     let logger = Arc::new(dgxtop_core::testing::MemoryLogger::default());
     let tiers = OverviewTiers::new();
     let port = StoppingPort::default();
-    let shared: Arc<dyn dgxtop_core::ports::Logger> = logger.clone();
+    let shared: Arc<dyn Logger> = logger.clone();
     tiers.attach_store(
         Box::new(port.clone()),
         host_id("test-host"),

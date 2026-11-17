@@ -163,7 +163,7 @@ impl StoreLink {
     /// Past the store's budget the series given a minute longest ago give
     /// way, never while a deletion is still unanswered (the usage would
     /// not show it yet).
-    fn give_way_for_store(&mut self, book: &mut TierBook, usage: TierStoreUsage) {
+    fn give_way_for_store(&self, book: &mut TierBook, usage: TierStoreUsage) {
         let deleting = !self.forget.is_empty() || self.appends_inflight.contains(&true);
         let count = budget::series_giving_way(usage, budget::STORE_BUDGET_BYTES);
         if !deleting && count > 0 {

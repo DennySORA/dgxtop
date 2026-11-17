@@ -35,7 +35,7 @@ impl Default for Backlog {
 
 impl Backlog {
     /// A backlog whose buckets keep within `budget_bytes`.
-    pub(crate) fn with_budget(budget_bytes: usize) -> Self {
+    pub(crate) const fn with_budget(budget_bytes: usize) -> Self {
         Self {
             runs: BTreeMap::new(),
             buckets: VecDeque::new(),
@@ -105,7 +105,7 @@ impl Backlog {
 /// What a refused bucket costs: the row and its key's texts.
 fn row_bytes(row: &RunBucketRow) -> usize {
     let key = &row.key;
-    std::mem::size_of::<RunBucketRow>()
+    size_of::<RunBucketRow>()
         + key.host_id.as_str().len()
         + key.boot_id.as_str().len()
         + key.pid_namespace.as_str().len()
@@ -221,7 +221,7 @@ mod tests {
             pids(taken.buckets.iter().map(|row| &row.key).collect()),
             vec![2]
         );
-        assert!(taken.keep_latest.is_empty());
+        assert_eq!(taken.keep_latest.len(), 0);
         assert_eq!(
             pids(taken.forget.iter().collect()),
             vec![1],

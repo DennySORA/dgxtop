@@ -6,7 +6,7 @@
 //!   permission denied) with a reason and every capability unsupported;
 //!   re-open attempts are throttled (default 60 s).
 //! * Entities are `gpu:<UUID>`; values are native (mW, mJ, MHz, percent,
-//!   degC, bytes, count). PCIe throughput keeps NVML's unproven "KB/s" as
+//!   degC, bytes, count). `PCIe` throughput keeps NVML's unproven "KB/s" as
 //!   `KB_unverified_per_second`, which the collector rejects on purpose.
 //! * Unsupported or denied queries yield `unsupported`/`permission_denied`
 //!   records (never 0) and are re-probed at most once per probe interval.
@@ -68,6 +68,16 @@ pub const MIN_REINIT_INTERVAL_MS: u64 = 60_000;
 const INIT_PROBE_KEY: &str = "nvml.init";
 
 /// Static manifest of the NVML adapter (`examples/adapter-manifest.nvml.json`).
+///
+/// # Panics
+///
+/// Panics when the embedded manifest is invalid, which only a broken build
+/// has; its tests catch that.
+#[must_use]
+#[expect(
+    clippy::panic,
+    reason = "a built-in constant: invalid only in a broken build, which the tests catch"
+)]
 pub fn manifest() -> AdapterManifest {
     serde_json::from_str(include_str!(
         "../../../../contracts/examples/adapter-manifest.nvml.json"
@@ -126,6 +136,14 @@ pub struct NvmlAdapter {
     tombstones: Tombstones,
     /// Where the kernel module and CUDA toolkits are read from.
     stack_files: Box<dyn StackFiles>,
+}
+
+impl std::fmt::Debug for NvmlAdapter {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NvmlAdapter")
+            .finish_non_exhaustive()
+    }
 }
 
 impl NvmlAdapter {
@@ -288,12 +306,9 @@ impl NvmlAdapter {
             now,
             &mut self.tracker,
         );
-        let change = match applied {
-            Ok(change) => change,
-            Err(_) => {
-                self.drop_session("NVML_SESSION_LOST");
-                return self.unavailable_delta(request);
-            }
+        let Ok(change) = applied else {
+            self.drop_session("NVML_SESSION_LOST");
+            return self.unavailable_delta(request);
         };
         self.lost_devices.clear();
         if change.generation_changed

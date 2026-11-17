@@ -26,6 +26,14 @@ pub struct ProcessHistoryHandles {
     pub runs: Arc<dyn ProcessHistoryReader>,
 }
 
+impl std::fmt::Debug for ProcessHistoryHandles {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProcessHistoryHandles")
+            .finish_non_exhaustive()
+    }
+}
+
 /// What became of a deletion handed to the process actor (D-108).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Deletion {
@@ -98,7 +106,9 @@ impl ProcessHistoryLink {
         // A tick refused for a full queue changes nothing: the queue holds
         // inputs that tick too.
         if let Some(inputs) = &self.inputs {
-            let _ = inputs.try_dispatch(ProcessHistoryInput::Tick);
+            inputs
+                .try_dispatch(ProcessHistoryInput::Tick)
+                .unwrap_or_default();
         }
     }
 
@@ -184,7 +194,7 @@ impl ProcessHistoryLink {
 }
 
 /// What tells one table from the next: its cycle and read time.
-fn table_identity(table: &ProcessTable) -> (u64, u64) {
+const fn table_identity(table: &ProcessTable) -> (u64, u64) {
     (table.cycle_id, table.read_finished_boot_ns)
 }
 

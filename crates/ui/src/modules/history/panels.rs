@@ -6,7 +6,7 @@
 //! memory's also with its stall pressure, `some` and `full`, where the
 //! kernel reports it (D-135), unless a key of their own folded those two
 //! strips away (D-144); every temperature the machine reports, each CPU
-//! package's, the SoC's (D-137), each GPU's and the charted drive's; the
+//! package's, the `SoC`'s (D-137), each GPU's and the charted drive's; the
 //! power, the host's total and each CPU package's once the CPU's is read
 //! (D-106), else each GPU's; the disk's read and write and the interface's
 //! receive and transmit rates (two strips on one scale, the tallest column
@@ -101,7 +101,7 @@ impl<'a> Series<'a> {
         }
     }
 
-    pub(super) fn error(&self) -> Option<&'a str> {
+    pub(super) const fn error(&self) -> Option<&'a str> {
         match self.state {
             SeriesState::Failed(error) => Some(error),
             SeriesState::Ready | SeriesState::Pending => None,
@@ -440,8 +440,7 @@ fn group<'a>((title, fold): (&str, &'static str), strips: Vec<Strip<'a>>) -> Opt
 fn memory_panel<'a>(history: &'a HistoryView, used: &'a HistoryChartView) -> Panel<'a> {
     let total = used
         .scale_max
-        .map(|total| format!(" · {}", format_value(total, used.unit)))
-        .unwrap_or_default();
+        .map_or_default(|total| format!(" · {}", format_value(total, used.unit)));
     let pressure: Vec<Strip<'a>> = [
         (HistoryChartKind::MemoryPressureSome, "some"),
         (HistoryChartKind::MemoryPressureFull, "full"),
@@ -563,7 +562,7 @@ fn machine_power_panel(history: &HistoryView) -> Option<Panel<'_>> {
 }
 
 /// Every temperature the machine reports (D-137, D-148): each CPU
-/// package's, the SoC's (`SoC`), each GPU's in its color and the charted
+/// package's, the `SoC`'s (`SoC`), each GPU's in its color and the charted
 /// drive's (`disk`), all against the same 100 °C.
 fn machine_temperature_strips(history: &HistoryView) -> Vec<Strip<'_>> {
     let of = |kind, label: &'static str| {
@@ -1054,6 +1053,9 @@ mod tests {
     /// not by its share of that scale. It stays one panel under one fold.
     #[test]
     fn the_memory_panel_adds_the_stall_pressure_strips() {
+        fn machine(history: &HistoryView) -> Vec<Panel<'_>> {
+            panels(history, Page::Overview)
+        }
         let mut history = history_view();
         let template = history.charts[1].clone();
         let pressure =
@@ -1064,9 +1066,6 @@ mod tests {
         history
             .charts
             .push(pressure(HistoryChartKind::MemoryPressureFull, 0.02));
-        fn machine(history: &HistoryView) -> Vec<Panel<'_>> {
-            panels(history, Page::Overview)
-        }
         let panels = machine(&history);
         let memory = &panels[1];
         assert_eq!(memory.title, "Memory used and pressure · 64.0 GiB");

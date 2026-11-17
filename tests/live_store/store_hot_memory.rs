@@ -1,11 +1,17 @@
 //! AT13/AT25 (retired snapshots stay accounted, only the latest is kept),
 //! eviction under a tiny budget, series caps and slot generations.
 
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
+
+#[expect(dead_code, reason = "each suite uses its part of the shared helpers")]
 #[path = "store_hot_support.rs"]
 mod support;
 
 use dgxtop_core::budget::{ByteLedger, Partition, PartitionLimits};
 use dgxtop_core::canonical::CanonicalValue;
+use dgxtop_core::num::ToF64Lossy;
 use dgxtop_core::ports::SnapshotReader;
 use dgxtop_core::quality::Namespace;
 use dgxtop_core::tiers::Tier;
@@ -26,7 +32,7 @@ fn at13_snapshots_held_by_a_slow_reader_stay_accounted() {
     let held = harness.snapshots.latest();
     for second in 2..=21u64 {
         harness.commit(
-            wide_batch(100, 50.0 + second as f64, second * SECOND),
+            wide_batch(100, 50.0 + second.to_f64_lossy(), second * SECOND),
             vec![],
             second * SECOND,
         );
@@ -56,7 +62,7 @@ fn at25_the_store_retains_only_the_latest_snapshot() {
     let single = harness.ledger.used(Partition::HotState);
     for second in 2..=200u64 {
         harness.commit(
-            wide_batch(50, second as f64, second * SECOND),
+            wide_batch(50, second.to_f64_lossy(), second * SECOND),
             vec![],
             second * SECOND,
         );
@@ -79,7 +85,7 @@ fn a_tiny_budget_holds_hours_of_history_within_its_partitions() {
     let ledger = ByteLedger::new(PartitionLimits::for_memory_limit_mib(1));
     let mut settings = config();
     settings.sampling.interval_ms = 5000;
-    let mut harness = Harness::build(settings, ledger.clone(), Namespace::Live, false);
+    let mut harness = Harness::build(settings, ledger, Namespace::Live, false);
     let keys: Vec<_> = (0..10)
         .map(|index| temperature_key(&format!("gpu:{index}")))
         .collect();
@@ -195,11 +201,15 @@ fn series_slots_are_never_reused_for_another_series_after_churn() {
     harness.clock.set_boot_ns(start + MINUTE);
     let old = harness.bars(&first, Tier::OneMinute, (0, start + MINUTE));
     assert!(
-        old.iter().all(|bar| bar.maximum == 11.0),
+        old.iter()
+            .all(|bar| (bar.maximum - 11.0).abs() < f64::EPSILON),
         "the old series keeps only its own values"
     );
     let new = harness.bars(&replacement, Tier::OneMinute, (0, start + MINUTE));
-    assert!(new.iter().all(|bar| bar.maximum == 99.0));
+    assert!(
+        new.iter()
+            .all(|bar| (bar.maximum - 99.0).abs() < f64::EPSILON)
+    );
     assert_eq!(
         new.iter().map(|bar| bar.covered_ns).sum::<u64>(),
         10 * SECOND + 2 * SECOND

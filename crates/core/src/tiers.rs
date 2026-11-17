@@ -1,10 +1,11 @@
-//! The bar sizes every history shares (D-77, D-79): the Process and the
-//! Overview History keep each series in buckets of these sizes, 1, 5, 10
-//! and 30 minutes, 1, 2, 4, 6, 8, 12, 18 and 24 hours (and 5 s buckets for
-//! the last 10 minutes), each bucket the merge of the finer ones it covers,
-//! aligned to the local clock. Each size keeps its latest
-//! [`TIER_BUCKETS`], as many as the widest chart draws: older time is in
-//! the coarser sizes already.
+//! The bar sizes every history shares (D-77, D-79).
+//!
+//! The Process and the Overview History keep each series in buckets of
+//! these sizes, 1, 5, 10 and 30 minutes, 1, 2, 4, 6, 8, 12, 18 and 24 hours
+//! (and 5 s buckets for the last 10 minutes), each bucket the merge of the
+//! finer ones it covers, aligned to the local clock. Each size keeps its
+//! latest [`TIER_BUCKETS`], as many as the widest chart draws: older time
+//! is in the coarser sizes already.
 
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +51,7 @@ impl Tier {
         Self::OneDay,
     ];
 
+    #[must_use]
     pub const fn step_ns(self) -> u64 {
         let minutes = match self {
             Self::Recent => return 5 * NANOS_PER_SECOND,
@@ -71,6 +73,7 @@ impl Tier {
 
     /// The size whose closed buckets this one merges: the coarsest finer
     /// size its step is a multiple of (18 hours take 6, 24 take 12).
+    #[must_use]
     pub const fn source(self) -> Option<Self> {
         Some(match self {
             Self::Recent => return None,
@@ -88,12 +91,14 @@ impl Tier {
     }
 
     /// Its position in [`Tier::ALL`].
+    #[must_use]
     pub const fn level(self) -> usize {
         self as usize
     }
 
     /// Buckets of this size a series keeps at most: 10 minutes of 5 s
     /// buckets, else [`TIER_BUCKETS`].
+    #[must_use]
     pub const fn capacity(self) -> usize {
         match self {
             Self::Recent => 120,
@@ -103,6 +108,7 @@ impl Tier {
 
     /// The code stored in the databases. A stored code never changes
     /// meaning: renumbering needs a new format version (D-85).
+    #[must_use]
     pub const fn code(self) -> i64 {
         match self {
             Self::Recent => 0,
@@ -121,17 +127,20 @@ impl Tier {
         }
     }
 
+    #[must_use]
     pub fn from_code(code: i64) -> Option<Self> {
         Self::ALL.into_iter().find(|tier| tier.code() == code)
     }
 
     /// [`Self::step_ns`] as a span of signed UTC time.
+    #[must_use]
     pub fn step_i64(self) -> i64 {
         i64::try_from(self.step_ns()).unwrap_or(i64::MAX)
     }
 
     /// The start of the bucket holding `utc_ns`, its boundaries moved by
     /// `shift_ns` (the local clock's offset, so a day is a local day).
+    #[must_use]
     pub fn align(self, utc_ns: i64, shift_ns: i64) -> i64 {
         let step = self.step_i64();
         utc_ns
@@ -144,6 +153,7 @@ impl Tier {
     /// `[start, end)` of `columns` bars of this size ending with the one
     /// holding `utc_ns`: every chart's window, so the Overview's and the
     /// Process History's bars share their boundaries (D-79).
+    #[must_use]
     pub fn window_ending_at(self, utc_ns: i64, shift_ns: i64, columns: i64) -> (i64, i64) {
         let step = self.step_i64();
         let end = self.align(utc_ns, shift_ns).saturating_add(step);
@@ -152,10 +162,12 @@ impl Tier {
 }
 
 /// How much time one bar of a chart covers (D-77, D-78): its mean of every
-/// sample in that time. The Process and the Overview History share these
-/// sizes; `Auto` (Process History only) takes the finest that shows the
-/// whole run. Serialized as its token (`1m`, `24h`, `auto`), as the
-/// session's bar sizes travel (D-80).
+/// sample in that time.
+///
+/// The Process and the Overview History share these sizes; `Auto` (Process
+/// History only) takes the finest that shows the whole run. Serialized as
+/// its token (`1m`, `24h`, `auto`), as the session's bar sizes travel
+/// (D-80).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum BarSize {
     #[serde(rename = "auto")]
@@ -195,11 +207,13 @@ impl Default for BarSize {
 
 impl BarSize {
     /// The Overview History's default (it has no `Auto`).
+    #[must_use]
     pub const fn overview_default() -> Self {
         Self::OneMinute
     }
 
     /// As the Overview History draws it: `Auto` is its default.
+    #[must_use]
     pub const fn for_overview(self) -> Self {
         match self {
             Self::Auto => Self::overview_default(),
@@ -209,6 +223,7 @@ impl BarSize {
 
     /// The next (or previous) size the Overview History steps to, wrapping
     /// past `Auto`.
+    #[must_use]
     pub fn step_overview(self, forward: bool) -> Self {
         match self.for_overview().step(forward) {
             Self::Auto => self.for_overview().step(forward).step(forward),
@@ -233,6 +248,7 @@ impl BarSize {
         Self::OneDay,
     ];
 
+    #[must_use]
     pub const fn token(self) -> &'static str {
         match self {
             Self::Auto => "auto",
@@ -251,11 +267,13 @@ impl BarSize {
         }
     }
 
+    #[must_use]
     pub fn parse(token: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|bar| bar.token() == token)
     }
 
     /// The bucket size its bars are; `None` for `Auto`.
+    #[must_use]
     pub const fn tier(self) -> Option<Tier> {
         Some(match self {
             Self::Auto => return None,
@@ -274,6 +292,7 @@ impl BarSize {
         })
     }
 
+    #[must_use]
     pub const fn step_ns(self) -> Option<u64> {
         match self.tier() {
             Some(tier) => Some(tier.step_ns()),
@@ -282,6 +301,7 @@ impl BarSize {
     }
 
     /// The next (or with `forward` false the previous) size, wrapping.
+    #[must_use]
     pub fn step(self, forward: bool) -> Self {
         let count = Self::ALL.len();
         let position = Self::ALL.iter().position(|bar| *bar == self).unwrap_or(0);

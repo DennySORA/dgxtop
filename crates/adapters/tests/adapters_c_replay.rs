@@ -1,6 +1,9 @@
 //! Replay adapter, fixture validation and REF generator integration tests.
-#![allow(clippy::unwrap_used, clippy::expect_used)] // tests may unwrap
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
+#[expect(dead_code, reason = "each suite uses its part of the shared helpers")]
 #[path = "fixtures/adapters_c/support.rs"]
 mod support;
 
@@ -24,7 +27,7 @@ use dgxtop_core::testing::adapter_id;
 use support::*;
 
 /// Violation code of an invalid fixture; other errors have none.
-fn code_of(error: &ReplayError) -> Option<&'static str> {
+const fn code_of(error: &ReplayError) -> Option<&'static str> {
     match error {
         ReplayError::Invalid(violation) => Some(violation.code),
         _ => None,
@@ -79,7 +82,7 @@ fn row(id: &str, value: u64) -> FixtureSample {
     sample
 }
 
-/// Package temperature, a counter, a simulated SoC and a process row; 3 cycles.
+/// Package temperature, a counter, a simulated `SoC` and a process row; 3 cycles.
 fn base_fixture() -> ReplayFixture {
     let mut temperature = fixture_source(
         "hwmon:t:temp1",
@@ -157,10 +160,10 @@ fn base_fixture() -> ReplayFixture {
 }
 
 fn replay_adapter(
-    fixture: ReplayFixture,
+    fixture: &ReplayFixture,
     clock: &std::sync::Arc<dgxtop_core::testing::FakeClock>,
 ) -> ReplayAdapter {
-    ReplayAdapter::from_fixture(fixture, adapter_id(ADAPTER), time(clock), host(), None).unwrap()
+    ReplayAdapter::from_fixture(fixture, adapter_id(ADAPTER), time(clock), &host(), None).unwrap()
 }
 
 fn read_group_records(
@@ -175,7 +178,7 @@ fn read_group_records(
         group,
         cycle,
         deadline(clock),
-        Vec::new(),
+        &Vec::new(),
     ))
 }
 
@@ -217,6 +220,10 @@ fn same_seed_produces_identical_bytes_and_other_seeds_differ() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one scenario walked from start to end: its steps share their state"
+)]
 fn reference_fixture_is_byte_identical_and_matches_the_ref_workload() {
     let profile = RefProfile::reference();
     let fixture = generate_ref_fixture(20_261_004, &profile);
@@ -385,7 +392,7 @@ fn validation_rejects_live_sample_kinds() {
         assert_eq!(violation_of(&fixture), "LIVE_SAMPLE_KIND");
         let clock = clock();
         let error =
-            ReplayAdapter::from_fixture(fixture, adapter_id(ADAPTER), time(&clock), host(), None)
+            ReplayAdapter::from_fixture(&fixture, adapter_id(ADAPTER), time(&clock), &host(), None)
                 .err()
                 .unwrap();
         assert_eq!(code_of(&error), Some("LIVE_SAMPLE_KIND"));
@@ -468,26 +475,26 @@ fn validation_rejects_oversize_inputs() {
 fn adapter_ids_and_manifests_stay_in_the_replay_namespace() {
     let clock = clock();
     let wrong = ReplayAdapter::from_fixture(
-        base_fixture(),
+        &base_fixture(),
         adapter_id("hwmon"),
         time(&clock),
-        host(),
+        &host(),
         None,
     );
     assert!(matches!(wrong, Err(ReplayError::NotReplayAdapter(_))));
     let slice = ReplayAdapter::from_fixture(
-        base_fixture(),
+        &base_fixture(),
         adapter_id(ADAPTER),
         time(&clock),
-        host(),
+        &host(),
         Some((2, 2)),
     );
     assert!(matches!(slice, Err(ReplayError::InvalidSlice { .. })));
     let adapter = ReplayAdapter::from_fixture(
-        base_fixture(),
+        &base_fixture(),
         adapter_id("replay-3"),
         time(&clock),
-        host(),
+        &host(),
         None,
     )
     .unwrap();
@@ -509,7 +516,7 @@ fn adapter_ids_and_manifests_stay_in_the_replay_namespace() {
 #[test]
 fn records_are_labelled_replay_and_stamped_with_the_current_clock() {
     let clock = clock();
-    let mut adapter = replay_adapter(base_fixture(), &clock);
+    let mut adapter = replay_adapter(&base_fixture(), &clock);
     let (_, pages) = discover(&mut adapter, ADAPTER, 0, deadline(&clock));
     let catalog = sources(&pages);
     assert_eq!(catalog.len(), 4);
@@ -549,7 +556,7 @@ fn records_are_labelled_replay_and_stamped_with_the_current_clock() {
 #[test]
 fn failed_samples_have_no_value_and_absent_samples_have_no_record() {
     let clock = clock();
-    let mut adapter = replay_adapter(base_fixture(), &clock);
+    let mut adapter = replay_adapter(&base_fixture(), &clock);
     discover(&mut adapter, ADAPTER, 0, deadline(&clock));
     let timeout = read_group_records(&mut adapter, "thermal.fast", 1, &clock);
     assert_eq!(timeout[0].read_status, ReadStatus::Timeout);
@@ -559,7 +566,10 @@ fn failed_samples_have_no_value_and_absent_samples_have_no_record() {
             .reason_codes
             .contains(&"SYNTHETIC_TIMEOUT".to_owned())
     );
-    assert!(read_group_records(&mut adapter, "thermal.fast", 2, &clock).is_empty());
+    assert_eq!(
+        read_group_records(&mut adapter, "thermal.fast", 2, &clock),
+        [] as [dgxtop_core::observation::Observation; 0]
+    );
     let zero = read_group_records(&mut adapter, "hwmon.fast", 2, &clock);
     assert_eq!(zero[0].read_status, ReadStatus::Ok);
     assert_eq!(
@@ -572,7 +582,7 @@ fn failed_samples_have_no_value_and_absent_samples_have_no_record() {
 #[test]
 fn cycles_wrap_and_counters_keep_increasing_across_loops() {
     let clock = clock();
-    let mut adapter = replay_adapter(base_fixture(), &clock);
+    let mut adapter = replay_adapter(&base_fixture(), &clock);
     discover(&mut adapter, ADAPTER, 0, deadline(&clock));
     assert_eq!(adapter.cycle_count(), 3);
     let values: Vec<u64> = (0..8)
@@ -603,7 +613,7 @@ fn removed_source_reads_removed_then_leaves_the_catalog() {
         },
     });
     let clock = clock();
-    let mut adapter = replay_adapter(fixture, &clock);
+    let mut adapter = replay_adapter(&fixture, &clock);
     let (generation, _) = discover(&mut adapter, ADAPTER, 0, deadline(&clock));
     assert_eq!(
         read_group_records(&mut adapter, "hwmon.fast", 0, &clock)[0].read_status,
@@ -619,8 +629,14 @@ fn removed_source_reads_removed_then_leaves_the_catalog() {
         pages.last().unwrap().removed_sources,
         vec![SourceId::new("hwmon:t:temp1").unwrap()]
     );
-    assert!(read_group_records(&mut adapter, "hwmon.fast", 2, &clock).is_empty());
-    assert!(read_group_records(&mut adapter, "hwmon.fast", 3, &clock).is_empty());
+    assert_eq!(
+        read_group_records(&mut adapter, "hwmon.fast", 2, &clock),
+        [] as [dgxtop_core::observation::Observation; 0]
+    );
+    assert_eq!(
+        read_group_records(&mut adapter, "hwmon.fast", 3, &clock),
+        [] as [dgxtop_core::observation::Observation; 0]
+    );
     assert_eq!(adapter.source_count(), 3);
 }
 
@@ -633,7 +649,7 @@ fn generation_change_bumps_generations_once_per_cycle() {
         kind: FaultKind::GenerationChange,
     });
     let clock = clock();
-    let mut adapter = replay_adapter(fixture, &clock);
+    let mut adapter = replay_adapter(&fixture, &clock);
     let (generation, _) = discover(&mut adapter, ADAPTER, 0, deadline(&clock));
     assert_eq!(
         read_group_records(&mut adapter, "hwmon.fast", 0, &clock)[0]
@@ -687,7 +703,7 @@ fn large_groups_are_paged_consistently() {
     }
     fixture.cycles[0].extend(cycle);
     let clock = clock();
-    let mut adapter = replay_adapter(fixture, &clock);
+    let mut adapter = replay_adapter(&fixture, &clock);
     let pages = discover_all(&mut adapter, ADAPTER, 0, deadline(&clock));
     assert!(pages.len() >= 2);
     assert!(
@@ -701,7 +717,7 @@ fn large_groups_are_paged_consistently() {
         "hwmon.fast",
         0,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     );
     assert_eq!(batches.len(), 2);
     assert_eq!(batches[0].records.len(), 256);
@@ -713,7 +729,7 @@ fn large_groups_are_paged_consistently() {
 #[test]
 fn slot_selection_and_invalid_plans() {
     let clock = clock();
-    let mut adapter = replay_adapter(base_fixture(), &clock);
+    let mut adapter = replay_adapter(&base_fixture(), &clock);
     let (_, pages) = discover(&mut adapter, ADAPTER, 0, deadline(&clock));
     let slot = source(&sources(&pages), "procfs:t:user").slot;
     let selected = records(&read_all(
@@ -722,7 +738,7 @@ fn slot_selection_and_invalid_plans() {
         "procfs.cpu",
         0,
         deadline(&clock),
-        vec![slot],
+        &[slot],
     ));
     assert_eq!(selected.len(), 1);
     let none = records(&read_all(
@@ -731,9 +747,9 @@ fn slot_selection_and_invalid_plans() {
         "procfs.cpu",
         0,
         deadline(&clock),
-        vec![slot + 100],
+        &[slot + 100],
     ));
-    assert!(none.is_empty());
+    assert_eq!(none, [] as [dgxtop_core::observation::Observation; 0]);
     let unknown = adapter.read(&read_plan(
         ADAPTER,
         "fast",
@@ -758,7 +774,7 @@ fn slot_selection_and_invalid_plans() {
         "nvml.fast",
         0,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     assert!(
         other_group.is_empty(),
@@ -782,7 +798,10 @@ fn shipped_demo_fixture_loads_and_shows_package_soc_and_conflict() {
     let fixture = ReplayFixture::load(Path::new(DEMO)).unwrap();
     assert_eq!(fixture.cycles.len(), 60);
     assert_eq!(
-        fixture.host_id.as_ref().map(|id| id.as_str()),
+        fixture
+            .host_id
+            .as_ref()
+            .map(dgxtop_core::identity::HostId::as_str),
         Some("demo-host")
     );
     assert_eq!(
@@ -793,7 +812,7 @@ fn shipped_demo_fixture_loads_and_shows_package_soc_and_conflict() {
         Path::new(DEMO),
         adapter_id(ADAPTER),
         time(&clock),
-        host(),
+        &host(),
         None,
     )
     .unwrap()

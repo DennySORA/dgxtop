@@ -3,6 +3,11 @@
 //! Overview's sizes (D-82); the point, byte and scan caps belonged to the
 //! query engine D-90 removed.
 
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
+
+#[expect(dead_code, reason = "each suite uses its part of the shared helpers")]
 #[path = "store_hot_support.rs"]
 mod support;
 
@@ -12,6 +17,7 @@ use dgxtop_core::clock::TimeProvider;
 use dgxtop_core::errors::ErrorCode;
 use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::identity::BootId;
+use dgxtop_core::num::ToF64Lossy;
 use dgxtop_core::overview_history::{OverviewAnswer, OverviewRequest};
 use dgxtop_core::ports::{CancelFlag, OverviewReader};
 use dgxtop_core::testing::boot_id;
@@ -56,7 +62,7 @@ fn at38_deadline_returns_timed_out() {
     let key = temperature_key("gpu:0");
     for second in 0..300u64 {
         harness.commit(
-            vec![gauge(&key, (second % 50) as f64, second * SECOND)],
+            vec![gauge(&key, (second % 50).to_f64_lossy(), second * SECOND)],
             vec![],
             second * SECOND,
         );

@@ -102,7 +102,7 @@ pub(crate) fn series_overhead_bytes(key: &MetricKey) -> u64 {
         + key.entity_id.as_str().len()
         + key.metric_id.as_str().len()
         + key.scope.as_str().len();
-    let size = std::mem::size_of::<Series>().saturating_add(strings);
+    let size = size_of::<Series>().saturating_add(strings);
     SERIES_BASE_BYTES.saturating_add(u64::try_from(size).unwrap_or(u64::MAX))
 }
 
@@ -215,7 +215,7 @@ impl Series {
         self.gauge
             .raw
             .try_push(record)
-            .map_err(|_| DropReason::Capacity)?;
+            .map_err(|_cause| DropReason::Capacity)?;
         self.gauge.last = Some(record);
         self.last_activity_ns = self.last_activity_ns.max(now_ns);
         Ok(())
@@ -229,7 +229,7 @@ impl Series {
         self.counter
             .raw
             .try_push(record)
-            .map_err(|_| DropReason::Capacity)?;
+            .map_err(|_cause| DropReason::Capacity)?;
         self.counter.last_end_ns = Some(record.end_ns);
         self.last_activity_ns = self.last_activity_ns.max(now_ns);
         Ok(())
@@ -390,10 +390,9 @@ impl Series {
     /// as finished minutes); before the grid, `target_ns` itself, because no minute
     /// can be cut yet and raw history must not wait for the wall clock.
     fn raw_floor_target(&self, target_ns: u64, grid: Option<MinuteGrid>) -> u64 {
-        match grid {
-            Some(grid) => grid.floor(target_ns).min(self.finalized_through_ns),
-            None => target_ns,
-        }
+        grid.map_or(target_ns, |grid| {
+            grid.floor(target_ns).min(self.finalized_through_ns)
+        })
     }
 
     /// Raw data dropped before the grid is known has no minute and never
@@ -435,9 +434,11 @@ impl Series {
             .raw
             .oldest_chunk()
             .and_then(<[GaugeSample]>::last)
-            .map(|last| match grid {
-                Some(grid) => grid.end_of(last.time_ns),
-                None => last.time_ns.saturating_add(1),
+            .map(|last| {
+                grid.map_or_else(
+                    || last.time_ns.saturating_add(1),
+                    |grid| grid.end_of(last.time_ns),
+                )
             })
             .filter(summarized)
             .map(RawTrack::Gauge);
@@ -522,7 +523,7 @@ impl Series {
 }
 
 /// Builds a gauge record from a scalar value (or a cut when `None`).
-pub(crate) fn gauge_record(
+pub(crate) const fn gauge_record(
     time_ns: u64,
     deadline_ns: u64,
     value: Option<Scalar>,

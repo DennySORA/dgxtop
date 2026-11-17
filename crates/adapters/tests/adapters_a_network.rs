@@ -1,5 +1,10 @@
 //! Network adapter against fake `/sys/class/net` trees.
 
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
+
+#[expect(dead_code, reason = "each suite uses its part of the shared helpers")]
 #[path = "fixtures/adapters_a/support.rs"]
 mod support;
 
@@ -104,7 +109,7 @@ fn unreadable_counter_has_no_value() {
     tree.remove("/sys/class/net/eth0/statistics/tx_errors");
     let faulty = tree.faulty();
     faulty.inject("/sys/class/net/eth0/statistics/rx_dropped", 13);
-    let mut adapter = adapter_with(faulty.clone(), 256);
+    let mut adapter = adapter_with(faulty, 256);
     ParentCatalog::default().sync(&mut adapter, ADAPTER);
     let batches = read_all(&mut adapter, ADAPTER, "fast", 1);
     assert_eq!(batches[0].status, BatchStatus::Partial);
@@ -169,7 +174,11 @@ fn recreated_interface_never_continues_the_old_counter() {
     }
     let pages = parent.sync(&mut adapter, ADAPTER);
     let last = pages.last().unwrap();
-    let removed: Vec<&str> = last.removed_entities.iter().map(|id| id.as_str()).collect();
+    let removed: Vec<&str> = last
+        .removed_entities
+        .iter()
+        .map(dgxtop_core::identity::EntityId::as_str)
+        .collect();
     assert_eq!(removed, vec![entity_of(2).as_str()]);
     assert_eq!(last.removed_sources.len(), 8);
     let fresh = parent.entity(&entity_of(9));
@@ -213,7 +222,10 @@ fn transient_ifindex_failure_keeps_the_interface() {
     faulty.inject("/sys/class/net/eth0/ifindex", 5);
     let pages = parent.sync(&mut adapter, ADAPTER);
     let last = pages.last().unwrap();
-    assert!(last.removed_entities.is_empty());
+    assert_eq!(
+        last.removed_entities,
+        [] as [dgxtop_core::identity::EntityId; 0]
+    );
     assert!(
         last.error_code
             .as_deref()
@@ -250,7 +262,10 @@ fn missing_namespace_or_class_directory_is_unavailable() {
         pages[0].error_code.as_deref(),
         Some("NET_NAMESPACE_UNKNOWN")
     );
-    assert!(pages[0].entities.is_empty());
+    assert_eq!(
+        pages[0].entities,
+        [] as [dgxtop_core::observation::EntityRecord; 0]
+    );
 
     let tree = FakeTree::new("net-noclass");
     write_namespaces(&tree);
@@ -295,7 +310,10 @@ fn operstate_change_is_an_attribute_update_not_a_new_incarnation() {
     tree.write("/sys/class/net/eth0/operstate", "down\n");
     let pages = parent.sync(&mut adapter, ADAPTER);
     assert_eq!(pages[0].entities.len(), 1);
-    assert!(pages[0].sources.is_empty());
+    assert_eq!(
+        pages[0].sources,
+        [] as [dgxtop_core::observation::SourceDescriptor; 0]
+    );
     let eth0 = parent.entity(&entity_of(2));
     assert_eq!(eth0.attribute("operstate"), Some("down"));
     assert_eq!(eth0.generation, generation);

@@ -78,6 +78,7 @@ fn widen(value: u32) -> usize {
 
 impl SupervisorConfig {
     /// Values from the validated application configuration.
+    #[must_use]
     pub fn from_config(config: &Config) -> Self {
         let defaults = Self::default();
         Self {
@@ -96,6 +97,11 @@ impl SupervisorConfig {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     pub fn validate(&self) -> Result<(), InfraError> {
         let fail = |message: &str| {
             Err(InfraError::Unavailable(format!(
@@ -137,6 +143,11 @@ impl SupervisorConfig {
         self.ipc_limits().map(|_| ())
     }
 
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     pub fn ipc_limits(&self) -> Result<IpcLimits, InfraError> {
         IpcLimits::new(
             self.max_frame_bytes,

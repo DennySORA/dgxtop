@@ -14,7 +14,7 @@ use dgxtop_core::quality::RawKind;
 use nix::unistd::{SysconfVar, sysconf};
 
 use super::catalog::{EntityParts, KeyContext, SnapshotBuilder, SourceSpec, source_draft};
-use super::locator::{DRIVER, FAMILY_HOST, LOAD_FIELDS, ProcfsLocator, RANK_HOST_WIDE};
+use super::locator::{DRIVER, FAMILY_HOST, LOAD_FIELDS, LoadField, ProcfsLocator, RANK_HOST_WIDE};
 use super::mechanics::invariant;
 use super::parse::parse_cpu_model;
 use super::pressure::{self, PressurePlace};
@@ -36,6 +36,7 @@ pub struct HostConstants {
 
 impl HostConstants {
     /// Values of this process; unavailable values stay `None`.
+    #[must_use]
     pub fn from_sysconf() -> Self {
         Self {
             clk_tck: sysconf_value(SysconfVar::CLK_TCK),
@@ -131,7 +132,7 @@ pub(crate) fn add_host(
                 scope: &scope,
                 metric_id: field.metric_id(),
                 group: groups::CPU,
-                native_unit: field.native_unit(),
+                native_unit: LoadField::NATIVE_UNIT,
                 raw_kind: RawKind::Gauge,
                 driver: DRIVER,
                 device_path: LOADAVG_PATH,

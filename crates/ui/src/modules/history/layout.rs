@@ -64,13 +64,13 @@ impl HistoryLayout {
     }
 
     /// Left edge of the panel in `column`, from the view's left edge.
-    pub(super) fn panel_offset(&self, column: u16) -> u16 {
+    pub(super) const fn panel_offset(&self, column: u16) -> u16 {
         column * (self.panel_width + HISTORY_PANEL_GAP)
     }
 }
 
 /// Panels a band holds side by side in `width`: one or two.
-fn columns_of(width: u16) -> u16 {
+const fn columns_of(width: u16) -> u16 {
     if width >= HISTORY_TWO_COLUMN_WIDTH {
         2
     } else {
@@ -329,8 +329,8 @@ mod tests {
         assert_eq!(plan(100, 16, &[2], 0).band_height(0), 16);
         // Too short for any band; no panels at all.
         let layout = plan(78, 1, &PANELS, 0);
-        assert!(layout.bands.is_empty());
+        assert_eq!(layout.bands.len(), 0);
         assert_eq!(layout.panels_below, 8);
-        assert!(plan(211, 35, &[], 0).bands.is_empty());
+        assert_eq!(plan(211, 35, &[], 0).bands.len(), 0);
     }
 }

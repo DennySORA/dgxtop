@@ -31,10 +31,10 @@ const FIELD_IDS: [&str; 8] = [
 ];
 
 fn scope_of(core: Option<u32>) -> (String, String) {
-    match core {
-        None => ("cpu".to_owned(), "host".to_owned()),
-        Some(core) => (format!("cpu.core.{core}"), format!("core:{core}")),
-    }
+    core.map_or_else(
+        || ("cpu".to_owned(), "host".to_owned()),
+        |core| (format!("cpu.core.{core}"), format!("core:{core}")),
+    )
 }
 
 fn tick(core: Option<u32>, field: &str, value: u64, at: u64) -> Observation {
@@ -141,7 +141,10 @@ fn cpu_pressure_averages_pass_through() {
             .build(),
     );
     let short = value_of(&batch, &key(ids::CPU_PRESSURE_SOME_AVG10)).unwrap();
-    assert_eq!(short.value.map(|value| value.to_f64_lossy()), Some(1.5));
+    assert_eq!(
+        short.value.map(dgxtop_core::metric::Scalar::to_f64_lossy),
+        Some(1.5)
+    );
     assert_eq!(short.unit, CanonicalUnit::Percent);
     assert!(!short.eligible_for_history);
     // No stall at all is a value of its own, not a missing one.
@@ -183,7 +186,10 @@ fn the_frequency_limit_passes_through_in_megahertz() {
             .build(),
     );
     let limit = value_of(&batch, &key(ids::CPU_FREQUENCY_LIMIT)).unwrap();
-    assert_eq!(limit.value.map(|value| value.to_f64_lossy()), Some(3000.0));
+    assert_eq!(
+        limit.value.map(dgxtop_core::metric::Scalar::to_f64_lossy),
+        Some(3000.0)
+    );
     assert_eq!(limit.unit, CanonicalUnit::MHz);
     assert_eq!(limit.selection_state, SelectionState::Selected);
     assert!(!limit.eligible_for_history);
@@ -657,7 +663,10 @@ fn retained_reading_expires_once_as_stale() {
             .at(6 * SECOND)
             .build(),
     );
-    assert!(later.canonical.is_empty());
+    assert_eq!(
+        later.canonical,
+        [] as [dgxtop_core::canonical::CanonicalValue; 0]
+    );
 }
 
 // ----- power ----------------------------------------------------------------
@@ -720,7 +729,10 @@ fn package_power_from_energy_counter_rate() {
     assert_eq!(warmup.value, None);
     assert!(warmup.reason_codes.contains(&reasons::WARMUP.to_owned()));
     let power = value_of(&batches[1], &package_power()).unwrap();
-    assert_eq!(power.value.map(|value| value.to_f64_lossy()), Some(15.0));
+    assert_eq!(
+        power.value.map(dgxtop_core::metric::Scalar::to_f64_lossy),
+        Some(15.0)
+    );
     assert_eq!(power.sample_kind, SampleKind::Derived);
     assert!(
         power
@@ -830,7 +842,7 @@ fn gb10_package_power_is_the_sum_of_both_clusters() {
     let ids: Vec<&str> = power
         .candidate_source_ids
         .iter()
-        .map(|id| id.as_str())
+        .map(dgxtop_core::identity::SourceId::as_str)
         .collect();
     assert!(ids.contains(&"hwmon:spbm:cluster:p") && ids.contains(&"hwmon:spbm:cluster:e"));
     assert!(
@@ -902,7 +914,7 @@ fn replayed_inputs_never_publish_into_the_live_namespace() {
         let mut records = stat_line(None, ticks, at);
         for record in &mut records {
             record.sample_kind = SampleKind::Replay;
-            record.provenance.adapter_id = dgxtop_core::identity::AdapterId::new("replay").unwrap();
+            record.provenance.adapter_id = AdapterId::new("replay").unwrap();
         }
         records
     };
@@ -962,7 +974,10 @@ fn replayed_inputs_never_publish_into_the_live_namespace() {
             .build(),
     );
     let total = value_of(&second, &utilization_key(None, ids::CPU_UTILIZATION_TOTAL)).unwrap();
-    assert_eq!(total.value.map(|value| value.to_f64_lossy()), Some(50.0));
+    assert_eq!(
+        total.value.map(dgxtop_core::metric::Scalar::to_f64_lossy),
+        Some(50.0)
+    );
     assert_eq!(total.sample_kind, SampleKind::Replay);
     assert!(!total.eligible_for_history);
 }
@@ -1029,7 +1044,10 @@ fn value_returning_after_a_conflict_is_published_again() {
     );
     let value = value_of(&resolved, &package_temperature()).unwrap();
     assert_eq!(value.selection_state, SelectionState::Selected);
-    assert_eq!(value.value.map(|value| value.to_f64_lossy()), Some(68.0));
+    assert_eq!(
+        value.value.map(dgxtop_core::metric::Scalar::to_f64_lossy),
+        Some(68.0)
+    );
     // A further round with nothing new for the selected source publishes
     // nothing new for it.
     let quiet = collect(
@@ -1202,7 +1220,7 @@ fn the_total_adds_every_gpus_draw_to_the_cpu_package() {
     let inputs: Vec<&str> = total
         .candidate_source_ids
         .iter()
-        .map(|id| id.as_str())
+        .map(dgxtop_core::identity::SourceId::as_str)
         .collect();
     for input in [
         format!("{GPU_A}:power"),
@@ -1318,7 +1336,7 @@ fn a_package_the_job_did_not_read_counts_as_committed() {
 fn a_replayed_total_never_enters_the_history() {
     let replayed = |mut record: Observation| {
         record.sample_kind = SampleKind::Replay;
-        record.provenance.adapter_id = dgxtop_core::identity::AdapterId::new("replay").unwrap();
+        record.provenance.adapter_id = AdapterId::new("replay").unwrap();
         record
     };
     let mut gpu = (*gpu_power(GPU_A, Some(60.0), 3 * SECOND)).clone();

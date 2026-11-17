@@ -1,6 +1,8 @@
-//! In-process replay pipeline for micro benchmarks: the REF fixture split
-//! over replay hosts → `ReplayAdapter` discovery and paged reads → the real
-//! collectors (arbitration included) → optionally the real live state.
+//! In-process replay pipeline for micro benchmarks.
+//!
+//! The REF fixture split over replay hosts → `ReplayAdapter` discovery and
+//! paged reads → the real collectors (arbitration included) → optionally
+//! the real live state.
 //!
 //! No threads, IPC or scheduler are involved, so a bench timing a step of
 //! this pipeline measures exactly that hot path. Read groups follow their
@@ -52,6 +54,10 @@ pub struct ManualClock {
 }
 
 impl ManualClock {
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn new(start_boot_ns: u64) -> Result<Arc<Self>, IdentityError> {
         Ok(Arc::new(Self {
             boot_ns: AtomicU64::new(start_boot_ns),
@@ -100,9 +106,22 @@ pub struct ReplayPipeline {
     cycle: u64,
 }
 
+impl std::fmt::Debug for ReplayPipeline {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ReplayPipeline")
+            .finish_non_exhaustive()
+    }
+}
+
 impl ReplayPipeline {
     /// Splits `fixture` over `hosts` replay adapters (`replay-1..`) and
     /// discovers every catalog. Memory peaks at one extra fixture copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PipelineError` when the fixture or an identity is invalid, or
+    /// discovery never completes.
     pub fn new(
         fixture: &ReplayFixture,
         hosts: u32,
@@ -124,10 +143,10 @@ impl ReplayPipeline {
         for index in 0..count {
             let adapter_id = AdapterId::new(format!("replay-{}", index + 1))?;
             let mut adapter = ReplayAdapter::from_fixture(
-                fixture.clone(),
+                &fixture.clone(),
                 adapter_id.clone(),
                 Arc::clone(&time),
-                host_id.clone(),
+                &host_id.clone(),
                 Some((index, count)),
             )?;
             discover_into(&mut adapter, &adapter_id, start_boot_ns, &mut catalog)?;
@@ -160,19 +179,23 @@ impl ReplayPipeline {
         })
     }
 
-    pub fn clock(&self) -> &Arc<ManualClock> {
+    #[must_use]
+    pub const fn clock(&self) -> &Arc<ManualClock> {
         &self.clock
     }
 
-    pub fn host_id(&self) -> &HostId {
+    #[must_use]
+    pub const fn host_id(&self) -> &HostId {
         &self.host_id
     }
 
-    pub fn catalog(&self) -> &Arc<CatalogSnapshot> {
+    #[must_use]
+    pub const fn catalog(&self) -> &Arc<CatalogSnapshot> {
         &self.catalog
     }
 
-    pub fn cycle(&self) -> u64 {
+    #[must_use]
+    pub const fn cycle(&self) -> u64 {
         self.cycle
     }
 
@@ -208,6 +231,7 @@ impl ReplayPipeline {
     }
 
     /// One collection plan per collector that consumes any of `batches`.
+    #[must_use]
     pub fn plans(
         &self,
         batches: &[Arc<IngressBatch>],
@@ -411,8 +435,8 @@ fn policy_for(config: &Config, hosts: &[ReplayHost]) -> PolicySnapshot {
         temperature_disagreement_deg_c: config.quality.temperature_disagreement_deg_c,
         relative_tolerance_percent: RELATIVE_TOLERANCE_PERCENT,
         alignment_tolerance_ms: config.quality.alignment_tolerance_ms,
-        excluded_sources: Default::default(),
-        pinned_sources: Default::default(),
+        excluded_sources: std::collections::BTreeSet::default(),
+        pinned_sources: BTreeMap::default(),
         stale_factor: config.sampling.stale_factor,
         effective_periods_ms,
         namespace: Namespace::Replay,

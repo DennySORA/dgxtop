@@ -1,9 +1,11 @@
 //! This host's offset from UTC (D-76), for showing wall-clock times in
 //! local time: from `TZ` when set (a zone name or a POSIX rule), else from
-//! `/etc/localtime`, the way the C library finds it. Read once at startup;
-//! a time zone change while dgxtop runs is not followed.
+//! `/etc/localtime`, the way the C library finds it.
 //!
-//! A zone file (TZif, RFC 8536) lists transitions; past the last one its
+//! Read once at startup; a time zone change while dgxtop runs is not
+//! followed.
+//!
+//! A zone file (`TZif`, RFC 8536) lists transitions; past the last one its
 //! footer's POSIX rule (`CST-8`, `CET-1CEST,M3.5.0,M10.5.0/3`) applies.
 
 use std::io::Read;
@@ -18,6 +20,7 @@ const SECONDS_PER_DAY: i64 = 86_400;
 const HOUR: i32 = 3600;
 
 /// The offset east of UTC now, in seconds; 0 when it cannot be told.
+#[must_use]
 pub fn local_utc_offset_s() -> i32 {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -79,7 +82,7 @@ impl<'a> Cursor<'a> {
     }
 }
 
-/// The counts of a TZif header.
+/// The counts of a `TZif` header.
 struct Counts {
     utc: usize,
     std: usize,
@@ -226,11 +229,13 @@ fn zone_name<'a>(rest: &mut &'a str) -> Option<&'a str> {
 
 /// `[+-]hh[:mm[:ss]]` in seconds.
 fn signed_time(rest: &mut &str) -> Option<i32> {
-    let (sign, unsigned) = match rest.as_bytes().first()? {
-        b'-' => (-1, &rest[1..]),
-        b'+' => (1, &rest[1..]),
-        _ => (1, *rest),
-    };
+    if rest.is_empty() {
+        return None;
+    }
+    let (sign, unsigned) = rest.strip_prefix('-').map_or_else(
+        || (1, rest.strip_prefix('+').unwrap_or(rest)),
+        |unsigned| (-1, unsigned),
+    );
     let length = unsigned
         .find(|c: char| !(c.is_ascii_digit() || c == ':'))
         .unwrap_or(unsigned.len());

@@ -325,6 +325,6 @@ mod tests {
             .collect();
         assert_eq!(build(&fixture).hosts.len(), MAX_HOSTS);
         fixture.hosts.clear();
-        assert!(build(&fixture).hosts.is_empty());
+        assert_eq!(build(&fixture).hosts.len(), 0);
     }
 }

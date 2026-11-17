@@ -99,8 +99,11 @@ fn backend_error_of(error: &NvmlError) -> BackendError {
     }
 }
 
-#[allow(deprecated)]
-fn error_name(error: &NvmlError) -> &'static str {
+#[expect(
+    deprecated,
+    reason = "the match names every variant the driver's wrapper has, the deprecated ones among them"
+)]
+const fn error_name(error: &NvmlError) -> &'static str {
     match error {
         NvmlError::Utf8Error(_) => "UTF8",
         NvmlError::NulError(_) => "NUL_BYTE",
@@ -186,7 +189,7 @@ const fn performance_state_number(state: PerformanceState) -> Option<u32> {
 }
 
 /// Readable architecture name; `None` for one this library cannot name.
-const fn architecture_name(architecture: DeviceArchitecture) -> Option<&'static str> {
+const fn architecture_name(architecture: &DeviceArchitecture) -> Option<&'static str> {
     Some(match architecture {
         DeviceArchitecture::Kepler => "Kepler",
         DeviceArchitecture::Maxwell => "Maxwell",
@@ -252,11 +255,11 @@ const fn link_of(level: TopologyLevel) -> GpuLink {
 }
 
 /// A field value in the driver's unsigned unit.
-fn unsigned_field(value: SampleValue) -> BackendResult<u32> {
+fn unsigned_field(value: &SampleValue) -> BackendResult<u32> {
     match value {
-        SampleValue::U32(value) => Ok(value),
+        SampleValue::U32(value) => Ok(*value),
         SampleValue::U64(value) => {
-            u32::try_from(value).map_err(|_| BackendError::Other("FIELD_RANGE".to_owned()))
+            u32::try_from(*value).map_err(|_cause| BackendError::Other("FIELD_RANGE".to_owned()))
         }
         SampleValue::F64(_) | SampleValue::I64(_) => {
             Err(BackendError::Other("FIELD_TYPE".to_owned()))
@@ -273,7 +276,9 @@ const fn compute_mode_name(mode: ComputeMode) -> &'static str {
     }
 }
 
-fn process_entry_of(info: nvml_wrapper::struct_wrappers::device::ProcessInfo) -> GpuProcessEntry {
+const fn process_entry_of(
+    info: &nvml_wrapper::struct_wrappers::device::ProcessInfo,
+) -> GpuProcessEntry {
     GpuProcessEntry {
         pid: info.pid,
         used_memory_bytes: match info.used_gpu_memory {
@@ -320,7 +325,7 @@ impl GpuInventory for NvmlLibraryBackend {
             architecture: device
                 .architecture()
                 .ok()
-                .and_then(architecture_name)
+                .and_then(|architecture| architecture_name(&architecture))
                 .map(str::to_owned),
             brand: device.brand().ok().and_then(brand_name).map(str::to_owned),
             compute_capability: device
@@ -419,7 +424,7 @@ impl GpuInventory for NvmlLibraryBackend {
         let mut samples = query(self.device(uuid)?.field_values_for(&fields))?.into_iter();
         let mut next_field = || {
             let sample = samples.next().ok_or(BackendError::NotSupported)?;
-            unsigned_field(query(query(sample)?.value)?)
+            unsigned_field(&query(query(sample)?.value)?)
         };
         let count = next_field()?;
         Ok(C2cLinks {
@@ -478,7 +483,7 @@ impl GpuTelemetry for NvmlLibraryBackend {
             .into_iter()
             .next()
             .ok_or(BackendError::NotSupported)?;
-        unsigned_field(query(query(sample)?.value)?)
+        unsigned_field(&query(query(sample)?.value)?)
     }
 
     fn clock_mhz(&self, uuid: &str, domain: ClockDomain) -> BackendResult<u32> {
@@ -544,7 +549,7 @@ impl GpuTelemetry for NvmlLibraryBackend {
             RetiredPageCause::DoubleBitError => RetirementCause::DoubleBitEccError,
         };
         let pages = query(self.device(uuid)?.retired_pages(cause))?;
-        u64::try_from(pages.len()).map_err(|_| BackendError::Other("PAGE_COUNT".to_owned()))
+        u64::try_from(pages.len()).map_err(|_cause| BackendError::Other("PAGE_COUNT".to_owned()))
     }
 
     fn nvlink_active(&self, uuid: &str, link: u32) -> BackendResult<bool> {
@@ -594,12 +599,12 @@ impl GpuTelemetry for NvmlLibraryBackend {
 impl GpuProcessQueries for NvmlLibraryBackend {
     fn compute_processes(&self, uuid: &str) -> BackendResult<Vec<GpuProcessEntry>> {
         let processes = query(self.device(uuid)?.running_compute_processes())?;
-        Ok(processes.into_iter().map(process_entry_of).collect())
+        Ok(processes.iter().map(process_entry_of).collect())
     }
 
     fn graphics_processes(&self, uuid: &str) -> BackendResult<Vec<GpuProcessEntry>> {
         let processes = query(self.device(uuid)?.running_graphics_processes())?;
-        Ok(processes.into_iter().map(process_entry_of).collect())
+        Ok(processes.iter().map(process_entry_of).collect())
     }
 
     fn process_utilization(

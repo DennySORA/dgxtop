@@ -24,6 +24,7 @@ use super::history_charts::{gpu_memory_scale, ram_total};
 use super::labels::{TextNeedle, label_text};
 use super::plan::ViewportLayout;
 use super::reader::MetricReader;
+use dgxtop_core::num::ToF64Lossy;
 
 const PERCENT_SCALE: f64 = 100.0;
 
@@ -86,8 +87,7 @@ pub(crate) struct RunScales {
 impl RunScales {
     pub(crate) fn read(reader: &MetricReader<'_>, directory: &GpuDirectory<'_>) -> Self {
         let cpus = logical_cpu_count(reader);
-        #[allow(clippy::cast_precision_loss)]
-        let cpu = (cpus > 0).then_some(cpus as f64 * PERCENT_SCALE);
+        let cpu = (cpus > 0).then_some(cpus.to_f64_lossy() * PERCENT_SCALE);
         Self {
             cpu,
             ram: ram_total(reader),
@@ -105,8 +105,9 @@ impl RunScales {
         match metric {
             RunMetric::Cpu | RunMetric::ChildrenCpu => self.cpu,
             RunMetric::Memory | RunMetric::ChildrenMemory | RunMetric::Swap => self.ram,
-            #[allow(clippy::cast_precision_loss)]
-            RunMetric::GpuUtilization => Some(PERCENT_SCALE * info.gpus.len().max(1) as f64),
+            RunMetric::GpuUtilization => {
+                Some(PERCENT_SCALE * info.gpus.len().max(1).to_f64_lossy())
+            }
             RunMetric::GpuMemory => {
                 let scales: Option<Vec<f64>> = info
                     .gpus

@@ -51,7 +51,7 @@ impl ScanContext<'_> {
         self.clock.now_boot_ns() > self.deadline_boot_ns
     }
 
-    /// MetricKey on this host/boot; `None` when an identity part is invalid.
+    /// `MetricKey` on this host/boot; `None` when an identity part is invalid.
     pub(crate) fn metric_key(
         &self,
         entity_id: &EntityId,
@@ -119,7 +119,7 @@ impl<S: Scanner> SysfsAdapter<S> {
         }
     }
 
-    pub(crate) fn manifest(&self) -> &AdapterManifest {
+    pub(crate) const fn manifest(&self) -> &AdapterManifest {
         &self.manifest
     }
 

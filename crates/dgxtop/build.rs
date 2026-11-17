@@ -27,8 +27,7 @@ fn main() {
         .output()
         .ok()
         .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|text| text.trim().to_owned())
-        .unwrap_or_else(|| "unknown".to_owned());
+        .map_or_else(|| "unknown".to_owned(), |text| text.trim().to_owned());
     let target = std::env::var("TARGET").unwrap_or_else(|_| "unknown".to_owned());
     let profile = std::env::var("PROFILE").unwrap_or_else(|_| "unknown".to_owned());
     println!(

@@ -3,8 +3,9 @@
 //! refused by policy before any system call, and every child is killed and
 //! reaped by its guard even when an assertion fails.
 
-// Test-only crate: a broken fixture must panic loudly, also in helpers.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
 use std::os::fd::{BorrowedFd, OwnedFd, RawFd};
 use std::os::unix::process::ExitStatusExt;
@@ -70,8 +71,8 @@ impl Drop for Disposable {
     fn drop(&mut self) {
         // `kill` is a no-op once the child was reaped, so no stray signal can
         // reach a recycled PID.
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.child.kill().unwrap_or_default();
+        self.child.wait().unwrap_or_default();
     }
 }
 
@@ -204,12 +205,12 @@ struct ScriptedFiles {
 
 impl ProcessFiles for ScriptedFiles {
     fn stat(&self, pid: i32) -> std::io::Result<String> {
-        if let Some(text) = self
+        let scripted = self
             .stat_override
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-        {
+            .clone();
+        if let Some(text) = scripted {
             return Ok(text);
         }
         HostProcessFiles.stat(pid)
@@ -223,17 +224,17 @@ impl ProcessFiles for ScriptedFiles {
     }
 
     fn pid_namespace(&self, pid: i32) -> std::io::Result<String> {
-        match &self.namespace_override {
-            Some(namespace) => Ok(namespace.clone()),
-            None => HostProcessFiles.pid_namespace(pid),
-        }
+        self.namespace_override.as_ref().map_or_else(
+            || HostProcessFiles.pid_namespace(pid),
+            |namespace| Ok(namespace.clone()),
+        )
     }
 
     fn descriptor_info(&self, fd: RawFd) -> std::io::Result<String> {
-        match &self.fdinfo_override {
-            Some(text) => Ok(text.clone()),
-            None => HostProcessFiles.descriptor_info(fd),
-        }
+        self.fdinfo_override.as_ref().map_or_else(
+            || HostProcessFiles.descriptor_info(fd),
+            |text| Ok(text.clone()),
+        )
     }
 }
 
@@ -408,7 +409,7 @@ fn foreign_namespace_host_or_boot_is_refused() {
     other_namespace.pid_namespace = PidNamespace::new("pid:[1]").unwrap();
     let mut other_host = key.clone();
     other_host.host_id = HostId::new("another-host").unwrap();
-    let mut other_boot = key.clone();
+    let mut other_boot = key;
     other_boot.boot_id = BootId::new("another-boot").unwrap();
     for foreign in [other_namespace, other_host, other_boot] {
         assert_eq!(

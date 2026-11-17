@@ -16,9 +16,10 @@ pub struct UnavailableReplay {
 }
 
 impl UnavailableReplay {
-    pub fn new(adapter_id: AdapterId) -> Self {
+    #[must_use]
+    pub fn new(adapter_id: &AdapterId) -> Self {
         Self {
-            manifest: dgxtop_adapters::replay::manifest(&adapter_id, true),
+            manifest: dgxtop_adapters::replay::manifest(adapter_id, true),
         }
     }
 }

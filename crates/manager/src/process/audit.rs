@@ -1,4 +1,4 @@
-//! Audit plumbing of the ProcessService: recovery of intents without
+//! Audit plumbing of the `ProcessService`: recovery of intents without
 //! outcome, audit health, the audit's age expiry (decided here, D-96),
 //! attempt records (best effort) and outcome records (never dropped
 //! silently: an ordered, bounded backlog absorbs a busy worker).
@@ -6,7 +6,12 @@
 use dgxtop_core::action::AuditExpiryReport;
 use dgxtop_core::clock::format_utc_rfc3339;
 
-use super::*;
+use super::{
+    AUDIT_BACKLOG_LIMIT, AUDIT_FAILURE_RECHECK_NS, AUDIT_RETRY_NS, AUDIT_STATUS_REFRESH_NS,
+    ActionAttempt, ActionOutcomeRecord, ActionState, AuditFailure, AuditOp, DispatchError,
+    ErrorCode, NANOS_PER_SECOND, Now, PersistenceKind, PersistenceState, PersistenceStatus,
+    ProcessService, RecoveredIntent, Recovery, Uuid, sanitize_message,
+};
 
 /// Shortest boot time between two audit expiry requests.
 pub(super) const AUDIT_EXPIRY_INTERVAL_NS: u64 = 3600 * NANOS_PER_SECOND;
@@ -38,7 +43,7 @@ impl AuditExpirySchedule {
             .then(|| format_utc_rfc3339(now.utc_ns.saturating_sub(i128::from(self.keep_ns))))
     }
 
-    pub(super) fn requested(&mut self, now: Now) {
+    pub(super) const fn requested(&mut self, now: Now) {
         self.next_due_ns = now.boot_ns.saturating_add(AUDIT_EXPIRY_INTERVAL_NS);
     }
 }
@@ -62,12 +67,15 @@ impl ProcessService {
         let intents = match result {
             Ok(intents) => intents,
             Err(failure) => {
-                self.recovery_requested = false;
+                // A recovery already done stays done.
+                if self.recovery == Recovery::Requested {
+                    self.recovery = Recovery::Due;
+                }
                 self.note_audit_failure(&failure, now);
                 return;
             }
         };
-        self.recovered = true;
+        self.recovery = Recovery::Done;
         let count = u32::try_from(intents.len()).unwrap_or(u32::MAX);
         self.unknown_outcomes = self.unknown_outcomes.saturating_add(count);
     }
@@ -84,12 +92,16 @@ impl ProcessService {
             now_boot_ns: now.boot_ns,
             now_utc: crate::time_format::format_utc(now.utc_ns),
         };
-        self.recovery_requested = self.audit.try_dispatch(op).is_ok();
+        self.recovery = if self.audit.try_dispatch(op).is_ok() {
+            Recovery::Requested
+        } else {
+            Recovery::Due
+        };
     }
     /// Asks the audit to expire its old rows once recovery is done and an
     /// expiry is due; a busy worker is asked again at the next tick.
     pub(super) fn request_expiry(&mut self, now: Now) {
-        if !self.recovered {
+        if self.recovery != Recovery::Done {
             return;
         }
         let Some(before_utc) = self.audit_expiry.cutoff_if_due(now) else {
@@ -106,14 +118,18 @@ impl ProcessService {
     /// A failed expiry leaves the rows for the next request; the audit's
     /// status, asked for again now, shows the failure. Recording keeps
     /// working.
-    pub(super) fn on_expired(&mut self, result: Result<AuditExpiryReport, AuditFailure>, now: Now) {
+    pub(super) fn on_expired(
+        &mut self,
+        result: &Result<AuditExpiryReport, AuditFailure>,
+        now: Now,
+    ) {
         if result.is_err() {
             self.request_status(now);
         }
     }
     pub(super) fn request_status(&mut self, now: Now) {
         // A refused status request is simply retried at the next refresh.
-        let _ = self.audit.try_dispatch(AuditOp::Status);
+        self.audit.try_dispatch(AuditOp::Status).unwrap_or_default();
         self.next_status_ns = now.boot_ns.saturating_add(AUDIT_STATUS_REFRESH_NS);
     }
     pub(super) fn append_attempt(&mut self, facts: AttemptFacts<'_>, now: Now) {

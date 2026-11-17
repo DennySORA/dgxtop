@@ -65,7 +65,7 @@ pub struct DisplayContext {
 }
 
 /// Clickable region produced by a module, resolved by the Controller through
-/// the HitMap of the frame it was drawn in.
+/// the `HitMap` of the frame it was drawn in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HitTarget {
     pub frame_revision: u64,
@@ -76,10 +76,11 @@ pub struct HitTarget {
     pub rect: Rect,
 }
 
-/// Where a module sits in the overview grid (D-38). Modules sharing a `row`
-/// sit side by side, left to right by `column`, with widths in proportion to
-/// `weight`; rows run top to bottom. The row of a `fills` module takes the
-/// rows the other rows leave.
+/// Where a module sits in the overview grid (D-38).
+///
+/// Modules sharing a `row` sit side by side, left to right by `column`, with
+/// widths in proportion to `weight`; rows run top to bottom. The row of a
+/// `fills` module takes the rows the other rows leave.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OverviewCell {
     pub row: u8,
@@ -90,6 +91,7 @@ pub struct OverviewCell {
 
 impl OverviewCell {
     /// A cell of `row` at `column` with `weight` that does not fill.
+    #[must_use]
     pub const fn at(row: u8, column: u8, weight: u16) -> Self {
         Self {
             row,
@@ -100,6 +102,7 @@ impl OverviewCell {
     }
 
     /// The same cell, taking the rows the other rows leave.
+    #[must_use]
     pub const fn filling(mut self) -> Self {
         self.fills = true;
         self
@@ -147,7 +150,7 @@ pub trait DisplayModule: Send {
 }
 
 /// Well-known control ids shared by modules (producers) and the Controller
-/// (consumer of the HitMap).
+/// (consumer of the `HitMap`).
 pub mod controls {
     /// A visible process row (carries the full `ProcessKey`).
     pub const PROCESS_ROW: &str = "processes.row";
@@ -168,10 +171,11 @@ pub mod controls {
     /// The Overview History's GPU picker chip (carries the GPU entity id,
     /// D-107): picks the GPU its GPU panels show.
     pub const HISTORY_GPU: &str = "history.gpu";
-    /// One a unit of the module's page scrolled past, and one a unit
-    /// waiting below the ones shown: a band of the Overview History's panels
-    /// (D-107), a page of the GPU view's sections (D-110). The controller
-    /// scrolls the module's page from what the frame showed.
+    /// One a unit of the module's page scrolled past, and one a unit waiting
+    /// below the ones shown: a band of the Overview History's panels
+    /// (D-107), a page of the GPU view's sections (D-110).
+    ///
+    /// The controller scrolls the module's page from what the frame showed.
     pub const PAGE_ABOVE: &str = "module.page_above";
     pub const PAGE_BELOW: &str = "module.page_below";
 }
@@ -213,6 +217,7 @@ impl Default for ModuleRegistry {
 }
 
 impl ModuleRegistry {
+    #[must_use]
     pub fn empty() -> Self {
         Self {
             modules: Vec::new(),
@@ -221,13 +226,14 @@ impl ModuleRegistry {
     }
 
     /// The built-in modules (`config::BUILTIN_MODULES`).
+    #[must_use]
     pub fn builtin() -> Self {
         let mut registry = Self::empty();
         for candidate in crate::modules::builtin_modules() {
             match candidate {
                 Ok(module) => {
                     // Rejections are already recorded as warnings by `register`.
-                    let _ = registry.register(module);
+                    registry.register(module).unwrap_or_default();
                 }
                 Err(error) => registry.warn(format!("built-in module failed to build: {error}")),
             }
@@ -236,6 +242,12 @@ impl ModuleRegistry {
     }
 
     /// Registers a module after validating its manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `RegistryError` when the module is already registered,
+    /// declares another API version or has an invalid manifest, or the registry
+    /// is full.
     pub fn register(&mut self, module: Box<dyn DisplayModule>) -> Result<(), RegistryError> {
         let result = self.check(module.manifest());
         match result {
@@ -281,10 +293,12 @@ impl ModuleRegistry {
     }
 
     /// Visible registration warnings (rejected modules).
+    #[must_use]
     pub fn warnings(&self) -> &[String] {
         &self.warnings
     }
 
+    #[must_use]
     pub fn get(&self, module_id: &str) -> Option<&dyn DisplayModule> {
         self.modules
             .iter()
@@ -292,14 +306,17 @@ impl ModuleRegistry {
             .map(|module| &**module)
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.modules.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.modules.is_empty()
     }
 
+    #[must_use]
     pub fn module_ids(&self) -> Vec<ModuleId> {
         self.modules
             .iter()
@@ -308,6 +325,7 @@ impl ModuleRegistry {
     }
 
     /// Module at a registration index (the layout engine's handle).
+    #[must_use]
     pub fn module_at(&self, index: usize) -> Option<&dyn DisplayModule> {
         self.modules.get(index).map(|module| &**module)
     }
@@ -318,6 +336,7 @@ impl ModuleRegistry {
     }
 
     /// Module that renders the main area of a detail view.
+    #[must_use]
     pub fn detail_module_for(&self, view: ViewKind) -> Option<&dyn DisplayModule> {
         detail_module_id(view)
             .and_then(|module_id| self.get(module_id))
@@ -328,6 +347,7 @@ impl ModuleRegistry {
 /// View → module mapping of the detail views. `Overview` is composed from
 /// every overview-slot module instead, and the retired Processes, Sources
 /// and Actions views have none (D-91).
+#[must_use]
 pub const fn detail_module_id(view: ViewKind) -> Option<&'static str> {
     match view {
         ViewKind::GpuDetail => Some("gpu"),
@@ -432,7 +452,9 @@ mod tests {
             Err(RegistryError::Full)
         );
         for index in 0..40 {
-            let _ = registry.register(stub(&format!("m{index}"), 1));
+            registry
+                .register(stub(&format!("m{index}"), 1))
+                .unwrap_or_default();
         }
         assert!(registry.warnings().len() <= MAX_WARNINGS);
     }

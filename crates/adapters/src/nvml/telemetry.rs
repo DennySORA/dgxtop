@@ -25,7 +25,7 @@ use super::inventory::{
     DeviceMetadata, Inventory, MemoryModel, framebuffer_size, framebuffer_size_from,
 };
 
-/// Reason attached to PCIe records: NVML's "KB" may be 1000 or 1024 bytes.
+/// Reason attached to `PCIe` records: NVML's "KB" may be 1000 or 1024 bytes.
 pub const PCIE_UNVERIFIED_REASON: &str = "NVML_KB_DEFINITION_UNVERIFIED";
 const UNIFIED_MEMORY_REASON: &str = "NVML_UNIFIED_MEMORY_NO_FRAMEBUFFER";
 const DEADLINE_REASON: &str = "NVML_DEADLINE_EXPIRED";

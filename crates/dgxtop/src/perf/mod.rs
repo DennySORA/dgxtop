@@ -1,8 +1,9 @@
 //! Performance evidence primitives shared by the benchmark harness and the
-//! validation report: nearest-rank quantiles, process-tree CPU accounting
-//! and the `performance-report.schema.json` document. Compiled only for
-//! the benches
-//! (`bench-support`) and this crate's tests: no CLI path uses it.
+//! validation report.
+//!
+//! Nearest-rank quantiles, process-tree CPU accounting and the
+//! `performance-report.schema.json` document. Compiled only for the
+//! benches (`benchmarks`) and this crate's tests: no CLI path uses it.
 //!
 //! Nothing here fabricates results: a report is `measured` only when built
 //! from recorded samples; budgets are read from `bench/budgets.json`.
@@ -28,24 +29,28 @@ pub mod verdict;
 
 use std::path::Path;
 
+use dgxtop_core::num::ToF64Lossy;
 use serde::{Deserialize, Serialize};
 
 /// Nearest-rank quantile: sort ascending, take index `ceil(p * N) - 1`.
+#[must_use]
 pub fn nearest_rank(sorted: &[f64], quantile: f64) -> Option<f64> {
     if sorted.is_empty() || !(0.0..=1.0).contains(&quantile) {
         return None;
     }
-    #[allow(clippy::cast_precision_loss)]
-    let rank = (quantile * sorted.len() as f64).ceil();
-    // rank is within 1..=len because 0 <= quantile <= 1 and len >= 1.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let rank = (quantile * sorted.len().to_f64_lossy()).ceil();
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "rank is within 1..=len because 0 <= quantile <= 1 and len >= 1"
+    )]
     let index = (rank as usize).clamp(1, sorted.len()) - 1;
     sorted.get(index).copied()
 }
 
 /// CPU seconds of a process tree between two samples, as percent of ONE
 /// logical core: `100 * Σ Δ(utime+stime) / (CLK_TCK * wall_seconds)`.
-#[allow(clippy::cast_precision_loss)]
+#[must_use]
 pub fn cpu_percent_of_one_core(
     delta_ticks: u64,
     clock_ticks_per_second: u64,
@@ -54,7 +59,9 @@ pub fn cpu_percent_of_one_core(
     if clock_ticks_per_second == 0 || !(wall_seconds.is_finite() && wall_seconds > 0.0) {
         return None;
     }
-    Some(100.0 * delta_ticks as f64 / (clock_ticks_per_second as f64 * wall_seconds))
+    Some(
+        100.0 * delta_ticks.to_f64_lossy() / (clock_ticks_per_second.to_f64_lossy() * wall_seconds),
+    )
 }
 
 /// `performance-report.schema.json` (kind `measured` only for real runs).
@@ -178,6 +185,7 @@ pub struct Workload {
 
 impl Workload {
     /// The REF profile of `bench/scenarios.json`.
+    #[must_use]
     pub const fn reference() -> Self {
         Self {
             series: 512,
@@ -214,6 +222,9 @@ pub struct Budgets {
 }
 
 impl Budgets {
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     pub fn load(path: &Path) -> Result<Self, std::io::Error> {
         let text = std::fs::read_to_string(path)?;
         serde_json::from_str(&text)

@@ -57,6 +57,10 @@ fn gpu_entity(index: u32) -> String {
 
 /// Reference-load fixture: 512 non-process series, 8 GPUs, `processes`
 /// processes linked to two GPUs each, and full trend books.
+#[expect(
+    clippy::too_many_lines,
+    reason = "a fixture: one literal of every field"
+)]
 fn reference_fixture(cores: u32, processes: i64) -> Fixture {
     let mut fixture = Fixture::new();
     fixture.add(
@@ -265,10 +269,10 @@ fn each_view_fills_only_its_visible_topics() {
     let enabled: Vec<&str> = model
         .enabled_modules
         .iter()
-        .map(|module| module.as_str())
+        .map(dgxtop_core::identity::ModuleId::as_str)
         .collect();
     assert_eq!(enabled, BUILTIN_MODULES.to_vec());
-    assert!(model.banners.is_empty());
+    assert_eq!(model.banners.len(), 0);
 }
 
 #[test]
@@ -468,7 +472,7 @@ fn the_gpu_view_carries_the_power_the_history_recorded() {
     assert_eq!(recorded, vec![Some(80.0), None]);
 }
 
-/// The HistoryService asks one bar per plot column (D-50), so the
+/// The `HistoryService` asks one bar per plot column (D-50), so the
 /// projection shares its view as it is, however many bars it holds; only
 /// the byte budget may shrink it.
 #[test]

@@ -22,20 +22,27 @@ pub struct FilterEdit {
 
 impl FilterEdit {
     /// Starts editing from the current filter (cut to the byte limit).
+    #[must_use]
     pub fn new(initial: &str) -> Self {
         let buffer = dgxtop_core::text::truncate_utf8(initial, MAX_FILTER_BYTES).to_owned();
         let cursor = buffer.len();
         Self { buffer, cursor }
     }
 
+    #[must_use]
     pub fn text(&self) -> &str {
         &self.buffer
     }
 
-    pub fn cursor(&self) -> usize {
+    #[must_use]
+    pub const fn cursor(&self) -> usize {
         self.cursor
     }
 
+    /// # Errors
+    ///
+    /// Returns a `FilterEditError` when the character would make the filter too
+    /// long or is a control character.
     pub fn insert(&mut self, character: char) -> Result<(), FilterEditError> {
         if character.is_control() {
             return Err(FilterEditError::ControlCharacter);
@@ -48,8 +55,13 @@ impl FilterEdit {
         Ok(())
     }
 
+    /// The character before the cursor.
+    fn before_cursor(&self) -> Option<char> {
+        self.buffer.get(..self.cursor)?.chars().next_back()
+    }
+
     pub fn backspace(&mut self) {
-        if let Some(previous) = self.buffer[..self.cursor].chars().next_back() {
+        if let Some(previous) = self.before_cursor() {
             self.cursor -= previous.len_utf8();
             self.buffer.remove(self.cursor);
         }
@@ -62,22 +74,26 @@ impl FilterEdit {
     }
 
     pub fn left(&mut self) {
-        if let Some(previous) = self.buffer[..self.cursor].chars().next_back() {
+        if let Some(previous) = self.before_cursor() {
             self.cursor -= previous.len_utf8();
         }
     }
 
     pub fn right(&mut self) {
-        if let Some(next) = self.buffer[self.cursor..].chars().next() {
+        if let Some(next) = self
+            .buffer
+            .get(self.cursor..)
+            .and_then(|after| after.chars().next())
+        {
             self.cursor += next.len_utf8();
         }
     }
 
-    pub fn home(&mut self) {
+    pub const fn home(&mut self) {
         self.cursor = 0;
     }
 
-    pub fn end(&mut self) {
+    pub const fn end(&mut self) {
         self.cursor = self.buffer.len();
     }
 }

@@ -1,4 +1,4 @@
-//! RenderScheduler: dirty-only frames. Nothing is drawn unless the active
+//! `RenderScheduler`: dirty-only frames. Nothing is drawn unless the active
 //! projection revision, the viewport or the controller-visible state
 //! changed, or the once-per-second age tick is due. Data-driven frames are
 //! capped at `fps` (2 fps while the Manager reports pressure), input-driven
@@ -93,7 +93,7 @@ impl RenderScheduler {
         }
     }
 
-    pub fn drawn(&mut self, key: RenderKey, now: Duration) {
+    pub const fn drawn(&mut self, key: RenderKey, now: Duration) {
         self.last_key = Some(key);
         self.last_draw_at = Some(now);
         self.full_redraw = false;
@@ -101,16 +101,16 @@ impl RenderScheduler {
 
     /// The next frame must repaint everything (after an incomplete or slow
     /// flush, a failed draw or an overflow).
-    pub fn request_full_redraw(&mut self) {
+    pub const fn request_full_redraw(&mut self) {
         self.full_redraw = true;
     }
 
-    pub fn full_redraw_pending(&self) -> bool {
+    pub const fn full_redraw_pending(&self) -> bool {
         self.full_redraw
     }
 
     /// Defers any draw until `until` (backoff after repeated failures).
-    pub fn defer_until(&mut self, until: Duration) {
+    pub const fn defer_until(&mut self, until: Duration) {
         self.not_before = until;
     }
 }

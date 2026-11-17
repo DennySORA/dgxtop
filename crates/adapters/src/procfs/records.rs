@@ -191,17 +191,19 @@ pub(crate) fn u64_text_record(
     window: ReadWindow,
     notes: Vec<String>,
 ) -> Option<Observation> {
-    match parse_u64(text) {
-        Some(value) => ok_record(
-            plan,
-            descriptor,
-            Scalar::from_u64(value),
-            quality,
-            window,
-            notes,
-        ),
-        None => failed_record(plan, descriptor, ReadStatus::Error, PARSE_ERROR, window),
-    }
+    parse_u64(text).map_or_else(
+        || failed_record(plan, descriptor, ReadStatus::Error, PARSE_ERROR, window),
+        |value| {
+            ok_record(
+                plan,
+                descriptor,
+                Scalar::from_u64(value),
+                quality,
+                window,
+                notes,
+            )
+        },
+    )
 }
 
 /// Record of one finite `f64` kernel field.
@@ -224,15 +226,17 @@ pub(crate) fn f64_field_record(
         }
         Field::Invalid => None,
     };
-    match value {
-        Some(value) => ok_record(
-            plan,
-            descriptor,
-            value,
-            Quality::Verified,
-            window,
-            Vec::new(),
-        ),
-        None => failed_record(plan, descriptor, ReadStatus::Error, PARSE_ERROR, window),
-    }
+    value.map_or_else(
+        || failed_record(plan, descriptor, ReadStatus::Error, PARSE_ERROR, window),
+        |value| {
+            ok_record(
+                plan,
+                descriptor,
+                value,
+                Quality::Verified,
+                window,
+                Vec::new(),
+            )
+        },
+    )
 }

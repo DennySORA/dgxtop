@@ -125,7 +125,7 @@ fn usage(transaction: &Transaction<'_>) -> rusqlite::Result<StoreUsage> {
 /// The runs `request` asks for (the last seen first), and the buckets of
 /// those still unfinished and of the ended ones it asks buckets of.
 pub(super) fn load(
-    connection: &mut Connection,
+    connection: &Connection,
     request: &ProcessHistoryLoadRequest,
 ) -> Result<(Vec<RunInfo>, Vec<RunBucketRow>), DatabaseFailure> {
     let limit = i64::try_from(request.runs).unwrap_or(i64::MAX);
@@ -164,7 +164,7 @@ pub(super) fn load(
 
 /// One run's buckets, as `request` asks.
 pub(super) fn read_run(
-    connection: &mut Connection,
+    connection: &Connection,
     key: &ProcessKey,
     request: &BucketRequest,
 ) -> Result<Vec<RunBucketRow>, DatabaseFailure> {
@@ -179,10 +179,10 @@ pub(super) fn read_run(
                 .optional()
         })
         .map_err(DatabaseFailure::statement("process_history.read_run"))?;
-    match found {
-        Some(run_id) => buckets_of(connection, (run_id, key), request),
-        None => Ok(Vec::new()),
-    }
+    found.map_or_else(
+        || Ok(Vec::new()),
+        |run_id| buckets_of(connection, (run_id, key), request),
+    )
 }
 
 /// One run's buckets: of each size `request` names, in its order, the
@@ -388,7 +388,10 @@ pub(super) fn pack(bucket: &RunBucket) -> Vec<u8> {
         .map_or(1, |last| last + 1);
     let mut packed = Vec::with_capacity(used * AGGREGATE_BYTES);
     for aggregate in &bucket.values[..used] {
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the packed row holds an f32 mean, the precision the aggregate has"
+        )]
         let mean = aggregate.mean().unwrap_or(0.0) as f32;
         packed.extend(aggregate.count.to_le_bytes());
         packed.extend(mean.to_le_bytes());

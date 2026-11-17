@@ -9,6 +9,7 @@ use dgxtop_core::view::{
 use ratatui::style::{Color, Modifier, Style};
 
 use crate::format::{CellTone, cell_tone, gpu_number};
+use dgxtop_core::num::ToF64Lossy;
 
 /// Steps of the level colors from an empty to a full gauge (D-104): each
 /// whole percent of a fill has a color of its own.
@@ -50,6 +51,7 @@ impl LevelScale {
     };
 
     /// The share of `top`, like a gauge that full: green only when empty.
+    #[must_use]
     pub const fn share_of(top: f64) -> Self {
         Self {
             green_until: 0.0,
@@ -59,6 +61,7 @@ impl LevelScale {
 
     /// Where `value` sits on the gradient: 0 up to `green_until`, 1 at
     /// `top`; [`ThemePalette::level_color`] takes it from there.
+    #[must_use]
     pub fn level(self, value: f64) -> f64 {
         (value - self.green_until) / (self.top - self.green_until)
     }
@@ -68,7 +71,7 @@ impl LevelScale {
 /// same in every theme: teal, orange, magenta, blue, rose, violet, olive,
 /// orchid. Validated as a categorical set on each theme's background
 /// with the data-viz palette validator: any two colors, since any two can
-/// meet in a bar, stay apart for full color vision (OKLab ΔE ≥ 16.0) and
+/// meet in a bar, stay apart for full color vision (`OKLab` ΔE ≥ 16.0) and
 /// under protanopia and deuteranopia (ΔE ≥ 7.9, so names always go beside
 /// them); neighbors in this order (which processes of one name take,
 /// wrapping around) at least ΔE 21.6 / 10.3; each is at least ΔE 12.3 /
@@ -90,7 +93,7 @@ const PROCESS_COLORS: [Color; PROCESS_COLOR_SLOTS] = [
 /// wherever a GPU is named: sky blue, pink, yellow, aqua, violet, green,
 /// salmon, teal; a ninth GPU takes the first again. Validated as text on
 /// each theme's backgrounds: the first two, the most common pair, stay
-/// apart by OKLab ΔE ≥ 27.5 (≥ 10.9 under protanopia and deuteranopia),
+/// apart by `OKLab` ΔE ≥ 27.5 (≥ 10.9 under protanopia and deuteranopia),
 /// the first four by ≥ 19.0 (10.9), all eight by ≥ 12.9 (3.1, so the GPU's
 /// number always goes beside its color); each is at least ΔE 10.7 from the
 /// level colors (the first four 16.1), so a label never reads as how full
@@ -151,7 +154,7 @@ const MEMORY_ROW_COLORS: [(MemoryRow, Color); 4] = [
 ];
 
 /// The color `position` (0..=1) of the way from `from` to `to`, mixed in
-/// OKLab so the steps look even; the ends are `from` and `to` exactly, and
+/// `OKLab` so the steps look even; the ends are `from` and `to` exactly, and
 /// a color that is not RGB stays `from`.
 fn mix_oklab(from: Color, to: Color, position: f64) -> Color {
     let (Color::Rgb(r0, g0, b0), Color::Rgb(r1, g1, b1)) = (from, to) else {
@@ -171,9 +174,9 @@ fn mix_oklab(from: Color, to: Color, position: f64) -> Color {
     Color::Rgb(r, g, b)
 }
 
-/// OKLab of an sRGB color (Bjorn Ottosson's matrices).
+/// `OKLab` of an sRGB color (Bjorn Ottosson's matrices).
 fn oklab(rgb: [u8; 3]) -> [f64; 3] {
-    let [r, g, b] = rgb.map(|channel| {
+    let [red, green, blue] = rgb.map(|channel| {
         let value = f64::from(channel) / 255.0;
         if value <= 0.040_45 {
             value / 12.92
@@ -181,25 +184,25 @@ fn oklab(rgb: [u8; 3]) -> [f64; 3] {
             ((value + 0.055) / 1.055).powf(2.4)
         }
     });
-    let l = (0.412_221_470_8 * r + 0.536_332_536_3 * g + 0.051_445_992_9 * b).cbrt();
-    let m = (0.211_903_498_2 * r + 0.680_699_545_1 * g + 0.107_396_956_6 * b).cbrt();
-    let s = (0.088_302_461_9 * r + 0.281_718_837_6 * g + 0.629_978_700_5 * b).cbrt();
+    let long = (0.412_221_470_8 * red + 0.536_332_536_3 * green + 0.051_445_992_9 * blue).cbrt();
+    let medium = (0.211_903_498_2 * red + 0.680_699_545_1 * green + 0.107_396_956_6 * blue).cbrt();
+    let short = (0.088_302_461_9 * red + 0.281_718_837_6 * green + 0.629_978_700_5 * blue).cbrt();
     [
-        0.210_454_255_3 * l + 0.793_617_785_0 * m - 0.004_072_046_8 * s,
-        1.977_998_495_1 * l - 2.428_592_205_0 * m + 0.450_593_709_9 * s,
-        0.025_904_037_1 * l + 0.782_771_766_2 * m - 0.808_675_766_0 * s,
+        0.210_454_255_3 * long + 0.793_617_785_0 * medium - 0.004_072_046_8 * short,
+        1.977_998_495_1 * long - 2.428_592_205_0 * medium + 0.450_593_709_9 * short,
+        0.025_904_037_1 * long + 0.782_771_766_2 * medium - 0.808_675_766_0 * short,
     ]
 }
 
-/// The sRGB color of an OKLab color, clamped into the gamut.
+/// The sRGB color of an `OKLab` color, clamped into the gamut.
 fn srgb_of_oklab([lightness, a, b]: [f64; 3]) -> [u8; 3] {
-    let l = (lightness + 0.396_337_777_4 * a + 0.215_803_757_3 * b).powi(3);
-    let m = (lightness - 0.105_561_345_8 * a - 0.063_854_172_8 * b).powi(3);
-    let s = (lightness - 0.089_484_177_5 * a - 1.291_485_548_0 * b).powi(3);
+    let long = (lightness + 0.396_337_777_4 * a + 0.215_803_757_3 * b).powi(3);
+    let medium = (lightness - 0.105_561_345_8 * a - 0.063_854_172_8 * b).powi(3);
+    let short = (lightness - 0.089_484_177_5 * a - 1.291_485_548_0 * b).powi(3);
     let linear = [
-        4.076_741_662_1 * l - 3.307_711_591_3 * m + 0.230_969_929_2 * s,
-        -1.268_438_004_6 * l + 2.609_757_401_1 * m - 0.341_319_396_5 * s,
-        -0.004_196_086_3 * l - 0.703_418_614_7 * m + 1.707_614_701_0 * s,
+        4.076_741_662_1 * long - 3.307_711_591_3 * medium + 0.230_969_929_2 * short,
+        -1.268_438_004_6 * long + 2.609_757_401_1 * medium - 0.341_319_396_5 * short,
+        -0.004_196_086_3 * long - 0.703_418_614_7 * medium + 1.707_614_701_0 * short,
     ];
     linear.map(|value| {
         let value = value.clamp(0.0, 1.0);
@@ -208,8 +211,11 @@ fn srgb_of_oklab([lightness, a, b]: [f64; 3]) -> [u8; 3] {
         } else {
             1.055 * value.powf(1.0 / 2.4) - 0.055
         };
-        // Clamped to 0..=255 first, so the cast is exact.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "clamped to 0..=255 first, so the cast is exact"
+        )]
         let channel = (encoded * 255.0).round().clamp(0.0, 255.0) as u8;
         channel
     })
@@ -248,6 +254,7 @@ pub struct ThemePalette {
 
 impl ThemePalette {
     /// Palette of a configured theme.
+    #[must_use]
     pub const fn for_theme(theme: Theme) -> Self {
         match theme {
             Theme::Dark => Self::dark(),
@@ -258,7 +265,8 @@ impl ThemePalette {
     }
 
     /// The palette of the theme a projection asks for.
-    pub fn for_model(model: &ViewModel) -> Self {
+    #[must_use]
+    pub const fn for_model(model: &ViewModel) -> Self {
         Self::for_theme(model.header.theme)
     }
 
@@ -387,9 +395,10 @@ impl ThemePalette {
     }
 
     /// Gauge color for a 0..=1 fill ratio (D-104): one of a hundred steps
-    /// of an OKLab gradient, the theme's green at 0 %, its amber at 50 %
+    /// of an `OKLab` gradient, the theme's green at 0 %, its amber at 50 %
     /// and its red at 100 %. A fill takes the step of its whole percent;
     /// below 0 % (or not a number) it is green, above 100 % red.
+    #[must_use]
     pub fn level_color(&self, ratio: f64) -> Color {
         let step = level_step(ratio);
         if step <= MIDDLE_STEP {
@@ -408,7 +417,8 @@ impl ThemePalette {
     }
 
     /// The color at `position` (0 the first letter, 1 the last) of the
-    /// brand's gradient (D-129), mixed in OKLab like the level colors.
+    /// brand's gradient (D-129), mixed in `OKLab` like the level colors.
+    #[must_use]
     pub fn brand_color(&self, position: f64) -> Color {
         let [first, middle, last] = self.brand;
         let position = if position.is_finite() {
@@ -426,6 +436,7 @@ impl ThemePalette {
     /// The level color of a temperature (D-104, D-126): green up to 50 °C,
     /// then the gradient to red at 100 °C ([`LevelScale::TEMPERATURE`]), as
     /// its text, the GPU's temperature bar and History chart draw it.
+    #[must_use]
     pub fn temperature_color(&self, celsius: f64) -> Color {
         self.level_color(LevelScale::TEMPERATURE.level(celsius))
     }
@@ -433,6 +444,7 @@ impl ThemePalette {
     /// The style a temperature's value is written in: its level color
     /// ([`Self::temperature_color`]) when it is read as it should be, else
     /// the tone that says it is a fallback, stale, conflicting or missing.
+    #[must_use]
     pub fn temperature_style(&self, cell: &MetricCell) -> Style {
         self.level_style(cell, LevelScale::TEMPERATURE)
     }
@@ -440,12 +452,14 @@ impl ThemePalette {
     /// The style a percentage's value is written in (D-125): the level
     /// color of its share of 100 % when it is read as it should be, else
     /// the tone that says otherwise, like [`Self::temperature_style`].
+    #[must_use]
     pub fn percent_style(&self, cell: &MetricCell) -> Style {
         self.level_style(cell, LevelScale::share_of(PERCENT_SCALE))
     }
 
     /// The style a fan speed is written in (D-126): green up to 50 %, then
     /// the gradient to red at 100 % ([`LevelScale::FAN`]), else its tone.
+    #[must_use]
     pub fn fan_style(&self, cell: &MetricCell) -> Style {
         self.level_style(cell, LevelScale::FAN)
     }
@@ -454,16 +468,17 @@ impl ThemePalette {
     /// that many of the host's `cpus` busy, as the utilization bar above it
     /// would be colored, red from a load of every CPU on; its tone where
     /// it is not read as it should be or the CPUs are not counted.
+    #[must_use]
     pub fn load_style(&self, cell: &MetricCell, cpus: usize) -> Style {
         if cpus == 0 {
             return self.tone_style(cell_tone(cell));
         }
-        #[allow(clippy::cast_precision_loss)]
-        let scale = LevelScale::share_of(cpus as f64);
+        let scale = LevelScale::share_of(cpus.to_f64_lossy());
         self.level_style(cell, scale)
     }
 
     /// The label style of a row of the memory panel (D-143).
+    #[must_use]
     pub fn memory_row_style(&self, row: MemoryRow) -> Style {
         MEMORY_ROW_COLORS
             .iter()
@@ -474,6 +489,7 @@ impl ThemePalette {
     /// The style a stall pressure is written in (D-135): green up to 1 %,
     /// then the gradient to red at 20 % ([`LevelScale::PRESSURE`]), else
     /// its tone.
+    #[must_use]
     pub fn pressure_style(&self, cell: &MetricCell) -> Style {
         self.level_style(cell, LevelScale::PRESSURE)
     }
@@ -488,6 +504,7 @@ impl ThemePalette {
     }
 
     /// Color of tracked GPU process `slot` (D-64).
+    #[must_use]
     pub fn process_color(&self, slot: u8) -> Color {
         PROCESS_COLORS
             .get(usize::from(slot))
@@ -496,6 +513,11 @@ impl ThemePalette {
     }
 
     /// Color of GPU `number`, its NVML index (D-123).
+    #[must_use]
+    #[expect(
+        clippy::unused_self,
+        reason = "every color is asked of the theme, so no caller knows which ones the themes share"
+    )]
     pub fn gpu_color(&self, number: u32) -> Color {
         let slot = usize::try_from(number).unwrap_or(usize::MAX) % GPU_COLORS.len();
         GPU_COLORS[slot]
@@ -503,32 +525,41 @@ impl ThemePalette {
 
     /// Color of the GPU labelled `label` (`GPU 0`); none for a GPU labelled
     /// by its UUID, which has no number.
+    #[must_use]
     pub fn gpu_label_color(&self, label: &str) -> Option<Color> {
         gpu_number(label).map(|number| self.gpu_color(number))
     }
 
     /// `style` in the color of the GPU labelled `label`, when it has one.
+    #[must_use]
     pub fn gpu_style(&self, label: &str, style: Style) -> Style {
         self.gpu_label_color(label)
             .map_or(style, |color| style.fg(color))
     }
 
     /// GPU processes without a color of their own.
-    pub fn other_processes_color(&self) -> Color {
+    #[must_use]
+    pub const fn other_processes_color(&self) -> Color {
         self.text_dim
     }
 
     /// What the system itself holds of a RAM shared with a GPU (D-69): a
-    /// green, the same in every theme, at least OKLab ΔE 17.1 from every
+    /// green, the same in every theme, at least `OKLab` ΔE 17.1 from every
     /// process color, the track and the gray (10.1 under protanopia and
     /// deuteranopia); a shared RAM's bar has no level colors to mistake it
     /// for.
-    pub fn os_memory_color(&self) -> Color {
+    #[must_use]
+    #[expect(
+        clippy::unused_self,
+        reason = "every color is asked of the theme, so no caller knows which ones the themes share"
+    )]
+    pub const fn os_memory_color(&self) -> Color {
         OS_MEMORY_COLOR
     }
 
     /// Style of a formatted cell; the tone text itself carries the meaning.
-    pub fn tone_style(&self, tone: CellTone) -> Style {
+    #[must_use]
+    pub const fn tone_style(&self, tone: CellTone) -> Style {
         match tone {
             CellTone::Normal => Style::new().fg(self.text),
             CellTone::Fallback | CellTone::Stale => Style::new().fg(self.warning),
@@ -540,7 +571,8 @@ impl ThemePalette {
     }
 
     /// Style of a banner line of the given level.
-    pub fn banner_style(&self, level: BannerLevel) -> Style {
+    #[must_use]
+    pub const fn banner_style(&self, level: BannerLevel) -> Style {
         match level {
             BannerLevel::Info => Style::new().fg(self.text).bg(self.bar_background),
             BannerLevel::Warning => Style::new().fg(self.warning).bg(self.bar_background),
@@ -558,6 +590,7 @@ impl ThemePalette {
     /// The title style of a panel or chart named `title`: its resource's
     /// fixed bright color (D-74), told by the title's first words (`GPU
     /// memory · GPU 0` is a GPU's); the theme's title style otherwise.
+    #[must_use]
     pub fn section_title_style(&self, title: &str) -> Style {
         let title = title.trim_start();
         SECTION_COLORS
@@ -573,38 +606,46 @@ impl ThemePalette {
             )
     }
 
-    pub fn title_style(&self) -> Style {
+    #[must_use]
+    pub const fn title_style(&self) -> Style {
         Style::new().fg(self.primary).add_modifier(Modifier::BOLD)
     }
 
-    pub fn label_style(&self) -> Style {
+    #[must_use]
+    pub const fn label_style(&self) -> Style {
         Style::new().fg(self.text_dim)
     }
 
-    pub fn muted_style(&self) -> Style {
+    #[must_use]
+    pub const fn muted_style(&self) -> Style {
         Style::new().fg(self.text_muted)
     }
 
-    pub fn text_style(&self) -> Style {
+    #[must_use]
+    pub const fn text_style(&self) -> Style {
         Style::new().fg(self.text)
     }
 
-    pub fn header_style(&self) -> Style {
+    #[must_use]
+    pub const fn header_style(&self) -> Style {
         Style::new().fg(self.text_dim).add_modifier(Modifier::BOLD)
     }
 
-    pub fn selected_row_style(&self) -> Style {
+    #[must_use]
+    pub const fn selected_row_style(&self) -> Style {
         Style::new()
             .fg(self.text)
             .bg(self.highlight_background)
             .add_modifier(Modifier::BOLD)
     }
 
-    pub fn secondary_style(&self) -> Style {
+    #[must_use]
+    pub const fn secondary_style(&self) -> Style {
         Style::new().fg(self.secondary)
     }
 
-    pub fn border_style(&self, focused: bool) -> Style {
+    #[must_use]
+    pub const fn border_style(&self, focused: bool) -> Style {
         Style::new().fg(if focused {
             self.border_focus
         } else {
@@ -621,8 +662,11 @@ fn level_step(ratio: f64) -> u8 {
     }
     let steps = f64::from(LEVEL_STEPS);
     let percent = (ratio * steps).round().clamp(0.0, steps);
-    // Clamped to 0..=100 above, so the cast is exact.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "clamped to 0..=100 above, so the cast is exact"
+    )]
     let step = percent as u8;
     step
 }
@@ -963,7 +1007,7 @@ mod tests {
         (first.max(second) + 0.05) / (first.min(second) + 0.05)
     }
 
-    /// OKLab ΔE of two colors, in hundredths.
+    /// `OKLab` ΔE of two colors, in hundredths.
     fn delta_e(first: Color, second: Color) -> f64 {
         let (first, second) = (oklab(rgb(first)), oklab(rgb(second)));
         100.0

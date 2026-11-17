@@ -53,7 +53,7 @@ impl FrameDemand {
         }
     }
 
-    pub(crate) fn on_input(&mut self) {
+    pub(crate) const fn on_input(&mut self) {
         self.input = true;
     }
 
@@ -63,12 +63,12 @@ impl FrameDemand {
     }
 
     /// Whether a frame has anything new to show beyond the ages.
-    pub(crate) fn wants_content(&self) -> bool {
+    pub(crate) const fn wants_content(&self) -> bool {
         self.input || self.data_since_ns.is_some()
     }
 
     /// A frame was published at `now_ns`: it shows everything asked so far.
-    pub(crate) fn on_frame(&mut self, now_ns: u64) {
+    pub(crate) const fn on_frame(&mut self, now_ns: u64) {
         self.on_attempt(now_ns);
         self.input = false;
         self.data_since_ns = None;
@@ -77,11 +77,11 @@ impl FrameDemand {
     /// A frame was attempted and skipped (presentation budget): it still
     /// counts against the pacing so a full ledger is not retried in a storm,
     /// and what it would have shown stays asked for.
-    pub(crate) fn on_skipped(&mut self, now_ns: u64) {
+    pub(crate) const fn on_skipped(&mut self, now_ns: u64) {
         self.on_attempt(now_ns);
     }
 
-    fn on_attempt(&mut self, now_ns: u64) {
+    const fn on_attempt(&mut self, now_ns: u64) {
         if self.data_since_ns.is_some() {
             self.last_data_frame_ns = Some(now_ns);
         }

@@ -71,7 +71,7 @@ enum CpufreqState {
 }
 
 impl CpufreqState {
-    fn generation(&self) -> u32 {
+    const fn generation(&self) -> u32 {
         match self {
             Self::Supported { generation, .. } | Self::Unsupported { generation, .. } => {
                 *generation
@@ -89,7 +89,7 @@ pub(crate) struct CpufreqCache {
 }
 
 impl CpufreqCache {
-    pub(crate) fn new(unsupported_probe_ms: u64) -> Self {
+    pub(crate) const fn new(unsupported_probe_ms: u64) -> Self {
         Self {
             entries: BTreeMap::new(),
             gate: ReprobeGate::new(unsupported_probe_ms),
@@ -179,14 +179,14 @@ impl CpufreqProber<'_> {
             reason,
         };
         match &read.result {
-            Ok(text) => match parse_u64(text) {
-                Some(maximum_khz) => CpufreqState::Supported {
+            Ok(text) => parse_u64(text).map_or_else(
+                || unsupported(ReadStatus::Unsupported, "CPUFREQ_MAX_UNPARSABLE".to_owned()),
+                |maximum_khz| CpufreqState::Supported {
                     generation,
                     maximum_khz,
                     current: self.current_frequency(cpu),
                 },
-                None => unsupported(ReadStatus::Unsupported, "CPUFREQ_MAX_UNPARSABLE".to_owned()),
-            },
+            ),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 unsupported(ReadStatus::Unsupported, "CPUFREQ_NOT_PRESENT".to_owned())
             }
@@ -545,13 +545,12 @@ impl SharedCpuFiles {
         let stat_lines = stat
             .as_ref()
             .and_then(|read| read.result.as_ref().ok())
-            .map(|text| {
+            .map_or_default(|text| {
                 parse_cpu_times(text)
                     .into_iter()
                     .map(|line| (line.label, line))
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         Self {
             stat,
             stat_lines,
@@ -604,16 +603,18 @@ impl SharedCpuFiles {
         if let Err(error) = &read.result {
             return io_failed_record(plan, descriptor, error, window);
         }
-        match self.stat_lines.get(&cpu) {
-            Some(times) => u64_field_record(plan, descriptor, times.column(column), window),
-            None => failed_record(
-                plan,
-                descriptor,
-                ReadStatus::Removed,
-                CPU_NOT_ONLINE,
-                window,
-            ),
-        }
+        self.stat_lines.get(&cpu).map_or_else(
+            || {
+                failed_record(
+                    plan,
+                    descriptor,
+                    ReadStatus::Removed,
+                    CPU_NOT_ONLINE,
+                    window,
+                )
+            },
+            |times| u64_field_record(plan, descriptor, times.column(column), window),
+        )
     }
 }
 

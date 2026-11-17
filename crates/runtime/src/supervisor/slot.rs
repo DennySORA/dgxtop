@@ -54,6 +54,7 @@ use super::requests::{self, Revisions, failed_completion, failure};
 use super::shared::Execution;
 use super::status_emission;
 use super::stderr_drain::StderrDrain;
+use std::fmt::Write as _;
 
 /// Poll interval while a reap or a credit retry is pending.
 pub(crate) const FAST_POLL_NS: u64 = 5 * NANOS_PER_MILLI;
@@ -368,10 +369,10 @@ impl HostSlot {
             vec![execution.ticket],
         )));
         self.set_ready(ctx, false);
-        self.send_frame(frame, now, ctx);
+        self.send_frame(&frame, now, ctx);
     }
 
-    fn send_frame(&mut self, frame: Vec<u8>, now: u64, ctx: &mut LoopContext) {
+    fn send_frame(&mut self, frame: &[u8], now: u64, ctx: &mut LoopContext) {
         let Some(connection) = self.connection.as_mut() else {
             return;
         };
@@ -408,7 +409,7 @@ impl HostSlot {
         )));
         self.set_ready(ctx, false);
         self.publish(ctx);
-        self.send_frame(frame, now, ctx);
+        self.send_frame(&frame, now, ctx);
     }
 
     // ----- timers ----------------------------------------------------------
@@ -589,7 +590,7 @@ impl HostSlot {
         }
     }
 
-    fn retry_paused_credit(&mut self, ctx: &mut LoopContext) {
+    fn retry_paused_credit(&mut self, ctx: &LoopContext) {
         let Some(declared) = self
             .connection
             .as_ref()
@@ -603,7 +604,7 @@ impl HostSlot {
         if let Some(connection) = self.connection.as_mut() {
             connection.set_paused(false);
             // A pending decision exists (checked above), so admission works.
-            let _ = connection.decoder_mut().admit_body();
+            connection.decoder_mut().admit_body().unwrap_or_default();
         }
     }
 
@@ -664,13 +665,14 @@ impl HostSlot {
 
     fn body_decision(&self, declared: usize) -> BodyDecision {
         match &self.phase {
-            Phase::AwaitHello { .. } if declared <= HELLO_FRAME_BYTES => BodyDecision::Admit,
+            // A hello and a shutdown ack are tiny.
+            Phase::AwaitHello { .. } | Phase::Stopping(_) if declared <= HELLO_FRAME_BYTES => {
+                BodyDecision::Admit
+            }
             Phase::AwaitHello { .. } => BodyDecision::Reject("hello frame exceeds 64 KiB"),
             Phase::Busy(inflight) if inflight.late => BodyDecision::Skip,
             Phase::Busy(_) => BodyDecision::NeedCredit,
-            // Shutdown acks are tiny; anything else while stopping is a late
-            // reply that is skipped.
-            Phase::Stopping(_) if declared <= HELLO_FRAME_BYTES => BodyDecision::Admit,
+            // Anything else while stopping is a late reply that is skipped.
             Phase::Stopping(_) => BodyDecision::Skip,
             _ => BodyDecision::Reject("unsolicited frame without a request in flight"),
         }
@@ -710,7 +712,7 @@ impl HostSlot {
 
     /// Makes sure the in-flight request holds wire + decoded credit for a
     /// frame of `declared` bytes, topping up from the ingress gate.
-    fn ensure_credit(&mut self, declared: usize, ctx: &mut LoopContext) -> bool {
+    fn ensure_credit(&mut self, declared: usize, ctx: &LoopContext) -> bool {
         let required = frame_credit(declared, &ctx.limits);
         let Phase::Busy(inflight) = &mut self.phase else {
             return false;
@@ -794,7 +796,7 @@ impl HostSlot {
                 self.finish_read(payload, reply, now, ctx);
             }
             InFlightKind::Discover { request } => {
-                self.finish_discover(&payload, &request, now, ctx)
+                self.finish_discover(&payload, &request, now, ctx);
             }
             InFlightKind::Probe { request_id } => self.finish_probe(&payload, request_id, now, ctx),
         }
@@ -817,7 +819,7 @@ impl HostSlot {
                 complete_read(
                     reply.key,
                     reply.plan,
-                    Err(failure(AdapterFailureKind::Protocol, &message)),
+                    &Err(failure(AdapterFailureKind::Protocol, &message)),
                     ctx,
                 );
                 self.protocol_failure(now, &error, ctx);
@@ -827,11 +829,11 @@ impl HostSlot {
         match account(batch.decoded_bytes(), reply.credit, ctx) {
             Ok(permit) => {
                 let shared = Arc::new(IngressBatch::new(batch, Some(permit)));
-                complete_read(reply.key, reply.plan, Ok(shared), ctx);
+                complete_read(reply.key, reply.plan, &Ok(shared), ctx);
             }
             Err(message) => {
                 let rejected = failure(AdapterFailureKind::CapacityExceeded, &message);
-                complete_read(reply.key, reply.plan, Err(rejected), ctx);
+                complete_read(reply.key, reply.plan, &Err(rejected), ctx);
             }
         }
         self.become_idle(now, true, ctx);
@@ -901,10 +903,10 @@ impl HostSlot {
             _ => {
                 let mut message = String::from("host closed its reply pipe");
                 if let Some(error) = io_error {
-                    message.push_str(&format!(" ({error})"));
+                    write!(message, " ({error})").unwrap_or_default();
                 }
                 if let Some(error) = truncated {
-                    message.push_str(&format!("; {error}"));
+                    write!(message, "; {error}").unwrap_or_default();
                 }
                 self.host_failed(now, AdapterFailureKind::HostUnavailable, &message, ctx);
             }
@@ -1008,7 +1010,7 @@ impl HostSlot {
         inflight.count_strikes = false;
         let reason = failure(kind, message);
         match &inflight.kind {
-            InFlightKind::Read { plan, key } => complete_read(key, plan, Err(reason), ctx),
+            InFlightKind::Read { plan, key } => complete_read(key, plan, &Err(reason), ctx),
             InFlightKind::Discover { request } => ctx.emit(IngestionCompletion::Catalog {
                 adapter_id: request.adapter_id.clone(),
                 request_id: request.request_id,
@@ -1043,11 +1045,11 @@ impl HostSlot {
             encode_frame(&request, REQUEST_FRAME_BYTES).map_err(|error| error.to_string())
         });
         if let Ok(frame) = shutdown {
-            connection.queue_frame(frame);
+            connection.queue_frame(&frame);
         }
         connection.close_requests_after_flush();
         // A broken pipe only means the host is already gone; the reap decides.
-        let _ = connection.flush_requests();
+        connection.flush_requests().unwrap_or_default();
         self.phase = Phase::Stopping(StopState {
             stage: StopStage::Protocol,
             stage_deadline_boot_ns: grace_deadline,
@@ -1083,14 +1085,14 @@ impl HostSlot {
         }
     }
 
-    fn set_stage(&mut self, stage: StopStage, deadline: u64) {
+    const fn set_stage(&mut self, stage: StopStage, deadline: u64) {
         if let Phase::Stopping(stop) = &mut self.phase {
             stop.stage = stage;
             stop.stage_deadline_boot_ns = deadline;
         }
     }
 
-    fn send_signal(&mut self, stage: StopStage, ctx: &mut LoopContext) {
+    fn send_signal(&mut self, stage: StopStage, ctx: &LoopContext) {
         let Some(connection) = self.connection.as_mut() else {
             return;
         };
@@ -1108,7 +1110,7 @@ impl HostSlot {
         ctx.log(LogLevel::Warn, &format!("{}: {note}", self.adapter_id));
     }
 
-    fn try_reap(&mut self, ctx: &mut LoopContext) -> Option<ExitSummary> {
+    fn try_reap(&mut self, ctx: &LoopContext) -> Option<ExitSummary> {
         let connection = self.connection.as_mut()?;
         match connection.control().try_reap() {
             Ok(exit) => exit,
@@ -1229,7 +1231,7 @@ impl HostSlot {
         }
     }
 
-    pub(crate) fn is_settled(&self) -> bool {
+    pub(crate) const fn is_settled(&self) -> bool {
         matches!(
             self.phase,
             Phase::NotStarted | Phase::Retired | Phase::Quarantined
@@ -1243,8 +1245,11 @@ impl HostSlot {
             self.outcome.clone()
         } else {
             let pid = self.connection.as_ref().and_then(Connection::pid);
-            if let Some(connection) = self.connection.as_mut() {
-                let _ = connection.control().kill();
+            if let Some(connection) = self.connection.as_mut()
+                && connection.control().kill().is_err()
+            {
+                // The host is reported unreaped either way: a kill that
+                // could not be sent changes nothing in that outcome.
             }
             StopOutcome::Unreaped { pid }
         };
@@ -1257,7 +1262,7 @@ impl HostSlot {
 
     // ----- gates and status ------------------------------------------------
 
-    fn become_idle(&mut self, now: u64, success: bool, ctx: &mut LoopContext) {
+    fn become_idle(&mut self, now: u64, success: bool, ctx: &LoopContext) {
         self.phase = Phase::Idle;
         if success {
             self.last_success_boot_ns = Some(now);
@@ -1305,7 +1310,8 @@ impl HostSlot {
             } => HostState::Starting,
             Phase::AwaitHello {
                 probe_after: true, ..
-            } => HostState::CircuitOpen,
+            }
+            | Phase::CircuitOpen { .. } => HostState::CircuitOpen,
             Phase::Busy(inflight) if matches!(inflight.kind, InFlightKind::Probe { .. }) => {
                 HostState::CircuitOpen
             }
@@ -1314,7 +1320,6 @@ impl HostSlot {
             Phase::Stopping(stop) if stop.after == AfterStop::Retire => HostState::Unavailable,
             Phase::Stopping(_) if self.circuit.is_tripped() => HostState::CircuitOpen,
             Phase::Stopping(_) => HostState::Degraded,
-            Phase::CircuitOpen { .. } => HostState::CircuitOpen,
             Phase::Quarantined => HostState::Quarantined,
             Phase::Retired => HostState::Unavailable,
         }
@@ -1474,7 +1479,7 @@ fn account(
     for extra in permits {
         // Same gate, same ledger: merging cannot fail; a mismatch would just
         // release the extra bytes.
-        let _ = permit.merge(extra);
+        permit.merge(extra).unwrap_or_default();
     }
     if estimate <= permit.bytes() {
         permit.shrink_to(estimate);
@@ -1487,7 +1492,7 @@ fn account(
 }
 
 /// Delivers a read outcome to every broker requester (dispatcher first).
-fn complete_read(key: &BrokerKey, plan: &ReadPlan, result: BrokerResult, ctx: &mut LoopContext) {
+fn complete_read(key: &BrokerKey, plan: &ReadPlan, result: &BrokerResult, ctx: &mut LoopContext) {
     let mut requesters = ctx.shared.lock().broker.complete(key, result.clone());
     if requesters.is_empty() {
         requesters.push(plan.request_id);
@@ -1505,7 +1510,7 @@ fn complete_read(key: &BrokerKey, plan: &ReadPlan, result: BrokerResult, ctx: &m
 /// Fails a job that never reached its host.
 fn fail_execution(execution: &Execution, reason: AdapterFailure, ctx: &mut LoopContext) {
     if let (AdapterJob::Read(plan), Some(key)) = (&execution.job, &execution.broker_key) {
-        complete_read(key, plan, Err(reason), ctx);
+        complete_read(key, plan, &Err(reason), ctx);
         return;
     }
     ctx.emit(failed_completion(

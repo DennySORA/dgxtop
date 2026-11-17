@@ -9,6 +9,11 @@ use dgxtop_core::identity::ProcessKey;
 const INIT_PID: i32 = 1;
 
 /// Checks the caller context and target key; no system call is made.
+///
+/// # Errors
+///
+/// Returns an `ActionError` when the action is refused or cannot be carried
+/// out; every failure leaves the process untouched.
 pub fn check_policy(
     key: &ProcessKey,
     signal: Signal,

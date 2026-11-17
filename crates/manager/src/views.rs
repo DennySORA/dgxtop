@@ -1,4 +1,4 @@
-//! ViewSessionService: the single authoritative `SessionState` per session
+//! `ViewSessionService`: the single authoritative `SessionState` per session
 //! (AT13).
 //!
 //! `UpdateViewSession` semantics follow `dgxtop_core::commands::CommandBody`:
@@ -120,7 +120,7 @@ impl ViewSessionService {
         self.sessions.insert(
             session_id.clone(),
             SessionRecord {
-                state: default_state(session_id.clone()),
+                state: default_state(session_id),
                 shared,
                 recent_frames: VecDeque::new(),
                 demand: FrameDemand::new_session(),
@@ -420,7 +420,7 @@ fn validate_series(update: &ViewUpdate, context: &ViewContext<'_>) -> Result<(),
     };
     MetricKey::from_series_selector(context.host_id, context.boot_id, selector.as_str())
         .map(|_| ())
-        .map_err(|_| {
+        .map_err(|_cause| {
             ErrorDetail::new(
                 ErrorCode::ValidationFailed,
                 "series selector must be metric_id|scope|entity_id",
@@ -506,8 +506,8 @@ mod tests {
             sort: SortKey::Pid,
             ascending: true,
             frame_revision: frame,
-            overview_bar: dgxtop_core::tiers::BarSize::OneMinute,
-            process_bar: dgxtop_core::tiers::BarSize::Auto,
+            overview_bar: BarSize::OneMinute,
+            process_bar: BarSize::Auto,
         }
     }
 
@@ -641,6 +641,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one scenario walked from start to end: its steps share their state"
+    )]
     fn view_specific_semantics_are_validated() {
         let mut bench = bench();
         let rows = table(&[]);
@@ -776,13 +780,13 @@ mod tests {
         assert_eq!(bench.service.next_frame_ns(&pacing), Some(1_250 * MS));
         assert_eq!(bench.service.due_for_frame(1_250 * MS, &pacing).len(), 1);
         bench.service.frame_skipped(&bench.session, 1_250 * MS);
-        assert!(bench.service.due_for_frame(1_300 * MS, &pacing).is_empty());
+        assert_eq!(bench.service.due_for_frame(1_300 * MS, &pacing).len(), 0);
         bench.shared.store_viewport(120, 40);
         assert_eq!(
             bench.service.viewport_changes(),
             vec![bench.session.clone()]
         );
-        assert!(bench.service.viewport_changes().is_empty());
+        assert_eq!(bench.service.viewport_changes().len(), 0);
     }
 
     /// Commits ask for a frame at the data pace; the frame clears them.
@@ -799,7 +803,7 @@ mod tests {
         bench.service.record_frame(&bench.session, 1, 0);
         bench.service.mark_all_data_changed(100 * MS);
         bench.service.mark_data_changed(&bench.session, 110 * MS);
-        assert!(bench.service.due_for_frame(200 * MS, &pacing).is_empty());
+        assert_eq!(bench.service.due_for_frame(200 * MS, &pacing).len(), 0);
         assert_eq!(bench.service.due_for_frame(250 * MS, &pacing).len(), 1);
         bench.service.record_frame(&bench.session, 2, 250 * MS);
         let age = 250 * MS + crate::pacing::AGE_REFRESH_NS + crate::pacing::SETTLE_NS;
@@ -823,7 +827,7 @@ mod tests {
             Err(ManagerError::SessionLimit { max: 2 })
         );
         assert_eq!(bench.service.open_ids().len(), 2);
-        assert!(bench.service.reap_closed().is_empty());
+        assert_eq!(bench.service.reap_closed().len(), 0);
         bench.service.mark_shutdown_requested_all();
         assert!(bench.service.contains(&bench.session));
         assert!(bench.service.shared(&bench.session).is_some());

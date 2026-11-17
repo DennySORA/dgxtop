@@ -3,9 +3,15 @@
 //! agreeing with the raw steps they were cut from (read where the history
 //! hands them on, D-90).
 
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
+
+#[expect(dead_code, reason = "each suite uses its part of the shared helpers")]
 #[path = "store_hot_support.rs"]
 mod support;
 
+use dgxtop_core::num::ToF64Lossy;
 use dgxtop_core::tiers::Tier;
 use proptest::prelude::*;
 use support::{
@@ -16,7 +22,6 @@ use support::{
 const STALE_NS: u64 = 3 * SECOND;
 
 /// Reference time-weighted mean over `[start, end)` of samples `(t, v)`.
-#[allow(clippy::cast_precision_loss)]
 fn reference(samples: &[(u64, f64)], (start, end): (u64, u64), now: u64) -> (u64, f64) {
     let mut covered = 0u64;
     let mut weighted = 0.0;
@@ -26,7 +31,7 @@ fn reference(samples: &[(u64, f64)], (start, end): (u64, u64), now: u64) -> (u64
         let step_start = (*time).max(start);
         if step_end > step_start {
             covered += step_end - step_start;
-            weighted += value * (step_end - step_start) as f64;
+            weighted += value * (step_end - step_start).to_f64_lossy();
         }
     }
     (
@@ -34,7 +39,7 @@ fn reference(samples: &[(u64, f64)], (start, end): (u64, u64), now: u64) -> (u64
         if covered == 0 {
             0.0
         } else {
-            weighted / covered as f64
+            weighted / covered.to_f64_lossy()
         },
     )
 }

@@ -1,6 +1,6 @@
 //! Controller: input → typed intents, never side effects.
 //!
-//! Five parts: the InputBackend ([`crate::terminal::InputSource`]), the
+//! Five parts: the `InputBackend` ([`crate::terminal::InputSource`]), the
 //! [`keymap`], the context router (this module: mode/view/HitMap routing),
 //! the command builder ([`session`] drafts + typed `CommandBody` values) and
 //! the confirmation input ([`confirmation`]). The Controller validates only
@@ -73,6 +73,11 @@ const MAX_SEEK_STEPS: u16 = 512;
 pub trait CommandSink {
     fn session_id(&self) -> &SessionId;
     /// `Ok` means accepted (never "completed"); a full queue is `Busy`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `CommandRejection` when the command is refused before it is
+    /// queued; its code says why.
     fn submit(&self, command: CommandEnvelope) -> Result<(), CommandRejection>;
 }
 
@@ -91,7 +96,7 @@ impl<T: SessionPort + ?Sized> CommandSink for T {
 pub struct ControllerContext<'a> {
     /// The projection drawn in the last frame (what the user sees).
     pub model: Option<&'a ViewModel>,
-    /// HitMap of the last rendered frame.
+    /// `HitMap` of the last rendered frame.
     pub hit_map: &'a HitMap,
     /// Revision of the last rendered projection (sent with session updates).
     pub frame_revision: u64,
@@ -192,6 +197,7 @@ fn rejection_text(what: &str, rejection: &CommandRejection) -> (BannerLevel, Str
 }
 
 impl Controller {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             mode: InputMode::Normal,
@@ -218,28 +224,32 @@ impl Controller {
     }
 
     /// The user asked to quit (`q` / `Ctrl-C`).
-    pub fn quit_requested(&self) -> bool {
+    #[must_use]
+    pub const fn quit_requested(&self) -> bool {
         self.quit
     }
 
     /// Whether a command's result is still expected: the loop then looks
     /// for it at the input cadence instead of its idle one.
+    #[must_use]
     pub fn awaits_results(&self) -> bool {
         !self.requests.is_empty()
     }
 
     /// Whether a signal is on its way: its token or its outcome is looked
     /// for at once (D-109), since a kill is never something to wait for.
+    #[must_use]
     pub fn awaits_signal(&self) -> bool {
         self.confirmation.is_awaiting() || self.requests.has_signal_pending()
     }
 
     /// Increments whenever something the Viewer shows changed.
-    pub fn version(&self) -> u64 {
+    #[must_use]
+    pub const fn version(&self) -> u64 {
         self.version
     }
 
-    fn bump(&mut self) {
+    const fn bump(&mut self) {
         self.version = self.version.wrapping_add(1);
     }
 
@@ -251,7 +261,8 @@ impl Controller {
 
     /// Current input mode. A signal waiting for its token already takes
     /// its answer (D-109).
-    pub fn mode(&self) -> ModeKind {
+    #[must_use]
+    pub const fn mode(&self) -> ModeKind {
         if self.confirmation.is_active() || self.confirmation.is_awaiting() {
             return ModeKind::Confirm;
         }
@@ -263,6 +274,7 @@ impl Controller {
     }
 
     /// Redacted state for the Viewer (never contains the token).
+    #[must_use]
     pub fn ui_state(&self, now: Duration) -> UiState {
         let mode = match (self.confirmation.summary(now), &self.mode) {
             (Some(summary), _) => ModeView::Confirm {
@@ -308,7 +320,7 @@ impl Controller {
     ) {
         match event {
             Event::Key(key) => self.handle_key(key, context, sink),
-            Event::Mouse(mouse) => self.handle_mouse(mouse, context),
+            Event::Mouse(mouse) => self.handle_mouse(*mouse, context),
             Event::Paste(text) => self.paste(text, context.now),
             Event::FocusGained | Event::FocusLost | Event::Resize(..) => {}
         }
@@ -375,82 +387,36 @@ impl Controller {
         sink: &S,
     ) {
         let view = current_view(context);
-        // A key of one of the Overview's other panels shows them again
-        // first, so it never acts on a panel out of sight (D-121).
-        if view == ViewKind::Overview
-            && matches!(
-                action,
-                KeyAction::ToggleCpuDetail
-                    | KeyAction::ScrollMemoryUp
-                    | KeyAction::ScrollMemoryDown
-                    | KeyAction::Fold(_)
-                    | KeyAction::UnfoldAll
-            )
-            && self.unzoom_processes()
-        {
-            self.bump();
-        }
+        self.show_panels_for(action, view);
         match action {
             KeyAction::Quit => {
                 self.quit = true;
                 self.bump();
             }
-            KeyAction::DismissNotices => {
-                let dismissed = self.notices.clear();
-                let hidden = context
-                    .model
-                    .is_some_and(|model| self.hidden_banners.hide_all(&model.banners));
-                let unmarked = self.clear_marks();
-                // With nothing else to dismiss, `Esc` brings the
-                // Overview's panels back (D-121).
-                if dismissed || hidden || unmarked || self.unzoom_processes() {
-                    self.bump();
-                }
-            }
-            KeyAction::ZoomProcesses => {
-                if let Ok(processes) = ModuleId::new(PROCESSES_MODULE_ID) {
-                    self.toggle_expanded(processes);
-                }
-            }
+            KeyAction::DismissNotices => self.dismiss(context),
+            KeyAction::ZoomProcesses => self.toggle_expanded_named(PROCESSES_MODULE_ID),
             KeyAction::MoveDown
             | KeyAction::MoveUp
             | KeyAction::PageDown
             | KeyAction::PageUp
             | KeyAction::First
             | KeyAction::Last => {
-                let movement = self.movement_for(action, context);
-                self.navigate(movement, context);
+                self.navigate(movement_for(action, context), context);
             }
             KeyAction::ShowTab(target) => self.show_tab(target, context),
             KeyAction::NextView | KeyAction::PreviousView => {
-                // Cycle from the view already requested so Tab bursts advance.
-                let base = self
-                    .drafts
-                    .current(context.model, context.now)
-                    .map_or(view, |fields| fields.view);
-                let current = views::Tab::of(base, self.history_page());
-                let target = if action == KeyAction::NextView {
-                    views::next_tab(current)
-                } else {
-                    views::previous_tab(current)
-                };
-                self.show_tab(target, context);
+                self.cycle_tab(action == KeyAction::NextView, view, context);
             }
             KeyAction::NextGpu | KeyAction::PreviousGpu => {
-                let movement = if action == KeyAction::NextGpu {
-                    Movement::Down(1)
-                } else {
-                    Movement::Up(1)
-                };
-                self.navigate_gpu(movement, context);
+                self.navigate_gpu(one_row(action == KeyAction::NextGpu), context);
             }
             KeyAction::CycleGpuFilter => self.cycle_gpu_filter(context),
             KeyAction::StartFilter => self.start_filter(context),
             KeyAction::CycleSort => {
-                self.reorder(context, |fields| fields.sort = fields.sort.next())
+                self.reorder(context, |fields| fields.sort = fields.sort.next());
             }
             KeyAction::ToggleOrder => {
-                self.reorder(context, |fields| fields.ascending = !fields.ascending)
+                self.reorder(context, |fields| fields.ascending = !fields.ascending);
             }
             KeyAction::FasterInterval => self.change_interval(true, context, sink),
             KeyAction::SlowerInterval => self.change_interval(false, context, sink),
@@ -461,11 +427,7 @@ impl Controller {
             KeyAction::NextHistoryBarSize => self.cycle_history_bar_size(true, context),
             KeyAction::PreviousHistoryBarSize => self.cycle_history_bar_size(false, context),
             KeyAction::ToggleModule => self.toggle_module(context, sink),
-            KeyAction::ToggleCpuDetail => {
-                if let Ok(cpu) = ModuleId::new(CPU_MODULE_ID) {
-                    self.toggle_expanded(cpu);
-                }
-            }
+            KeyAction::ToggleCpuDetail => self.toggle_expanded_named(CPU_MODULE_ID),
             KeyAction::ScrollMemoryUp | KeyAction::ScrollMemoryDown => {
                 if let Ok(memory) = ModuleId::new(MEMORY_MODULE_ID) {
                     self.scroll_module(memory, action == KeyAction::ScrollMemoryDown);
@@ -475,12 +437,7 @@ impl Controller {
             KeyAction::HistoryDown | KeyAction::HistoryUp
                 if self.history_page() == views::GPU_HISTORY_PAGE =>
             {
-                let movement = if action == KeyAction::HistoryDown {
-                    Movement::Down(1)
-                } else {
-                    Movement::Up(1)
-                };
-                self.navigate_history_gpu(movement, context);
+                self.navigate_history_gpu(one_row(action == KeyAction::HistoryDown), context);
             }
             // Every page but the list scrolls: the Overview History has no
             // GPU to pick, so ↑/↓ scroll its panels as PgUp/PgDn do
@@ -507,13 +464,10 @@ impl Controller {
             KeyAction::HistoryMark => self.toggle_mark(context),
             KeyAction::HistoryMarkAll => self.toggle_mark_all(context),
             KeyAction::HistoryDelete => self.ask_delete(context),
-            KeyAction::HistoryExpandCommand => {
-                if self.history_page() == views::RUN_PAGE
-                    && let Ok(history) = ModuleId::new(HISTORY_MODULE_ID)
-                {
-                    self.toggle_expanded(history);
-                }
+            KeyAction::HistoryExpandCommand if self.history_page() == views::RUN_PAGE => {
+                self.toggle_expanded_named(HISTORY_MODULE_ID);
             }
+            KeyAction::HistoryExpandCommand => {}
             KeyAction::HistoryCopyCommand => self.copy_command(context),
             KeyAction::Fold(key) => self.toggle_fold(key, context, sink),
             KeyAction::UnfoldAll => self.unfold_all(context, sink),
@@ -522,25 +476,62 @@ impl Controller {
         }
     }
 
-    fn set_mode(&mut self, mode: InputMode) {
-        if self.mode != mode {
-            self.mode = mode;
+    /// A key of one of the Overview's other panels shows them again first,
+    /// so it never acts on a panel out of sight (D-121).
+    fn show_panels_for(&mut self, action: KeyAction, view: ViewKind) {
+        let acts_on_a_panel = matches!(
+            action,
+            KeyAction::ToggleCpuDetail
+                | KeyAction::ScrollMemoryUp
+                | KeyAction::ScrollMemoryDown
+                | KeyAction::Fold(_)
+                | KeyAction::UnfoldAll
+        );
+        if view == ViewKind::Overview && acts_on_a_panel && self.unzoom_processes() {
             self.bump();
         }
     }
 
-    fn movement_for(&self, action: KeyAction, context: &ControllerContext<'_>) -> Movement {
-        let page = match context.hit_map.visible_process_rows() {
-            0 => DEFAULT_PAGE,
-            rows => crate::num::saturate_u32(rows.saturating_sub(1).max(1)),
+    /// `Esc`: the notices, the banners and the marks go; with nothing else
+    /// to dismiss, the Overview's panels come back (D-121).
+    fn dismiss(&mut self, context: &ControllerContext<'_>) {
+        let dismissed = self.notices.clear();
+        let hidden = context
+            .model
+            .is_some_and(|model| self.hidden_banners.hide_all(&model.banners));
+        let unmarked = self.clear_marks();
+        if dismissed || hidden || unmarked || self.unzoom_processes() {
+            self.bump();
+        }
+    }
+
+    /// The next or the previous tab, from the view already requested so
+    /// Tab bursts advance.
+    fn cycle_tab(&mut self, forward: bool, view: ViewKind, context: &ControllerContext<'_>) {
+        let base = self
+            .drafts
+            .current(context.model, context.now)
+            .map_or(view, |fields| fields.view);
+        let current = views::Tab::of(base, self.history_page());
+        let target = if forward {
+            views::next_tab(current)
+        } else {
+            views::previous_tab(current)
         };
-        match action {
-            KeyAction::MoveUp => Movement::Up(1),
-            KeyAction::PageDown => Movement::Down(page),
-            KeyAction::PageUp => Movement::Up(page),
-            KeyAction::First => Movement::First,
-            KeyAction::Last => Movement::Last,
-            _ => Movement::Down(1),
+        self.show_tab(target, context);
+    }
+
+    /// Expands the module named `module_id`, or folds it back.
+    fn toggle_expanded_named(&mut self, module_id: &str) {
+        if let Ok(module) = ModuleId::new(module_id) {
+            self.toggle_expanded(module);
+        }
+    }
+
+    fn set_mode(&mut self, mode: InputMode) {
+        if self.mode != mode {
+            self.mode = mode;
+            self.bump();
         }
     }
 
@@ -774,8 +765,7 @@ impl Controller {
         let initial = self
             .drafts
             .current(context.model, context.now)
-            .map(|fields| fields.filter)
-            .unwrap_or_default();
+            .map_or_default(|fields| fields.filter);
         self.set_mode(InputMode::Filter(FilterEdit::new(&initial)));
     }
 
@@ -872,7 +862,7 @@ impl Controller {
         }
     }
 
-    fn handle_mouse(&mut self, mouse: &MouseEvent, context: &ControllerContext<'_>) {
+    fn handle_mouse(&mut self, mouse: MouseEvent, context: &ControllerContext<'_>) {
         match self.mode() {
             ModeKind::Normal => {}
             // Confirmation and text entry ignore the mouse: a click must
@@ -927,7 +917,7 @@ impl Controller {
         let scroll = self.scroll.get(&history).copied().unwrap_or(0);
         let cursor = selected
             .and_then(|key| runs.runs.iter().position(|run| run.key == key))
-            .map_or(scroll.min(last), saturate_u16);
+            .map_or_else(|| scroll.min(last), saturate_u16);
         let moved = match action {
             KeyAction::HistoryOpen => {
                 self.set_history_page(if tab == views::PROCESS_LIST_PAGE {
@@ -975,7 +965,7 @@ impl Controller {
     }
 
     /// The text to copy with the next frame, once.
-    pub fn take_clipboard(&mut self) -> Option<String> {
+    pub const fn take_clipboard(&mut self) -> Option<String> {
         self.clipboard.take()
     }
 
@@ -991,7 +981,7 @@ impl Controller {
         self.bump();
     }
 
-    /// Resolves a click through the HitMap of the frame the user saw. The
+    /// Resolves a click through the `HitMap` of the frame the user saw. The
     /// target carries the full identity drawn there, and the update is sent
     /// with that frame's revision, so a stale map can never be retargeted to
     /// whatever row occupies the position now; the Manager rejects it as
@@ -1245,7 +1235,7 @@ impl Controller {
         );
     }
 
-    /// `K` (SIGTERM) and `F9` (SIGKILL, D-70): PrepareSignal for the
+    /// `K` (SIGTERM) and `F9` (SIGKILL, D-70): `PrepareSignal` for the
     /// selected process exactly as drawn in the visible process table, with
     /// its full `ProcessKey`; the same confirmation follows either, and the
     /// Manager's policy decides whether SIGKILL may be sent.
@@ -1461,7 +1451,9 @@ impl Controller {
                 self.on_deletion_result(request_id, result, context, sink);
             }
             Some(RequestKind::Folds) if terminal => {
-                if let Some(Some(text)) = self.folds.answered(request_id, result, context.now) {
+                if let folds::SaveAnswer::Failed(text) =
+                    self.folds.answered(request_id, result, context.now)
+                {
                     self.notify(BannerLevel::Warning, text, context.now);
                 }
                 self.save_folds(context, sink);
@@ -1561,6 +1553,32 @@ impl Controller {
             view: seek.view,
             started_at: context.now,
         });
+    }
+}
+
+/// Where a movement key goes in the process list: a page is the rows in
+/// sight but one.
+fn movement_for(action: KeyAction, context: &ControllerContext<'_>) -> Movement {
+    let page = match context.hit_map.visible_process_rows() {
+        0 => DEFAULT_PAGE,
+        rows => crate::num::saturate_u32(rows.saturating_sub(1).max(1)),
+    };
+    match action {
+        KeyAction::MoveUp => Movement::Up(1),
+        KeyAction::PageDown => Movement::Down(page),
+        KeyAction::PageUp => Movement::Up(page),
+        KeyAction::First => Movement::First,
+        KeyAction::Last => Movement::Last,
+        _ => Movement::Down(1),
+    }
+}
+
+/// One row down, or one up.
+const fn one_row(down: bool) -> Movement {
+    if down {
+        Movement::Down(1)
+    } else {
+        Movement::Up(1)
     }
 }
 

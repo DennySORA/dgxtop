@@ -1,6 +1,7 @@
-//! Files in the state directory that dgxtop no longer needs (D-85): the
-//! backups older builds wrote before a migration, `-wal`/`-shm` journals
-//! whose database is gone, and temporary files of an interrupted
+//! Files in the state directory that dgxtop no longer needs (D-85).
+//!
+//! The backups older builds wrote before a migration, `-wal`/`-shm`
+//! journals whose database is gone, and temporary files of an interrupted
 //! short-term write. Nothing reads them, so they are found by name here and
 //! deleted at startup by the composition, under the instance lock.
 //!
@@ -32,6 +33,7 @@ pub enum LeftoverKind {
 }
 
 impl LeftoverKind {
+    #[must_use]
     pub const fn reason(self) -> &'static str {
         match self {
             Self::MigrationBackup => "a migration backup of an older build",
@@ -50,16 +52,22 @@ pub struct Leftover {
 }
 
 impl Leftover {
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
+    #[must_use]
     pub const fn kind(&self) -> LeftoverKind {
         self.kind
     }
 }
 
 /// The leftovers in the state directory, sorted by path.
+///
+/// # Errors
+///
+/// Returns the operating system's error when the call fails.
 pub fn find_leftovers(fs: &dyn FileSystemOps, paths: &StatePaths) -> io::Result<Vec<Leftover>> {
     verify_private_directory(fs, &paths.state_dir).map_err(io::Error::other)?;
     let names = fs.list_directory(&paths.state_dir, MAX_ENTRIES)?;
@@ -78,6 +86,10 @@ pub fn find_leftovers(fs: &dyn FileSystemOps, paths: &StatePaths) -> io::Result<
 }
 
 /// Deletes one leftover (a link as a link); one already gone is no error.
+///
+/// # Errors
+///
+/// Returns the operating system's error when the call fails.
 pub fn remove_leftover(fs: &dyn FileSystemOps, leftover: &Leftover) -> io::Result<()> {
     match fs.remove_file(&leftover.path) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
@@ -104,8 +116,7 @@ impl NameRules {
     fn of(paths: &StatePaths) -> Self {
         let name = |path: &Path| {
             path.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default()
+                .map_or_default(|name| name.to_string_lossy().into_owned())
         };
         Self {
             databases: [
@@ -132,7 +143,11 @@ impl NameRules {
         }
         self.databases.iter().find_map(|database| {
             let rest = name.strip_prefix(database.as_str())?;
-            if rest.starts_with(".pre-v") && rest.ends_with(".bak") {
+            if rest.starts_with(".pre-v")
+                && Path::new(rest)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("bak"))
+            {
                 Some(LeftoverKind::MigrationBackup)
             } else if (rest == "-wal" || rest == "-shm") && !database_exists(database) {
                 Some(LeftoverKind::OrphanJournal)
@@ -186,8 +201,9 @@ mod tests {
 
     impl Drop for Scratch {
         fn drop(&mut self) {
-            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
-            let _ = std::fs::remove_dir_all(&self.0);
+            std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700))
+                .unwrap_or_default();
+            std::fs::remove_dir_all(&self.0).unwrap_or_default();
         }
     }
 

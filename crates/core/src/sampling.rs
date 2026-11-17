@@ -24,6 +24,7 @@ pub struct SamplingTiming {
 }
 
 impl SamplingTiming {
+    #[must_use]
     pub fn from_sampling(sampling: &SamplingConfig) -> Self {
         let fast = ms_to_ns(u64::from(sampling.interval_ms.max(1)));
         let capacity = ms_to_ns(u64::from(sampling.capacity_interval_ms.max(1)));
@@ -44,6 +45,7 @@ impl SamplingTiming {
 }
 
 /// Stale deadline of a sample: `time + stale_factor x period`, saturating.
+#[must_use]
 pub fn stale_deadline(time_ns: u64, stale_factor: u32, period_ns: u64) -> u64 {
     time_ns.saturating_add(u64::from(stale_factor.max(1)).saturating_mul(period_ns))
 }

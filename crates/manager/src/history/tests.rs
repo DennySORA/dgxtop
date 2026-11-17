@@ -2,6 +2,7 @@ use super::*;
 use dgxtop_core::clock::NANOS_PER_SECOND;
 use dgxtop_core::commands::SortKey;
 use dgxtop_core::errors::ErrorCode;
+use dgxtop_core::num::ToF64Lossy;
 use dgxtop_core::process_model::MemoryPart;
 use dgxtop_core::testing::{CapturingDispatch, FakeClock, metric_key};
 
@@ -36,7 +37,7 @@ fn bench_at(max_inflight: usize, utc_offset_s: i32) -> Bench {
     let mut service = HistoryService::new(
         Box::new(port.clone()),
         clock.clone(),
-        HistorySettings {
+        &HistorySettings {
             max_inflight,
             deadline_ms: 200,
             max_points: 2000,
@@ -101,13 +102,12 @@ fn gpu_series(kind: HistoryChartKind, metric: &str) -> HistoryChartSpec {
 }
 
 /// A bar starting at `start` holding `minutes` minutes at `value`.
-#[allow(clippy::cast_precision_loss)]
 fn bar(start: i64, minutes: u64, value: f64) -> OverviewBucket {
     let covered = minutes * 60 * SECOND;
     OverviewBucket::gauge(
         start,
         covered,
-        value * covered as f64,
+        value * covered.to_f64_lossy(),
         (value, value + 5.0),
         12,
     )
@@ -315,7 +315,7 @@ fn a_memory_chart_carries_the_parts_the_history_joined() {
         answer_of(Vec::new(), OverviewBucket::new(from), vec![part]),
     );
     let view = bench.service.view(&bench.session);
-    assert!(view.charts[0].parts.is_empty());
+    assert_eq!(view.charts[0].parts.len(), 0);
     let parts: Vec<(u8, Vec<Option<f64>>)> = view.charts[1]
         .parts
         .iter()
@@ -383,7 +383,7 @@ fn the_gpu_view_reads_the_days_its_power_bars_scale_to() {
         1,
         |request| {
             assert_eq!(request.view, ViewKind::History);
-            assert!(request.shown.is_empty());
+            assert_eq!(request.shown.len(), 0);
             picks(vec![cpu()])
         },
         NOW,
@@ -437,7 +437,7 @@ fn timeouts_and_errors_show_on_their_chart_and_leaving_cancels() {
     bench.open("1m", &[cpu(), read_rate("blockdev:8:0")]);
     let job = bench.sent(NOW).pop().unwrap();
     // Overdue: the slot is reclaimed and the error shows on the chart.
-    let later = NOW + 400 * dgxtop_core::clock::NANOS_PER_MILLI;
+    let later = NOW + 400 * NANOS_PER_MILLI;
     let tick = bench.service.tick(later, false);
     assert_eq!(tick.expired, 1);
     assert!(job.cancel.is_cancelled());
@@ -485,7 +485,7 @@ fn timeouts_and_errors_show_on_their_chart_and_leaving_cancels() {
     bench.service.cancel_all();
     assert_eq!(bench.service.inflight_count(), 0);
     bench.service.close_session(&bench.session);
-    assert!(bench.service.view(&bench.session).charts.is_empty());
+    assert_eq!(bench.service.view(&bench.session).charts.len(), 0);
 }
 
 /// Where the history before this run comes from follows what the history

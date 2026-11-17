@@ -28,6 +28,7 @@ pub struct SessionFields {
 }
 
 impl SessionFields {
+    #[must_use]
     pub fn from_state(state: &SessionState) -> Self {
         Self {
             view: state.view,
@@ -41,6 +42,7 @@ impl SessionFields {
         }
     }
 
+    #[must_use]
     pub fn into_command(self, frame_revision: u64) -> CommandBody {
         CommandBody::UpdateViewSession {
             view: self.view,
@@ -119,7 +121,7 @@ impl SessionDrafts {
     }
 
     /// Takes the staged fields for submission.
-    pub fn take_staged(&mut self) -> Option<SessionFields> {
+    pub const fn take_staged(&mut self) -> Option<SessionFields> {
         self.staged.take()
     }
 

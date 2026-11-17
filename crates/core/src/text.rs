@@ -14,6 +14,7 @@ pub const MAX_MESSAGE_BYTES: usize = 1024;
 /// result at a UTF-8 boundary so it never exceeds `max_bytes`.
 ///
 /// Tabs and newlines become a single space because display rows are single line.
+#[must_use]
 pub fn sanitize_display(input: &str, max_bytes: usize) -> String {
     let mut output = String::with_capacity(input.len().min(max_bytes));
     let mut characters = input.chars().peekable();
@@ -41,6 +42,7 @@ pub fn sanitize_display(input: &str, max_bytes: usize) -> String {
 
 /// Sanitizes a kernel command name (`comm`). Unlike a path it may contain
 /// `/` (e.g. `kworker/0:1H`), so nothing is split; empty names become `?`.
+#[must_use]
 pub fn sanitize_command_name(comm: &str) -> String {
     let cleaned = sanitize_display(comm.trim(), MAX_BASENAME_BYTES);
     if cleaned.is_empty() {
@@ -51,10 +53,12 @@ pub fn sanitize_command_name(comm: &str) -> String {
 }
 
 /// Bounded, auditable form of untrusted text for persistent records
-/// (displays strip control codes, the Store keeps
-/// them escaped). Control characters, DEL, C1 and bidi overrides become
-/// `\u{XX}`; a literal backslash becomes `\\`, so the form is unambiguous.
-/// The result never exceeds `max_bytes` and never ends inside an escape.
+/// (displays strip control codes, the Store keeps them escaped).
+///
+/// Control characters, DEL, C1 and bidi overrides become `\u{XX}`; a
+/// literal backslash becomes `\\`, so the form is unambiguous. The result
+/// never exceeds `max_bytes` and never ends inside an escape.
+#[must_use]
 pub fn escape_for_audit(input: &str, max_bytes: usize) -> String {
     let mut output = String::with_capacity(input.len().min(max_bytes));
     for character in input.chars() {
@@ -71,10 +75,13 @@ pub fn escape_for_audit(input: &str, max_bytes: usize) -> String {
     output
 }
 
-/// Command name for persistent records: an absolute path is reduced to its
-/// final component (privacy: a full path is never stored), a kernel command
-/// name keeps its slashes (`kworker/0:1H`), and the result is escaped and
-/// bounded by [`escape_for_audit`].
+/// Command name for persistent records.
+///
+/// An absolute path is reduced to its final component (privacy: a full path
+/// is never stored), a kernel command name keeps its slashes
+/// (`kworker/0:1H`), and the result is escaped and bounded by
+/// [`escape_for_audit`].
+#[must_use]
 pub fn audit_command_name(comm_or_path: &str) -> String {
     let name = if comm_or_path.starts_with('/') {
         let trimmed = comm_or_path.trim_end_matches('/');
@@ -86,11 +93,13 @@ pub fn audit_command_name(comm_or_path: &str) -> String {
 }
 
 /// Sanitizes a free-form message to the shared message limit.
+#[must_use]
 pub fn sanitize_message(message: &str) -> String {
     sanitize_display(message, MAX_MESSAGE_BYTES)
 }
 
 /// Truncates at a UTF-8 boundary without other rewriting (for already clean text).
+#[must_use]
 pub fn truncate_utf8(input: &str, max_bytes: usize) -> &str {
     if input.len() <= max_bytes {
         return input;
@@ -99,10 +108,10 @@ pub fn truncate_utf8(input: &str, max_bytes: usize) -> &str {
     while end > 0 && !input.is_char_boundary(end) {
         end -= 1;
     }
-    &input[..end]
+    input.get(..end).unwrap_or(input)
 }
 
-fn is_bidi_override(character: char) -> bool {
+const fn is_bidi_override(character: char) -> bool {
     matches!(
         character,
         '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{200e}' | '\u{200f}'
@@ -122,7 +131,7 @@ fn skip_escape_sequence(characters: &mut std::iter::Peekable<std::str::Chars<'_>
                 }
             }
         }
-        Some(']') | Some('P') | Some('X') | Some('^') | Some('_') => {
+        Some(']' | 'P' | 'X' | '^' | '_') => {
             characters.next();
             // OSC/DCS/SOS/PM/APC: until BEL or ST (ESC \).
             while let Some(character) = characters.next() {

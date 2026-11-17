@@ -2,8 +2,11 @@
 //! run with `cargo test -p dgxtop-adapters -- --ignored hardware_ --nocapture`.
 //! Assertions are generic (contract invariants) plus driver-specific checks
 //! that only apply when the corresponding driver is present.
-#![allow(clippy::unwrap_used, clippy::expect_used)] // tests may unwrap
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
+#[expect(dead_code, reason = "each suite uses its part of the shared helpers")]
 #[path = "fixtures/adapters_c/support.rs"]
 mod support;
 
@@ -43,15 +46,15 @@ fn print_catalog(
         println!(
             "  {} metric={} origin={:?} profile={} rank={} label={:?} -> {:?} {:?} {:?}",
             descriptor.source_id,
-            descriptor
-                .metric
-                .as_ref()
-                .map_or("diagnostics".to_owned(), |key| key.series_selector()),
+            descriptor.metric.as_ref().map_or_else(
+                || "diagnostics".to_owned(),
+                dgxtop_core::identity::MetricKey::series_selector
+            ),
             descriptor
                 .origin
                 .origin_id
                 .as_ref()
-                .map(|origin| origin.as_str()),
+                .map(dgxtop_core::identity::OriginId::as_str),
             descriptor.profile_id,
             descriptor.profile_rank,
             descriptor.label,
@@ -78,7 +81,7 @@ fn hardware_hwmon_smoke() {
         time(&clock),
         host(),
         host_files(),
-        AdapterOptions::default(),
+        &AdapterOptions::default(),
     );
     let (_, pages) = discover(&mut adapter, "hwmon", 0, deadline(&clock));
     let catalog = sources(&pages);
@@ -91,7 +94,7 @@ fn hardware_hwmon_smoke() {
             group,
             1,
             deadline(&clock),
-            Vec::new(),
+            &Vec::new(),
         )));
     }
     print_catalog("hwmon", &pages, &catalog, &readings);
@@ -139,7 +142,7 @@ fn hardware_thermal_smoke() {
         time(&clock),
         host(),
         host_files(),
-        AdapterOptions::default(),
+        &AdapterOptions::default(),
     );
     let (_, pages) = discover(&mut adapter, "thermal", 0, deadline(&clock));
     let catalog = sources(&pages);
@@ -149,7 +152,7 @@ fn hardware_thermal_smoke() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     print_catalog("thermal", &pages, &catalog, &readings);
     assert_contract(&readings);
@@ -172,7 +175,7 @@ fn hardware_powercap_smoke() {
         time(&clock),
         host(),
         host_files(),
-        AdapterOptions::default(),
+        &AdapterOptions::default(),
     );
     let (_, pages) = discover(&mut adapter, "powercap", 0, deadline(&clock));
     let catalog = sources(&pages);
@@ -182,7 +185,7 @@ fn hardware_powercap_smoke() {
         "fast",
         1,
         deadline(&clock),
-        Vec::new(),
+        &Vec::new(),
     ));
     print_catalog("powercap", &pages, &catalog, &readings);
     assert_contract(&readings);

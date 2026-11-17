@@ -235,11 +235,11 @@ fn train(pid: i64, start_ticks: u64, gpu_bytes: u64) -> ProcessRow {
 }
 
 /// `request` answered by a model of `book`.
-fn detail(book: &ProcessHistoryBook, request: RunRequest) -> RunDetail {
+fn detail(book: &ProcessHistoryBook, request: &RunRequest) -> RunDetail {
     let mut builder = ModelBuilder::default();
     builder.show(request.clone());
     let model = build(&mut builder, book).unwrap();
-    model.detail_for(&request).unwrap().clone()
+    model.detail_for(request).unwrap().clone()
 }
 
 /// The list puts the latest start first and sums up each run.
@@ -271,7 +271,7 @@ fn runs_are_listed_newest_start_first_with_their_figures() {
     );
     assert_eq!(first.whole.value(RunMetric::Cpu).mean(), Some(50.0));
     assert_eq!(model.more_runs, 0);
-    assert!(model.details.is_empty());
+    assert_eq!(model.details.len(), 0);
 }
 
 /// An opened run gets bars of every metric; `Auto` takes the finest bar
@@ -283,7 +283,7 @@ fn an_opened_run_gets_bars_of_the_size_that_shows_it_whole() {
     for second in 2..32 {
         observe(&mut book, second, vec![train(1, 100, 4 << 30)]);
     }
-    let opened = detail(&book, request(1, BarSize::Auto));
+    let opened = detail(&book, &request(1, BarSize::Auto));
     let bars = opened.bars.as_ref().unwrap();
     assert_eq!(bars.bar, BarSize::OneMinute);
     assert_eq!(
@@ -314,7 +314,7 @@ fn the_size_asked_for_is_laid_out() {
     }
     let opened = detail(
         &book,
-        RunRequest {
+        &RunRequest {
             columns: 24,
             ..request(1, BarSize::OneHour)
         },
@@ -338,7 +338,7 @@ fn a_run_older_than_dgxtop_is_laid_out_finely() {
     for second in 3_600..3_700 {
         observe(&mut book, second, vec![train(1, 100, 4 << 30)]);
     }
-    let bars = detail(&book, request(1, BarSize::Auto)).bars.unwrap();
+    let bars = detail(&book, &request(1, BarSize::Auto)).bars.unwrap();
     assert_eq!(bars.bar, BarSize::OneMinute);
     assert!(bars.bars.len() >= 2);
 }

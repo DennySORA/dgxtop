@@ -1,6 +1,7 @@
 //! Age, countdown and interval text.
 
 /// `<1s ago`, `12s ago`, `3m 05s ago`, `2h 03m ago`, `1d 4h ago`.
+#[must_use]
 pub fn format_age(age_ms: u64) -> String {
     if age_ms < 1000 {
         return "<1s ago".to_owned();
@@ -9,6 +10,7 @@ pub fn format_age(age_ms: u64) -> String {
 }
 
 /// Compact span: `12s`, `3m 05s`, `2h 03m`, `1d 4h`.
+#[must_use]
 pub fn format_span_seconds(seconds: u64) -> String {
     if seconds < 60 {
         format!("{seconds}s")
@@ -22,11 +24,13 @@ pub fn format_span_seconds(seconds: u64) -> String {
 }
 
 /// Countdown rounded up so a token never shows `0s` while still valid.
+#[must_use]
 pub fn format_countdown_ms(remaining_ms: u64) -> String {
     format_span_seconds(remaining_ms.div_ceil(1000))
 }
 
 /// Sampling interval: `250 ms`, `1 s`, `1.5 s`.
+#[must_use]
 pub fn format_interval_ms(interval_ms: u32) -> String {
     if interval_ms < 1000 {
         format!("{interval_ms} ms")
@@ -38,6 +42,7 @@ pub fn format_interval_ms(interval_ms: u32) -> String {
 }
 
 /// Requested history span: whole units when exact (`5m`, `1h`, `24h`).
+#[must_use]
 pub fn format_span_ns(span_ns: u64) -> String {
     let seconds = span_ns / 1_000_000_000;
     if seconds == 0 {

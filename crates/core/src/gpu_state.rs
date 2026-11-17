@@ -1,8 +1,9 @@
-//! GPU state shared by the NVML adapter and the Viewer (D-47): the reasons
-//! the driver holds the clocks below their target ("throttle reasons"), by
-//! their public NVML clocks-event bit values, and how each GPU reaches the
-//! others (D-54: the PCIe path and direct peer access), so every layer
-//! reads one meaning.
+//! GPU state shared by the NVML adapter and the Viewer (D-47).
+//!
+//! The reasons the driver holds the clocks below their target ("throttle
+//! reasons"), by their public NVML clocks-event bit values, and how each
+//! GPU reaches the others (D-54: the `PCIe` path and direct peer access),
+//! so every layer reads one meaning.
 
 /// How much a throttle reason matters to someone reading the GPU view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -23,10 +24,11 @@ pub struct ThrottleReason {
     pub severity: ThrottleSeverity,
 }
 
-/// Every reason NVML reports, in bit order. The board limit and the
-/// reliability (voltage) limit came with later drivers (D-147); a GPU
-/// under full load commonly runs at its voltage limit, which is the top
-/// of its boost, not a fault.
+/// Every reason NVML reports, in bit order.
+///
+/// The board limit and the reliability (voltage) limit came with later
+/// drivers (D-147); a GPU under full load commonly runs at its voltage
+/// limit, which is the top of its boost, not a fault.
 pub const THROTTLE_REASONS: [ThrottleReason; 11] = [
     reason(0x1, "idle", ThrottleSeverity::Benign),
     reason(0x2, "application clocks", ThrottleSeverity::Benign),
@@ -57,30 +59,33 @@ pub fn throttle_reasons(bits: u64) -> impl Iterator<Item = &'static ThrottleReas
 }
 
 /// The most serious severity among `bits`; `None` when no reason is set.
+///
 /// The bits of `bits` whose reasons slow work down (D-146): heat, a
 /// hardware signal, a power cap. Idle and set clocks hold a GPU's clocks
 /// down too, and nobody waits for them.
+#[must_use]
 pub fn slowing_reasons(bits: u64) -> u64 {
     throttle_reasons(bits)
         .filter(|reason| reason.severity > ThrottleSeverity::Benign)
         .fold(0, |slowing, reason| slowing | reason.bit)
 }
 
+#[must_use]
 pub fn throttle_severity(bits: u64) -> Option<ThrottleSeverity> {
     throttle_reasons(bits).map(|reason| reason.severity).max()
 }
 
-/// How the PCIe fabric joins two GPUs, nearest first: NVML's topology
+/// How the `PCIe` fabric joins two GPUs, nearest first: NVML's topology
 /// levels, which `nvidia-smi topo -m` prints as `PIX` to `SYS`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum GpuLink {
     /// Both on one board (a dual-GPU card).
     SameBoard,
-    /// Through one PCIe switch.
+    /// Through one `PCIe` switch.
     OneSwitch,
-    /// Through several PCIe switches, not the host bridge.
+    /// Through several `PCIe` switches, not the host bridge.
     Switches,
-    /// Through the CPU's PCIe host bridge.
+    /// Through the CPU's `PCIe` host bridge.
     HostBridge,
     /// Between host bridges of one NUMA node.
     NumaNode,
@@ -99,6 +104,7 @@ impl GpuLink {
     ];
 
     /// `nvidia-smi topo -m`'s name of the path.
+    #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
             Self::SameBoard => "BOARD",
@@ -111,6 +117,7 @@ impl GpuLink {
     }
 
     /// What the path goes through, in words.
+    #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::SameBoard => "same board",
@@ -157,6 +164,7 @@ impl PeerAccess {
     }
 
     /// `P2P read/write`, `P2P read only`, `no P2P`.
+    #[must_use]
     pub const fn label(self) -> &'static str {
         match (self.read, self.write) {
             (true, true) => "P2P read/write",
@@ -181,6 +189,7 @@ const UNKNOWN_PART: &str = "?";
 
 /// The entity attribute of a GPU's peers: `index:path:access` entries
 /// separated by spaces (`1:PHB:none`), `?` for an unknown part.
+#[must_use]
 pub fn format_peers(peers: &[GpuPeer]) -> String {
     let entries: Vec<String> = peers
         .iter()
@@ -199,6 +208,7 @@ pub fn format_peers(peers: &[GpuPeer]) -> String {
 /// The peers of [`format_peers`]' attribute; an entry that is not
 /// `index:path:access` (one cut by the attribute's length bound) is
 /// skipped.
+#[must_use]
 pub fn parse_peers(attribute: &str) -> Vec<GpuPeer> {
     attribute
         .split_whitespace()
@@ -210,8 +220,8 @@ pub fn parse_peers(attribute: &str) -> Vec<GpuPeer> {
             if parts.next().is_some() {
                 return None;
             }
-            let link = known(link, GpuLink::parse)?;
-            let access = known(access, PeerAccess::parse)?;
+            let link = known(link, GpuLink::parse).ok()?;
+            let access = known(access, PeerAccess::parse).ok()?;
             Some(GpuPeer {
                 index,
                 link,
@@ -221,12 +231,15 @@ pub fn parse_peers(attribute: &str) -> Vec<GpuPeer> {
         .collect()
 }
 
-/// `Some(None)` for the unknown part, `None` for an invalid one.
-fn known<T>(part: &str, parse: impl FnOnce(&str) -> Option<T>) -> Option<Option<T>> {
+/// A part that is neither the unknown mark nor a value `parse` knows.
+struct InvalidPart;
+
+/// The value of `part`, `None` for the unknown mark.
+fn known<T>(part: &str, parse: impl FnOnce(&str) -> Option<T>) -> Result<Option<T>, InvalidPart> {
     if part == UNKNOWN_PART {
-        Some(None)
+        Ok(None)
     } else {
-        parse(part).map(Some)
+        parse(part).map(Some).ok_or(InvalidPart)
     }
 }
 
@@ -272,7 +285,7 @@ mod tests {
                 },
             ]
         );
-        assert!(parse_peers("").is_empty());
+        assert_eq!(parse_peers("").len(), 0);
     }
 
     #[test]

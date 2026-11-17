@@ -69,7 +69,7 @@ pub(crate) struct DropCounts {
 }
 
 impl DropCounts {
-    pub(crate) fn record(&mut self, reason: DropReason) {
+    pub(crate) const fn record(&mut self, reason: DropReason) {
         let counter = match reason {
             DropReason::Late => &mut self.late,
             DropReason::OutOfOrder => &mut self.out_of_order,

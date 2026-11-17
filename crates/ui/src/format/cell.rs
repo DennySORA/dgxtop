@@ -75,6 +75,7 @@ pub struct CellText {
 
 impl CellText {
     /// `primary · annotation · annotation`.
+    #[must_use]
     pub fn joined(&self) -> String {
         let mut text = self.primary.clone();
         for annotation in &self.annotations {
@@ -86,12 +87,14 @@ impl CellText {
 }
 
 /// Primary text only (value or state label), for narrow table cells.
+#[must_use]
 pub fn value_text(cell: &MetricCell) -> String {
     primary(cell).0
 }
 
 /// Full description of a cell. `age_offset_ms` is the time elapsed since
 /// the projection was received; it advances ages between projections.
+#[must_use]
 pub fn describe_cell(cell: &MetricCell, detail: CellDetail, age_offset_ms: u64) -> CellText {
     let (primary_text, tone) = primary(cell);
     let mut annotations = Vec::new();
@@ -133,6 +136,7 @@ pub fn describe_cell(cell: &MetricCell, detail: CellDetail, age_offset_ms: u64) 
 }
 
 /// Tag for non-measured sample kinds (`derived` is a normal computed value).
+#[must_use]
 pub const fn kind_tag(kind: SampleKind) -> Option<&'static str> {
     match kind {
         SampleKind::Measured | SampleKind::Derived => None,
@@ -143,6 +147,7 @@ pub const fn kind_tag(kind: SampleKind) -> Option<&'static str> {
 }
 
 /// Quality grade word shown whenever the grade is not `verified`.
+#[must_use]
 pub const fn quality_word(quality: Quality) -> Option<&'static str> {
     match quality {
         Quality::Verified => None,
@@ -154,6 +159,7 @@ pub const fn quality_word(quality: Quality) -> Option<&'static str> {
 }
 
 /// State label that fits `width` columns, falling back to a short form.
+#[must_use]
 pub fn state_label_for_width(state: CellState, width: usize) -> &'static str {
     let full = state.label();
     if display_width(full) <= width {
@@ -173,7 +179,8 @@ pub fn state_label_for_width(state: CellState, width: usize) -> &'static str {
 }
 
 /// Tone of a cell without formatting its text.
-pub fn cell_tone(cell: &MetricCell) -> CellTone {
+#[must_use]
+pub const fn cell_tone(cell: &MetricCell) -> CellTone {
     match (cell.state, cell.value.is_some()) {
         (CellState::Ok, true) => CellTone::Normal,
         (CellState::Degraded, true) => CellTone::Fallback,

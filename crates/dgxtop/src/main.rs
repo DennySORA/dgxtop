@@ -1,5 +1,9 @@
 //! dgxtop binary entry point.
 
+// The executable is the one crate nothing depends on: a `pub` item left
+// unused in it is dead.
+#![deny(dead_code_pub_in_binary)]
+
 use std::process::ExitCode;
 
 use clap::Parser;

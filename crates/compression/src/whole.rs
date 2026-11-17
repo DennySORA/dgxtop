@@ -6,10 +6,12 @@ use dgxtop_core::tiers::Tier;
 use crate::bucket::Bucket;
 use crate::series::TieredSeries;
 
-/// The series as one bucket: every bucket of the size that reaches back to
-/// the earliest data ([`chart_tier`]), and what its sources are filling,
-/// which has not reached it yet (each size merges its source's buckets as
-/// they close, so every sample counts once).
+/// The series as one bucket.
+///
+/// Every bucket of the size that reaches back to the earliest data
+/// ([`chart_tier`]), and what its sources are filling, which has not
+/// reached it yet (each size merges its source's buckets as they close, so
+/// every sample counts once).
 pub fn whole_series<B: Bucket>(series: &TieredSeries<B>) -> B {
     let mut whole = B::new(0);
     let Some(tier) = chart_tier(series) else {

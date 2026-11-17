@@ -148,7 +148,7 @@ mod tests {
                 (2, Tier::OneMinute, 300)
             ]
         );
-        assert!(keep_latest_of(&[]).is_empty());
+        assert_eq!(keep_latest_of(&[]).len(), 0);
     }
 
     #[test]

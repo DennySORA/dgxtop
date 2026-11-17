@@ -24,10 +24,16 @@ pub struct Structure {
     pub elements: usize,
 }
 
-/// Walks the JSON text once without allocating. Brackets inside strings are
-/// ignored and backslash escapes are honoured, so `"[[["` does not count as
-/// nesting. Multi-byte UTF-8 sequences never contain ASCII bytes, so a byte
-/// scan is exact on validated UTF-8.
+/// Walks the JSON text once without allocating.
+///
+/// Brackets inside strings are ignored and backslash escapes are honoured,
+/// so `"[[["` does not count as nesting. Multi-byte UTF-8 sequences never
+/// contain ASCII bytes, so a byte scan is exact on validated UTF-8.
+///
+/// # Errors
+///
+/// Returns an `IpcError` when a frame or message is rejected: too large,
+/// truncated, malformed or over a limit, or when its pipe fails.
 pub fn scan_structure(text: &str, limits: &IpcLimits) -> Result<Structure, IpcError> {
     let mut depth = 0usize;
     let mut max_depth = 0usize;
@@ -82,6 +88,11 @@ fn string_end(bytes: &[u8], start: usize) -> usize {
 }
 
 /// UTF-8 validation, structural pre-scan, then serde decode of `T`.
+///
+/// # Errors
+///
+/// Returns an `IpcError` when a frame or message is rejected: too large,
+/// truncated, malformed or over a limit, or when its pipe fails.
 pub fn decode_bounded<T: DeserializeOwned>(
     payload: &[u8],
     limits: &IpcLimits,
@@ -118,6 +129,11 @@ pub struct HelloExpectation<'a> {
 
 /// Decodes and verifies a hello: protocol version, adapter id, generation,
 /// nonce and a valid manifest for the same adapter.
+///
+/// # Errors
+///
+/// Returns an `IpcError` when a frame or message is rejected: too large,
+/// truncated, malformed or over a limit, or when its pipe fails.
 pub fn decode_hello(
     payload: &[u8],
     limits: &IpcLimits,
@@ -158,6 +174,11 @@ pub fn decode_hello(
 /// Decodes an observation batch and enforces the record and decoded-size
 /// limits. Consistency with the in-flight plan is checked by the caller
 /// (`ObservationBatch::validate_against`).
+///
+/// # Errors
+///
+/// Returns an `IpcError` when a frame or message is rejected: too large,
+/// truncated, malformed or over a limit, or when its pipe fails.
 pub fn decode_batch(payload: &[u8], limits: &IpcLimits) -> Result<ObservationBatch, IpcError> {
     let batch: ObservationBatch = decode_bounded(payload, limits)?;
     let limit = limits.max_records().min(MAX_RECORDS_PER_BATCH);
@@ -172,6 +193,11 @@ pub fn decode_batch(payload: &[u8], limits: &IpcLimits) -> Result<ObservationBat
 }
 
 /// Decodes a catalog page and validates its page bound.
+///
+/// # Errors
+///
+/// Returns an `IpcError` when a frame or message is rejected: too large,
+/// truncated, malformed or over a limit, or when its pipe fails.
 pub fn decode_catalog(payload: &[u8], limits: &IpcLimits) -> Result<CatalogReply, IpcError> {
     let reply: CatalogReply = decode_bounded(payload, limits)?;
     reply
@@ -183,6 +209,11 @@ pub fn decode_catalog(payload: &[u8], limits: &IpcLimits) -> Result<CatalogReply
 }
 
 /// Decodes a shutdown acknowledgement.
+///
+/// # Errors
+///
+/// Returns an `IpcError` when a frame or message is rejected: too large,
+/// truncated, malformed or over a limit, or when its pipe fails.
 pub fn decode_shutdown_ack(payload: &[u8], limits: &IpcLimits) -> Result<ShutdownAck, IpcError> {
     let ack: ShutdownAck = decode_bounded(payload, limits)?;
     check_decoded_size(&ack, limits)?;
@@ -191,6 +222,11 @@ pub fn decode_shutdown_ack(payload: &[u8], limits: &IpcLimits) -> Result<Shutdow
 
 /// Decodes and validates a parent request (child side). Unknown operations
 /// (including any action-like verb) fail at the `type` enum.
+///
+/// # Errors
+///
+/// Returns an `IpcError` when a frame or message is rejected: too large,
+/// truncated, malformed or over a limit, or when its pipe fails.
 pub fn decode_request(payload: &[u8], limits: &IpcLimits) -> Result<IpcRequest, IpcError> {
     let request: IpcRequest = decode_bounded(payload, limits)?;
     request
@@ -522,7 +558,7 @@ mod tests {
         };
         let bytes = serde_json::to_vec(&reply).unwrap();
         assert_eq!(decode_catalog(&bytes, &limits).unwrap(), reply);
-        let mut invalid = reply.clone();
+        let mut invalid = reply;
         invalid.delta.next_page = Some(1);
         let bytes = serde_json::to_vec(&invalid).unwrap();
         assert!(matches!(
@@ -557,9 +593,10 @@ mod tests {
         #[test]
         fn arbitrary_bytes_never_panic(bytes in proptest::collection::vec(any::<u8>(), 0..512)) {
             let limits = IpcLimits::default();
-            let _ = decode_bounded::<serde_json::Value>(&bytes, &limits);
-            let _ = decode_batch(&bytes, &limits);
-            let _ = decode_request(&bytes, &limits);
+            // Each may reject the bytes; none may panic on them.
+            drop(decode_bounded::<serde_json::Value>(&bytes, &limits));
+            drop(decode_batch(&bytes, &limits));
+            drop(decode_request(&bytes, &limits));
         }
     }
 

@@ -1,7 +1,8 @@
-//! The Overview History's long-term buckets (D-82): the history keeps each
-//! Overview series in every bar size (1 minute to 24 hours, [`Tier`]),
-//! each size aligned to the local clock and keeping its latest
-//! [`crate::tiers::TIER_BUCKETS`], fed by the minutes it
+//! The Overview History's long-term buckets (D-82).
+//!
+//! The history keeps each Overview series in every bar size (1 minute to
+//! 24 hours, [`Tier`]), each size aligned to the local clock and keeping
+//! its latest [`crate::tiers::TIER_BUCKETS`], fed by the minutes it
 //! finalizes. A bucket carries what makes merging exact: the time it holds
 //! a value, the time-weighted sum, the minimum, the maximum, the sample
 //! count and, for a counter, the exact total. Its mean is the weighted sum
@@ -20,6 +21,7 @@ use crate::history::SeriesInEveryBoot;
 use crate::identity::{EntityId, HostId};
 use crate::metric::ids;
 use crate::naming::entity;
+use crate::num::ToF64Lossy;
 use crate::process_model::MemoryPart;
 use crate::tiers::Tier;
 
@@ -52,6 +54,7 @@ pub const OVERVIEW_METRICS: [&str; 20] = [
 ];
 
 /// Whether `metric_id` is one the Overview History charts or summarizes.
+#[must_use]
 pub fn is_overview_metric(metric_id: &str) -> bool {
     OVERVIEW_METRICS.contains(&metric_id)
 }
@@ -59,6 +62,7 @@ pub fn is_overview_metric(metric_id: &str) -> bool {
 /// Whether the history keeps the series of `metric_id` on `entity_id` in
 /// every bar size: an Overview metric, and of the CPU only the whole (the
 /// history view charts the total, never each core).
+#[must_use]
 pub fn is_overview_series(metric_id: &str, entity_id: &str) -> bool {
     is_overview_metric(metric_id)
         && (metric_id != ids::CPU_UTILIZATION_TOTAL || entity_id == entity::CPU_AGGREGATE)
@@ -87,6 +91,7 @@ pub struct OverviewBucket {
 
 impl OverviewBucket {
     /// An empty bucket starting at `start_utc_ns`.
+    #[must_use]
     pub const fn new(start_utc_ns: i64) -> Self {
         Self {
             start_utc_ns,
@@ -101,7 +106,8 @@ impl OverviewBucket {
     }
 
     /// A gauge's minute: `covered_ns` of steps summing to `weighted_sum`.
-    pub fn gauge(
+    #[must_use]
+    pub const fn gauge(
         start_utc_ns: i64,
         covered_ns: u64,
         weighted_sum: f64,
@@ -120,6 +126,7 @@ impl OverviewBucket {
 
     /// A counter's minute: `covered_ns` of intervals totalling `total`
     /// (`None` when the total was not exact).
+    #[must_use]
     pub fn counter(
         start_utc_ns: i64,
         covered_ns: u64,
@@ -146,39 +153,42 @@ impl OverviewBucket {
         self.minimum = self.minimum.min(other.minimum);
         self.maximum = self.maximum.max(other.maximum);
         self.samples = self.samples.saturating_add(other.samples);
-        match self.total.checked_add(other.total) {
-            Some(total) => self.total = total,
-            None => {
-                self.total = u64::MAX;
-                self.total_exact = false;
-            }
+        if let Some(total) = self.total.checked_add(other.total) {
+            self.total = total;
+        } else {
+            self.total = u64::MAX;
+            self.total_exact = false;
         }
         self.total_exact &= other.total_exact;
     }
 
     /// Whether it holds no time of the series.
+    #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.covered_ns == 0
     }
 
     /// The mean over the time it holds; `None` for a counter or when empty.
-    #[allow(clippy::cast_precision_loss)]
+    #[must_use]
     pub fn mean(&self) -> Option<f64> {
         (self.covered_ns > 0 && self.maximum.is_finite())
-            .then(|| self.weighted_sum / self.covered_ns as f64)
+            .then(|| self.weighted_sum / self.covered_ns.to_f64_lossy())
     }
 
     /// The highest value held.
+    #[must_use]
     pub fn peak(&self) -> Option<f64> {
         self.maximum.is_finite().then_some(self.maximum)
     }
 
     /// The lowest value held.
+    #[must_use]
     pub fn low(&self) -> Option<f64> {
         self.minimum.is_finite().then_some(self.minimum)
     }
 
     /// Mean × time held in seconds (joules for a power series).
+    #[must_use]
     pub fn integral(&self) -> Option<f64> {
         self.mean()
             .map(|_| self.weighted_sum / NANOS_PER_SECOND_F64)
@@ -201,11 +211,13 @@ pub struct StoredTierSeries {
     pub buckets: Vec<(Tier, OverviewBucket)>,
 }
 
-/// What the history asks its store to write: first every bucket of the
-/// `forget` series deleted (the history's cache let them go, so they are
-/// not read back), then the closed buckets, then of every (series, size)
-/// written only the latest `keep_latest` kept. The rows are shared: the
-/// history keeps them (without a copy) when the store's queue is full.
+/// What the history asks its store to write.
+///
+/// First every bucket of the `forget` series deleted (the history's
+/// cache let them go, so they are not read back), then the closed
+/// buckets, then of every (series, size) written only the latest
+/// `keep_latest` kept. The rows are shared: the history keeps them
+/// (without a copy) when the store's queue is full.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TierJournal {
     pub forget: Vec<SeriesInEveryBoot>,
@@ -224,8 +236,10 @@ pub struct TierStoreUsage {
 }
 
 /// The series of `metric_ids` the archive holds minutes of in earlier
-/// runs: segments of `host_id` in their metric's canonical unit, started
-/// before `before_utc_ns` (this run's own minutes reach the history live).
+/// runs.
+///
+/// Segments of `host_id` in their metric's canonical unit, started before
+/// `before_utc_ns` (this run's own minutes reach the history live).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchivedSeriesList {
     pub host_id: HostId,
@@ -285,7 +299,7 @@ pub enum HistoryTierCompletion {
 }
 
 /// What the Manager asks the history of one Overview series (D-82).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OverviewRequest {
     /// The bars of `tier` that start in `[from_utc_ns, end_utc_ns)`, the
     /// latest with what is still being filled up to `at_utc_ns`, with the
@@ -310,7 +324,8 @@ pub enum OverviewRequest {
 }
 
 impl OverviewRequest {
-    pub fn series(&self) -> &SeriesInEveryBoot {
+    #[must_use]
+    pub const fn series(&self) -> &SeriesInEveryBoot {
         match self {
             Self::Bars { series, .. } | Self::Windows { series, .. } => series,
         }
@@ -350,8 +365,7 @@ mod tests {
     const MINUTE: u64 = 60_000_000_000;
 
     fn minute(start: i64, value: f64, covered: u64) -> OverviewBucket {
-        #[allow(clippy::cast_precision_loss)]
-        let sum = value * covered as f64;
+        let sum = value * covered.to_f64_lossy();
         OverviewBucket::gauge(start, covered, sum, (value, value), 1)
     }
 

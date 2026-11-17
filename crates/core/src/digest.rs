@@ -3,6 +3,7 @@
 use sha2::{Digest, Sha256};
 
 /// Lower-case hex SHA-256 of `bytes` (64 characters).
+#[must_use]
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut text = String::with_capacity(64);
@@ -17,6 +18,11 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 ///
 /// `serde_json` emits struct fields in declaration order, so identical payloads
 /// produce identical digests within one binary version.
+///
+/// # Errors
+///
+/// Returns a `serde_json::Error` when the value cannot be written as, or read
+/// from, JSON.
 pub fn sha256_json<T: serde::Serialize>(value: &T) -> Result<String, serde_json::Error> {
     let encoded = serde_json::to_vec(value)?;
     Ok(sha256_hex(&encoded))

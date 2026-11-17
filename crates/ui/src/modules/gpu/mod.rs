@@ -37,14 +37,19 @@ const MAX_CARD_ROWS: u16 = 3;
 /// Module id of the GPU panel and the GPU view.
 pub const GPU_MODULE_ID: &str = "gpu";
 
+#[derive(Debug)]
 pub struct GpuModule {
     manifest: DisplayModuleManifest,
 }
 
 impl GpuModule {
+    /// # Errors
+    ///
+    /// Returns a `ModuleBuildError` when the module's static manifest is
+    /// invalid, which is a build defect.
     pub fn new() -> Result<Self, ModuleBuildError> {
         Ok(Self {
-            manifest: build_manifest(ManifestSpec {
+            manifest: build_manifest(&ManifestSpec {
                 id: GPU_MODULE_ID,
                 title: "GPU devices",
                 min_columns: 36,
@@ -131,7 +136,7 @@ impl GpuModule {
         let title = format!("GPUs  {count}x");
         let inner = panel(frame, area, &title, context);
         let mut rows = RowCursor::new(inner);
-        self.render_partial_reason(gpu, &mut rows, frame, context);
+        Self::render_partial_reason(gpu, &mut rows, frame, context);
         if rows.remaining() / saturate_u16(count).max(1) < OVERVIEW_GPU_ROWS {
             if let Some(list) = rows.rest() {
                 self.render_card_list(context, model, gpu, list, frame, output);
@@ -164,7 +169,6 @@ impl GpuModule {
 
     /// `partial: <reason>` when some GPUs could not be read.
     fn render_partial_reason(
-        &self,
         gpu: &GpuView,
         rows: &mut RowCursor,
         frame: &mut Frame<'_>,
@@ -677,7 +681,7 @@ mod tests {
         let (words, style) = notice(&card).unwrap();
         assert_eq!(words, " ▼ thermal slowdown");
         assert_eq!(style.fg, Some(theme.danger));
-        assert!(style.add_modifier.contains(ratatui::style::Modifier::BOLD));
+        assert!(style.add_modifier.contains(Modifier::BOLD));
         let headline = text(&overview_headline(&card, &context));
         assert!(headline.contains("°C ▼ thermal slowdown │ "), "{headline}");
         assert!(

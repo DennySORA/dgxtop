@@ -63,6 +63,10 @@ pub struct Scenarios {
 }
 
 impl Scenarios {
+    /// # Errors
+    ///
+    /// Returns a `ScenarioError` when the scenario file cannot be read or
+    /// decoded, or names an unknown profile.
     pub fn load(path: &Path) -> Result<Self, ScenarioError> {
         let text = std::fs::read_to_string(path).map_err(|source| ScenarioError::Io {
             path: path.display().to_string(),
@@ -74,6 +78,10 @@ impl Scenarios {
         })
     }
 
+    /// # Errors
+    ///
+    /// Returns a `ScenarioError` when the scenario file cannot be read or
+    /// decoded, or names an unknown profile.
     pub fn profile(&self, id: &str) -> Result<&ScenarioProfile, ScenarioError> {
         self.profiles
             .iter()
@@ -84,6 +92,7 @@ impl Scenarios {
 
 impl ScenarioProfile {
     /// The workload block of a performance report for this profile.
+    #[must_use]
     pub fn workload(&self) -> Workload {
         Workload {
             series: self.series,
@@ -101,6 +110,7 @@ impl ScenarioProfile {
 
     /// Whether this profile is the fixed REF workload the report schema demands.
     #[cfg(test)]
+    #[must_use]
     pub fn is_reference_workload(&self) -> bool {
         self.workload() == Workload::reference()
     }
@@ -108,6 +118,7 @@ impl ScenarioProfile {
     /// Generator profile with this scenario's counts. GPU count and the
     /// number of distinct cycles are generator choices the scenario file
     /// does not fix, so they keep the generator's REF defaults.
+    #[must_use]
     pub fn replay_profile(&self, simulated_latency_us: u32) -> RefProfile {
         RefProfile {
             id: self.id.clone(),

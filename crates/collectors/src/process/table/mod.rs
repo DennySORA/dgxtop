@@ -4,7 +4,7 @@
 //! procfs record per process (`process:<ns>:<pid>:<start>`, D-79, D-86):
 //! its CPU ticks as the value, the rest of its `stat` as tags
 //! ([`ProcessStat`]) and the name and command line in the provenance
-//! channel. CPU% = Δticks / (CLK_TCK × dt) × 100 (may exceed 100 on several
+//! channel. CPU% = Δticks / (`CLK_TCK` × dt) × 100 (may exceed 100 on several
 //! cores); RSS bytes and the numeric uid come from the tags. GPU usage from NVML
 //! (`gpupid:<UUID>:<PID>`) is joined afterwards as `(ProcessKey, GPU)` links:
 //! host resources are never repeated or multiplied per GPU, compute and
@@ -45,6 +45,7 @@ use crate::shared::gpu_processes::{self, GpuProcesses, PidRecords};
 use crate::shared::output::Subject;
 use crate::shared::reasons;
 use crate::shared::state_bounds::PROCESS_BASES_PER_ROW;
+use dgxtop_core::num::ToF64Lossy;
 
 fn accepts(metric: &MetricDescriptor) -> bool {
     metric.domain == Domain::Process
@@ -76,6 +77,10 @@ pub struct ProcessCollector {
 }
 
 impl ProcessCollector {
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn new() -> Result<Self, IdentityError> {
         Ok(Self {
             id: CollectorId::new(naming::collectors::PROCESS)?,
@@ -153,7 +158,7 @@ impl<'a> HostSample<'a> {
         }
     }
 
-    fn read_finished_boot_ns(&self) -> u64 {
+    const fn read_finished_boot_ns(&self) -> u64 {
         self.record.observation.read_finished_boot_ns
     }
 }
@@ -252,16 +257,18 @@ fn tagged_rss(
     if !counter_inputs::is_fresh(session, sample.record) {
         return (None, Some(reasons::STALE));
     }
-    match sample.stat.rss_bytes {
-        Some(bytes) => (Some(bytes), None),
-        None => (
-            None,
-            Some(
-                process_stat::rss_failure(&sample.record.observation.reason_codes)
-                    .unwrap_or(reasons::MISSING_INPUT),
-            ),
-        ),
-    }
+    sample.stat.rss_bytes.map_or_else(
+        || {
+            (
+                None,
+                Some(
+                    process_stat::rss_failure(&sample.record.observation.reason_codes)
+                        .unwrap_or(reasons::MISSING_INPUT),
+                ),
+            )
+        },
+        |bytes| (Some(bytes), None),
+    )
 }
 
 /// CPU% of one instance. The first sample of a `ProcessKey` (and therefore of
@@ -310,8 +317,7 @@ fn cpu_percent(
     if !counter_inputs::is_fresh(session, record) {
         return (None, Some(reasons::STALE), base);
     }
-    #[allow(clippy::cast_precision_loss)]
-    let cpu_seconds = delta.delta as f64 / clk_tck as f64;
+    let cpu_seconds = delta.delta.to_f64_lossy() / clk_tck.to_f64_lossy();
     match counter::rate_of(cpu_seconds, delta.elapsed_ns()) {
         Some(share) => (Some(share * 100.0), None, base),
         None => (None, Some(reasons::VALUE_OVERFLOW), base),
@@ -375,8 +381,7 @@ fn descendants_of(
         let spent = now.ticks.checked_sub(before.ticks)?;
         let elapsed = now.read_boot_ns.checked_sub(before.read_boot_ns)?;
         let per_second = clk_tck.filter(|ticks| *ticks > 0)?;
-        #[allow(clippy::cast_precision_loss)]
-        let cpu_seconds = spent as f64 / per_second as f64;
+        let cpu_seconds = spent.to_f64_lossy() / per_second.to_f64_lossy();
         counter::rate_of(cpu_seconds, elapsed).map(|share| share * 100.0)
     });
     ProcessDescendants {
@@ -599,7 +604,7 @@ fn priority(left: &ProcessRow, right: &ProcessRow) -> Ordering {
     (!right.gpu.is_empty())
         .cmp(&!left.gpu.is_empty())
         .then_with(|| descending(left.cpu_percent, right.cpu_percent, f64::total_cmp))
-        .then_with(|| descending(left.rss_bytes, right.rss_bytes, |a, b| a.cmp(b)))
+        .then_with(|| descending(left.rss_bytes, right.rss_bytes, Ord::cmp))
         .then_with(|| left.key.cmp(&right.key))
 }
 
@@ -634,9 +639,11 @@ fn prune_bases(session: &mut Session<'_>, rows: &[ProcessRow]) {
     }
     let mut order: Vec<(bool, u64, usize, ProcessKey)> = bases
         .iter()
-        .map(|(key, base)| match rank.get(key) {
-            None => (false, base.sample_boot_ns, 0, key.clone()),
-            Some(index) => (true, 0, usize::MAX - index, key.clone()),
+        .map(|(key, base)| {
+            rank.get(key).map_or_else(
+                || (false, base.sample_boot_ns, 0, key.clone()),
+                |index| (true, 0, usize::MAX - index, key.clone()),
+            )
         })
         .collect();
     order.sort();

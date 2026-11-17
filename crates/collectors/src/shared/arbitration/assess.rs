@@ -133,7 +133,7 @@ fn check_fault(observation: &Observation) -> Result<(), RejectReason> {
     }
 }
 
-fn check_read(observation: &Observation) -> Result<(), RejectReason> {
+const fn check_read(observation: &Observation) -> Result<(), RejectReason> {
     if !observation.read_status.is_ok() {
         return Err(RejectReason::ReadFailed {
             status: observation.read_status,
@@ -146,7 +146,7 @@ fn check_read(observation: &Observation) -> Result<(), RejectReason> {
 }
 
 /// `allow_suspect_as_canonical` is a fixed `false`: only verified/usable.
-fn check_quality(observation: &Observation) -> Result<(), RejectReason> {
+const fn check_quality(observation: &Observation) -> Result<(), RejectReason> {
     if observation.quality.is_canonical_eligible() {
         Ok(())
     } else {
@@ -167,11 +167,11 @@ fn normalize(
         conversion_for(observation.native_unit.as_str(), unit).ok_or(RejectReason::UnknownUnit)?;
     let value = conversion
         .apply(raw)
-        .map_err(|_| RejectReason::InvalidValue)?;
+        .map_err(|_cause| RejectReason::InvalidValue)?;
     Ok((value, conversion.id))
 }
 
-fn read_freshness(deadlines: Deadlines, now_boot_ns: u64) -> Freshness {
+const fn read_freshness(deadlines: Deadlines, now_boot_ns: u64) -> Freshness {
     if now_boot_ns >= deadlines.read_boot_ns {
         Freshness::Stale
     } else {
@@ -181,7 +181,7 @@ fn read_freshness(deadlines: Deadlines, now_boot_ns: u64) -> Freshness {
 
 /// Fresh only with a device timestamp inside its deadline; without a device
 /// timestamp a successful read proves nothing about the measurement.
-fn measurement_freshness(
+const fn measurement_freshness(
     observation: &Observation,
     deadlines: Deadlines,
     now_boot_ns: u64,
@@ -228,7 +228,7 @@ pub(crate) fn has_reason(observation: &Observation, code: &str) -> bool {
 }
 
 /// Origin id when a verified profile/topology confirmed it.
-pub(crate) fn confirmed_origin(observation: &Observation) -> Option<&OriginId> {
+pub(crate) const fn confirmed_origin(observation: &Observation) -> Option<&OriginId> {
     match observation.provenance.origin_relation {
         OriginRelation::Confirmed => observation.provenance.origin_id.as_ref(),
         OriginRelation::Unknown => None,

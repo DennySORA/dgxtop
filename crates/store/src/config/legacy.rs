@@ -121,6 +121,12 @@ impl FileConfigRepository {
     /// `apply = false` nothing is written. With `apply = true` the mapped
     /// candidate is stored as the first v2 document (revision = defaults + 1)
     /// and the returned report's candidate is exactly what was written.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `LegacyImportError` when the legacy file is missing, unsafe,
+    /// too large or does not parse, or the mapped configuration is invalid or
+    /// cannot be written.
     pub fn import_legacy(
         &self,
         legacy_path: &Path,

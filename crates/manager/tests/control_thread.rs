@@ -2,7 +2,9 @@
 //! shutdown in real time (AT39) and a cross-thread command flood (AT23).
 //! Every port is a fake from `dgxtop_core::testing`; no real I/O happens.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -127,9 +129,7 @@ fn fixture_with_audit(audit: Box<dyn Dispatch<AuditOp>>) -> Fixture {
         saved_config: config.clone(),
         effective_config: config,
         value_origins: BTreeMap::new(),
-        config_file: dgxtop_core::action::PersistenceStatus::healthy(
-            dgxtop_core::action::PersistenceKind::Config,
-        ),
+        config_file: PersistenceStatus::healthy(PersistenceKind::Config),
         host_id: host_id("test-host"),
         boot_id: boot_id("fake-boot"),
         pid_namespace: PidNamespace::new("pid:[1]").unwrap(),

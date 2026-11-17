@@ -27,7 +27,7 @@ use crate::stack::{ActionStack, AuditBackend, EXIT_WAIT, Kernel, StackOptions};
 /// A PID namespace this test process is not in.
 const FOREIGN_PID_NAMESPACE: &str = "pid:[4026539999]";
 
-fn ready_stack(options: StackOptions) -> ActionStack {
+fn ready_stack(options: &StackOptions) -> ActionStack {
     let stack = ActionStack::start(options);
     stack.await_audit_ready();
     stack
@@ -36,7 +36,7 @@ fn ready_stack(options: StackOptions) -> ActionStack {
 #[test]
 fn at10_confirmed_sigterm_reaches_only_the_disposable_child_after_one_durable_intent() {
     let mut child = DisposableChild::sleeping();
-    let stack = ready_stack(StackOptions::default());
+    let stack = ready_stack(&StackOptions::default());
     let target = stack.publish(&child);
 
     // Prepare: identity re-verified on a held pidfd, a token, nothing sent.
@@ -118,7 +118,7 @@ fn at10_confirmed_sigterm_reaches_only_the_disposable_child_after_one_durable_in
 #[test]
 fn at10_root_session_sends_nothing() {
     let mut child = DisposableChild::sleeping();
-    let stack = ActionStack::start(StackOptions {
+    let stack = ActionStack::start(&StackOptions {
         caller_euid: Some(0),
         ..StackOptions::default()
     });
@@ -158,7 +158,7 @@ fn at10_read_only_or_disabled_actions_send_nothing() {
     ];
     for (options, reason) in cases {
         let mut child = DisposableChild::sleeping();
-        let stack = ActionStack::start(options);
+        let stack = ActionStack::start(&options);
         stack.await_audit_ready();
         let target = stack.publish(&child);
         let prepare_id = stack.prepare(&target, Signal::Sigterm);
@@ -175,7 +175,7 @@ fn at10_read_only_or_disabled_actions_send_nothing() {
 #[test]
 fn at10_target_listed_under_another_uid_sends_nothing() {
     let mut child = DisposableChild::sleeping();
-    let stack = ready_stack(StackOptions::default());
+    let stack = ready_stack(&StackOptions::default());
     let facts = ProcessFacts::read(child.pid()).expect("child facts");
     let target = stack.key_for(&facts, &pid_namespace(child.pid()));
     let another_user = facts.real_uid.checked_add(1).unwrap_or(0);
@@ -196,7 +196,7 @@ fn at10_target_listed_under_another_uid_sends_nothing() {
 
 #[test]
 fn at10_process_of_another_user_is_refused_by_the_kernel_identity_check() {
-    let stack = ready_stack(StackOptions::default());
+    let stack = ready_stack(&StackOptions::default());
     let foreign = foreign_user_process(stack.caller_euid())
         .expect("this test needs a visible process of another user, e.g. a root daemon");
     // Only the refusal path is exercised: no confirmation is ever submitted.
@@ -226,7 +226,7 @@ fn at10_process_of_another_user_is_refused_by_the_kernel_identity_check() {
 #[test]
 fn at10_target_in_another_pid_namespace_sends_nothing() {
     let mut child = DisposableChild::sleeping();
-    let stack = ready_stack(StackOptions::default());
+    let stack = ready_stack(&StackOptions::default());
     assert_ne!(pid_namespace(child.pid()), FOREIGN_PID_NAMESPACE);
     let facts = ProcessFacts::read(child.pid()).expect("child facts");
     let target = stack.key_for(&facts, FOREIGN_PID_NAMESPACE);
@@ -246,7 +246,7 @@ fn at10_target_in_another_pid_namespace_sends_nothing() {
 #[test]
 fn at10_reused_pid_with_another_start_time_sends_nothing() {
     let mut child = DisposableChild::sleeping();
-    let stack = ready_stack(StackOptions::default());
+    let stack = ready_stack(&StackOptions::default());
     let facts = ProcessFacts::read(child.pid()).expect("child facts");
     // The table still names the PID's previous owner: same PID, earlier start.
     let previous_owner = ProcessFacts {
@@ -254,7 +254,7 @@ fn at10_reused_pid_with_another_start_time_sends_nothing() {
             .start_time_ticks
             .checked_sub(1)
             .expect("started after boot"),
-        ..facts.clone()
+        ..facts
     };
     let stale = stack.key_for(&previous_owner, &pid_namespace(child.pid()));
     stack.publish_row(&stale, Some(facts.real_uid));
@@ -275,7 +275,7 @@ fn at10_reused_pid_with_another_start_time_sends_nothing() {
 #[test]
 fn at10_target_gone_after_prepare_is_never_signalled_through_its_pidfd() {
     let mut child = DisposableChild::sleeping();
-    let stack = ready_stack(StackOptions::default());
+    let stack = ready_stack(&StackOptions::default());
     let target = stack.publish(&child);
     let prepared = stack.prepared(&target);
     // The selected instance disappears; its PID may now be reused.
@@ -321,7 +321,7 @@ fn at10_target_gone_after_prepare_is_never_signalled_through_its_pidfd() {
 #[test]
 fn at10_expired_confirmation_sends_nothing() {
     let mut child = DisposableChild::sleeping();
-    let stack = ready_stack(StackOptions::default());
+    let stack = ready_stack(&StackOptions::default());
     let target = stack.publish(&child);
     let prepared = stack.prepared(&target);
     stack
@@ -348,7 +348,7 @@ fn at10_expired_confirmation_sends_nothing() {
 #[test]
 fn at10_unavailable_audit_store_sends_nothing() {
     let mut child = DisposableChild::sleeping();
-    let stack = ActionStack::start(StackOptions {
+    let stack = ActionStack::start(&StackOptions {
         audit: AuditBackend::Unavailable,
         ..StackOptions::default()
     });
@@ -364,14 +364,14 @@ fn at10_unavailable_audit_store_sends_nothing() {
     assert_nothing_sent(&stack, &mut [&mut child]);
     let steps = stack.steps();
     assert_eq!(steps.prepares_dispatched(), 0, "refused before the worker");
-    assert!(steps.intents_requested().is_empty());
+    assert_eq!(steps.intents_requested(), [] as [Uuid; 0]);
     stack.stop();
 }
 
 #[test]
 fn at10_audit_refusing_the_intent_sends_nothing() {
     let mut child = DisposableChild::sleeping();
-    let stack = ready_stack(StackOptions::default());
+    let stack = ready_stack(&StackOptions::default());
     let target = stack.publish(&child);
     let prepared = stack.prepared(&target);
     // The prepare's audit row is written before the disk "fills up".
@@ -403,7 +403,7 @@ fn at10_audit_refusing_the_intent_sends_nothing() {
 #[test]
 fn at10_without_pidfd_support_nothing_is_sent_and_there_is_no_pid_fallback() {
     let mut child = DisposableChild::sleeping();
-    let stack = ready_stack(StackOptions {
+    let stack = ready_stack(&StackOptions {
         kernel: Kernel::WithoutPidfd,
         ..StackOptions::default()
     });

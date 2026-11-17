@@ -38,7 +38,7 @@ impl Scratch {
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        std::fs::remove_dir_all(&self.0).unwrap_or_default();
     }
 }
 
@@ -296,7 +296,7 @@ fn a_database_of_another_format_starts_empty() {
             )]))
             .unwrap();
         drop(store);
-        rusqlite::Connection::open(scratch.path())
+        Connection::open(scratch.path())
             .unwrap()
             .pragma_update(None, "application_id", stamp)
             .unwrap();
@@ -312,7 +312,7 @@ fn a_database_of_another_format_starts_empty() {
 #[test]
 fn a_format_1_database_with_last_utc_ns_is_recreated() {
     let scratch = Scratch::new("format-1");
-    let connection = rusqlite::Connection::open(scratch.path()).unwrap();
+    let connection = Connection::open(scratch.path()).unwrap();
     connection
         .execute_batch(
             "CREATE TABLE tier_series (series_id INTEGER PRIMARY KEY, \
@@ -335,7 +335,7 @@ fn a_format_1_database_with_last_utc_ns_is_recreated() {
     drop(connection);
     let mut store = scratch.open();
     assert!(store.recreated().is_some());
-    assert!(store.load().unwrap().is_empty());
+    assert_eq!(store.load().unwrap(), [] as [StoredTierSeries; 0]);
 }
 
 /// The series table holds the identity only: nothing reads a latest
@@ -402,7 +402,7 @@ fn an_unreadable_bucket_fails_the_load() {
     );
 }
 
-/// Corruption stops the database like every partition's (sqlite::Writer):
+/// Corruption stops the database like every partition's (`sqlite::Writer)`:
 /// later calls say why.
 #[test]
 fn a_corrupt_database_stops_with_its_reason() {

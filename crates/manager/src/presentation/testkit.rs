@@ -325,7 +325,7 @@ pub(crate) fn history_chart(points: Vec<HistoryPointView>) -> HistoryChartView {
     HistoryChartView {
         kind: HistoryChartKind::CpuUtilization,
         subject: String::new(),
-        series: dgxtop_core::testing::metric_key("cpu", "cpu.utilization.total", "host"),
+        series: metric_key("cpu", "cpu.utilization.total", "host"),
         unit: dgxtop_core::metric::CanonicalUnit::Percent,
         scale_max: Some(100.0),
         points,

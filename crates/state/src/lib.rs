@@ -76,6 +76,7 @@ impl LiveState {
     /// `--replay`); `archive_enabled` lets [`StateWriter::take_archive_journal`]
     /// hand out the journals `history` queues. Every commit, gap and
     /// maintenance step is forwarded to `history` before it is published.
+    #[must_use]
     pub fn new(
         store: &StoreConfig,
         sampling: &SamplingConfig,
@@ -125,6 +126,7 @@ impl LiveState {
     }
 
     /// Splits the state into its writer and snapshot reader.
+    #[must_use]
     pub fn into_parts(self) -> (StateWriter, SharedSnapshot) {
         (self.writer, self.snapshots)
     }
@@ -210,6 +212,7 @@ impl StateWriter {
     }
 
     /// The read side of the trends this writer fills (D-99).
+    #[must_use]
     pub fn trends(&self) -> SharedTrends {
         self.trends.reader()
     }
@@ -243,7 +246,7 @@ impl StateWriter {
             .map_or(0, |(revision, _)| *revision)
     }
 
-    fn archive_state(&self) -> ArchiveState {
+    const fn archive_state(&self) -> ArchiveState {
         if self.archive_enabled {
             ArchiveState::Pending
         } else {

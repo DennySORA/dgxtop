@@ -164,9 +164,7 @@ impl Completions {
     }
 
     fn dropped(&self, message: &str) {
-        self.probes
-            .completion_drops
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.probes.completion_drops.fetch_add(1, Ordering::Relaxed);
         self.logger
             .log(LogLevel::Warn, "bench.composition", message);
     }
@@ -244,6 +242,10 @@ struct Wiring {
 }
 
 impl RefComposition {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the bench's composition root: each step builds one part from the ones before it, in order"
+    )]
     pub fn start(inputs: &CompositionInputs<'_>) -> BenchResult<Self> {
         let paths = state_paths(inputs.run_dir)?;
         let filesystem = real_filesystem();
@@ -351,21 +353,21 @@ impl RefComposition {
         let supervisor = Supervisor::start(
             SupervisorConfig::from_config(&config),
             specs,
-            ledger.clone(),
+            &ledger,
             ingress.clone(),
-            inboxes.ingestion.clone(),
+            inboxes.ingestion,
             Arc::clone(&clock),
             Arc::clone(&product_logger),
         )
         .map_err(|error| error.to_string())?;
         let self_pid =
-            i32::try_from(std::process::id()).map_err(|_| "pid out of range".to_owned())?;
+            i32::try_from(std::process::id()).map_err(|_cause| "pid out of range".to_owned())?;
         let setup = ManagerSetup {
             saved_config: config.clone(),
             effective_config: config.clone(),
             value_origins: value_origins(&config, &loaded.origin, &[]),
             config_file,
-            host_id: host_id.clone(),
+            host_id,
             boot_id: clock.boot_id(),
             pid_namespace: pid_namespace_of(self_pid).map_err(|error| error.to_string())?,
             euid: current_euid(),
@@ -380,7 +382,7 @@ impl RefComposition {
                 namespace_label: Some("replay (simulated data)".to_owned()),
                 utc_offset_s: 0,
                 any_user: false,
-                users: Default::default(),
+                users: dgxtop_core::users::UserNames::default(),
             },
             namespace: Namespace::Replay,
         };
@@ -557,15 +559,13 @@ impl Wiring {
             "collector",
             usize::try_from(config.runtime.compute_workers).unwrap_or(2),
             usize::try_from(config.queues.collector_jobs).unwrap_or(8),
-            Arc::new(move |plan: CollectionPlan| {
+            move |plan: CollectionPlan| {
                 let completion = run_collection(&registry, &plan);
                 if is_collector_panic(&completion) {
-                    probes
-                        .collector_panics
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    probes.collector_panics.fetch_add(1, Ordering::Relaxed);
                 }
                 completions.ingestion(completion);
-            }),
+            },
         )
         .map_err(|error| error.to_string())
     }
@@ -582,7 +582,7 @@ impl Wiring {
             "history",
             usize::try_from(config.runtime.history_workers).unwrap_or(1),
             usize::try_from(config.queues.history_requests).unwrap_or(4),
-            Arc::new(move |job: HistoryJob| {
+            move |job: HistoryJob| {
                 let completion = run_history_job(reader.as_ref(), job, clock.as_ref());
                 if let ControlCompletion::History {
                     request_id, result, ..
@@ -591,7 +591,7 @@ impl Wiring {
                     probes.on_history_result(request_id, result);
                 }
                 completions.control(completion);
-            }),
+            },
         )
         .map_err(|error| error.to_string())
     }
@@ -720,10 +720,10 @@ fn join_within<T: Send + 'static>(thread: JoinHandle<T>, timeout: Duration) -> O
     let joiner = std::thread::Builder::new()
         .name("bench-join".to_owned())
         .spawn(move || {
-            let _ = sender.send(thread.join());
+            sender.send(thread.join()).unwrap_or_default();
         })
         .ok()?;
-    let joined = receiver.recv_timeout(timeout).ok()?.ok();
+    let outcome = receiver.recv_timeout(timeout).ok()?.ok();
     drop(joiner);
-    joined
+    outcome
 }

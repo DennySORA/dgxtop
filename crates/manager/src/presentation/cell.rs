@@ -1,4 +1,4 @@
-//! MetricCell mapping: one committed sample plus its arbitration explanation
+//! `MetricCell` mapping: one committed sample plus its arbitration explanation
 //! becomes one displayable cell. A cell carries a value only when a source
 //! was selected; every other state is explained in text and never shown as 0.
 
@@ -30,6 +30,7 @@ const WARMUP_MARKERS: [&str; 5] = ["WARMUP", "WARM_UP", "RESET", "FIRST_SAMPLE",
 
 /// Builds the cell for one committed sample. `catalog` resolves the adapter
 /// of the selected source for the "package 0 · hwmon" label.
+#[must_use]
 pub fn build_metric_cell(
     entry: &SnapshotEntry,
     explanation: Option<&Explanation>,
@@ -131,6 +132,10 @@ fn unavailable_state(sample: &CanonicalSample, explanation: Option<&Explanation>
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "what the sources of a cell said: several hold at once and the first by priority is shown"
+)]
 struct ReasonSignals {
     unsupported: bool,
     permission_denied: bool,
@@ -155,7 +160,7 @@ impl ReasonSignals {
     }
 }
 
-fn effective_read_status(candidate: &CandidateExplanation) -> ReadStatus {
+const fn effective_read_status(candidate: &CandidateExplanation) -> ReadStatus {
     match &candidate.disposition {
         CandidateDisposition::Rejected(RejectReason::ReadFailed { status }) => *status,
         _ => candidate.read_status,
@@ -403,7 +408,7 @@ mod tests {
             .build();
         assert!(cell(&present, None).last_good.is_none());
 
-        let mut wrong_unit = missing.clone();
+        let mut wrong_unit = missing;
         if let Some(last_good) = wrong_unit.last_good.as_mut() {
             last_good.unit = CanonicalUnit::Watts;
         }

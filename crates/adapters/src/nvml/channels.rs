@@ -12,7 +12,7 @@ use super::backend::{
     RetiredPageCause, StaticFact, ThermalThreshold,
 };
 
-/// Highest NVLink index probed (`NVML_NVLINK_MAX_LINKS`).
+/// Highest `NVLink` index probed (`NVML_NVLINK_MAX_LINKS`).
 pub const MAX_NVLINK_LINKS: u32 = 18;
 /// Fans per GPU beyond this are not catalogued (bounded catalog).
 pub const MAX_FANS_PER_GPU: u32 = 16;
@@ -81,7 +81,7 @@ pub enum Channel {
     ProcessMemoryTotal,
     PerformanceState,
     ThrottleReasons,
-    /// Current PCIe link generation or width.
+    /// Current `PCIe` link generation or width.
     PcieLink(PcieLink),
     MaxPcieLink(PcieLink),
     TemperatureThreshold(ThermalThreshold),

@@ -16,6 +16,7 @@
 //! `--soak-results FILE`: real soak results to include (otherwise the
 //! report carries zero-length soak placeholders and cannot be `measured`).
 
+#[expect(dead_code, reason = "each bench uses its part of the shared helpers")]
 #[path = "../common/mod.rs"]
 mod common;
 mod composition;
@@ -44,6 +45,7 @@ use dgxtop::perf::latency::summarize_us;
 use dgxtop::perf::report::{BenchMode, RunRecord};
 use dgxtop::perf::threads::HarnessCpu;
 use dgxtop_core::clock::NANOS_PER_SECOND;
+use dgxtop_core::num::ToF64Lossy;
 use dgxtop_core::ports::{SessionPort, SnapshotReader};
 use frontend::{Frontend, FrontendInputs, FrontendReport};
 use metrics::{
@@ -124,14 +126,13 @@ struct RunResult {
 }
 
 fn main() -> ExitCode {
-    common::run_bench(BENCH, run)
+    common::run_bench(BENCH, true, run)
 }
 
-fn run() -> BenchResult<PathBuf> {
-    let args = common::parse_args(BENCH, true)?;
+fn run(args: &common::BenchArgs) -> BenchResult<PathBuf> {
     let inputs = common::load_inputs()?;
     let config = common::reference_config()?;
-    let paths = common::output_paths(BENCH, &args);
+    let paths = common::output_paths(BENCH, args);
     let _isolation = isolate_terminal_input()?;
     let environment = common::environment(
         "headless 160x50 TuiLoop: ANSI encoded in memory, null transport, no terminal I/O",
@@ -178,10 +179,10 @@ fn run() -> BenchResult<PathBuf> {
     let mut run_details = Vec::new();
     let mut extra_blockers = Vec::new();
     for index in 1..=RUNS {
-        println!(
+        dgxtop::output::line(&format!(
             "ref run {index}/{RUNS}: warm-up {:?}, window {:?}",
             plan.sizes.warmup, plan.sizes.window
-        );
+        ));
         let result = run_once(&plan)?;
         write_run_evidence(&mut evidence, index, &result)?;
         extra_blockers.extend(
@@ -208,7 +209,7 @@ fn run() -> BenchResult<PathBuf> {
         notes: notes(),
     };
     common::finish(
-        outcome,
+        &outcome,
         &inputs,
         &config,
         environment,
@@ -327,7 +328,7 @@ fn warm_and_measure(
 }
 
 /// The history metric's definition needs a 24 h preload of every series
-/// the HistoryService can query.
+/// the `HistoryService` can query.
 fn preload_blockers(
     preload: &dgxtop::perf::history_load::PreloadReport,
     history_keys_at_end: usize,
@@ -335,8 +336,7 @@ fn preload_blockers(
     let mut blockers = Vec::new();
     let span_ns = preload.end_ns.saturating_sub(preload.start_ns);
     if span_ns < MINIMUM_HISTORY_SPAN_NS {
-        #[allow(clippy::cast_precision_loss)]
-        let hours = (span_ns / NANOS_PER_SECOND) as f64 / 3600.0;
+        let hours = (span_ns / NANOS_PER_SECOND).to_f64_lossy() / 3600.0;
         blockers.push(format!(
             "history preload spans only {hours:.1} h (boot uptime); the 24 h query definition needs >= 24 h uptime"
         ));
@@ -378,7 +378,7 @@ fn raw_streams(data: &WindowData, frames_us: Vec<u64>) -> Vec<RawStream> {
 /// Waits until every replay host delivered committed reads and the set of
 /// history-capable series in the snapshot stopped growing for
 /// [`STABLE_KEYS_FOR`] (the preload must cover every series the
-/// HistoryService can be asked for).
+/// `HistoryService` can be asked for).
 fn wait_until_ready(
     plan: &RunPlan,
     composition: &RefComposition,
@@ -475,15 +475,20 @@ fn measure_window(
     let started = Instant::now();
     let mut manager_died = false;
     while started.elapsed() < plan.sizes.window {
-        std::thread::sleep((plan.sizes.window - started.elapsed()).min(Duration::from_millis(500)));
+        std::thread::sleep(
+            plan.sizes
+                .window
+                .saturating_sub(started.elapsed())
+                .min(Duration::from_millis(500)),
+        );
         manager_died |= !composition.manager_alive();
     }
-    let sampled = sampler.finish();
+    let measured = sampler.finish();
     let end_ns = composition.clock_now();
     let wall_seconds = started.elapsed().as_secs_f64();
     let thread_usage = usage_by_thread(
-        &sampled.threads_at_start,
-        &sampled.threads_at_end,
+        &measured.threads_at_start,
+        &measured.threads_at_end,
         plan.clock_ticks_per_second,
         wall_seconds,
     );
@@ -513,7 +518,7 @@ fn measure_window(
     Ok(MeasuredWindow {
         data: WindowData {
             wall_seconds,
-            resources: sampled.samples,
+            resources: measured.samples,
             clock_ticks_per_second: plan.clock_ticks_per_second,
             commands_us,
             frames_us: Vec::new(),

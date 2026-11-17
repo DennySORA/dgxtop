@@ -167,6 +167,10 @@ pub(super) fn load(connection: &mut Connection) -> Result<Vec<StoredTierSeries>,
         )
         .map_err(DatabaseFailure::statement("history_tiers.load"))?;
     let failed = DatabaseFailure::statement("history_tiers.load");
+    #[expect(
+        clippy::needless_collect,
+        reason = "the statement goes before its series' buckets are read: each read needs the connection back"
+    )]
     let series: Vec<(i64, SeriesInEveryBoot)> = statement
         .query_map([], series_of)
         .map_err(&failed)?

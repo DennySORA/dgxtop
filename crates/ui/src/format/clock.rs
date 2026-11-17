@@ -7,6 +7,7 @@ const NANOS_PER_SECOND: i64 = 1_000_000_000;
 const SECONDS_PER_DAY: i64 = 86_400;
 
 /// `2026-10-11 14:03:22`.
+#[must_use]
 pub fn format_local_datetime(utc_ns: i64, offset_s: i32) -> String {
     let (date, time) = parts(utc_ns, offset_s);
     format!(
@@ -16,18 +17,21 @@ pub fn format_local_datetime(utc_ns: i64, offset_s: i32) -> String {
 }
 
 /// `10-11 14:03`.
+#[must_use]
 pub fn format_local_short(utc_ns: i64, offset_s: i32) -> String {
     let (date, time) = parts(utc_ns, offset_s);
     format!("{:02}-{:02} {:02}:{:02}", date.1, date.2, time.0, time.1)
 }
 
 /// `14:03`.
+#[must_use]
 pub fn format_local_clock(utc_ns: i64, offset_s: i32) -> String {
     let (_, time) = parts(utc_ns, offset_s);
     format!("{:02}:{:02}", time.0, time.1)
 }
 
 /// `10-11`.
+#[must_use]
 pub fn format_local_date(utc_ns: i64, offset_s: i32) -> String {
     let (date, _) = parts(utc_ns, offset_s);
     format!("{:02}-{:02}", date.1, date.2)

@@ -69,11 +69,16 @@ pub struct Supervisor;
 
 impl Supervisor {
     /// Starts the supervisor thread and launches every host.
-    #[allow(clippy::too_many_arguments)] // signature fixed by the composition root
+    ///
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     pub fn start(
         config: SupervisorConfig,
         specs: Vec<HostSpec>,
-        ledger: ByteLedger,
+        ledger: &ByteLedger,
         ingress: QueueGate,
         completions: Sender<IngestionCompletion>,
         clock: Arc<dyn TimeProvider>,
@@ -92,11 +97,20 @@ impl Supervisor {
     }
 
     /// [`Supervisor::start`] with an injected launcher (fault injection).
-    #[allow(clippy::too_many_arguments)] // `start` plus the injected launcher
+    ///
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "`start` plus the injected launcher"
+    )]
     pub fn start_with_launcher(
         config: SupervisorConfig,
         specs: Vec<HostSpec>,
-        ledger: ByteLedger,
+        ledger: &ByteLedger,
         ingress: QueueGate,
         completions: Sender<IngestionCompletion>,
         clock: Arc<dyn TimeProvider>,

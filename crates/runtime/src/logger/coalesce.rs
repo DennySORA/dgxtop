@@ -165,7 +165,7 @@ mod tests {
                 Verdict::Suppress
             );
         }
-        assert!(coalescer.due(WINDOW - 1).is_empty());
+        assert_eq!(coalescer.due(WINDOW - 1).len(), 0);
         let summaries = coalescer.due(WINDOW);
         assert_eq!(
             summaries,

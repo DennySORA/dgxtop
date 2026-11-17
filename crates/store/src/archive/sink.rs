@@ -115,13 +115,12 @@ impl fmt::Debug for SqliteArchive {
 }
 
 fn validate_path(path: &Path) -> Result<(), ArchiveOpenError> {
-    match path_problem(path) {
-        Some(reason) => Err(ArchiveOpenError::InvalidPath {
+    path_problem(path).map_or(Ok(()), |reason| {
+        Err(ArchiveOpenError::InvalidPath {
             path: path.display().to_string(),
             reason: reason.to_owned(),
-        }),
-        None => Ok(()),
-    }
+        })
+    })
 }
 
 /// Splits rows into transactions of at most `max_rows` rows and about
@@ -206,6 +205,11 @@ fn utc_text(utc_ns: i64) -> String {
 impl SqliteArchive {
     /// Opens (creating with mode 0600 when missing) and verifies the
     /// archive. `Err` only for invalid arguments; see the type docs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `ArchiveOpenError` when the limits or the path are invalid; a
+    /// database problem opens an archive that reports its status instead.
     pub fn open(
         path: &Path,
         limits: ArchiveLimits,
@@ -257,11 +261,11 @@ impl SqliteArchive {
         &self.path
     }
 
-    pub fn limits(&self) -> &ArchiveLimits {
+    pub const fn limits(&self) -> &ArchiveLimits {
         &self.limits
     }
 
-    pub fn stats(&self) -> ArchiveStats {
+    pub const fn stats(&self) -> ArchiveStats {
         self.stats
     }
 
@@ -275,6 +279,12 @@ impl SqliteArchive {
     /// then stale bridges, empty segments (cascade) and gaps of boots
     /// without data and of this boot before its boot time. Bounded: what is
     /// left goes with the next expiry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     pub fn expire(&mut self, expiry: &ArchiveExpiry) -> Result<ArchiveExpiryReport, InfraError> {
         self.expire_keeping(expiry, NO_PROTECTED_SEGMENTS)
     }
@@ -460,7 +470,7 @@ impl SqliteArchive {
         );
         let (pages, wal_backlog_bytes) =
             measured.map_err(|error| self.sqlite_failure("archive.capacity", &error))?;
-        let directory = self.path.parent().unwrap_or(Path::new("/"));
+        let directory = self.path.parent().unwrap_or_else(|| Path::new("/"));
         let free_disk_bytes = self.free_space.available_bytes(directory)?;
         Ok(CapacityView {
             footprint,
@@ -572,12 +582,11 @@ impl SqliteArchive {
     fn check_segment_references(&mut self, batch: &ArchiveBatch) -> Result<(), InfraError> {
         let unknown = first_unknown_segment(self.connection()?, batch);
         let unknown = unknown.map_err(|error| self.sqlite_failure("archive.validate", &error))?;
-        match unknown {
-            Some(segment_id) => Err(InfraError::Database(format!(
+        unknown.map_or(Ok(()), |segment_id| {
+            Err(InfraError::Database(format!(
                 "archive journal rejected: rows reference unknown segment {segment_id}"
-            ))),
-            None => Ok(()),
-        }
+            )))
+        })
     }
 
     fn state_and_detail(&mut self) -> (PersistenceState, Option<String>) {
@@ -604,10 +613,12 @@ impl SqliteArchive {
                 PersistenceState::Degraded,
                 Some("archive near a capacity threshold".to_owned()),
             ),
-            Ok(()) => match &self.last_issue {
-                Some(issue) => (PersistenceState::Degraded, Some(issue.clone())),
-                None => (PersistenceState::Healthy, None),
-            },
+            Ok(()) => self
+                .last_issue
+                .as_ref()
+                .map_or((PersistenceState::Healthy, None), |issue| {
+                    (PersistenceState::Degraded, Some(issue.clone()))
+                }),
         }
     }
 }
@@ -776,7 +787,7 @@ mod tests {
         let row_bytes = rows[0].payload_bytes();
         let by_bytes = chunk_bounds(&rows, 100, row_bytes * 3);
         assert_eq!(by_bytes, vec![0..3, 3..6, 6..9, 9..10]);
-        assert!(chunk_bounds(&[], 4, 100).is_empty());
+        assert_eq!(chunk_bounds(&[], 4, 100), [] as [Range<usize>; 0]);
     }
 
     #[test]
@@ -790,7 +801,7 @@ mod tests {
         rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None)
     }
 
-    /// The archive maps a failure like every partition (sqlite::Writer): a
+    /// The archive maps a failure like every partition (`sqlite::Writer)`: a
     /// full database is `DiskFull` and shown until the next good append, a
     /// corrupt one stops the archive with its reason.
     #[test]

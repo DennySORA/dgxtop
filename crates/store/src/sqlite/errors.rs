@@ -30,7 +30,7 @@ pub(crate) enum FaultKind {
     Other,
 }
 
-pub(crate) fn fault_kind(error: &rusqlite::Error) -> FaultKind {
+pub(crate) const fn fault_kind(error: &rusqlite::Error) -> FaultKind {
     let rusqlite::Error::SqliteFailure(failure, _) = error else {
         return FaultKind::Other;
     };
@@ -78,12 +78,11 @@ pub(crate) fn infra_error(operation: &'static str, error: &rusqlite::Error) -> I
 /// disk) and the lock deadline is a `Timeout`.
 pub(crate) fn tx_infra_error<E>(operation: &'static str, error: &TxError<E>) -> InfraError {
     match error {
-        TxError::Sqlite(error) => infra_error(operation, error),
         TxError::Commit(error) if fault_kind(error) == FaultKind::Io => InfraError::Uncertain {
             operation,
             message: fault_message(operation, error),
         },
-        TxError::Commit(error) => infra_error(operation, error),
+        TxError::Sqlite(error) | TxError::Commit(error) => infra_error(operation, error),
         TxError::BusyTimeout { elapsed_ms } => InfraError::Timeout {
             operation,
             elapsed_ms: *elapsed_ms,
@@ -93,7 +92,7 @@ pub(crate) fn tx_infra_error<E>(operation: &'static str, error: &TxError<E>) -> 
 }
 
 /// The SQLite error inside a failed transaction, if there is one.
-pub(crate) fn tx_sqlite_error<E>(error: &TxError<E>) -> Option<&rusqlite::Error> {
+pub(crate) const fn tx_sqlite_error<E>(error: &TxError<E>) -> Option<&rusqlite::Error> {
     match error {
         TxError::Sqlite(error) | TxError::Commit(error) => Some(error),
         TxError::Abort(_) | TxError::BusyTimeout { .. } => None,

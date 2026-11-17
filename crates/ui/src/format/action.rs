@@ -18,6 +18,7 @@ pub(crate) const CONFIRM_DELETE_HINT: &str = "y / Enter delete · n / Esc cancel
 pub(crate) const COMPACT_CONFIRMATION_WIDTH: u16 = 60;
 
 /// Human state words. `SignalSent` deliberately says nothing about exit.
+#[must_use]
 pub const fn action_state_label(state: ActionState) -> &'static str {
     match state {
         ActionState::Requested => "requested",

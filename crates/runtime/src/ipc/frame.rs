@@ -29,6 +29,7 @@ pub enum Step {
 }
 
 impl Step {
+    #[must_use]
     pub const fn consumed(&self) -> usize {
         match self {
             Self::NeedMore { consumed }
@@ -76,6 +77,10 @@ pub struct FrameDecoder {
 }
 
 impl FrameDecoder {
+    /// # Errors
+    ///
+    /// Returns an `IpcError` when a frame or message is rejected: too large,
+    /// truncated, malformed or over a limit, or when its pipe fails.
     pub fn new(max_frame_bytes: usize) -> Result<Self, IpcError> {
         if !(1..=super::limits::MAX_WIRE_FRAME_BYTES).contains(&max_frame_bytes) {
             return Err(IpcError::InvalidLimits(format!(
@@ -89,12 +94,14 @@ impl FrameDecoder {
         })
     }
 
+    #[must_use]
     pub const fn max_frame_bytes(&self) -> usize {
         self.max_frame_bytes
     }
 
     /// Bytes still missing from the current prefix or body. `0` means a body
     /// decision is pending (or the decoder failed) and nothing must be read.
+    #[must_use]
     pub fn wanted(&self) -> usize {
         match &self.state {
             State::Prefix { filled, .. } => PREFIX_BYTES - filled,
@@ -105,17 +112,20 @@ impl FrameDecoder {
     }
 
     /// At a frame boundary (nothing partially received).
-    pub fn is_idle(&self) -> bool {
+    #[must_use]
+    pub const fn is_idle(&self) -> bool {
         matches!(self.state, State::Prefix { filled: 0, .. })
     }
 
     /// A body buffer is allocated and partially filled.
-    pub fn is_receiving_body(&self) -> bool {
+    #[must_use]
+    pub const fn is_receiving_body(&self) -> bool {
         matches!(self.state, State::Body { .. })
     }
 
     /// Declared length of a frame whose body decision is pending.
-    pub fn pending_declared(&self) -> Option<usize> {
+    #[must_use]
+    pub const fn pending_declared(&self) -> Option<usize> {
         match self.state {
             State::Pending { declared } => Some(declared),
             _ => None,
@@ -124,7 +134,7 @@ impl FrameDecoder {
 
     /// Capacity of the body buffer currently held (observable allocation).
     #[cfg(test)]
-    fn buffered_capacity(&self) -> usize {
+    const fn buffered_capacity(&self) -> usize {
         match &self.state {
             State::Body { buffer, .. } => buffer.capacity(),
             _ => 0,
@@ -132,6 +142,11 @@ impl FrameDecoder {
     }
 
     /// Absorbs bytes up to the end of the current prefix or body.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IpcError` when a frame or message is rejected: too large,
+    /// truncated, malformed or over a limit, or when its pipe fails.
     pub fn push(&mut self, chunk: &[u8]) -> Result<Step, IpcError> {
         match &mut self.state {
             State::Failed => Err(IpcError::Poisoned),
@@ -200,6 +215,11 @@ impl FrameDecoder {
     }
 
     /// Allocates exactly the declared length and starts receiving the body.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IpcError` when a frame or message is rejected: too large,
+    /// truncated, malformed or over a limit, or when its pipe fails.
     pub fn admit_body(&mut self) -> Result<(), IpcError> {
         let State::Pending { declared } = self.state else {
             return Err(IpcError::DecisionPending);
@@ -214,6 +234,11 @@ impl FrameDecoder {
     }
 
     /// Discards the declared body without storing it (late replies).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IpcError` when a frame or message is rejected: too large,
+    /// truncated, malformed or over a limit, or when its pipe fails.
     pub fn skip_body(&mut self) -> Result<(), IpcError> {
         let State::Pending { declared } = self.state else {
             return Err(IpcError::DecisionPending);
@@ -227,6 +252,11 @@ impl FrameDecoder {
 
     /// Convenience for callers that accept every valid body: feeds a whole
     /// chunk and returns the completed payloads (at most `max_frames`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IpcError` when a frame or message is rejected: too large,
+    /// truncated, malformed or over a limit, or when its pipe fails.
     pub fn feed(&mut self, chunk: &[u8], max_frames: usize) -> Result<Vec<Vec<u8>>, IpcError> {
         let mut frames = Vec::new();
         let mut offset = 0;
@@ -250,6 +280,11 @@ impl FrameDecoder {
     }
 
     /// End-of-stream check: a partial frame is an error, never an empty batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IpcError` when a frame or message is rejected: too large,
+    /// truncated, malformed or over a limit, or when its pipe fails.
     pub fn finish(&self) -> Result<(), IpcError> {
         match &self.state {
             State::Prefix { filled: 0, .. } => Ok(()),
@@ -280,6 +315,11 @@ impl FrameDecoder {
 /// Serializes `message` as one frame (prefix + JSON). Serialization stops as
 /// soon as the payload would exceed `max_frame_bytes`, so an oversized
 /// message never materializes in memory.
+///
+/// # Errors
+///
+/// Returns an `IpcError` when a frame or message is rejected: too large,
+/// truncated, malformed or over a limit, or when its pipe fails.
 pub fn encode_frame<T: Serialize>(
     message: &T,
     max_frame_bytes: usize,
@@ -305,7 +345,7 @@ pub fn encode_frame<T: Serialize>(
     if payload_len == 0 {
         return Err(IpcError::EmptyFrame);
     }
-    let prefix = u32::try_from(payload_len).map_err(|_| IpcError::FrameTooLarge {
+    let prefix = u32::try_from(payload_len).map_err(|_cause| IpcError::FrameTooLarge {
         declared: u64::try_from(payload_len).unwrap_or(u64::MAX),
         limit,
     })?;
@@ -337,6 +377,11 @@ impl Write for LimitedWriter {
 /// Blocking read of one frame (adapter-host side). Reads exactly what the
 /// decoder wants, so no bytes of the following frame are consumed. Returns
 /// `Ok(None)` on a clean end of stream at a frame boundary.
+///
+/// # Errors
+///
+/// Returns an `IpcError` when a frame or message is rejected: too large,
+/// truncated, malformed or over a limit, or when its pipe fails.
 pub fn read_frame_blocking(
     reader: &mut dyn Read,
     decoder: &mut FrameDecoder,

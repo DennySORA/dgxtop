@@ -194,15 +194,17 @@ mod tests {
     #[test]
     fn a_slowed_gpu_is_listed_with_its_clock() {
         let mut slowdowns = GpuSlowdowns::default();
-        assert!(
+        assert_eq!(
             slowdowns
                 .observe(&snapshot(1, 0, Some(2900.0)), SECOND)
-                .is_empty()
+                .len(),
+            0
         );
-        assert!(
+        assert_eq!(
             slowdowns
                 .observe(&snapshot(2, 0x1 | 0x2, None), 2 * SECOND)
-                .is_empty()
+                .len(),
+            0
         );
         let listed = slowdowns.observe(&snapshot(3, 0x20 | 0x1, Some(1500.0)), 3 * SECOND);
         assert_eq!(listed.len(), 1);
@@ -235,10 +237,11 @@ mod tests {
                 .len(),
             1
         );
-        assert!(
+        assert_eq!(
             slowdowns
                 .observe(&snapshot(4, 0, None), 16 * SECOND + 1)
-                .is_empty()
+                .len(),
+            0
         );
         let anew = slowdowns.observe(&snapshot(5, 0x20, None), 40 * SECOND);
         assert_eq!(anew[0].reasons, 0x20, "the old reasons are not carried");

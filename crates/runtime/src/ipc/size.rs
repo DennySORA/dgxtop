@@ -33,8 +33,8 @@ fn owned_text(text: &String) -> u64 {
     bytes_of(text.capacity())
 }
 
-fn optional_text(text: &Option<String>) -> u64 {
-    text.as_ref().map_or(0, owned_text)
+fn optional_text(text: Option<&String>) -> u64 {
+    text.map_or(0, owned_text)
 }
 
 fn vector_inline<T>(items: &Vec<T>) -> u64 {
@@ -101,7 +101,7 @@ impl DecodedSize for ObservationBatch {
         bytes_of(size_of::<Self>())
             .saturating_add(arc_text(self.adapter_id.as_str()))
             .saturating_add(arc_text(self.read_group.as_str()))
-            .saturating_add(optional_text(&self.error_code))
+            .saturating_add(optional_text(self.error_code.as_ref()))
             .saturating_add(records)
     }
 }
@@ -138,12 +138,12 @@ fn source_heap(source: &SourceDescriptor) -> u64 {
         source.metric.as_ref().map_or(0, metric_key_heap),
         origin_heap(&source.origin),
         owned_text(&source.driver),
-        optional_text(&source.api_version),
+        optional_text(source.api_version.as_ref()),
         owned_text(&source.device_path),
         bytes_of(source.native_unit.as_str().len()),
         arc_text(source.read_group.as_str()),
         arc_text(source.profile_id.as_str()),
-        optional_text(&source.label),
+        optional_text(source.label.as_ref()),
     ]
     .iter()
     .fold(0u64, |sum, part| sum.saturating_add(*part))
@@ -157,7 +157,7 @@ fn capability_heap(capability: &Capability) -> u64 {
                 .as_ref()
                 .map_or(0, |id| arc_text(id.as_str())),
         )
-        .saturating_add(optional_text(&capability.reason))
+        .saturating_add(optional_text(capability.reason.as_ref()))
 }
 
 impl DecodedSize for CatalogDelta {
@@ -198,7 +198,7 @@ impl DecodedSize for CatalogDelta {
                     .as_ref()
                     .map_or(0, |id| arc_text(id.as_str())),
             )
-            .saturating_add(optional_text(&self.error_code))
+            .saturating_add(optional_text(self.error_code.as_ref()))
             .saturating_add(entities)
             .saturating_add(sources)
             .saturating_add(removed_sources)
@@ -218,7 +218,7 @@ fn manifest_heap(manifest: &AdapterManifest) -> u64 {
     arc_text(manifest.adapter_id.as_str())
         .saturating_add(owned_text(&manifest.implementation))
         .saturating_add(vector_inline(&manifest.operations))
-        .saturating_add(optional_text(&manifest.runtime_library))
+        .saturating_add(optional_text(manifest.runtime_library.as_ref()))
 }
 
 impl DecodedSize for HostHello {

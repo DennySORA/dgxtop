@@ -231,17 +231,14 @@ pub(crate) fn with_series(
 /// `minuend - subtrahend` in exact arithmetic when both are `u64`; `None`
 /// when the result would be negative (never clamped to 0).
 pub(crate) fn difference(minuend: Scalar, subtrahend: Scalar) -> Option<Scalar> {
-    match (minuend.view(), subtrahend.view()) {
-        (ScalarView::U64(left), ScalarView::U64(right)) => {
-            left.checked_sub(right).map(Scalar::from_u64)
-        }
-        _ => {
-            let result = minuend.to_f64_lossy() - subtrahend.to_f64_lossy();
-            if result < 0.0 {
-                None
-            } else {
-                Scalar::from_f64(result).ok()
-            }
+    if let (ScalarView::U64(left), ScalarView::U64(right)) = (minuend.view(), subtrahend.view()) {
+        left.checked_sub(right).map(Scalar::from_u64)
+    } else {
+        let result = minuend.to_f64_lossy() - subtrahend.to_f64_lossy();
+        if result < 0.0 {
+            None
+        } else {
+            Scalar::from_f64(result).ok()
         }
     }
 }

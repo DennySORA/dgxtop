@@ -15,6 +15,7 @@ pub struct SystemClock {
 }
 
 impl SystemClock {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             origin: Instant::now(),

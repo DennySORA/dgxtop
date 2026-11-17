@@ -16,6 +16,7 @@ pub struct UnavailableAudit {
 }
 
 impl UnavailableAudit {
+    #[must_use]
     pub fn new(reason: &str) -> Self {
         Self {
             reason: dgxtop_core::text::sanitize_message(reason),

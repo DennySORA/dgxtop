@@ -1,8 +1,9 @@
 //! NVML adapter behaviour against a fake GPU backend (no driver needed), plus
 //! one `#[ignore]` smoke test on this machine's real GPUs.
 
-// Test-only crate: a broken fixture must panic loudly, also in helpers.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -211,6 +212,10 @@ impl FakeGpu {
             .sum()
     }
 
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the device is edited inside the fake's state, under its lock"
+    )]
     fn edit(&self, uuid: &str, change: impl FnOnce(&mut FakeDevice)) {
         let mut state = self.lock();
         let device = state
@@ -221,6 +226,10 @@ impl FakeGpu {
         change(device);
     }
 
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the device is read inside the fake's state, under its lock"
+    )]
     fn query<T: Clone>(
         &self,
         method: &str,
@@ -422,7 +431,7 @@ impl GpuTelemetry for FakeGpu {
                 .nvlinks
                 .get(usize::try_from(link).unwrap())
                 .cloned()
-                .unwrap_or(Err(BackendError::Other("INVALID_ARGUMENT".to_owned())))
+                .unwrap_or_else(|| Err(BackendError::Other("INVALID_ARGUMENT".to_owned())))
         })
     }
 
@@ -490,12 +499,12 @@ struct FakeConnector {
 impl BackendConnector for FakeConnector {
     fn connect(&mut self) -> Result<Box<dyn GpuBackend>, ConnectError> {
         self.connects.fetch_add(1, Ordering::SeqCst);
-        if let Some(failure) = self
+        let scripted = self
             .failure
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-        {
+            .clone();
+        if let Some(failure) = scripted {
             return Err(failure);
         }
         self.gpu.lock().uninitialized = false;
@@ -580,7 +589,7 @@ impl Harness {
         merged
     }
 
-    fn plan(&mut self, group: &str, page: u32, slots: Vec<u32>) -> ReadPlan {
+    fn plan(&self, group: &str, page: u32, slots: Vec<u32>) -> ReadPlan {
         ReadPlan {
             request_id: Uuid::new_v4(),
             adapter_id: adapter_id("nvml"),
@@ -631,14 +640,18 @@ fn capability<'a>(
         .iter()
         .find(|capability| {
             capability.capability_id == metric
-                && capability.entity_id.as_ref().map(|id| id.as_str()) == Some(entity)
+                && capability
+                    .entity_id
+                    .as_ref()
+                    .map(dgxtop_core::identity::EntityId::as_str)
+                    == Some(entity)
         })
         .unwrap_or_else(|| panic!("no capability {entity} {metric}"))
 }
 
 /// One driver sample of `pid`: its utilization and its encoder and decoder
 /// shares, in percent.
-fn process_sample(pid: u32, timestamp_us: u64, shares: [u32; 3]) -> ProcessUtilizationSample {
+const fn process_sample(pid: u32, timestamp_us: u64, shares: [u32; 3]) -> ProcessUtilizationSample {
     let [sm_percent, encoder_percent, decoder_percent] = shares;
     ProcessUtilizationSample {
         pid,
@@ -801,7 +814,7 @@ fn capabilities_and_slow_health_values_are_reported_in_native_units() {
     let value = |metric: &str, scope: &str| {
         let record = find(&slow.records, "gpu:GPU-a", metric, scope);
         (
-            record.value.and_then(|value| value.as_u64()),
+            record.value.and_then(dgxtop_core::metric::Scalar::as_u64),
             record.native_unit.as_str().to_owned(),
         )
     };
@@ -1095,7 +1108,7 @@ fn an_empty_process_list_reads_as_no_process_memory() {
     let compute_only = held("gpu:GPU-compute");
     assert_eq!(compute_only.len(), 1);
     assert_eq!(compute_only[0].value.unwrap().as_u64(), Some(0));
-    assert!(held("gpu:GPU-busy").is_empty());
+    assert_eq!(held("gpu:GPU-busy"), [] as [&Observation; 0]);
     for gpu in ["gpu:GPU-failed", "gpu:GPU-unkeyable"] {
         let failed = held(gpu);
         assert_eq!(failed.len(), 1, "{gpu}: {:?}", batch.records);
@@ -1312,7 +1325,7 @@ fn lost_gpu_only_affects_its_own_records() {
         .iter()
         .filter(|record| record.key.entity_id.as_str() == "gpu:GPU-a")
         .collect();
-    assert!(!lost.is_empty());
+    assert_ne!(lost, [] as [&Observation; 0]);
     assert!(
         lost.iter()
             .all(|record| record.read_status == ReadStatus::Removed)
@@ -1343,7 +1356,10 @@ fn init_failure_reports_unavailable_with_every_capability_unsupported() {
     assert_eq!(delta.availability, Some(Availability::Unavailable));
     assert!(delta.complete);
     assert!(delta.entities.is_empty() && delta.sources.is_empty());
-    assert!(!delta.capabilities.is_empty());
+    assert_ne!(
+        delta.capabilities,
+        [] as [dgxtop_core::observation::Capability; 0]
+    );
     assert!(delta.capabilities.iter().all(|capability| {
         capability.support == Support::Unsupported
             && capability
@@ -1353,7 +1369,7 @@ fn init_failure_reports_unavailable_with_every_capability_unsupported() {
     }));
     let batch = harness.read("fast");
     assert_eq!(batch.status, BatchStatus::Failed);
-    assert!(batch.records.is_empty());
+    assert_eq!(batch.records, [] as [Observation; 0]);
 }
 
 #[test]
@@ -1575,7 +1591,10 @@ fn catalog_discovery_is_paged_and_complete_only_at_the_end() {
         assert!(page.capabilities.is_empty() && page.removed_sources.is_empty());
     }
     assert!(last.complete);
-    assert!(!last.capabilities.is_empty());
+    assert_ne!(
+        last.capabilities,
+        [] as [dgxtop_core::observation::Capability; 0]
+    );
     let mut ids: Vec<&str> = pages
         .iter()
         .flat_map(|page| &page.sources)

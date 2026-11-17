@@ -35,6 +35,7 @@ use crate::registry::{
 };
 use crate::theme::MemoryRow;
 use crate::widgets::{Gauge, Segment, StackedBar};
+use std::fmt::Write as _;
 
 /// Rows of the used chart under the bar (D-43).
 const CHART_ROWS: u16 = 3;
@@ -56,14 +57,19 @@ const LABEL_WIDTH: u16 = 6;
 /// Value column of the used bar (`100.0%`).
 const PERCENT_WIDTH: u16 = 6;
 
+#[derive(Debug)]
 pub struct MemoryModule {
     manifest: DisplayModuleManifest,
 }
 
 impl MemoryModule {
+    /// # Errors
+    ///
+    /// Returns a `ModuleBuildError` when the module's static manifest is
+    /// invalid, which is a build defect.
     pub fn new() -> Result<Self, ModuleBuildError> {
         Ok(Self {
-            manifest: build_manifest(ManifestSpec {
+            manifest: build_manifest(&ManifestSpec {
                 id: MEMORY_MODULE_ID,
                 title: "Memory and swap",
                 min_columns: 30,
@@ -383,10 +389,10 @@ fn gpu_legend(
     if let Some(last) = lines.last_mut() {
         let mut hint = String::from("  ");
         if above > 0 {
-            hint.push_str(&format!("▲{above} "));
+            write!(hint, "▲{above} ").unwrap_or_default();
         }
         if below > 0 {
-            hint.push_str(&format!("▼{below} "));
+            write!(hint, "▼{below} ").unwrap_or_default();
         }
         last.spans.push(Span::styled(
             hint.trim_end().to_owned(),
@@ -424,7 +430,11 @@ fn host_bytes(memory: &MemoryView) -> Option<u64> {
     let used = memory.used.value_f64()?;
     let gpu = memory.gpu_resident.as_ref()?.value_f64()?;
     let host = (used - gpu).max(0.0);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "bytes of RAM: not negative after `max(0.0)` and far below u64::MAX"
+    )]
     let bytes = host.round() as u64;
     Some(bytes)
 }
@@ -449,7 +459,11 @@ fn share_beyond_tracked(memory: &MemoryView) -> Option<u64> {
         .map(|share| bytes_f64(share.bytes))
         .sum();
     let other = (gpu - tracked).max(0.0);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "bytes of GPU memory: not negative after `max(0.0)` and far below u64::MAX"
+    )]
     let bytes = other.round() as u64;
     Some(bytes)
 }
@@ -570,14 +584,13 @@ fn figure_rows(memory: &MemoryView, width: u16, context: &DisplayContext) -> Vec
 /// what its averages span instead of losing one of them.
 fn trouble_lines(memory: &MemoryView, width: u16, context: &DisplayContext) -> Vec<Line<'static>> {
     let fits = |line: &Line<'_>| line.width() <= usize::from(width);
-    let pressures: Vec<Line<'static>> = telling_pressure(memory.pressure.as_ref())
-        .map(|pressure| {
+    let pressures: Vec<Line<'static>> =
+        telling_pressure(memory.pressure.as_ref()).map_or_default(|pressure| {
             vec![
                 pressure_line(pressure, context),
                 short_pressure_line(pressure, context),
             ]
-        })
-        .unwrap_or_default();
+        });
     let kills: Vec<Line<'static>> = [OomKills::SinceBoot, OomKills::Count]
         .into_iter()
         .filter_map(|form| oom_line(memory, form, context))
@@ -598,7 +611,7 @@ fn trouble_lines(memory: &MemoryView, width: u16, context: &DisplayContext) -> V
     let pressure = pressures
         .iter()
         .find(|line| fits(line))
-        .or(pressures.last())
+        .or_else(|| pressures.last())
         .cloned();
     pressure
         .into_iter()
@@ -697,6 +710,7 @@ fn swap_rates(memory: &MemoryView) -> impl Iterator<Item = (&'static str, &Metri
 mod tests {
     use super::*;
     use dgxtop_core::metric::CanonicalUnit;
+    use dgxtop_core::num::ToF64Lossy;
     use dgxtop_core::view::{CellState, ProcessShare, ProcessTrend, Trend};
 
     /// Label column of the panel's rows, before the gauge of `used`.
@@ -750,7 +764,11 @@ mod tests {
     }
 
     fn share(slot: u8, gib: f64) -> ProcessShare {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a test's gibibytes: small and never negative"
+        )]
         let bytes = (gib * GIB) as u64;
         ProcessShare {
             slot,
@@ -841,11 +859,10 @@ mod tests {
     /// that row split between the jobs, in the larger one's color, and the
     /// system (D-134).
     #[test]
-    #[allow(clippy::cast_precision_loss)]
     fn a_small_job_keeps_its_color_on_the_bar_and_the_chart() {
         let theme = crate::test_fixtures::display_context().theme;
         let (job, small) = (share(3, 12.2), share(5, 0.1));
-        let held = (job.bytes + small.bytes) as f64;
+        let held = (job.bytes + small.bytes).to_f64_lossy();
         let mut view = memory(bytes(19.5 * GIB), Some(bytes(held)));
         view.total = bytes(122.0 * GIB);
         view.used_trend.points = vec![Some(19.5 * GIB); 2];
@@ -855,7 +872,7 @@ mod tests {
             .map(|process| ProcessTrend {
                 slot: process.slot,
                 trend: Trend {
-                    points: vec![Some(process.bytes as f64); 2],
+                    points: vec![Some(process.bytes.to_f64_lossy()); 2],
                 },
             })
             .collect();
@@ -953,7 +970,7 @@ mod tests {
             text(&ram_line(&view, &context)),
             "RAM   48.0 GiB / 64.0 GiB"
         );
-        assert!(legend(&view, 120).is_empty());
+        assert_eq!(legend(&view, 120).len(), 0);
     }
 
     /// The GPU share is read at another moment than its processes: while a
@@ -1006,7 +1023,11 @@ mod tests {
             ])
         );
         // What the lists count for processes without a color is shown.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "four gibibytes fit a u64 exactly"
+        )]
         let four_gib = (4.0 * GIB) as u64;
         view.gpu_other_bytes = Some(four_gib);
         assert_eq!(
@@ -1141,8 +1162,7 @@ mod tests {
                 .spans
                 .iter()
                 .find(|span| span.content == text)
-                .map(|span| span.style)
-                .unwrap_or_else(|| panic!("{text} missing"))
+                .map_or_else(|| panic!("{text} missing"), |span| span.style)
         };
         assert_eq!(
             styled(0, "avail "),

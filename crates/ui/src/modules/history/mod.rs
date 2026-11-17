@@ -59,6 +59,7 @@ use crate::registry::{
     DisplayContext, DisplayModule, DisplayModuleManifest, RenderOutput, Slot, controls,
 };
 use crate::views::{GPU_HISTORY_PAGE, OVERVIEW_HISTORY_PAGE, PROCESS_LIST_PAGE, is_chart_page};
+use dgxtop_core::num::ToF64Lossy;
 
 /// Module id of the History view, whose pages are the Overview History,
 /// GPU History and Process History tabs (D-75, D-148).
@@ -67,14 +68,19 @@ pub const HISTORY_MODULE_ID: &str = "history";
 /// Share of the window below which the bar says how much is recorded.
 const FULL_COVERAGE: f64 = 0.99;
 
+#[derive(Debug)]
 pub struct HistoryModule {
     manifest: DisplayModuleManifest,
 }
 
 impl HistoryModule {
+    /// # Errors
+    ///
+    /// Returns a `ModuleBuildError` when the module's static manifest is
+    /// invalid, which is a build defect.
     pub fn new() -> Result<Self, ModuleBuildError> {
         Ok(Self {
-            manifest: build_manifest(ManifestSpec {
+            manifest: build_manifest(&ManifestSpec {
                 id: HISTORY_MODULE_ID,
                 title: "History of the overview charts",
                 min_columns: 40,
@@ -122,23 +128,22 @@ impl DisplayModule for HistoryModule {
         let keys = fitting_keys(area.width, title, keys);
         let inner = panel_with_keys(frame, area, title, keys, context);
         if !is_chart_page(context.tab) {
-            match model.modules.process_history.as_deref() {
-                Some(runs) => render_runs(
+            if let Some(runs) = model.modules.process_history.as_deref() {
+                render_runs(
                     frame,
                     inner,
                     (runs, (&self.manifest, model)),
                     context,
                     &mut output,
-                ),
-                None => {
-                    message(
-                        frame,
-                        inner,
-                        &no_data("process history"),
-                        context.theme.muted_style(),
-                    );
-                    output.label("process history: no data");
-                }
+                );
+            } else {
+                message(
+                    frame,
+                    inner,
+                    &no_data("process history"),
+                    context.theme.muted_style(),
+                );
+                output.label("process history: no data");
             }
             return output.finish();
         }
@@ -634,7 +639,7 @@ fn render_bar_size_row(
 /// Why a window is only partly recorded (D-51): without the archive the
 /// history starts with dgxtop; with it, it is recorded while dgxtop runs;
 /// an archive that cannot be read is said so.
-fn why_partly(disk: &DiskHistory) -> &'static str {
+const fn why_partly(disk: &DiskHistory) -> &'static str {
     match disk {
         DiskHistory::Off => "history starts with dgxtop",
         DiskHistory::On => "only while dgxtop runs",
@@ -674,8 +679,7 @@ fn utc_i64(utc_ns: u64) -> i64 {
 
 /// Seconds of `nanos`.
 pub(super) fn nanos_to_seconds(nanos: u64) -> f64 {
-    #[allow(clippy::cast_precision_loss)]
-    let nanos = nanos as f64;
+    let nanos = nanos.to_f64_lossy();
     nanos / 1e9
 }
 
@@ -757,7 +761,7 @@ mod tests {
                 .map(|x| buffer[(x, y)].symbol())
                 .collect();
             for (at, _) in row.match_indices(needle) {
-                let x = u16::try_from(row[..at].chars().count()).unwrap();
+                let x = u16::try_from(row.get(..at).unwrap().chars().count()).unwrap();
                 colors.push(buffer[(area.x + x, y)].fg);
             }
         }
@@ -800,7 +804,7 @@ mod tests {
         let machine = draw(&context);
         assert_eq!(colors_of(&machine, " GPU 0┤"), vec![first, first]);
         assert_eq!(colors_of(&machine, " GPU 1┤"), vec![second, second]);
-        assert!(colors_of(&machine, "[GPU 0 · GB10]").is_empty());
+        assert_eq!(colors_of(&machine, "[GPU 0 · GB10]").len(), 0);
         context.tab = 1;
         let list = draw(&context);
         // The ended run on GPU 0, the training on GPU 0 and GPU 1.
@@ -921,7 +925,7 @@ mod tests {
                 opened: None,
                 kept_on_disk: true,
                 utc_offset_s: 0,
-                bar: dgxtop_core::tiers::BarSize::Auto,
+                bar: BarSize::Auto,
                 cpu_scale: None,
             }),
             1,
@@ -983,6 +987,9 @@ mod tests {
     /// around. A tall panel keeps one page under a bare divider.
     #[test]
     fn a_runs_charts_go_on_pages_under_its_fixed_top() {
+        // The title, the identity line, four rows of details, the bar
+        // sizes, then the divider.
+        const DIVIDER: usize = 7;
         let count = |output: &RenderOutput, control| {
             output
                 .hit_targets
@@ -990,9 +997,6 @@ mod tests {
                 .filter(|target| target.control_id == control)
                 .count()
         };
-        // The title, the identity line, four rows of details, the bar
-        // sizes, then the divider.
-        const DIVIDER: usize = 7;
         let (first, output) = run_page(0, (213, 34));
         let text = first.join("\n");
         assert!(
@@ -1549,7 +1553,7 @@ mod tests {
     #[test]
     fn the_scroll_divider_tells_both_ways() {
         let gpu = scroll_keys(Page::Gpu(None));
-        assert!(scroll_forms(0, 0, gpu).is_empty());
+        assert_eq!(scroll_forms(0, 0, gpu).len(), 0);
         let below = |text: &str, keys| (text.to_owned(), keys);
         assert_eq!(
             scroll_forms(0, 1, gpu),
@@ -1586,6 +1590,6 @@ mod tests {
                 "recorded 5h 12m of 24h"
             ]
         );
-        assert!(bar_notes(None, why_partly(&DiskHistory::On)).is_empty());
+        assert_eq!(bar_notes(None, why_partly(&DiskHistory::On)).len(), 0);
     }
 }

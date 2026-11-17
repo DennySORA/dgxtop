@@ -1,6 +1,11 @@
 //! Hardware smoke tests against the real host (`--ignored`). They only read
 //! `/proc`, `/sys` and statvfs and assert basic sanity.
 
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
+
+#[expect(dead_code, reason = "each suite uses its part of the shared helpers")]
 #[path = "fixtures/adapters_a/support.rs"]
 mod support;
 

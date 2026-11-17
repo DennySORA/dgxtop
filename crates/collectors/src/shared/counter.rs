@@ -13,6 +13,7 @@ use dgxtop_core::identity::{BootId, MetricKey, SourceId};
 use dgxtop_core::metric::{Conversion, Scalar};
 
 use crate::shared::reasons;
+use dgxtop_core::num::ToF64Lossy;
 
 /// One reading of one counter source incarnation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,8 +82,7 @@ pub fn rate_of(amount: f64, elapsed_ns: u64) -> Option<f64> {
     if elapsed_ns == 0 {
         return None;
     }
-    #[allow(clippy::cast_precision_loss)]
-    let seconds = elapsed_ns as f64 / NANOS_PER_SECOND as f64;
+    let seconds = elapsed_ns.to_f64_lossy() / NANOS_PER_SECOND.to_f64_lossy();
     let rate = amount / seconds;
     rate.is_finite().then_some(rate)
 }
@@ -431,10 +431,13 @@ mod tests {
             previous_fraction in 0.0f64..1.0,
             current_fraction in 0.0f64..1.0,
         ) {
-            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let previous = ((modulus as f64) * previous_fraction) as u64 % modulus;
-            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let current = ((modulus as f64) * current_fraction) as u64 % modulus;
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "a share of the modulus: within 0..modulus before the cast"
+            )]
+            let part = |fraction: f64| (modulus.to_f64_lossy() * fraction) as u64 % modulus;
+            let (previous, current) = (part(previous_fraction), part(current_fraction));
             let boot = boot_id("b");
             let mut first = reading(&boot, previous, SECOND);
             first.modulus = Some(modulus);

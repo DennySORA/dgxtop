@@ -27,7 +27,7 @@ use crate::stack::{ActionStack, Prepared, SessionDriver, StackOptions, StateDir}
 const EXIT_WATCH: Duration = Duration::from_secs(10);
 
 /// A ready stack with one disposable child prepared for SIGTERM.
-fn prepared_child(options: StackOptions) -> (ActionStack, DisposableChild, Prepared) {
+fn prepared_child(options: &StackOptions) -> (ActionStack, DisposableChild, Prepared) {
     let child = DisposableChild::sleeping();
     let stack = ActionStack::start(options);
     stack.await_audit_ready();
@@ -71,7 +71,7 @@ fn confirm_concurrently(
 
 #[test]
 fn at32_token_is_single_use_across_sessions_concurrency_and_replays() {
-    let (stack, mut child, prepared) = prepared_child(StackOptions {
+    let (stack, mut child, prepared) = prepared_child(&StackOptions {
         bystander_session: true,
         ..StackOptions::default()
     });
@@ -145,7 +145,7 @@ fn at32_crash_after_a_durable_intent_is_unknown_after_restart_and_never_resent()
     let state = StateDir::create("restart");
 
     // Run 1: the process dies right after the intent's COMMIT.
-    let first = ActionStack::start_in(Arc::clone(&state), StackOptions::default());
+    let first = ActionStack::start_in(Arc::clone(&state), &StackOptions::default());
     first.await_audit_ready();
     let target = first.publish(&child);
     let prepared = first.prepared(&target);
@@ -177,7 +177,7 @@ fn at32_crash_after_a_durable_intent_is_unknown_after_restart_and_never_resent()
     );
 
     // Run 2: recovered as unknown, shown, and never resent.
-    let second = ActionStack::start_in(stopped.state(), StackOptions::default());
+    let second = ActionStack::start_in(stopped.state(), &StackOptions::default());
     second.await_audit_ready();
     second
         .session()
@@ -191,8 +191,8 @@ fn at32_crash_after_a_durable_intent_is_unknown_after_restart_and_never_resent()
     assert_eq!(recovered.len(), 1, "{recovered:?}");
     assert_eq!(recovered[0].request_id, lost_confirm);
     assert_eq!(recovered[0].process_key, target);
-    let stale = second.confirm(&prepared.token);
-    assert_rejected(&second.result(stale), ErrorCode::ConfirmationExpired);
+    let outdated = second.confirm(&prepared.token);
+    assert_rejected(&second.result(outdated), ErrorCode::ConfirmationExpired);
     assert_nothing_sent(&second, &mut [&mut child]);
 
     // Acting again takes a new preparation whose confirmation warns about it.
@@ -222,7 +222,7 @@ fn at32_crash_after_a_durable_intent_is_unknown_after_restart_and_never_resent()
 #[test]
 fn at32_signal_sent_is_reported_without_waiting_for_exit() {
     let mut child = DisposableChild::ignoring_sigterm();
-    let stack = ActionStack::start(StackOptions::default());
+    let stack = ActionStack::start(&StackOptions::default());
     stack.await_audit_ready();
     let prepared = stack.prepared(&stack.publish(&child));
 

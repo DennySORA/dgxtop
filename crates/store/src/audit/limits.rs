@@ -47,6 +47,7 @@ impl Default for AuditLimits {
 }
 
 /// Invalid arguments to [`crate::audit::SqliteAuditRepository::open`].
+///
 /// Database problems are not errors here: they open a repository whose
 /// status is `Failed` and which refuses every write (a file that is merely
 /// not this build's is recreated instead, D-85).
@@ -64,6 +65,7 @@ impl AuditLimits {
     /// owner's (`store.audit_retention_days`, D-96).
     /// The WAL thresholds shrink with small budgets (at most a quarter of the
     /// budget may be WAL) so the main file always keeps most of the space.
+    #[must_use]
     pub fn from_config(config: &Config) -> Self {
         let defaults = Self::default();
         let limit_bytes = u64::from(config.store.audit_limit_mib).saturating_mul(MIB);
@@ -78,6 +80,10 @@ impl AuditLimits {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an `AuditOpenError` when the limits or the path are invalid; a
+    /// database problem opens a repository that reports its status instead.
     pub fn validate(&self) -> Result<(), AuditOpenError> {
         let invalid = |message: &str| Err(AuditOpenError::InvalidLimits(message.to_owned()));
         if self.busy_deadline_ms == 0 {
@@ -102,11 +108,12 @@ impl AuditLimits {
         Ok(())
     }
 
-    pub fn busy_deadline(&self) -> Duration {
+    #[must_use]
+    pub const fn busy_deadline(&self) -> Duration {
         Duration::from_millis(self.busy_deadline_ms)
     }
 
-    pub(crate) fn capacity_policy(&self) -> CapacityPolicy {
+    pub(crate) const fn capacity_policy(&self) -> CapacityPolicy {
         CapacityPolicy {
             limit_bytes: self.limit_bytes,
             reserve_bytes: self.outcome_reserve_bytes,

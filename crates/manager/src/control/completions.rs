@@ -148,7 +148,9 @@ impl ControlCore {
             self.history.set_raw_interval(fast);
             // A full state queue keeps the old sampling until the next
             // periodic retry.
-            let _ = self.ingestion.apply_sampling(effective.sampling.clone());
+            self.ingestion
+                .apply_sampling(effective.sampling.clone())
+                .unwrap_or_default();
         } else {
             self.scheduler.set_config_revision(effective.revision);
         }
@@ -308,7 +310,7 @@ impl ControlCore {
         input.expires_ns =
             base.saturating_add(ms_to_ns(u64::from(period_ms)).saturating_mul(stale_factor.max(1)));
         input.arrived_ns = now;
-        let (_, gaps) = self.ingestion.route(input);
+        let (_, gaps) = self.ingestion.route(&input);
         for gap in gaps {
             self.record_gap(gap);
         }
@@ -430,8 +432,7 @@ impl ControlCore {
     fn on_collected(&mut self, batch: Box<CollectionBatch>, now: u64) {
         let epoch = self.scheduler.epoch();
         match self.ingestion.on_collected(batch, now, epoch) {
-            CollectedOutcome::Committing => {}
-            CollectedOutcome::Stale => {}
+            CollectedOutcome::Committing | CollectedOutcome::Stale => {}
             CollectedOutcome::EpochDiscarded => {
                 self.pump_collectors(now);
             }
@@ -564,7 +565,7 @@ impl ReplyIdentity<'_> {
     }
 }
 
-fn failure_label(kind: AdapterFailureKind) -> &'static str {
+const fn failure_label(kind: AdapterFailureKind) -> &'static str {
     match kind {
         AdapterFailureKind::TimedOut => "timed_out",
         AdapterFailureKind::HostUnavailable => "host_unavailable",

@@ -27,6 +27,7 @@ impl LiveStore {
     /// `--replay`); `archive_enabled` makes the history queue finished
     /// minute buckets, bridges and gaps for
     /// [`StateWriter::take_archive_journal`].
+    #[must_use]
     pub fn new(
         store: &StoreConfig,
         sampling: &SamplingConfig,
@@ -53,6 +54,7 @@ impl LiveStore {
     }
 
     /// Splits the store into its writer, snapshot reader and history reader.
+    #[must_use]
     pub fn into_parts(self) -> (StateWriter, SharedSnapshot, HistoryIndex) {
         (self.writer, self.snapshots, self.history)
     }

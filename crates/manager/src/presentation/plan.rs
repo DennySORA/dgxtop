@@ -15,14 +15,15 @@ pub(crate) const SETTINGS: &str = "settings";
 
 /// Viewport assumed until the session reports its terminal size.
 const DEFAULT_VIEWPORT: (u16, u16) = (80, 24);
-/// Upper bound of copied trend points (TrendBook capacity bounds it too).
+/// Upper bound of copied trend points (`TrendBook` capacity bounds it too).
 const MAX_TREND_POINTS: usize = 512;
 const MIN_TREND_POINTS: usize = 16;
 /// Trend points the overview GPUs share: eight GPUs still get 256 each.
 const GPU_OVERVIEW_POINT_BUDGET: usize = 2048;
 
 /// Module ids (from `config::BUILTIN_MODULES`) shown by each view.
-pub fn visible_modules(view: ViewKind) -> &'static [&'static str] {
+#[must_use]
+pub const fn visible_modules(view: ViewKind) -> &'static [&'static str] {
     match view {
         ViewKind::Overview => &[CPU, GPU, MEMORY, DISK, NETWORK, PROCESSES],
         ViewKind::GpuDetail => &[GPU],
@@ -65,7 +66,7 @@ pub(crate) struct ViewportLayout {
 }
 
 impl ViewportLayout {
-    pub(crate) fn new(viewport: (u16, u16)) -> Self {
+    pub(crate) const fn new(viewport: (u16, u16)) -> Self {
         let (columns, rows) = if viewport.0 == 0 || viewport.1 == 0 {
             DEFAULT_VIEWPORT
         } else {

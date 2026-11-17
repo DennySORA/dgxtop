@@ -205,7 +205,7 @@ impl Sandbox {
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
+        std::fs::remove_dir_all(&self.root).unwrap_or_default();
     }
 }
 
@@ -291,7 +291,7 @@ fn a_binary_reporting_another_version_is_refused() {
         "{}",
         stderr_of(&refused)
     );
-    assert!(sandbox.install_dir_entries().is_empty());
+    assert_eq!(sandbox.install_dir_entries(), [] as [String; 0]);
 }
 
 /// The version and target lines are matched in the whole report. Read from a
@@ -311,7 +311,7 @@ fn a_long_version_report_is_matched_without_a_broken_pipe() {
 fn a_requested_version_that_only_prefixes_the_binary_version_is_refused() {
     let sandbox = Sandbox::new("version-prefix");
     let version = env!("CARGO_PKG_VERSION");
-    let prefix = format!("v{}", &version[..version.rfind('.').unwrap()]);
+    let prefix = format!("v{}", version.rsplit_once('.').unwrap().0);
     sandbox.publish(&prefix, Path::new(BINARY), &[]);
     let refused = sandbox.install(&prefix);
     assert!(
@@ -323,7 +323,7 @@ fn a_requested_version_that_only_prefixes_the_binary_version_is_refused() {
         "{}",
         stderr_of(&refused)
     );
-    assert!(sandbox.install_dir_entries().is_empty());
+    assert_eq!(sandbox.install_dir_entries(), [] as [String; 0]);
 }
 
 #[test]
@@ -358,7 +358,7 @@ fn an_archive_with_more_than_the_binary_is_refused() {
         "{}",
         stderr_of(&refused)
     );
-    assert!(sandbox.install_dir_entries().is_empty());
+    assert_eq!(sandbox.install_dir_entries(), [] as [String; 0]);
 }
 
 #[test]
@@ -373,7 +373,7 @@ fn musl_hosts_are_refused_without_a_fallback() {
         "{}",
         stderr_of(&refused)
     );
-    assert!(sandbox.install_dir_entries().is_empty());
+    assert_eq!(sandbox.install_dir_entries(), [] as [String; 0]);
 }
 
 #[test]
@@ -413,7 +413,7 @@ fn non_linux_hosts_are_refused_before_anything_is_installed() {
         "{}",
         stderr_of(&refused)
     );
-    assert!(sandbox.install_dir_entries().is_empty());
+    assert_eq!(sandbox.install_dir_entries(), [] as [String; 0]);
 }
 
 #[test]
@@ -428,7 +428,7 @@ fn wsl1_hosts_are_refused() {
         "{}",
         stderr_of(&refused)
     );
-    assert!(sandbox.install_dir_entries().is_empty());
+    assert_eq!(sandbox.install_dir_entries(), [] as [String; 0]);
 }
 
 #[test]
@@ -458,7 +458,7 @@ fn releases_before_v2_are_refused_before_downloading() {
         let stderr = stderr_of(&refused);
         assert!(stderr.contains("earlier dgxtop"), "{old}: {stderr}");
         assert!(!stderr.contains("could not download"), "{old}: {stderr}");
-        assert!(sandbox.install_dir_entries().is_empty());
+        assert_eq!(sandbox.install_dir_entries(), [] as [String; 0]);
     }
 }
 
@@ -489,7 +489,7 @@ fn a_missing_release_names_the_archive_it_could_not_download() {
         "{}",
         stderr_of(&refused)
     );
-    assert!(sandbox.install_dir_entries().is_empty());
+    assert_eq!(sandbox.install_dir_entries(), [] as [String; 0]);
 }
 
 #[test]

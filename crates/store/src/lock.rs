@@ -48,6 +48,11 @@ impl InstanceLock {
     /// Takes the exclusive non-blocking lock. A second acquire, even from the
     /// same process through another open file description, fails with
     /// [`LockError::AlreadyRunning`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a `LockError` when another instance holds the lock, the lock
+    /// file is not safe to use or it cannot be opened.
     pub fn acquire(state_dir: &Path) -> Result<Self, LockError> {
         let path = state_dir.join(INSTANCE_LOCK_NAME);
         let file = open_lock_file(&path)?;
@@ -65,6 +70,7 @@ impl InstanceLock {
         }
     }
 
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }

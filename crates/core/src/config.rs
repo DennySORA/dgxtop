@@ -14,6 +14,7 @@ use thiserror::Error;
 
 use crate::budget::{MIB, Partition, PartitionLimits};
 use crate::identity::{MetricKey, SourceId};
+use crate::num::ToF64Lossy;
 
 /// The embedded configuration document of the REF workload.
 pub const REFERENCE_CONFIG_JSON: &str =
@@ -75,6 +76,7 @@ pub const RETIRED_KEYS: [RetiredConfigKey; 4] = [
 ];
 
 /// The decision that retired `path`, if it is a retired key.
+#[must_use]
 pub fn retired_by(path: &str) -> Option<&'static str> {
     RETIRED_KEYS
         .iter()
@@ -89,6 +91,7 @@ pub const RETIRED_MODULES: [&str; 2] = ["sources", "actions"];
 
 /// Whether `module` may appear in `viewer.enabled_modules`: a built-in or
 /// a retired module (D-91).
+#[must_use]
 pub fn is_known_module(module: &str) -> bool {
     BUILTIN_MODULES.contains(&module) || RETIRED_MODULES.contains(&module)
 }
@@ -109,9 +112,11 @@ pub fn remove_retired_keys(document: &mut serde_json::Value) {
     }
 }
 
-/// A retired key's slot in its section: whatever value a document holds is
-/// read and dropped, only that it was there is kept, so a configuration
-/// equals itself with or without it and saving leaves it out (D-88).
+/// A retired key's slot in its section.
+///
+/// Whatever value a document holds is read and dropped, only that it was
+/// there is kept, so a configuration equals itself with or without it and
+/// saving leaves it out (D-88).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RetiredKey {
     present: bool,
@@ -215,16 +220,19 @@ pub struct StoreConfig {
 impl StoreConfig {
     /// Whether the Process History is kept on disk: as set, else as the
     /// history archive (D-80).
+    #[must_use]
     pub fn process_history_on_disk(&self) -> bool {
         self.process_history_enabled.unwrap_or(self.archive_enabled)
     }
 
     /// `raw_history_seconds` in nanoseconds (at least one second).
+    #[must_use]
     pub fn raw_history_ns(&self) -> u64 {
         u64::from(self.raw_history_seconds.max(1)).saturating_mul(crate::clock::NANOS_PER_SECOND)
     }
 
     /// `aggregate_retention_hours` in nanoseconds (at least one hour).
+    #[must_use]
     pub fn aggregate_retention_ns(&self) -> u64 {
         u64::from(self.aggregate_retention_hours.max(1))
             .saturating_mul(crate::clock::NANOS_PER_SECOND)
@@ -234,6 +242,10 @@ impl StoreConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a key of the configuration file"
+)]
 pub struct ActionsConfig {
     pub enabled: bool,
     pub read_only: bool,
@@ -254,6 +266,7 @@ pub enum Theme {
 }
 
 impl Theme {
+    #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Dark => "dark",
@@ -263,6 +276,7 @@ impl Theme {
         }
     }
 
+    #[must_use]
     pub fn parse(name: &str) -> Option<Self> {
         match name {
             "dark" => Some(Self::Dark),
@@ -294,7 +308,7 @@ where
     Ok(panels)
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ViewerConfig {
     pub fps: u32,
@@ -389,10 +403,45 @@ fn format_issues(issues: &[ValidationIssue]) -> String {
         .join("; ")
 }
 
+/// What a validation found so far.
+#[derive(Debug, Default)]
+struct Issues(Vec<ValidationIssue>);
+
+impl Issues {
+    /// Notes `message` about the field at `path` unless `ok`.
+    fn check(&mut self, ok: bool, path: &str, message: &str) {
+        if !ok {
+            self.0.push(ValidationIssue {
+                path: path.to_owned(),
+                message: message.to_owned(),
+            });
+        }
+    }
+
+    /// Every issue found, or `Ok` when there is none.
+    fn into_result(self) -> Result<(), Vec<ValidationIssue>> {
+        if self.0.is_empty() {
+            Ok(())
+        } else {
+            Err(self.0)
+        }
+    }
+}
+
+/// Whether `value` is within `min..=max`.
+fn range(value: u32, min: u32, max: u32) -> bool {
+    (min..=max).contains(&value)
+}
+
 impl Config {
     /// Parses and fully validates a configuration document.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ConfigError` when the document does not parse or holds an
+    /// invalid value.
     pub fn from_json(text: &str) -> Result<Self, ConfigError> {
-        let config: Config = serde_json::from_str(text).map_err(|error| ConfigError::Parse {
+        let config: Self = serde_json::from_str(text).map_err(|error| ConfigError::Parse {
             line: error.line(),
             column: error.column(),
             message: crate::text::sanitize_message(&error.to_string()),
@@ -404,6 +453,11 @@ impl Config {
     /// The REF workload's configuration document. The
     /// embedded document is validated by tests, so a failure here is a build
     /// defect, reported as a parse error.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ConfigError` when the document does not parse or holds an
+    /// invalid value.
     pub fn reference() -> Result<Self, ConfigError> {
         Self::from_json(REFERENCE_CONFIG_JSON)
     }
@@ -412,6 +466,11 @@ impl Config {
     /// decisions: the history archive on, so the history view keeps earlier
     /// runs and boots (D-51), and SIGKILL allowed, so F9 force-kills after
     /// its confirmation (D-71). REF runs use [`Config::reference`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ConfigError` when the document does not parse or holds an
+    /// invalid value.
     pub fn defaults() -> Result<Self, ConfigError> {
         let mut config = Self::reference()?;
         config.store.archive_enabled = true;
@@ -422,6 +481,7 @@ impl Config {
 
     /// The retired keys ([`RETIRED_KEYS`]) the parsed document carried:
     /// ignored now and left out when the configuration is saved (D-88).
+    #[must_use]
     pub fn retired_keys_present(&self) -> Vec<&'static str> {
         // In the order of `RETIRED_KEYS`.
         let slots = [
@@ -439,6 +499,11 @@ impl Config {
     }
 
     /// Pretty JSON with a trailing newline (persisted form).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `serde_json::Error` when the value cannot be written as, or
+    /// read from, JSON.
     pub fn to_pretty_json(&self) -> Result<String, serde_json::Error> {
         let mut text = serde_json::to_string_pretty(self)?;
         text.push('\n');
@@ -446,126 +511,141 @@ impl Config {
     }
 
     /// Schema ranges, safety constants and cross-field capacity rules.
+    ///
+    /// # Errors
+    ///
+    /// Returns every `ValidationIssue` found, each with the path of the field
+    /// it is about.
     pub fn validate(&self) -> Result<(), Vec<ValidationIssue>> {
-        let mut issues = Vec::new();
-        let mut check = |ok: bool, path: &str, message: &str| {
-            if !ok {
-                issues.push(ValidationIssue {
-                    path: path.to_owned(),
-                    message: message.to_owned(),
-                });
-            }
-        };
-        let range = |value: u32, min: u32, max: u32| (min..=max).contains(&value);
+        let mut issues = Issues::default();
+        self.validate_schema(&mut issues);
+        self.validate_sampling(&mut issues);
+        self.validate_quality(&mut issues);
+        self.validate_store(&mut issues);
+        self.validate_actions(&mut issues);
+        self.validate_viewer(&mut issues);
+        self.validate_queues(&mut issues);
+        self.validate_runtime(&mut issues);
+        self.validate_capacity(&mut issues);
+        issues.into_result()
+    }
 
-        check(
+    /// The schema version and the revision.
+    fn validate_schema(&self, issues: &mut Issues) {
+        issues.check(
             self.schema_version == CONFIG_SCHEMA_VERSION,
             "schema_version",
             "must be 2",
         );
-        check(
+        issues.check(
             range(self.revision, 1, MAX_CONFIG_REVISION),
             "revision",
             "must be 1..=2147483647",
         );
+    }
 
+    /// `sampling`: the intervals and the read deadline.
+    fn validate_sampling(&self, issues: &mut Issues) {
         let sampling = &self.sampling;
-        check(
+        issues.check(
             range(sampling.interval_ms, 100, 60_000),
             "sampling.interval_ms",
             "must be 100..=60000",
         );
-        check(
+        issues.check(
             range(sampling.discovery_interval_ms, 1000, 300_000),
             "sampling.discovery_interval_ms",
             "must be 1000..=300000",
         );
-        check(
+        issues.check(
             range(sampling.read_deadline_ms, 50, 10_000),
             "sampling.read_deadline_ms",
             "must be 50..=10000",
         );
-        check(
+        issues.check(
             range(sampling.stale_factor, 2, 10),
             "sampling.stale_factor",
             "must be 2..=10",
         );
-        check(
+        issues.check(
             range(sampling.max_adapters, 1, 8),
             "sampling.max_adapters",
             "must be 1..=8",
         );
-        check(
+        issues.check(
             range(sampling.failure_threshold, 1, 10),
             "sampling.failure_threshold",
             "must be 1..=10",
         );
-        check(
+        issues.check(
             range(sampling.max_backoff_ms, 1000, 300_000),
             "sampling.max_backoff_ms",
             "must be 1000..=300000",
         );
-        check(
+        issues.check(
             range(sampling.capacity_interval_ms, 1000, 60_000),
             "sampling.capacity_interval_ms",
             "must be 1000..=60000",
         );
-        check(
+        issues.check(
             range(sampling.slow_health_interval_ms, 1000, 60_000),
             "sampling.slow_health_interval_ms",
             "must be 1000..=60000",
         );
-        check(
+        issues.check(
             range(sampling.unsupported_probe_ms, 10_000, 300_000),
             "sampling.unsupported_probe_ms",
             "must be 10000..=300000",
         );
+    }
 
+    /// `quality`: the tolerances, the pinned and the excluded sources.
+    fn validate_quality(&self, issues: &mut Issues) {
         let quality = &self.quality;
-        check(
+        issues.check(
             range(quality.switch_successes, 1, 10),
             "quality.switch_successes",
             "must be 1..=10",
         );
-        check(
+        issues.check(
             quality.switch_min_hold_ms <= 60_000,
             "quality.switch_min_hold_ms",
             "must be 0..=60000",
         );
-        check(
+        issues.check(
             quality.temperature_disagreement_deg_c.is_finite()
                 && (0.1..=50.0).contains(&quality.temperature_disagreement_deg_c),
             "quality.temperature_disagreement_deg_c",
             "must be a finite number in 0.1..=50",
         );
-        check(
+        issues.check(
             quality.alignment_tolerance_ms <= 5000,
             "quality.alignment_tolerance_ms",
             "must be 0..=5000",
         );
-        check(
+        issues.check(
             !quality.allow_suspect_as_canonical,
             "quality.allow_suspect_as_canonical",
             "is a fixed safety constant (false)",
         );
-        check(
+        issues.check(
             quality.excluded_sources.len() <= 2048,
             "quality.excluded_sources",
             "at most 2048 entries",
         );
-        check(
+        issues.check(
             quality.pinned_sources.len() <= 512,
             "quality.pinned_sources",
             "at most 512 entries",
         );
         let mut pinned_keys = std::collections::BTreeSet::new();
         for (index, pin) in quality.pinned_sources.iter().enumerate() {
-            check(
+            issues.check(
                 pinned_keys.insert(&pin.key),
                 &format!("quality.pinned_sources[{index}]"),
                 "duplicate pin for the same MetricKey",
             );
-            check(
+            issues.check(
                 !quality.excluded_sources.contains(&pin.source_id),
                 &format!("quality.pinned_sources[{index}].source_id"),
                 "a source cannot be both pinned and excluded",
@@ -573,115 +653,124 @@ impl Config {
         }
         let mut excluded = std::collections::BTreeSet::new();
         for (index, source) in quality.excluded_sources.iter().enumerate() {
-            check(
+            issues.check(
                 excluded.insert(source),
                 &format!("quality.excluded_sources[{index}]"),
                 "duplicate entry",
             );
         }
+    }
 
+    /// `store`: the memory and disk limits and what is kept.
+    fn validate_store(&self, issues: &mut Issues) {
         let store = &self.store;
-        check(
+        issues.check(
             range(store.raw_history_seconds, 30, 3600),
             "store.raw_history_seconds",
             "must be 30..=3600",
         );
-        check(
+        issues.check(
             store.aggregate_seconds == 60,
             "store.aggregate_seconds",
             "must be 60",
         );
-        check(
+        issues.check(
             range(store.aggregate_retention_hours, 1, 24),
             "store.aggregate_retention_hours",
             "must be 1..=24",
         );
-        check(
+        issues.check(
             range(store.memory_limit_mib, 64, 1024),
             "store.memory_limit_mib",
             "must be 64..=1024",
         );
-        check(
+        issues.check(
             range(store.max_series, 1, 4096),
             "store.max_series",
             "must be 1..=4096",
         );
-        check(
+        issues.check(
             range(store.max_sources, 1, 8192),
             "store.max_sources",
             "must be 1..=8192",
         );
-        check(
+        issues.check(
             range(store.max_candidates_per_series, 1, 4),
             "store.max_candidates_per_series",
             "must be 1..=4",
         );
-        check(
+        issues.check(
             range(store.max_history_points, 100, 2000),
             "store.max_history_points",
             "must be 100..=2000",
         );
-        check(
+        issues.check(
             range(store.archive_retention_days, 1, 30),
             "store.archive_retention_days",
             "must be 1..=30",
         );
-        check(
+        issues.check(
             range(store.archive_limit_mib, 128, 8192),
             "store.archive_limit_mib",
             "must be 128..=8192",
         );
-        check(
+        issues.check(
             range(store.audit_retention_days, 1, 365),
             "store.audit_retention_days",
             "must be 1..=365",
         );
-        check(
+        issues.check(
             range(store.audit_limit_mib, 16, 1024),
             "store.audit_limit_mib",
             "must be 16..=1024",
         );
-        check(
+        issues.check(
             range(store.max_processes, 1, 4096),
             "store.max_processes",
             "must be 1..=4096",
         );
-        check(
+        issues.check(
             range(store.max_process_gpu_links, 1, 16_384),
             "store.max_process_gpu_links",
             "must be 1..=16384",
         );
+    }
 
+    /// `actions`: the process action policy.
+    fn validate_actions(&self, issues: &mut Issues) {
         let actions = &self.actions;
-        check(
+        issues.check(
             actions.same_uid_only,
             "actions.same_uid_only",
             "is a fixed safety constant (true)",
         );
-        check(
+        issues.check(
             actions.deny_root_session,
             "actions.deny_root_session",
             "is a fixed safety constant (true)",
         );
-        check(
+        issues.check(
             range(actions.confirmation_ttl_ms, 1000, 30_000),
             "actions.confirmation_ttl_ms",
             "must be 1000..=30000",
         );
-        check(
+        issues.check(
             range(actions.max_pending_confirmations, 1, 8),
             "actions.max_pending_confirmations",
             "must be 1..=8",
         );
+    }
 
+    /// `viewer`: the frontend limits, modules and folds.
+    fn validate_viewer(&self, issues: &mut Issues) {
         let viewer = &self.viewer;
-        check(range(viewer.fps, 1, 20), "viewer.fps", "must be 1..=20");
-        check(
+        issues.check(range(viewer.fps, 1, 20), "viewer.fps", "must be 1..=20");
+        issues.check(
             range(viewer.max_sessions, 1, 2),
             "viewer.max_sessions",
             "must be 1..=2",
         );
-        check(
+        issues.check(
             viewer.enabled_modules.len() <= 64,
             "viewer.enabled_modules",
             "at most 64 entries",
@@ -689,209 +778,214 @@ impl Config {
         let mut modules = std::collections::BTreeSet::new();
         for (index, module) in viewer.enabled_modules.iter().enumerate() {
             let path = format!("viewer.enabled_modules[{index}]");
-            check(
+            issues.check(
                 !module.is_empty() && module.len() <= 64,
                 &path,
                 "must be 1..=64 bytes",
             );
-            check(modules.insert(module.as_str()), &path, "duplicate module");
+            issues.check(modules.insert(module.as_str()), &path, "duplicate module");
         }
-        check(
+        issues.check(
             range(viewer.network_max_visible, 1, 20),
             "viewer.network_max_visible",
             "must be 1..=20",
         );
-        check(
+        issues.check(
             crate::view::are_foldable(&viewer.folded),
             "viewer.folded",
             "must hold distinct foldable panels",
         );
+    }
 
+    /// `queues`: the bounded queues and their byte caps.
+    fn validate_queues(&self, issues: &mut Issues) {
         let queues = &self.queues;
-        check(
+        issues.check(
             range(queues.commands, 8, 128),
             "queues.commands",
             "must be 8..=128",
         );
-        check(
+        issues.check(
             range(queues.collection_batches, 1, 32),
             "queues.collection_batches",
             "must be 1..=32",
         );
-        check(
+        issues.check(
             range(queues.max_batch_bytes, 4096, 1_048_576),
             "queues.max_batch_bytes",
             "must be 4096..=1048576",
         );
-        check(
+        issues.check(
             range(queues.ingress_bytes, 1_048_576, 8_388_608),
             "queues.ingress_bytes",
             "must be 1048576..=8388608",
         );
-        check(
+        issues.check(
             range(queues.max_decoded_batch_bytes, 65_536, 4_194_304),
             "queues.max_decoded_batch_bytes",
             "must be 65536..=4194304",
         );
-        check(
+        issues.check(
             range(queues.max_records_per_batch, 1, 256),
             "queues.max_records_per_batch",
             "must be 1..=256",
         );
-        check(
+        issues.check(
             range(queues.collector_jobs, 1, 8),
             "queues.collector_jobs",
             "must be 1..=8",
         );
-        check(
+        issues.check(
             range(queues.history_requests, 1, 4),
             "queues.history_requests",
             "must be 1..=4",
         );
-        check(
+        issues.check(
             range(queues.archive_bytes, 1_048_576, 8_388_608),
             "queues.archive_bytes",
             "must be 1048576..=8388608",
         );
-        check(
+        issues.check(
             range(queues.log_bytes, 65_536, 1_048_576),
             "queues.log_bytes",
             "must be 65536..=1048576",
         );
 
-        check(
+        issues.check(
             !self.privacy.persist_full_command_line,
             "privacy.persist_full_command_line",
             "is a fixed privacy constant (false)",
         );
+    }
 
+    /// `runtime`: the workers and the per-request limits.
+    fn validate_runtime(&self, issues: &mut Issues) {
         let runtime = &self.runtime;
-        check(
+        issues.check(
             range(runtime.compute_workers, 1, 4),
             "runtime.compute_workers",
             "must be 1..=4",
         );
-        check(
+        issues.check(
             range(runtime.history_workers, 1, 2),
             "runtime.history_workers",
             "must be 1..=2",
         );
-        check(
+        issues.check(
             range(runtime.control_slice_ms, 1, 2),
             "runtime.control_slice_ms",
             "must be 1..=2",
         );
-        check(
+        issues.check(
             range(runtime.history_deadline_ms, 50, 200),
             "runtime.history_deadline_ms",
             "must be 50..=200",
         );
-        check(
+        issues.check(
             range(runtime.audit_intent_deadline_ms, 100, 1000),
             "runtime.audit_intent_deadline_ms",
             "must be 100..=1000",
         );
-        check(
+        issues.check(
             range(runtime.child_grace_ms, 50, 200),
             "runtime.child_grace_ms",
             "must be 50..=200",
         );
-        check(
+        issues.check(
             range(runtime.child_term_ms, 50, 200),
             "runtime.child_term_ms",
             "must be 50..=200",
         );
-        check(
+        issues.check(
             range(runtime.child_reap_ms, 100, 1000),
             "runtime.child_reap_ms",
             "must be 100..=1000",
         );
-        check(
+        issues.check(
             range(runtime.max_pending_requests, 8, 128),
             "runtime.max_pending_requests",
             "must be 8..=128",
         );
-        check(
+        issues.check(
             range(runtime.result_cache_entries, 128, 4096),
             "runtime.result_cache_entries",
             "must be 128..=4096",
         );
-        check(
+        issues.check(
             range(runtime.result_cache_ttl_ms, 1000, 600_000),
             "runtime.result_cache_ttl_ms",
             "must be 1000..=600000",
         );
-        check(
+        issues.check(
             range(runtime.max_projection_bytes, 65_536, 1_048_576),
             "runtime.max_projection_bytes",
             "must be 65536..=1048576",
         );
-        check(
+        issues.check(
             runtime.adaptive_enabled,
             "runtime.adaptive_enabled",
             "is a fixed constant (true)",
         );
-        check(
+        issues.check(
             range(runtime.pressure_samples, 3, 10),
             "runtime.pressure_samples",
             "must be 3..=10",
         );
-        check(
+        issues.check(
             range(runtime.recovery_ms, 30_000, 300_000),
             "runtime.recovery_ms",
             "must be 30000..=300000",
         );
+    }
 
-        // Cross-field capacity rules: per-field validity is not enough.
-        check(
+    /// The cross-field capacity rules: per-field validity is not enough.
+    fn validate_capacity(&self, issues: &mut Issues) {
+        let (queues, runtime, store, viewer) =
+            (&self.queues, &self.runtime, &self.store, &self.viewer);
+        issues.check(
             queues.commands <= runtime.max_pending_requests,
             "queues.commands",
             "must not exceed runtime.max_pending_requests",
         );
-        check(
+        issues.check(
             queues.max_batch_bytes <= queues.max_decoded_batch_bytes,
             "queues.max_batch_bytes",
             "wire bytes must not exceed max_decoded_batch_bytes",
         );
-        check(
+        issues.check(
             u64::from(queues.max_batch_bytes) + u64::from(queues.max_decoded_batch_bytes)
                 <= u64::from(queues.ingress_bytes),
             "queues.ingress_bytes",
             "must hold one maximum wire + decoded batch",
         );
-        check(
+        issues.check(
             queues.history_requests >= runtime.history_workers,
             "queues.history_requests",
             "must be at least runtime.history_workers",
         );
         let limits = PartitionLimits::for_memory_limit_mib(u64::from(store.memory_limit_mib));
-        check(
+        issues.check(
             self.effective_command_bytes() >= MIN_COMMAND_BYTES,
             "queues",
             "commands x per-command cap + archive + log + control bookkeeping must fit the reserve partition with at least 8 KiB per command",
         );
-        check(
+        issues.check(
             u64::from(queues.ingress_bytes) <= limits.limit(Partition::Ingress),
             "queues.ingress_bytes",
             "must fit the ingress partition (memory_limit_mib x 8/256)",
         );
         let presentation_need =
             u64::from(viewer.max_sessions) * 2 * u64::from(runtime.max_projection_bytes);
-        check(
+        issues.check(
             presentation_need <= limits.limit(Partition::Presentation),
             "runtime.max_projection_bytes",
             "max_sessions x (pending + active) projections must fit the presentation partition",
         );
-
-        if issues.is_empty() {
-            Ok(())
-        } else {
-            Err(issues)
-        }
     }
 
     /// Dotted paths of fields that differ and can only take effect after a restart.
-    pub fn restart_required_changes(&self, candidate: &Config) -> Vec<&'static str> {
+    #[must_use]
+    pub fn restart_required_changes(&self, candidate: &Self) -> Vec<&'static str> {
         let mut changed = Vec::new();
         if self.queues != candidate.queues {
             changed.push("queues");
@@ -928,18 +1022,21 @@ impl Config {
     }
 
     /// Whether scheduling-relevant fields differ (requires a new scheduler epoch).
-    pub fn scheduling_changed(&self, candidate: &Config) -> bool {
+    #[must_use]
+    pub fn scheduling_changed(&self, candidate: &Self) -> bool {
         self.sampling != candidate.sampling
     }
 
     /// Whether action policy changed in a way that must revoke pending tokens.
-    pub fn action_policy_changed(&self, candidate: &Config) -> bool {
+    #[must_use]
+    pub fn action_policy_changed(&self, candidate: &Self) -> bool {
         self.actions != candidate.actions
     }
 
     /// Effective per-command payload cap: 64 KiB, reduced (never exceeded) when
     /// the reserve partition cannot hold `commands x 64 KiB` next to the archive
     /// journal, the log buffer and control bookkeeping.
+    #[must_use]
     pub fn effective_command_bytes(&self) -> u64 {
         let limits = self.partition_limits();
         let reserve = limits.limit(Partition::Reserve);
@@ -952,6 +1049,7 @@ impl Config {
     }
 
     /// Byte limits of the global ledger for this configuration.
+    #[must_use]
     pub fn partition_limits(&self) -> PartitionLimits {
         PartitionLimits::for_memory_limit_mib(u64::from(self.store.memory_limit_mib))
     }
@@ -971,7 +1069,7 @@ pub enum ValueOrigin {
 
 /// Explicit command-line overrides. `None` means "not given": it must never
 /// overwrite a persisted value.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CliOverrides {
     pub interval_ms: Option<u32>,
     pub gpu_enabled: Option<bool>,
@@ -1055,226 +1153,251 @@ fn whole_f64_to_u32(value: f64) -> Option<u32> {
     if !value.is_finite() || value < 0.0 || value > f64::from(u32::MAX) || value.fract() != 0.0 {
         return None;
     }
-    // Range and integrality were checked above, so the cast is exact.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "range and integrality were checked above, so the cast is exact"
+    )]
     Some(value as u32)
 }
 
 /// Maps a legacy document onto a copy of `base` (normally the defaults).
+#[must_use]
 pub fn map_legacy_config(legacy: &LegacyConfig, base: &Config) -> LegacyImportReport {
-    let mut candidate = base.clone();
-    let mut mappings = Vec::new();
-    let mut warnings = Vec::new();
-    let mut push = |legacy_field: &str,
-                    legacy_value: String,
-                    target_field: Option<&str>,
-                    target_value: Option<String>,
-                    status: LegacyMappingStatus,
-                    note: &str| {
-        mappings.push(LegacyMapping {
-            legacy_field: legacy_field.to_owned(),
+    let mut import = LegacyImport {
+        legacy,
+        candidate: base.clone(),
+        mappings: Vec::new(),
+        warnings: Vec::new(),
+    };
+    import.interval();
+    import.theme();
+    import.gpu_enabled();
+    import.history_length();
+    import.network_max_visible();
+    import.redline_threshold();
+    import.unknown_keys();
+    LegacyImportReport {
+        mappings: import.mappings,
+        candidate: import.candidate,
+        warnings: import.warnings,
+    }
+}
+
+/// A legacy key and the field it maps onto, when it has one.
+#[derive(Clone, Copy)]
+struct LegacyKey<'a> {
+    legacy_field: &'a str,
+    target_field: Option<&'a str>,
+}
+
+impl<'a> LegacyKey<'a> {
+    const fn onto(legacy_field: &'a str, target_field: &'a str) -> Self {
+        Self {
+            legacy_field,
+            target_field: Some(target_field),
+        }
+    }
+
+    const fn without_target(legacy_field: &'a str) -> Self {
+        Self {
+            legacy_field,
+            target_field: None,
+        }
+    }
+}
+
+/// A legacy import in progress: the candidate, and one row a legacy key.
+struct LegacyImport<'a> {
+    legacy: &'a LegacyConfig,
+    candidate: Config,
+    mappings: Vec<LegacyMapping>,
+    warnings: Vec<String>,
+}
+
+impl LegacyImport<'_> {
+    fn row(
+        &mut self,
+        key: LegacyKey<'_>,
+        legacy_value: String,
+        target_value: Option<String>,
+        status: LegacyMappingStatus,
+        note: &str,
+    ) {
+        self.mappings.push(LegacyMapping {
+            legacy_field: key.legacy_field.to_owned(),
             legacy_value,
-            target_field: target_field.map(str::to_owned),
+            target_field: key.target_field.map(str::to_owned),
             target_value,
             status,
             note: note.to_owned(),
         });
-    };
-
-    let interval_secs = legacy.update_interval_secs;
-    match interval_secs {
-        Some(seconds) if seconds.is_finite() => {
-            let rounded = (seconds * 1000.0).round();
-            if (100.0..=60_000.0).contains(&rounded) {
-                let milliseconds = whole_f64_to_u32(rounded).unwrap_or(1000);
-                candidate.sampling.interval_ms = milliseconds;
-                push(
-                    "update_interval_secs",
-                    seconds.to_string(),
-                    Some("sampling.interval_ms"),
-                    Some(milliseconds.to_string()),
-                    LegacyMappingStatus::Mapped,
-                    "rounded to whole milliseconds",
-                );
-            } else {
-                push(
-                    "update_interval_secs",
-                    seconds.to_string(),
-                    Some("sampling.interval_ms"),
-                    None,
-                    LegacyMappingStatus::Rejected,
-                    "outside 100..=60000 ms after rounding; default kept",
-                );
-            }
-        }
-        Some(seconds) => push(
-            "update_interval_secs",
-            seconds.to_string(),
-            Some("sampling.interval_ms"),
-            None,
-            LegacyMappingStatus::Rejected,
-            "not a finite number",
-        ),
-        None => push(
-            "update_interval_secs",
-            "absent".into(),
-            Some("sampling.interval_ms"),
-            None,
-            LegacyMappingStatus::Absent,
-            "default kept",
-        ),
     }
 
-    match legacy.color_theme.as_deref() {
-        Some(name) => match Theme::parse(name) {
-            Some(theme) => {
-                candidate.viewer.theme = theme;
-                push(
-                    "color_theme",
-                    name.to_owned(),
-                    Some("viewer.theme"),
-                    Some(theme.name().to_owned()),
-                    LegacyMappingStatus::Mapped,
-                    "same theme name",
-                );
-            }
-            None => push(
-                "color_theme",
-                crate::text::sanitize_display(name, 64),
-                Some("viewer.theme"),
-                None,
-                LegacyMappingStatus::Rejected,
-                "unknown theme; default kept",
-            ),
-        },
-        None => push(
-            "color_theme",
-            "absent".into(),
-            Some("viewer.theme"),
-            None,
-            LegacyMappingStatus::Absent,
-            "default kept",
-        ),
-    }
-
-    match legacy.gpu_enabled {
-        Some(enabled) => {
-            candidate.sampling.gpu_enabled = enabled;
-            push(
-                "gpu_enabled",
-                enabled.to_string(),
-                Some("sampling.gpu_enabled"),
-                Some(enabled.to_string()),
-                LegacyMappingStatus::Mapped,
-                "selects whether the NVML adapter host starts",
-            );
-        }
-        None => push(
-            "gpu_enabled",
-            "absent".into(),
-            Some("sampling.gpu_enabled"),
-            None,
-            LegacyMappingStatus::Absent,
-            "default kept",
-        ),
-    }
-
-    match legacy.history_length {
-        Some(points) => {
-            let interval = interval_secs
-                .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
-                .unwrap_or(1.0);
-            let seconds = (points as f64 * interval).round();
-            let clamped = seconds.clamp(30.0, 3600.0);
-            let value = whole_f64_to_u32(clamped).unwrap_or(300);
-            candidate.store.raw_history_seconds = value;
-            warnings.push("history_length counted samples; v2 retains raw history by time, so the result is not equivalent".to_owned());
-            push(
-                "history_length",
-                points.to_string(),
-                Some("store.raw_history_seconds"),
-                Some(value.to_string()),
-                LegacyMappingStatus::MappedWithWarning,
-                "converted with the legacy interval; not equivalent (time based, memory capped)",
-            );
-        }
-        None => push(
-            "history_length",
-            "absent".into(),
-            Some("store.raw_history_seconds"),
-            None,
-            LegacyMappingStatus::Absent,
-            "default kept",
-        ),
-    }
-
-    match legacy.network_max_visible {
-        Some(visible) if (1..=20).contains(&visible) => {
-            let value = u32::try_from(visible).unwrap_or(3);
-            candidate.viewer.network_max_visible = value;
-            push(
-                "network_max_visible",
-                visible.to_string(),
-                Some("viewer.network_max_visible"),
-                Some(value.to_string()),
-                LegacyMappingStatus::Mapped,
-                "layout only; not a collection cap",
-            );
-        }
-        Some(visible) => push(
-            "network_max_visible",
-            visible.to_string(),
-            Some("viewer.network_max_visible"),
-            None,
-            LegacyMappingStatus::Rejected,
-            "outside 1..=20; default kept",
-        ),
-        None => push(
-            "network_max_visible",
-            "absent".into(),
-            Some("viewer.network_max_visible"),
-            None,
-            LegacyMappingStatus::Absent,
-            "default kept",
-        ),
-    }
-
-    // Level colors no longer turn red early (D-104), so the redline has
-    // nowhere to go (D-105).
-    match legacy.redline_threshold {
-        Some(threshold) => push(
-            "redline_threshold",
-            threshold.to_string(),
-            None,
-            None,
-            LegacyMappingStatus::Unsupported,
-            "retired (D-105): level colors run from green at 0 % to red at 100 %; not imported",
-        ),
-        None => push(
-            "redline_threshold",
-            "absent".into(),
-            None,
-            None,
-            LegacyMappingStatus::Absent,
-            "retired (D-105); nothing to import",
-        ),
-    }
-
-    for (key, value) in &legacy.unknown {
-        push(
-            &crate::text::sanitize_display(key, 64),
-            crate::text::sanitize_display(&value.to_string(), 128),
-            None,
-            None,
-            LegacyMappingStatus::Unsupported,
-            "no v2 equivalent; not imported",
+    fn mapped(
+        &mut self,
+        key: LegacyKey<'_>,
+        legacy_value: String,
+        target_value: String,
+        note: &str,
+    ) {
+        self.row(
+            key,
+            legacy_value,
+            Some(target_value),
+            LegacyMappingStatus::Mapped,
+            note,
         );
     }
 
-    LegacyImportReport {
-        mappings,
-        candidate,
-        warnings,
+    fn rejected(&mut self, key: LegacyKey<'_>, legacy_value: String, note: &str) {
+        self.row(key, legacy_value, None, LegacyMappingStatus::Rejected, note);
+    }
+
+    fn absent(&mut self, key: LegacyKey<'_>, note: &str) {
+        self.row(
+            key,
+            "absent".into(),
+            None,
+            LegacyMappingStatus::Absent,
+            note,
+        );
+    }
+
+    fn interval(&mut self) {
+        const KEY: LegacyKey<'_> = LegacyKey::onto("update_interval_secs", "sampling.interval_ms");
+        let Some(seconds) = self.legacy.update_interval_secs else {
+            return self.absent(KEY, "default kept");
+        };
+        if !seconds.is_finite() {
+            return self.rejected(KEY, seconds.to_string(), "not a finite number");
+        }
+        let rounded = (seconds * 1000.0).round();
+        if !(100.0..=60_000.0).contains(&rounded) {
+            return self.rejected(
+                KEY,
+                seconds.to_string(),
+                "outside 100..=60000 ms after rounding; default kept",
+            );
+        }
+        let milliseconds = whole_f64_to_u32(rounded).unwrap_or(1000);
+        self.candidate.sampling.interval_ms = milliseconds;
+        self.mapped(
+            KEY,
+            seconds.to_string(),
+            milliseconds.to_string(),
+            "rounded to whole milliseconds",
+        );
+    }
+
+    fn theme(&mut self) {
+        const KEY: LegacyKey<'_> = LegacyKey::onto("color_theme", "viewer.theme");
+        let Some(name) = self.legacy.color_theme.as_deref() else {
+            return self.absent(KEY, "default kept");
+        };
+        let Some(theme) = Theme::parse(name) else {
+            return self.rejected(
+                KEY,
+                crate::text::sanitize_display(name, 64),
+                "unknown theme; default kept",
+            );
+        };
+        self.candidate.viewer.theme = theme;
+        self.mapped(
+            KEY,
+            name.to_owned(),
+            theme.name().to_owned(),
+            "same theme name",
+        );
+    }
+
+    fn gpu_enabled(&mut self) {
+        const KEY: LegacyKey<'_> = LegacyKey::onto("gpu_enabled", "sampling.gpu_enabled");
+        let Some(enabled) = self.legacy.gpu_enabled else {
+            return self.absent(KEY, "default kept");
+        };
+        self.candidate.sampling.gpu_enabled = enabled;
+        self.mapped(
+            KEY,
+            enabled.to_string(),
+            enabled.to_string(),
+            "selects whether the NVML adapter host starts",
+        );
+    }
+
+    fn history_length(&mut self) {
+        const KEY: LegacyKey<'_> = LegacyKey::onto("history_length", "store.raw_history_seconds");
+        let Some(points) = self.legacy.history_length else {
+            return self.absent(KEY, "default kept");
+        };
+        let interval = self
+            .legacy
+            .update_interval_secs
+            .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+            .unwrap_or(1.0);
+        let seconds = (points.to_f64_lossy() * interval).round();
+        let clamped = seconds.clamp(30.0, 3600.0);
+        let value = whole_f64_to_u32(clamped).unwrap_or(300);
+        self.candidate.store.raw_history_seconds = value;
+        self.warnings.push(
+            "history_length counted samples; v2 retains raw history by time, so the result is not equivalent"
+                .to_owned(),
+        );
+        self.row(
+            KEY,
+            points.to_string(),
+            Some(value.to_string()),
+            LegacyMappingStatus::MappedWithWarning,
+            "converted with the legacy interval; not equivalent (time based, memory capped)",
+        );
+    }
+
+    fn network_max_visible(&mut self) {
+        const KEY: LegacyKey<'_> =
+            LegacyKey::onto("network_max_visible", "viewer.network_max_visible");
+        let Some(visible) = self.legacy.network_max_visible else {
+            return self.absent(KEY, "default kept");
+        };
+        if !(1..=20).contains(&visible) {
+            return self.rejected(KEY, visible.to_string(), "outside 1..=20; default kept");
+        }
+        let value = u32::try_from(visible).unwrap_or(3);
+        self.candidate.viewer.network_max_visible = value;
+        self.mapped(
+            KEY,
+            visible.to_string(),
+            value.to_string(),
+            "layout only; not a collection cap",
+        );
+    }
+
+    /// Level colors no longer turn red early (D-104), so the redline has
+    /// nowhere to go (D-105).
+    fn redline_threshold(&mut self) {
+        const KEY: LegacyKey<'_> = LegacyKey::without_target("redline_threshold");
+        let Some(threshold) = self.legacy.redline_threshold else {
+            return self.absent(KEY, "retired (D-105); nothing to import");
+        };
+        self.row(
+            KEY,
+            threshold.to_string(),
+            None,
+            LegacyMappingStatus::Unsupported,
+            "retired (D-105): level colors run from green at 0 % to red at 100 %; not imported",
+        );
+    }
+
+    fn unknown_keys(&mut self) {
+        let legacy = self.legacy;
+        for (key, value) in &legacy.unknown {
+            self.row(
+                LegacyKey::without_target(&crate::text::sanitize_display(key, 64)),
+                crate::text::sanitize_display(&value.to_string(), 128),
+                None,
+                LegacyMappingStatus::Unsupported,
+                "no v2 equivalent; not imported",
+            );
+        }
     }
 }
 
@@ -1338,7 +1461,7 @@ mod tests {
         config.viewer.folded.clear();
         let none = config.to_pretty_json().unwrap();
         assert!(none.contains("\"folded\": []"), "{none}");
-        assert!(Config::from_json(&none).unwrap().viewer.folded.is_empty());
+        assert_eq!(Config::from_json(&none).unwrap().viewer.folded.len(), 0);
         // What v2.6.0 saved: its temperature and power panels are gone.
         let mut earlier: serde_json::Value = serde_json::from_str(REFERENCE_CONFIG_JSON).unwrap();
         earlier["viewer"]["folded"] = serde_json::json!([
@@ -1385,7 +1508,7 @@ mod tests {
             assert!(!text.contains(key), "{key} written: {text}");
         }
         let saved = Config::from_json(&text).unwrap();
-        assert!(saved.retired_keys_present().is_empty());
+        assert_eq!(saved.retired_keys_present().len(), 0);
         assert_eq!(saved, reference, "the retired key changes nothing");
         // Out of its former range or of another type: still ignored.
         let mut value: serde_json::Value = serde_json::from_str(REFERENCE_CONFIG_JSON).unwrap();
@@ -1579,7 +1702,7 @@ mod tests {
         let base = defaults();
         let mut candidate = base.clone();
         candidate.sampling.interval_ms = 2000;
-        assert!(base.restart_required_changes(&candidate).is_empty());
+        assert_eq!(base.restart_required_changes(&candidate).len(), 0);
         assert!(base.scheduling_changed(&candidate));
         candidate.queues.commands = 64;
         candidate.store.max_series = 100;
@@ -1615,7 +1738,7 @@ mod tests {
         // Unset, it is not written: the REF document stays as it is.
         let json = serde_json::to_value(&base).unwrap();
         assert!(json["store"].get("process_history_enabled").is_none());
-        let mut set = json.clone();
+        let mut set = json;
         set["store"]["process_history_enabled"] = serde_json::json!(false);
         let parsed: Config = serde_json::from_value(set).unwrap();
         assert_eq!(parsed.store.process_history_enabled, Some(false));

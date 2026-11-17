@@ -1,4 +1,4 @@
-//! ProcessService: the only path to a user-process signal (AT10/AT32).
+//! `ProcessService`: the only path to a user-process signal (AT10/AT32).
 //!
 //! `requested → prepared → confirming → intent_pending → intent_committed →
 //! sending → signal_sent → exit_observed | still_running`, with
@@ -77,7 +77,7 @@ pub(crate) struct Now {
     pub(crate) utc_ns: i128,
 }
 
-/// Ports owned by the ProcessService (and nobody else).
+/// Ports owned by the `ProcessService` (and nobody else).
 pub(crate) struct ProcessPorts {
     pub(crate) audit: Box<dyn Dispatch<AuditOp>>,
     pub(crate) actions: Box<dyn Dispatch<ActionOp>>,
@@ -106,6 +106,17 @@ pub(crate) struct TokenCommand<'a> {
     pub(crate) payload_sha256: String,
 }
 
+/// Where the recovery of the intents an earlier run left unanswered is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Recovery {
+    /// To ask of the audit store, again after a failure.
+    Due,
+    /// Asked; no answer yet.
+    Requested,
+    /// Answered: actions may be prepared.
+    Done,
+}
+
 pub(crate) struct ProcessService {
     audit: Box<dyn Dispatch<AuditOp>>,
     actions: Box<dyn Dispatch<ActionOp>>,
@@ -113,8 +124,7 @@ pub(crate) struct ProcessService {
     policy: ActionPolicy,
     policy_revision: u32,
     audit_status: Option<PersistenceStatus>,
-    recovered: bool,
-    recovery_requested: bool,
+    recovery: Recovery,
     audit_backlog: VecDeque<AuditOp>,
     audit_retry_ns: u64,
     audit_outstanding: usize,
@@ -135,8 +145,7 @@ impl ProcessService {
             policy: ActionPolicy::from_config(config),
             policy_revision: 1,
             audit_status: None,
-            recovered: false,
-            recovery_requested: false,
+            recovery: Recovery::Due,
             audit_backlog: VecDeque::new(),
             audit_retry_ns: 0,
             audit_outstanding: 0,
@@ -160,7 +169,7 @@ impl ProcessService {
     }
 
     #[cfg(test)]
-    pub(crate) fn unknown_outcomes(&self) -> u32 {
+    pub(crate) const fn unknown_outcomes(&self) -> u32 {
         self.unknown_outcomes
     }
 
@@ -216,13 +225,13 @@ impl ProcessService {
         fx.mark_all_dirty();
     }
 
-    pub(crate) fn confirm(&mut self, command: TokenCommand<'_>, now: Now, fx: &mut Effects) {
+    pub(crate) fn confirm(&mut self, command: &TokenCommand<'_>, now: Now, fx: &mut Effects) {
         let Some(index) = self.records.by_token(command.token) else {
             let denial = Denial {
                 code: ErrorCode::ConfirmationExpired,
                 reason: "unknown or expired confirmation token".to_owned(),
             };
-            self.audit_refused_confirm(&command, &denial, None, now);
+            self.audit_refused_confirm(command, &denial, None, now);
             fx.reply(CommandResult::rejected(
                 command.request_id,
                 denial.code,
@@ -230,9 +239,9 @@ impl ProcessService {
             ));
             return;
         };
-        if let Some((denial, end_state)) = self.confirm_denial(index, &command, now) {
+        if let Some((denial, end_state)) = self.confirm_denial(index, command, now) {
             let prepare_request = self.records.get(index).map(|record| record.prepare_request);
-            self.audit_refused_confirm(&command, &denial, prepare_request, now);
+            self.audit_refused_confirm(command, &denial, prepare_request, now);
             if let Some(state) = end_state {
                 self.close_unconfirmed(index, state);
             }
@@ -244,11 +253,11 @@ impl ProcessService {
             fx.mark_all_dirty();
             return;
         }
-        self.begin_intent(index, &command, now, fx);
+        self.begin_intent(index, command, now, fx);
         fx.mark_all_dirty();
     }
 
-    pub(crate) fn cancel(&mut self, command: TokenCommand<'_>, now: Now, fx: &mut Effects) {
+    pub(crate) fn cancel(&mut self, command: &TokenCommand<'_>, now: Now, fx: &mut Effects) {
         let Some(index) = self.records.by_token(command.token) else {
             fx.reply(CommandResult::completed(
                 command.request_id,
@@ -269,7 +278,7 @@ impl ProcessService {
         }
         let state = record.state;
         if record.is_revocable() && state != ActionState::Requested {
-            self.cancel_unsent(index, &command, now, fx);
+            self.cancel_unsent(index, command, now, fx);
         } else if state.is_past_point_of_no_return() {
             fx.reply(
                 CommandResult::in_progress(
@@ -308,7 +317,7 @@ impl ProcessService {
                 intent_id,
                 outcome,
                 ..
-            } => self.on_sent(request_id, intent_id, outcome, now, fx),
+            } => self.on_sent(request_id, intent_id, &outcome, now, fx),
             ActionCompletion::ExitObserved {
                 request_id,
                 observation,
@@ -359,7 +368,7 @@ impl ProcessService {
                 self.on_recovered(result, now);
                 self.request_expiry(now);
             }
-            AuditCompletion::Expired { result } => self.on_expired(result, now),
+            AuditCompletion::Expired { result } => self.on_expired(&result, now),
             AuditCompletion::Status(status) => self.audit_status = Some(status),
         }
         fx.mark_all_dirty();
@@ -485,7 +494,7 @@ impl ProcessService {
         self.request_expiry(now);
         if now.boot_ns >= self.next_status_ns {
             self.request_status(now);
-            if !self.recovered && !self.recovery_requested {
+            if self.recovery == Recovery::Due {
                 self.request_recovery(now);
             }
         }
@@ -565,7 +574,7 @@ impl ProcessService {
             &self.policy,
             AuditReadiness {
                 status: self.audit_status.as_ref(),
-                recovered: self.recovered,
+                recovered: self.recovery == Recovery::Done,
                 backlog: !self.audit_backlog.is_empty(),
             },
         )
@@ -878,10 +887,10 @@ impl ProcessService {
         prepare_request: Option<Uuid>,
         now: Now,
     ) {
-        let detail = match prepare_request {
-            Some(prepare) => format!("{} (prepare request {prepare})", denial.reason),
-            None => denial.reason.clone(),
-        };
+        let detail = prepare_request.map_or_else(
+            || denial.reason.clone(),
+            |prepare| format!("{} (prepare request {prepare})", denial.reason),
+        );
         self.append_attempt(
             AttemptFacts {
                 request_id: command.request_id,
@@ -934,7 +943,7 @@ impl ProcessService {
             session_digest: record.session_digest.clone(),
             process_key: record.target.clone(),
             uid: prepared.verified.uid,
-            basename: prepared.verified.basename.clone(),
+            basename: prepared.verified.basename,
             signal: record.signal,
             policy_revision,
             payload_sha256: command.payload_sha256.clone(),
@@ -1266,7 +1275,7 @@ impl ProcessService {
         &mut self,
         request_id: Uuid,
         intent_id: Uuid,
-        outcome: SignalOutcome,
+        outcome: &SignalOutcome,
         now: Now,
         fx: &mut Effects,
     ) {
@@ -1281,8 +1290,8 @@ impl ProcessService {
             return;
         }
         record.send_deadline_ns = None;
-        if outcome != SignalOutcome::Sent {
-            let (code, reason) = signal_failure(&outcome);
+        if *outcome != SignalOutcome::Sent {
+            let (code, reason) = signal_failure(outcome);
             let denial = Denial { code, reason };
             self.finish_not_sent(index, &denial, ActionState::NotSent, now, fx);
             return;
@@ -1384,7 +1393,7 @@ fn session_digest(session_id: &SessionId) -> String {
     sha256_hex(session_id.as_str().as_bytes())
 }
 
-fn dispatch_code(error: &DispatchError) -> ErrorCode {
+const fn dispatch_code(error: &DispatchError) -> ErrorCode {
     match error {
         DispatchError::Closed => ErrorCode::Unavailable,
         DispatchError::Busy | DispatchError::Capacity(_) => ErrorCode::Busy,

@@ -2,7 +2,7 @@
 //!
 //! Candidates per power key, arbitrated together (origin de-duplication,
 //! conflict, hysteresis):
-//! * powercap energy counters: ΔµJ / dt = W over the actual interval
+//! * powercap energy counters: `ΔµJ` / dt = W over the actual interval
 //!   (`derived`, with an exact joule `CounterInterval`); the derived
 //!   candidate is retained under its energy source so other batches still
 //!   see it;
@@ -144,13 +144,13 @@ fn energy_step<'a>(
             let watts = delta
                 .rate_per_second(conversion)
                 .and_then(|rate| Scalar::from_f64(rate).ok());
-            match watts.and_then(|watts| power_observation(record, power_key, Some(watts), wrapped))
+            if let Some(observation) =
+                watts.and_then(|watts| power_observation(record, power_key, Some(watts), wrapped))
             {
-                Some(observation) => keep_derived(session, work, record, observation),
-                None => {
-                    work.note(power_key, reasons::VALUE_OVERFLOW);
-                    session.forget(record.source_id(), power_key);
-                }
+                keep_derived(session, work, record, observation);
+            } else {
+                work.note(power_key, reasons::VALUE_OVERFLOW);
+                session.forget(record.source_id(), power_key);
             }
         }
         Step::Unusable { record, code } if !record.observation.read_status.is_ok() => {
@@ -322,7 +322,8 @@ fn cluster_sum(
     if !aligned(session, p, e) {
         return Err((reasons::INPUTS_NOT_ALIGNED, evidence));
     }
-    let total = values::sum(p_watts, e_watts).ok_or((reasons::VALUE_OVERFLOW, evidence.clone()))?;
+    let total =
+        values::sum(p_watts, e_watts).ok_or_else(|| (reasons::VALUE_OVERFLOW, evidence.clone()))?;
     let observation = sum_observation(p, e, package_key, total, &evidence)
         .ok_or((reasons::VALUE_OVERFLOW, evidence))?;
     let deadline = session

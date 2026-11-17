@@ -285,10 +285,10 @@ impl Probes {
     ) -> CoverageReport {
         loop {
             let now_ns = clock_now();
-            if let Some(report) = locked(&self.commits)
+            let finished = locked(&self.commits)
                 .coverage
-                .final_report(groups, start_ns, end_ns, now_ns)
-            {
+                .final_report(groups, start_ns, end_ns, now_ns);
+            if let Some(report) = finished {
                 return report;
             }
             let remaining_ns = end_ns

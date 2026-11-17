@@ -1,5 +1,9 @@
 //! Registry: manifests and construction of the seven live adapters.
 
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
+
 use dgxtop_adapters::registry::{
     AdapterOptions, LIVE_ADAPTERS, RegistryError, build_live_adapter, live_manifest,
 };

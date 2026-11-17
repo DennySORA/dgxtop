@@ -61,14 +61,19 @@ const DEVICE_COLUMN: usize = 0;
 const READ_COLUMN: usize = 6;
 const WRITE_COLUMN: usize = 7;
 
+#[derive(Debug)]
 pub struct DiskModule {
     manifest: DisplayModuleManifest,
 }
 
 impl DiskModule {
+    /// # Errors
+    ///
+    /// Returns a `ModuleBuildError` when the module's static manifest is
+    /// invalid, which is a build defect.
     pub fn new() -> Result<Self, ModuleBuildError> {
         Ok(Self {
-            manifest: build_manifest(ManifestSpec {
+            manifest: build_manifest(&ManifestSpec {
                 id: "disk",
                 title: "Disk I/O and filesystem capacity",
                 min_columns: 36,

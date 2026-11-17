@@ -1,5 +1,5 @@
 //! Values the GPU view derives from what NVML reports (D-48): the peak
-//! device-memory bandwidth and the per-direction capacity of the PCIe link.
+//! device-memory bandwidth and the per-direction capacity of the `PCIe` link.
 //! Both are theoretical, marked derived, and missing whenever an input is,
 //! never zero.
 
@@ -19,7 +19,7 @@ pub(super) fn memory_bandwidth(
     })
 }
 
-/// Capacity of a PCIe link of `generation` and `width` lanes, per
+/// Capacity of a `PCIe` link of `generation` and `width` lanes, per
 /// direction.
 pub(super) fn pcie_bandwidth(generation: &MetricCell, width: &MetricCell) -> MetricCell {
     derived(&[generation, width], || {

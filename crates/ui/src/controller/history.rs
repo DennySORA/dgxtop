@@ -112,8 +112,7 @@ impl Controller {
             self.marked_every = Some(
                 self.drafts
                     .current(context.model, context.now)
-                    .map(|fields| fields.filter)
-                    .unwrap_or_default(),
+                    .map_or_default(|fields| fields.filter),
             );
         }
         self.bump();
@@ -347,6 +346,6 @@ fn process_history<'a>(context: &ControllerContext<'a>) -> Option<&'a ProcessHis
 }
 
 /// A run that ended, which may be deleted (the history's own rule).
-fn has_ended(run: &RunRowView) -> bool {
+const fn has_ended(run: &RunRowView) -> bool {
     run.end.is_some()
 }

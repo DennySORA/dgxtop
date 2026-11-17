@@ -1,8 +1,9 @@
 //! SQLite runtime gate (AT31), the verbatim audit and archive DDL and every
 //! partition's idempotent initialization.
 
-// Test helpers panic on setup failures; the lints target production code.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -40,7 +41,7 @@ impl TempDir {
 
 impl Drop for TempDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        std::fs::remove_dir_all(&self.0).unwrap_or_default();
     }
 }
 

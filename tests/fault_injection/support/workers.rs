@@ -57,20 +57,23 @@ impl Completions {
         }
     }
 
-    pub fn new(ingestion: Sender<IngestionCompletion>, control: Sender<ControlCompletion>) -> Self {
+    pub const fn new(
+        ingestion: Sender<IngestionCompletion>,
+        control: Sender<ControlCompletion>,
+    ) -> Self {
         Self { ingestion, control }
     }
 
     fn ingestion(&self, completion: IngestionCompletion) {
-        let _ = self
-            .ingestion
-            .send_timeout(completion, COMPLETION_SEND_TIMEOUT);
+        self.ingestion
+            .send_timeout(completion, COMPLETION_SEND_TIMEOUT)
+            .unwrap_or_default();
     }
 
     fn control(&self, completion: ControlCompletion) {
-        let _ = self
-            .control
-            .send_timeout(completion, COMPLETION_SEND_TIMEOUT);
+        self.control
+            .send_timeout(completion, COMPLETION_SEND_TIMEOUT)
+            .unwrap_or_default();
     }
 }
 
@@ -190,7 +193,7 @@ pub struct RecordingActionPort {
 }
 
 impl RecordingActionPort {
-    pub fn new(log: ActionLog, owner_uid: u32) -> Self {
+    pub const fn new(log: ActionLog, owner_uid: u32) -> Self {
         Self {
             log,
             owner_uid,
@@ -265,9 +268,9 @@ pub fn spawn_collector_pool(
         "collector",
         usize::try_from(config.runtime.compute_workers).unwrap_or(2),
         usize::try_from(config.queues.collector_jobs).unwrap_or(8),
-        Arc::new(move |plan: CollectionPlan| {
+        move |plan: CollectionPlan| {
             completions.ingestion(run_collection(&registry, &plan));
-        }),
+        },
     )
     .expect("spawn collector pool")
 }
@@ -282,9 +285,9 @@ pub fn spawn_history_pool(
         "history",
         usize::try_from(config.runtime.history_workers).unwrap_or(1),
         usize::try_from(config.queues.history_requests).unwrap_or(4),
-        Arc::new(move |job: HistoryJob| {
+        move |job: HistoryJob| {
             completions.control(run_history_job(history.as_ref(), job, clock.as_ref()));
-        }),
+        },
     )
     .expect("spawn history pool")
 }
@@ -320,7 +323,7 @@ impl ArchiveProbe {
         &self,
         result: Result<ArchiveReceipt, InfraError>,
         stats: ArchiveStats,
-        status: PersistenceStatus,
+        persistence: PersistenceStatus,
     ) {
         let mut record = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         match result {
@@ -328,7 +331,7 @@ impl ArchiveProbe {
             Err(error) => record.failures.push(error),
         }
         record.stats = stats;
-        record.status = Some(status);
+        record.status = Some(persistence);
     }
 }
 
@@ -346,8 +349,8 @@ pub fn spawn_archive_worker(
             gate.pass();
             let result = archive.append(journal);
             let stats = archive.stats();
-            let status = archive.status();
-            probe.record(result, stats, status);
+            let persistence = archive.status();
+            probe.record(result, stats, persistence);
         },
     )
     .expect("spawn archive worker")

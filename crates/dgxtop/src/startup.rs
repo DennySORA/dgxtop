@@ -42,7 +42,8 @@ pub struct LoadedConfiguration {
 }
 
 /// Namespace of this run: replay fixtures never share live state.
-pub fn namespace_of(cli: &Cli) -> Namespace {
+#[must_use]
+pub const fn namespace_of(cli: &Cli) -> Namespace {
     if cli.replay.is_some() {
         Namespace::Replay
     } else {
@@ -51,6 +52,11 @@ pub fn namespace_of(cli: &Cli) -> Namespace {
 }
 
 /// Resolves configuration and state paths (no I/O).
+///
+/// # Errors
+///
+/// Returns a `StartupError` when the command line, a path or the configuration
+/// stops the start before anything runs.
 pub fn resolve_paths(cli: &Cli) -> Result<StatePaths, StartupError> {
     cli.validate_paths()?;
     Ok(StatePaths::resolve(
@@ -62,12 +68,18 @@ pub fn resolve_paths(cli: &Cli) -> Result<StatePaths, StartupError> {
 }
 
 /// Real filesystem operations used by the persistent stores.
+#[must_use]
 pub fn real_filesystem() -> Arc<dyn FileSystemOps> {
     Arc::new(RealFileSystem)
 }
 
 /// Loads the saved configuration (writing nothing) and applies explicit
 /// command-line overrides to the effective copy only.
+///
+/// # Errors
+///
+/// Returns a `StartupError` when the command line, a path or the configuration
+/// stops the start before anything runs.
 pub fn load_configuration(
     cli: &Cli,
     paths: &StatePaths,
@@ -102,6 +114,7 @@ pub fn load_configuration(
 
 /// Origin of every leaf path: defaults when no file exists, saved otherwise,
 /// CLI override for explicitly given flags.
+#[must_use]
 pub fn value_origins(
     saved: &Config,
     load_origin: &LoadOrigin,
@@ -145,6 +158,7 @@ fn collect_leaves(
 }
 
 /// Every leaf whose effective value differs from the saved value.
+#[must_use]
 pub fn effective_differences(saved: &Config, effective: &Config) -> Vec<(String, String, String)> {
     let mut saved_leaves = BTreeMap::new();
     let mut effective_leaves = BTreeMap::new();
@@ -183,6 +197,7 @@ fn flatten(value: &serde_json::Value, prefix: String, leaves: &mut BTreeMap<Stri
 
 /// One notice per retired key the saved configuration still holds (D-88),
 /// naming the decision that retired it.
+#[must_use]
 pub fn retired_key_notices(saved: &Config) -> Vec<String> {
     saved
         .retired_keys_present()
@@ -309,16 +324,16 @@ mod tests {
         );
         let logger = MemoryLogger::default();
         log_retired_keys(&old, &logger);
-        let logged: Vec<_> = notices
+        let entries: Vec<_> = notices
             .iter()
             .map(|notice| (LogLevel::Info, "config", notice.clone()))
             .collect();
-        assert_eq!(logger.records(), logged);
+        assert_eq!(logger.records(), entries);
         let current = Config::from_json(&old.to_pretty_json().unwrap()).unwrap();
-        assert!(retired_key_notices(&current).is_empty());
+        assert_eq!(retired_key_notices(&current), [] as [String; 0]);
         let silent = MemoryLogger::default();
         log_retired_keys(&current, &silent);
-        assert!(silent.records().is_empty());
+        assert_eq!(silent.records(), [] as [(LogLevel, &str, String); 0]);
     }
 
     #[test]

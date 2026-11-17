@@ -122,7 +122,10 @@ fn plan_addressed_to_another_collector_is_refused() {
     }
     let plan = builder.at(SECOND + 1).build();
     let batch = network.collect(&plan);
-    assert!(batch.canonical.is_empty());
+    assert_eq!(
+        batch.canonical,
+        [] as [dgxtop_core::canonical::CanonicalValue; 0]
+    );
     assert_eq!(batch.failures[0].code, reasons::PLAN_COLLECTOR_MISMATCH);
     assert_eq!(batch.next_state.counters, seeded_state().counters);
 }
@@ -159,7 +162,10 @@ fn unknown_and_unhandled_metrics_and_failed_batches_are_reported() {
         .collect();
     assert!(codes.contains(&reasons::METRIC_NOT_HANDLED));
     assert!(codes.contains(&reasons::UNKNOWN_METRIC));
-    assert!(reported.canonical.is_empty());
+    assert_eq!(
+        reported.canonical,
+        [] as [dgxtop_core::canonical::CanonicalValue; 0]
+    );
     let failed_batch = collect(memory.as_ref(), &failed);
     assert_eq!(failed_batch.failures[0].code, reasons::BATCH_FAILED);
     assert!(

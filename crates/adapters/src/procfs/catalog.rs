@@ -198,7 +198,7 @@ pub(crate) struct Selection<'a, L> {
 }
 
 /// Size of the bookkeeping, for boundedness tests.
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CatalogStats {
     /// Committed catalog generation (0 before the first complete discovery).
@@ -298,17 +298,17 @@ impl<L: Clone> CatalogBook<L> {
         }
     }
 
-    pub(crate) fn config(&self) -> &CatalogConfig {
+    pub(crate) const fn config(&self) -> &CatalogConfig {
         &self.config
     }
 
     /// Whether any discovery snapshot exists (reads need one).
-    pub(crate) fn is_discovered(&self) -> bool {
+    pub(crate) const fn is_discovered(&self) -> bool {
         self.discovered
     }
 
     /// Starts a page-0 discovery snapshot.
-    pub(crate) fn begin_snapshot(&mut self, now_boot_ns: u64) -> SnapshotBuilder<'_, L> {
+    pub(crate) const fn begin_snapshot(&mut self, now_boot_ns: u64) -> SnapshotBuilder<'_, L> {
         SnapshotBuilder {
             book: self,
             now_boot_ns,
@@ -325,7 +325,7 @@ impl<L: Clone> CatalogBook<L> {
         let delta = match &self.pending {
             Some(pending)
                 if pending.previous_generation == request.previous_generation
-                    && request.page < pending.page_count =>
+                    && pending.has_page(request.page) =>
             {
                 pending.page(request, &self.config.adapter_id, page_size)
             }
@@ -383,7 +383,7 @@ impl<L: Clone> CatalogBook<L> {
         selection
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn stats(&self) -> CatalogStats {
         CatalogStats {
             generation: self.committed.generation,
@@ -510,6 +510,10 @@ impl Committed {
 }
 
 impl PendingDiscovery {
+    const fn has_page(&self, page: u32) -> bool {
+        page < self.page_count
+    }
+
     fn page(
         &self,
         request: &DiscoverRequest,
@@ -579,7 +583,7 @@ pub(crate) struct SnapshotBuilder<'book, L> {
 }
 
 impl<L: Clone> SnapshotBuilder<'_, L> {
-    pub(crate) fn config(&self) -> &CatalogConfig {
+    pub(crate) const fn config(&self) -> &CatalogConfig {
         &self.book.config
     }
 
@@ -810,7 +814,7 @@ fn keep_admitted_sources<L>(
     entity
 }
 
-fn take_one(budget: &mut usize) -> bool {
+const fn take_one(budget: &mut usize) -> bool {
     let available = *budget > 0;
     *budget = budget.saturating_sub(1);
     available

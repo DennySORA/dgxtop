@@ -36,7 +36,7 @@ mod shutdown;
 mod slowdown;
 #[cfg(test)]
 mod test_support;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 mod time_format;
 mod views;

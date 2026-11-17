@@ -2,6 +2,11 @@
 //! (AT15), hotplug boundedness and slot stability (AT15), source limits
 //! (AT15), metadata caching and unsupported re-probe throttling (AT34).
 
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
+
+#[expect(dead_code, reason = "each suite uses its part of the shared helpers")]
 #[path = "fixtures/adapters_a/support.rs"]
 mod support;
 
@@ -145,7 +150,7 @@ fn thousand_hotplug_cycles_keep_the_catalog_bounded_and_never_reuse_slots() {
     write_interface(&tree, "eth0", 2);
     let clock = FakeClock::new(1_000_000_000);
     let mut adapter = NetworkAdapter::new(
-        clock.clone(),
+        clock,
         host_id("test-host"),
         tree.files(),
         AdapterOptions::default(),
@@ -175,7 +180,7 @@ fn thousand_hotplug_cycles_keep_the_catalog_bounded_and_never_reuse_slots() {
             .unwrap()
             .removed_entities
             .iter()
-            .map(|id| id.as_str())
+            .map(dgxtop_core::identity::EntityId::as_str)
             .collect();
         assert_eq!(removed, vec![entity.as_str()]);
     }
@@ -252,7 +257,10 @@ fn source_limit_keeps_host_wide_sources_and_reports_the_rest() {
     assert_eq!(adapter.catalog_stats().incarnations, 9);
     let cpu = records(&read_all(&mut adapter, PROCFS, "cpu", 1));
     assert_eq!(cpu.len(), 13);
-    assert!(records(&read_all(&mut adapter, PROCFS, "disk", 1)).is_empty());
+    assert_eq!(
+        records(&read_all(&mut adapter, PROCFS, "disk", 1)),
+        [] as [dgxtop_core::observation::Observation; 0]
+    );
 }
 
 #[test]

@@ -24,8 +24,11 @@ pub(crate) fn scaled_floor(value: f64, max: u16) -> u16 {
     if value >= ceiling {
         return max;
     }
-    // The value is finite and inside 0..max here, so the cast is exact after floor().
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "the value is finite and inside 0..max here, so the cast is exact after floor()"
+    )]
     let floored = value.floor() as u16;
     floored
 }

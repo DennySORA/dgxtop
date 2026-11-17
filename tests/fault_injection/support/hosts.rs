@@ -238,8 +238,11 @@ fn reap_own_child(pid: i32) {
                 std::thread::sleep(Duration::from_millis(5));
             }
             Ok(WaitStatus::StillAlive) => {
-                let _ = nix::sys::signal::kill(child, nix::sys::signal::Signal::SIGKILL);
-                let _ = waitpid(child, None);
+                nix::sys::signal::kill(child, nix::sys::signal::Signal::SIGKILL)
+                    .unwrap_or_default();
+                if waitpid(child, None).is_err() {
+                    // Already reaped: nothing is left of it.
+                }
                 return;
             }
             _ => return,

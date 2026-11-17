@@ -4,10 +4,9 @@
 //!
 //! Every bench includes this file and uses a different subset of it, hence
 //! the module-wide `dead_code` allowance.
-#![allow(dead_code)]
-
 pub mod headless;
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -27,7 +26,14 @@ use serde_json::{Value, json};
 /// A bench failure with a message for the console.
 pub type BenchResult<T> = Result<T, String>;
 
-/// Command line of a bench (`cargo bench --features bench-support --bench <name> -- [args]`).
+/// What a bench's command line asks for: a run, or its usage (`--help`).
+#[derive(Debug, Clone)]
+pub enum Invocation {
+    Run(BenchArgs),
+    Help(String),
+}
+
+/// Command line of a bench (`cargo bench --features benchmarks --bench <name> -- [args]`).
 #[derive(Debug, Clone)]
 pub struct BenchArgs {
     pub mode: BenchMode,
@@ -38,9 +44,9 @@ pub struct BenchArgs {
 /// Parses `--smoke` (default) / `--full`, `--out PATH` and, where allowed,
 /// `--soak-results PATH`. `DGXTOP_BENCH_MODE=full|smoke` selects the mode
 /// too; an explicit flag wins. Cargo's own `--bench` flag is ignored.
-pub fn parse_args(bench: &str, accepts_soak: bool) -> BenchResult<BenchArgs> {
+pub fn parse_args(bench: &str, accepts_soak: bool) -> BenchResult<Invocation> {
     let mut mode = match std::env::var("DGXTOP_BENCH_MODE").ok().as_deref() {
-        None | Some("") | Some("smoke") => BenchMode::Smoke,
+        None | Some("" | "smoke") => BenchMode::Smoke,
         Some("full") => BenchMode::Full,
         Some(other) => {
             return Err(format!(
@@ -62,10 +68,7 @@ pub fn parse_args(bench: &str, accepts_soak: bool) -> BenchResult<BenchArgs> {
                     arguments.next().ok_or("--soak-results needs a path")?,
                 ));
             }
-            "--help" | "-h" => {
-                println!("{}", usage(bench, accepts_soak));
-                std::process::exit(0);
-            }
+            "--help" | "-h" => return Ok(Invocation::Help(usage(bench, accepts_soak))),
             other => {
                 if let Some(path) = other.strip_prefix("--out=") {
                     out = Some(PathBuf::from(path));
@@ -78,11 +81,11 @@ pub fn parse_args(bench: &str, accepts_soak: bool) -> BenchResult<BenchArgs> {
             }
         }
     }
-    Ok(BenchArgs {
+    Ok(Invocation::Run(BenchArgs {
         mode,
         out,
         soak_results,
-    })
+    }))
 }
 
 fn usage(bench: &str, accepts_soak: bool) -> String {
@@ -92,7 +95,7 @@ fn usage(bench: &str, accepts_soak: bool) -> String {
         ""
     };
     format!(
-        "usage: cargo bench -p dgxtop --features bench-support --bench {bench} -- [--smoke|--full] [--out REPORT.json]{soak}\n\
+        "usage: cargo bench -p dgxtop --features benchmarks --bench {bench} -- [--smoke|--full] [--out REPORT.json]{soak}\n\
          default: --smoke (seconds, never acceptance); report: target/perf/{bench}-<mode>.json"
     )
 }
@@ -120,15 +123,13 @@ impl RunDirectory {
     pub fn create(bench: &str) -> BenchResult<Self> {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_nanos())
-            .unwrap_or_default();
+            .map_or_default(|elapsed| elapsed.as_nanos());
         let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
             "dgxtop-bench-{bench}-{}-{unique}",
             std::process::id()
         ));
         std::fs::create_dir_all(&path)
             .map_err(|error| format!("run directory {}: {error}", path.display()))?;
-        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
             .map_err(|error| format!("run directory permissions: {error}"))?;
         Ok(Self { path })
@@ -141,7 +142,7 @@ impl RunDirectory {
 
 impl Drop for RunDirectory {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+        std::fs::remove_dir_all(&self.path).unwrap_or_default();
     }
 }
 
@@ -234,7 +235,7 @@ pub struct BenchOutcome {
 /// Writes evidence, assembles and schema-validates the report, writes it and
 /// prints the console summary. Returns the report path.
 pub fn finish(
-    outcome: BenchOutcome,
+    outcome: &BenchOutcome,
     bench: &BenchInputs,
     config: &Config,
     environment: (Environment, EnvironmentDetails),
@@ -282,14 +283,14 @@ pub fn finish(
         extra_blockers,
     };
     let blockers = acceptance_blockers(&inputs);
-    let summary = summary_document(&outcome, &bench.budgets, &blockers, &environment, &details);
+    let summary = summary_document(outcome, &bench.budgets, &blockers, &environment, &details);
     evidence.write_json("summary.json", &summary).map_err(io)?;
     inputs.evidence_files = evidence.files().to_vec();
     let assembled = assemble(inputs);
     let document = serde_json::to_value(&assembled.report).map_err(|error| error.to_string())?;
     validate_against_schema(&document)?;
     write_report(&paths.report, &document)?;
-    print_console(&outcome, &bench.budgets, &assembled, paths);
+    print_console(outcome, &bench.budgets, &assembled, paths);
     Ok(paths.report.clone())
 }
 
@@ -377,20 +378,20 @@ fn print_console(
     assembled: &AssembledReport,
     paths: &ReportPaths,
 ) {
-    println!(
+    dgxtop::output::line(&format!(
         "== dgxtop bench {} ({}) ==",
         outcome.bench,
         outcome.mode.label()
-    );
+    ));
     for (index, run) in outcome.runs.iter().enumerate() {
-        println!(
+        dgxtop::output::line(&format!(
             "run {}: {:.1} s, samples: commands {} frames {} history {}",
             index + 1,
             run.duration_seconds,
             run.commands,
             run.frames,
             run.history_queries
-        );
+        ));
         for gate in run_gates(budgets, run)
             .into_iter()
             .filter(|gate| gate_applies(gate, run))
@@ -399,28 +400,28 @@ fn print_console(
                 || gate.min.map_or_else(String::new, |min| format!(">= {min}")),
                 |max| format!("<= {max}"),
             );
-            println!(
+            dgxtop::output::line(&format!(
                 "    {:<32} {:>12.3} {:<12} {:?}",
                 gate.metric,
                 gate.measured.unwrap_or(f64::NAN),
                 bound,
                 gate.status
-            );
+            ));
         }
     }
     let kind = match assembled.report.kind {
         ReportKind::Measured => "measured",
         ReportKind::SyntheticExample => "synthetic_example (not acceptance evidence)",
     };
-    println!("report kind: {kind}");
+    dgxtop::output::line(&format!("report kind: {kind}"));
     for blocker in &assembled.blockers {
-        println!("  blocker: {blocker}");
+        dgxtop::output::line(&format!("  blocker: {blocker}"));
     }
     for note in &outcome.notes {
-        println!("  note: {note}");
+        dgxtop::output::line(&format!("  note: {note}"));
     }
-    println!("report:   {}", paths.report.display());
-    println!("evidence: {}", paths.evidence_dir.display());
+    dgxtop::output::line(&format!("report:   {}", paths.report.display()));
+    dgxtop::output::line(&format!("evidence: {}", paths.evidence_dir.display()));
 }
 
 /// Whether a gate concerns what this run measured: measured limits, sample
@@ -467,15 +468,24 @@ pub fn write_samples(
         .map_err(|error| format!("evidence {relative}: {error}"))
 }
 
-/// Runs `main_body`, printing a failure and exiting non-zero on error.
+/// Runs a bench: its command line, then `main_body` with it; `--help` prints
+/// the usage instead. A failure is printed and exits non-zero.
 pub fn run_bench(
     name: &str,
-    main_body: impl FnOnce() -> BenchResult<PathBuf>,
+    accepts_soak: bool,
+    main_body: impl FnOnce(&BenchArgs) -> BenchResult<PathBuf>,
 ) -> std::process::ExitCode {
-    match main_body() {
-        Ok(_) => std::process::ExitCode::SUCCESS,
+    let outcome = parse_args(name, accepts_soak).and_then(|invocation| match invocation {
+        Invocation::Help(usage) => {
+            dgxtop::output::line(&usage);
+            Ok(())
+        }
+        Invocation::Run(args) => main_body(&args).map(drop),
+    });
+    match outcome {
+        Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("bench {name} failed: {error}");
+            dgxtop::output::error_line(&format!("bench {name} failed: {error}"));
             std::process::ExitCode::FAILURE
         }
     }

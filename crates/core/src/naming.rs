@@ -1,6 +1,8 @@
 //! Telemetry naming contract shared by adapters, collectors, the store and the
-//! presentation layer: adapter/collector ids, read groups, entity id and scope
-//! spellings, source id format and the routing of read groups to collectors.
+//! presentation layer.
+//!
+//! Adapter/collector ids, read groups, entity id and scope spellings, source
+//! id format and the routing of read groups to collectors.
 //!
 //! Adapters emit raw records keyed by these names; collectors only accept
 //! records whose `(adapter, read_group)` they consume and whose metric ids
@@ -35,6 +37,7 @@ pub const MAX_CHANNEL_BYTES: usize = 256;
 
 /// The channel of a process's procfs record (D-73): its display name, then
 /// its command line after [`PROCESS_COMMAND_SEPARATOR`] when it has one.
+#[must_use]
 pub fn process_channel(name: &str, command: &str) -> String {
     if command.is_empty() {
         name.to_owned()
@@ -46,6 +49,7 @@ pub fn process_channel(name: &str, command: &str) -> String {
 /// The display name and the command line of a process record's channel,
 /// as [`process_channel`] joined them; the command line is empty when the
 /// channel has none.
+#[must_use]
 pub fn split_process_channel(channel: &str) -> (&str, &str) {
     channel
         .split_once(PROCESS_COMMAND_SEPARATOR)
@@ -219,6 +223,7 @@ pub fn read_groups_of(adapter: &str) -> impl Iterator<Item = &'static ReadGroupS
 /// Replay adapters (ids starting with `replay`) mirror live groups with the
 /// read group spelling `<live adapter>.<group>` (e.g. `hwmon.fast`) and are
 /// routed exactly like the live group they imitate.
+#[must_use]
 pub fn collectors_for(adapter: &str, read_group: &str) -> &'static [&'static str] {
     let (adapter, read_group) = if is_replay_adapter(adapter) {
         match read_group.split_once('.') {
@@ -235,27 +240,36 @@ pub fn collectors_for(adapter: &str, read_group: &str) -> &'static [&'static str
 }
 
 /// Whether an adapter id denotes a replay adapter (simulated/replay namespace).
+#[must_use]
 pub fn is_replay_adapter(adapter: &str) -> bool {
     adapter == adapters::REPLAY || adapter.starts_with("replay-")
 }
 
 /// Replay read group mirroring a live group (`<live adapter>.<group>`).
+#[must_use]
 pub fn replay_group(live_adapter: &str, live_group: &str) -> String {
     format!("{live_adapter}.{live_group}")
 }
 
 /// Key of `PolicySnapshot::effective_periods_ms` for a read group.
+#[must_use]
 pub fn period_key(adapter: &str, read_group: &str) -> String {
     format!("{adapter}/{read_group}")
 }
 
 /// Key of `PolicySnapshot::effective_periods_ms` used for `RawKind::Static`
 /// sources, whose values are refreshed by discovery (static metadata).
+#[must_use]
 pub fn static_period_key(adapter: &str) -> String {
     format!("{adapter}/discovery")
 }
 
 /// Builds a source id `adapter:device:channel` (bounded, control-free).
+///
+/// # Errors
+///
+/// Returns an `IdentityError` when the value breaks the rules of its kind: its
+/// length, a control character or its syntax.
 pub fn source_id(
     adapter: &str,
     device: &str,
@@ -307,73 +321,140 @@ pub mod entity {
     }
 
     /// Logical CPU `N` (the kernel `cpuN`, not the read order).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn cpu_core(cpu: u32) -> Result<EntityId, IdentityError> {
         entity(format!("cpu.core.{cpu}"))
     }
 
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn scope_core(cpu: u32) -> Result<Scope, IdentityError> {
         scope(format!("core:{cpu}"))
     }
 
     /// Physical package `P`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn cpu_package(package: u32) -> Result<EntityId, IdentityError> {
         entity(format!("cpu.package.{package}"))
     }
 
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn scope_package(package: u32) -> Result<Scope, IdentityError> {
         scope(format!("package:{package}"))
     }
 
     /// Per-physical-core temperature scope inside a package.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn scope_physical_core(core: u32) -> Result<Scope, IdentityError> {
         scope(format!("core:{core}"))
     }
 
     /// GPU identified by UUID (never by enumeration index).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn gpu(uuid: &str) -> Result<EntityId, IdentityError> {
         entity(format!("gpu:{uuid}"))
     }
 
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn scope_gpu_fan(fan: u32) -> Result<Scope, IdentityError> {
         scope(format!("fan:{fan}"))
     }
 
-    /// GPU-side process association before joining to a ProcessKey.
+    /// GPU-side process association before joining to a `ProcessKey`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn gpu_pid(uuid: &str, pid: i32) -> Result<EntityId, IdentityError> {
         entity(format!("gpupid:{uuid}:{pid}"))
     }
 
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn scope_gpu_of(uuid: &str) -> Result<Scope, IdentityError> {
         scope(format!("gpu:{uuid}"))
     }
 
     /// Block device by `major:minor` (stable within a boot).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn block_device(major: u32, minor: u32) -> Result<EntityId, IdentityError> {
         entity(format!("blockdev:{major}:{minor}"))
     }
 
     /// Mounted filesystem by mount namespace and mount id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn filesystem(mount_namespace: &str, mount_id: u64) -> Result<EntityId, IdentityError> {
         entity(format!("fs:{mount_namespace}:{mount_id}"))
     }
 
     /// Network interface by network namespace and ifindex.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn network_interface(net_namespace: &str, ifindex: u32) -> Result<EntityId, IdentityError> {
         entity(format!("netif:{net_namespace}:{ifindex}"))
     }
 
     /// The metadata entity of one sensor (a thermal zone's type and trip
     /// points), below the entity it measures.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn sensor(adapter: &str, device: &str, channel: &str) -> Result<EntityId, IdentityError> {
         entity(format!("sensor:{adapter}:{device}:{channel}"))
     }
 
     /// Powercap/RAPL domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn power_domain(domain: &str) -> Result<EntityId, IdentityError> {
         entity(format!("power:{domain}"))
     }
 
     /// Parses `gpupid:UUID:PID` back into `(uuid, pid)`.
+    #[must_use]
     pub fn parse_gpu_pid(entity_id: &str) -> Option<(&str, i32)> {
         let rest = entity_id.strip_prefix("gpupid:")?;
         let (uuid, pid) = rest.rsplit_once(':')?;
@@ -381,6 +462,7 @@ pub mod entity {
     }
 
     /// Parses `gpu:UUID` back into the UUID.
+    #[must_use]
     pub fn parse_gpu(entity_id: &str) -> Option<&str> {
         entity_id.strip_prefix("gpu:")
     }
@@ -392,6 +474,7 @@ pub mod entity {
 
     /// The label of GPU `entity_id`: `GPU 0` by its NVML index, else
     /// `GPU 1a2b3c4d` from `gpu:GPU-1a2b3c4d-...`, sanitized for display.
+    #[must_use]
     pub fn gpu_label(entity_id: &str, nvml_index: Option<u32>) -> String {
         if let Some(index) = nvml_index {
             return format!("GPU {index}");
@@ -409,7 +492,7 @@ pub mod entity {
 
 /// Values of [`attributes::BLOCK_LAYER`] (D-124), read from sysfs.
 pub mod block_layer {
-    /// A whole disk (an NVMe namespace, a SATA or virtio disk): the bottom
+    /// A whole disk (an `NVMe` namespace, a SATA or virtio disk): the bottom
     /// of its stack, whose I/O counts everything stacked on it.
     pub const DISK: &str = "disk";
     /// A partition of a disk.
@@ -485,10 +568,19 @@ pub mod attributes {
 }
 
 /// Typed ids for the built-in adapters/collectors.
+///
+/// # Errors
+///
+/// Returns an `IdentityError` when the value breaks the rules of its kind: its
+/// length, a control character or its syntax.
 pub fn adapter_id(name: &str) -> Result<AdapterId, IdentityError> {
     AdapterId::new(name)
 }
 
+/// # Errors
+///
+/// Returns an `IdentityError` when the value breaks the rules of its kind: its
+/// length, a control character or its syntax.
 pub fn collector_id(name: &str) -> Result<CollectorId, IdentityError> {
     CollectorId::new(name)
 }
@@ -522,13 +614,13 @@ mod tests {
             collectors_for(adapters::NVML, groups::PROCESS),
             &[collectors::PROCESS, collectors::GPU]
         );
-        assert!(collectors_for("unknown", "x").is_empty());
+        assert_eq!(collectors_for("unknown", "x").len(), 0);
         assert_eq!(collectors_for("replay-3", "hwmon.fast"), &[collectors::CPU]);
         assert_eq!(
             collectors_for("replay", "procfs.memory"),
             &[collectors::MEMORY]
         );
-        assert!(collectors_for("replay", "fast").is_empty());
+        assert_eq!(collectors_for("replay", "fast").len(), 0);
         assert!(is_replay_adapter("replay-1"));
         assert!(!is_replay_adapter("replayer"));
         assert_eq!(read_groups_of(adapters::PROCFS).count(), 4);

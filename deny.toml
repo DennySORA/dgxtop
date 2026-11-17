@@ -1,29 +1,77 @@
+# The graph every check runs against: the two release targets, with every
+# feature (the benches and the test helpers included).
+[graph]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+all-features = true
+
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
+# An unsound crate fails wherever it sits in the graph.
+unsound = "all"
 
+# The licenses the graph holds; another one is reviewed when a dependency
+# brings it.
 [licenses]
 confidence-threshold = 0.93
 allow = [
     "MIT",
     "Apache-2.0",
-    "BSD-2-Clause",
-    "BSD-3-Clause",
     "ISC",
     "Zlib",
-    "CC0-1.0",
     "Unicode-3.0",
-    "MPL-2.0",
-    # borrow-or-share (via the dev-only jsonschema chain).
-    "MIT-0",
 ]
 
 [bans]
-multiple-versions = "warn"
+multiple-versions = "deny"
 wildcards = "allow"
+# nvml-wrapper 0.13.0, the newest, and its derive still build on the
+# previous major of these; each entry goes when they move on.
+skip = [
+    { crate = "thiserror:<2", reason = "nvml-wrapper 0.13.0 depends on thiserror 1" },
+    { crate = "thiserror-impl:<2", reason = "the derive of thiserror 1" },
+    { crate = "darling:<0.24", reason = "wrapcenum-derive 0.4.1 (nvml-wrapper) depends on darling 0.20" },
+    { crate = "darling_core:<0.24", reason = "part of darling 0.20" },
+    { crate = "darling_macro:<0.24", reason = "part of darling 0.20" },
+    { crate = "syn:<3", reason = "darling 0.20, derive_more 2 (crossterm) and strum 0.28 parse with syn 2" },
+]
+
+# What runs at compile time. No crate ships an executable, and a build
+# script is allowed once it was read, at the version read (2026-11-17):
+# none reaches the network or writes outside OUT_DIR, and the programs they
+# run are the compiler and, for the bundled SQLite, the C compiler.
+[bans.build]
+executables = "deny"
+allow-build-scripts = [
+    "ahash@0.8.12",                   # probes the compiler for specialization; target cfgs
+    "crossbeam-utils@0.8.23",         # target cfgs from its own tables
+    "getrandom@0.3.4",                # sanitizer cfg; the compiler version on Windows targets
+    "getrandom@0.4.3",                # sanitizer cfg; the compiler version on Windows targets
+    "jsonschema-value@0.61.2",        # nothing without its pyo3 feature
+    "libc@0.2.191",                   # compiler and target cfgs (freebsd-version and emcc only for those targets)
+    "libsqlite3-sys@0.40.0",          # copies its bindings and compiles the bundled sqlite3.c with cc
+    "nix@0.32.0",                     # cfg aliases
+    "num-traits@0.2.19",              # probes the compiler (autocfg)
+    "parking_lot_core@0.9.12",        # sanitizer cfg
+    "proc-macro2@1.0.107",            # probes the compiler
+    "quote@1.0.47",                   # compiler version cfg
+    "ref-cast@1.0.27",                # compiler version cfg; private.rs in OUT_DIR
+    "rustix@1.1.6",                   # probes the compiler; target cfgs
+    "rustversion@1.0.23",             # writes the compiler version into OUT_DIR
+    "serde@1.0.229",                  # compiler version cfgs; private.rs in OUT_DIR
+    "serde_core@1.0.229",             # compiler version cfgs; private.rs in OUT_DIR
+    "serde_json@1.0.154",             # target cfg
+    "signal-hook@0.3.18",             # nothing without extended-siginfo-raw
+    "thiserror@1.0.69",               # probes the compiler; private.rs in OUT_DIR
+    "thiserror@2.0.21",               # probes the compiler; private.rs in OUT_DIR
+    "unicode-general-category@1.1.0", # generates its table into OUT_DIR
+    "zerocopy@0.8.63",                # compiler version cfgs from its Cargo.toml
+    "zmij@1.0.23",                    # compiler version and opt-level cfgs
+]
 
 [sources]
-unknown-registry = "warn"
-unknown-git = "warn"
+unknown-registry = "deny"
+unknown-git = "deny"
+required-git-spec = "rev"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []

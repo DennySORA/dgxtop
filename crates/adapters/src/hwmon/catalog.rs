@@ -74,7 +74,7 @@ struct Changes {
 }
 
 impl Changes {
-    fn is_empty(&self) -> bool {
+    const fn is_empty(&self) -> bool {
         self.entities.is_empty()
             && self.sources.is_empty()
             && self.removed_sources.is_empty()
@@ -140,7 +140,7 @@ impl CatalogPublisher {
             changes,
             content.capabilities,
             content.availability,
-            content.error_code,
+            content.error_code.as_ref(),
         );
         self.pending = Some(PendingDiscovery {
             previous_generation: request.previous_generation,
@@ -154,8 +154,8 @@ impl CatalogPublisher {
     /// Serves the next page of the pending discovery.
     pub(crate) fn next(&mut self, request: &DiscoverRequest) -> CatalogDelta {
         let matches = self.pending.as_ref().is_some_and(|pending| {
-            pending.next_page == request.page
-                && pending.previous_generation == request.previous_generation
+            let is_the_page_due = pending.next_page == request.page;
+            is_the_page_due && pending.previous_generation == request.previous_generation
         });
         if !matches {
             return self.failure(request, DISCOVERY_RESTART_REQUIRED, None);
@@ -263,7 +263,7 @@ impl CatalogPublisher {
         changes: Changes,
         capabilities: Vec<Capability>,
         availability: Availability,
-        error_code: Option<String>,
+        error_code: Option<&String>,
     ) -> VecDeque<CatalogDelta> {
         let size = self.page_size;
         let upserts = changes.entities.len() + changes.sources.len();
@@ -306,7 +306,7 @@ impl CatalogPublisher {
                 } else {
                     u32::try_from(index + 1).ok()
                 },
-                error_code: error_code.clone(),
+                error_code: error_code.cloned(),
             });
         }
         pages

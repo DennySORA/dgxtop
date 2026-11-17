@@ -12,11 +12,25 @@ const MAX_PROC_FILE_BYTES: u64 = 64 * 1024;
 
 /// Read-only access to the `/proc` files the verifier needs.
 pub trait ProcessFiles: Send {
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn stat(&self, pid: i32) -> io::Result<String>;
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn status(&self, pid: i32) -> io::Result<String>;
     /// Target of `/proc/<pid>/ns/pid`, e.g. `pid:[4026531836]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn pid_namespace(&self, pid: i32) -> io::Result<String>;
     /// Contents of `/proc/self/fdinfo/<fd>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn descriptor_info(&self, fd: RawFd) -> io::Result<String>;
 }
 
@@ -38,7 +52,7 @@ impl ProcessFiles for HostProcessFiles {
         target
             .into_os_string()
             .into_string()
-            .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))
+            .map_err(|_cause| io::Error::from(io::ErrorKind::InvalidData))
     }
 
     fn descriptor_info(&self, fd: RawFd) -> io::Result<String> {
@@ -65,6 +79,7 @@ pub struct StatFacts {
 
 /// Parses `stat`. The comm may contain spaces and parentheses, so fields are
 /// counted after the LAST `)`; field 22 is the 20th token after it.
+#[must_use]
 pub fn parse_stat(text: &str) -> Option<StatFacts> {
     let open = text.find('(')?;
     let close = text.rfind(')')?;
@@ -91,6 +106,7 @@ pub struct ProcessUids {
     pub effective: u32,
 }
 
+#[must_use]
 pub fn parse_uids(status: &str) -> Option<ProcessUids> {
     let line = status.lines().find(|line| line.starts_with("Uid:"))?;
     let mut fields = line.trim_start_matches("Uid:").split_ascii_whitespace();
@@ -111,6 +127,7 @@ pub enum PidfdTarget {
     OutsideNamespace,
 }
 
+#[must_use]
 pub fn parse_pidfd_target(info: &str) -> Option<PidfdTarget> {
     let line = info.lines().find(|line| line.starts_with("Pid:"))?;
     let pid = line.trim_start_matches("Pid:").trim().parse::<i64>().ok()?;

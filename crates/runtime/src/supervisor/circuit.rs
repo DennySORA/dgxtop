@@ -17,6 +17,7 @@ pub struct CircuitBreaker {
 }
 
 impl CircuitBreaker {
+    #[must_use]
     pub fn new(threshold: u32, base_ms: u64, max_ms: u64, jitter_permille: u64, seed: u64) -> Self {
         Self {
             threshold: threshold.max(1),
@@ -26,21 +27,23 @@ impl CircuitBreaker {
     }
 
     /// Counts one failure; returns `true` when the threshold is reached.
-    pub fn record_failure(&mut self) -> bool {
+    pub const fn record_failure(&mut self) -> bool {
         self.consecutive_failures = self.consecutive_failures.saturating_add(1);
         self.is_tripped()
     }
 
     /// A successful on-time reply closes the circuit and resets the backoff.
-    pub fn record_success(&mut self) {
+    pub const fn record_success(&mut self) {
         self.consecutive_failures = 0;
         self.backoff.reset();
     }
 
+    #[must_use]
     pub const fn is_tripped(&self) -> bool {
         self.consecutive_failures >= self.threshold
     }
 
+    #[must_use]
     pub const fn consecutive_failures(&self) -> u32 {
         self.consecutive_failures
     }
@@ -51,7 +54,8 @@ impl CircuitBreaker {
     }
 }
 
-/// Stable per-adapter jitter seed (FNV-1a of the id, mixed by SplitMix64).
+/// Stable per-adapter jitter seed (FNV-1a of the id, mixed by `SplitMix64`).
+#[must_use]
 pub fn backoff_seed(adapter_id: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in adapter_id.as_bytes() {

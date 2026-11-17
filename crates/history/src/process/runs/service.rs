@@ -138,7 +138,7 @@ impl ProcessHistoryService {
         }
     }
 
-    pub(crate) fn book(&self) -> &ProcessHistoryBook {
+    pub(crate) const fn book(&self) -> &ProcessHistoryBook {
         &self.book
     }
 
@@ -264,7 +264,7 @@ impl ProcessHistoryService {
         if now.boot_ns >= self.next_append_ns {
             self.next_append_ns = now.boot_ns.saturating_add(APPEND_EVERY_NS);
             // A refused journal stays in the backlog for the next turn.
-            let _ = self.append(now);
+            self.append(now).unwrap_or_default();
         }
         if now.boot_ns >= self.next_save_ns {
             self.next_save_ns = now.boot_ns.saturating_add(SAVE_EVERY_NS);
@@ -451,7 +451,7 @@ impl ProcessHistoryService {
 }
 
 /// Whether `journal` deletes runs.
-fn has_deletions(journal: &ProcessHistoryJournal) -> bool {
+const fn has_deletions(journal: &ProcessHistoryJournal) -> bool {
     !journal.forget.is_empty() || journal.keep_runs.is_some()
 }
 
@@ -872,7 +872,7 @@ mod tests {
             panic!("{jobs:?}");
         };
         assert_eq!(journal.keep_runs, Some(MAX_LISTED_RUNS));
-        assert!(journal.forget.is_empty());
+        assert_eq!(journal.forget.len(), 0);
     }
 
     fn key_of(pid: i64) -> ProcessKey {

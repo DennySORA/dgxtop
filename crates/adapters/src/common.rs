@@ -1,5 +1,7 @@
-//! Shared adapter mechanics: root-relative filesystem access (injectable for
-//! fake trees and call counting), stable slot interning, consistent paging,
+//! Shared adapter mechanics.
+//!
+//! Root-relative filesystem access (injectable for fake trees and call
+//! counting), stable slot interning, consistent paging,
 //! unsupported-capability probe throttling and observation construction.
 
 use std::collections::BTreeMap;
@@ -11,6 +13,7 @@ use std::sync::Arc;
 use dgxtop_core::clock::{TimeProvider, ms_to_ns};
 use dgxtop_core::identity::{AdapterId, ReadGroup, SourceId};
 use dgxtop_core::metric::Scalar;
+use dgxtop_core::num::ToF64Lossy;
 use dgxtop_core::observation::{
     BatchStatus, IPC_PROTOCOL_VERSION, MAX_RECORDS_PER_BATCH, OBSERVATION_SCHEMA_VERSION,
     Observation, ObservationBatch, PAGE_CONTINUES, Provenance, ReadPlan, SourceDescriptor,
@@ -32,12 +35,28 @@ pub struct EntryName {
 /// adapter. Paths passed in are absolute-style (`/proc/stat`) and resolved
 /// under the configured root, so tests can use fake trees.
 pub trait SystemFiles: Send + Sync {
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn read_to_string(&self, path: &str) -> io::Result<String>;
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn read_dir(&self, path: &str) -> io::Result<Vec<EntryName>>;
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn read_link(&self, path: &str) -> io::Result<PathBuf>;
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn canonicalize(&self, path: &str) -> io::Result<PathBuf>;
     fn exists(&self, path: &str) -> bool;
     /// Owner uid of a path (used for `/proc/<pid>`).
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn owner_uid(&self, path: &str) -> io::Result<u32>;
 }
 
@@ -52,6 +71,7 @@ impl RootedFiles {
         Self { root: root.into() }
     }
 
+    #[must_use]
     pub fn host() -> Self {
         Self::new("/")
     }
@@ -60,6 +80,7 @@ impl RootedFiles {
         self.root.join(path.trim_start_matches('/'))
     }
 
+    #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -78,7 +99,7 @@ impl SystemFiles for RootedFiles {
         let mut entries = Vec::new();
         for entry in std::fs::read_dir(self.resolve(path))? {
             let entry = entry?;
-            let is_dir = entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
+            let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
             if let Ok(name) = entry.file_name().into_string() {
                 entries.push(EntryName { name, is_dir });
             }
@@ -94,10 +115,10 @@ impl SystemFiles for RootedFiles {
     fn canonicalize(&self, path: &str) -> io::Result<PathBuf> {
         let resolved = std::fs::canonicalize(self.resolve(path))?;
         // Report paths relative to the root so fake trees look like the host.
-        match resolved.strip_prefix(&self.root) {
-            Ok(relative) => Ok(Path::new("/").join(relative)),
-            Err(_) => Ok(resolved),
-        }
+        let relative = resolved
+            .strip_prefix(&self.root)
+            .map(|relative| Path::new("/").join(relative));
+        Ok(relative.unwrap_or(resolved))
     }
 
     fn exists(&self, path: &str) -> bool {
@@ -111,16 +132,16 @@ impl SystemFiles for RootedFiles {
 }
 
 /// Wrapper counting reads per path (metadata cache / probe throttle tests).
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 #[derive(Debug)]
 pub struct CountingFiles<F> {
     inner: F,
     reads: std::sync::Mutex<BTreeMap<String, u64>>,
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 impl<F: SystemFiles> CountingFiles<F> {
-    pub fn new(inner: F) -> Self {
+    pub const fn new(inner: F) -> Self {
         Self {
             inner,
             reads: std::sync::Mutex::new(BTreeMap::new()),
@@ -158,7 +179,7 @@ impl<F: SystemFiles> CountingFiles<F> {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 impl<F: SystemFiles> SystemFiles for CountingFiles<F> {
     fn read_to_string(&self, path: &str) -> io::Result<String> {
         self.count(path);
@@ -214,6 +235,7 @@ impl<T: SystemFiles + ?Sized> SystemFiles for Arc<T> {
 
 /// Maps an I/O error to a read status. Missing files mean the source was
 /// removed; permission errors stay distinct; nothing becomes a value.
+#[must_use]
 pub fn read_status_of(error: &io::Error) -> ReadStatus {
     match error.kind() {
         io::ErrorKind::NotFound => ReadStatus::Removed,
@@ -227,6 +249,7 @@ pub fn read_status_of(error: &io::Error) -> ReadStatus {
 }
 
 /// Reason code for an I/O error (bounded, no paths).
+#[must_use]
 pub fn reason_of(error: &io::Error) -> String {
     match read_status_of(error) {
         ReadStatus::Removed => "SOURCE_REMOVED".to_owned(),
@@ -237,22 +260,24 @@ pub fn reason_of(error: &io::Error) -> String {
 }
 
 /// Parses a trimmed unsigned decimal.
+#[must_use]
 pub fn parse_u64(text: &str) -> Option<u64> {
     text.trim().parse::<u64>().ok()
 }
 
 /// Parses a trimmed signed decimal (hwmon temperatures may be negative).
+#[must_use]
 pub fn parse_i64(text: &str) -> Option<i64> {
     text.trim().parse::<i64>().ok()
 }
 
 /// Exact `i64` -> finite `f64` for native readings (|value| < 2^53 in practice;
 /// larger magnitudes are rejected rather than silently rounded).
+#[must_use]
 pub fn exact_i64_to_f64(value: i64) -> Option<f64> {
     const LIMIT: i64 = 1 << 53;
     if (-LIMIT..=LIMIT).contains(&value) {
-        #[allow(clippy::cast_precision_loss)]
-        Some(value as f64)
+        Some(value.to_f64_lossy())
     } else {
         None
     }
@@ -267,6 +292,7 @@ pub struct SlotInterner {
 }
 
 impl SlotInterner {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -282,14 +308,17 @@ impl SlotInterner {
         Some(slot)
     }
 
+    #[must_use]
     pub fn existing(&self, source: &SourceId) -> Option<u32> {
         self.slots.get(source).copied()
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.slots.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
     }
@@ -321,6 +350,7 @@ pub struct Page {
 }
 
 impl Pager {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -345,6 +375,7 @@ impl Pager {
 
     /// Serves page `index` of size `page_size` (≤ 256). `None` when no
     /// snapshot exists for this cycle/group (the caller must start at page 0).
+    #[must_use]
     pub fn page(&self, cycle_id: u64, group: &str, index: u32, page_size: usize) -> Option<Page> {
         let snapshot = self.snapshot.as_ref()?;
         if snapshot.cycle_id != cycle_id || snapshot.group != group {
@@ -373,7 +404,8 @@ pub struct ProbeThrottle {
 }
 
 impl ProbeThrottle {
-    pub fn new(unsupported_probe_ms: u64) -> Self {
+    #[must_use]
+    pub const fn new(unsupported_probe_ms: u64) -> Self {
         Self {
             interval_ns: ms_to_ns(unsupported_probe_ms),
             last_probe: BTreeMap::new(),
@@ -414,15 +446,18 @@ impl RecordFactory {
         Self { clock }
     }
 
+    #[must_use]
     pub fn now(&self) -> u64 {
         self.clock.now_boot_ns()
     }
 
+    #[must_use]
     pub fn clock(&self) -> &Arc<dyn TimeProvider> {
         &self.clock
     }
 
     /// Provenance derived from a catalog descriptor.
+    #[must_use]
     pub fn provenance(descriptor: &SourceDescriptor) -> Provenance {
         Provenance {
             adapter_id: descriptor.adapter_id.clone(),
@@ -439,8 +474,12 @@ impl RecordFactory {
     }
 
     /// Successful reading of a catalogued source. Sources without a proven
-    /// MetricKey must use [`RecordFactory::diagnostic_key`] beforehand.
-    #[allow(clippy::too_many_arguments)]
+    /// `MetricKey` must use [`RecordFactory::diagnostic_key`] beforehand.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument a field of the record: a struct would only repeat them at every call"
+    )]
+    #[must_use]
     pub fn ok(
         plan: &ReadPlan,
         descriptor: &SourceDescriptor,
@@ -471,6 +510,7 @@ impl RecordFactory {
     }
 
     /// Failed reading: value is `None`, never a substitute number.
+    #[must_use]
     pub fn failed(
         plan: &ReadPlan,
         descriptor: &SourceDescriptor,
@@ -505,6 +545,7 @@ impl RecordFactory {
     }
 
     /// Assembles a batch answering `plan`.
+    #[must_use]
     pub fn batch(
         plan: &ReadPlan,
         records: Vec<Observation>,
@@ -542,6 +583,7 @@ impl RecordFactory {
     }
 
     /// Batch reporting that the whole request failed (e.g. deadline expired).
+    #[must_use]
     pub fn failed_batch(plan: &ReadPlan, now_boot_ns: u64, error_code: &str) -> ObservationBatch {
         ObservationBatch {
             protocol_version: IPC_PROTOCOL_VERSION,
@@ -581,11 +623,13 @@ fn bounded_reasons(mut reasons: Vec<String>) -> Vec<String> {
 }
 
 /// Typed read group from a static name.
+#[must_use]
 pub fn group(name: &str) -> Option<ReadGroup> {
     ReadGroup::new(name).ok()
 }
 
 /// Typed adapter id from a static name.
+#[must_use]
 pub fn adapter(name: &str) -> Option<AdapterId> {
     AdapterId::new(name).ok()
 }

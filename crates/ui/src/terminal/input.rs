@@ -1,4 +1,4 @@
-//! InputBackend: where key, mouse and resize events come from. The real one
+//! `InputBackend`: where key, mouse and resize events come from. The real one
 //! reads crossterm events behind a hang-up-aware gate; tests script events
 //! against a fake clock.
 
@@ -13,12 +13,21 @@ use super::error::TuiError;
 /// Source of terminal input events.
 pub trait InputSource {
     /// Waits up to `timeout` for one event (`Ok(None)` on timeout).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `TuiError` when the terminal's input or output fails or the
+    /// terminal cannot be set up.
     fn poll_event(&mut self, timeout: Duration) -> Result<Option<Event>, TuiError>;
 }
 
 /// Events the input library can deliver without waiting.
 pub trait ReadyEvents {
     /// One already available event, if any; never blocks.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the call fails.
     fn next_ready(&mut self) -> io::Result<Option<Event>>;
 }
 
@@ -37,7 +46,9 @@ impl ReadyEvents for CrosstermEvents {
 }
 
 /// Terminal input that waits on an [`InputGate`] instead of crossterm's own
-/// poll. crossterm retries end-of-file reads forever, so its reader is only
+/// poll.
+///
+/// crossterm retries end-of-file reads forever, so its reader is only
 /// entered right after the gate saw the terminal alive, and a hang-up ends
 /// the loop with [`TuiError::InputClosed`].
 pub struct GatedInput {
@@ -45,12 +56,20 @@ pub struct GatedInput {
     events: Box<dyn ReadyEvents>,
 }
 
+impl std::fmt::Debug for GatedInput {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("GatedInput").finish_non_exhaustive()
+    }
+}
+
 impl GatedInput {
+    #[must_use]
     pub fn new(gate: Box<dyn InputGate>, events: Box<dyn ReadyEvents>) -> Self {
         Self { gate, events }
     }
 
     /// crossterm events behind `gate`.
+    #[must_use]
     pub fn crossterm(gate: Box<dyn InputGate>) -> Self {
         Self::new(gate, Box::new(CrosstermEvents))
     }

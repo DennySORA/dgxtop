@@ -227,7 +227,7 @@ impl Bench {
         let mut fx = Effects::default();
         let session = self.session.clone();
         self.service.confirm(
-            TokenCommand {
+            &TokenCommand {
                 request_id,
                 session_id: &session,
                 token,
@@ -244,7 +244,7 @@ impl Bench {
         let mut fx = Effects::default();
         let session = self.session.clone();
         self.service.cancel(
-            TokenCommand {
+            &TokenCommand {
                 request_id,
                 session_id: &session,
                 token,
@@ -335,6 +335,10 @@ fn prepared_process(key: &ProcessKey, handle: u64) -> PreparedProcess {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one scenario walked from start to end: its steps share their state"
+)]
 fn happy_path_sends_exactly_once_after_the_durable_intent() {
     let mut bench = bench();
     let (prepare_id, token) = bench.prepared(Signal::Sigterm);
@@ -504,7 +508,7 @@ fn expired_tokens_are_rejected_and_release_the_descriptor() {
         result_for(&fx, confirm_id).code,
         ResultCode::from(ErrorCode::ConfirmationExpired)
     );
-    assert!(bench.intents().is_empty());
+    assert_eq!(bench.intents().len(), 0);
     // A token never issued by this Manager is "expired" as well.
     let forged = ConfirmationToken::new("f".repeat(64)).unwrap();
     let (forged_id, fx) = bench.confirm(&forged);
@@ -617,7 +621,7 @@ fn a_confirmation_from_another_session_is_audited_and_the_token_stays_valid() {
     let request_id = Uuid::new_v4();
     let mut fx = Effects::default();
     bench.service.confirm(
-        TokenCommand {
+        &TokenCommand {
             request_id,
             session_id: &other,
             token: &token,
@@ -749,7 +753,7 @@ fn late_audit_receipt_after_the_intent_deadline_never_sends() {
     assert_eq!(outcomes[0].state, ActionState::NotSent);
     bench.actions.take();
     bench.durable(&intents[0]);
-    assert!(Bench::sends(&bench.actions.take()).is_empty());
+    assert_eq!(Bench::sends(&bench.actions.take()).len(), 0);
 }
 
 #[test]
@@ -764,7 +768,7 @@ fn receipt_arriving_after_the_deadline_but_before_a_tick_does_not_send() {
     bench.advance_ms(1_000);
     let fx = bench.durable(&intents[0]);
     let ops = bench.actions.take();
-    assert!(Bench::sends(&ops).is_empty());
+    assert_eq!(Bench::sends(&ops).len(), 0);
     assert!(ops.iter().any(|op| matches!(op, ActionOp::Release { .. })));
     let result = result_for(&fx, confirm_id);
     assert_eq!(result.code, ResultCode::from(ErrorCode::TimedOut));
@@ -820,26 +824,21 @@ fn policy_change_revokes_tokens_that_have_not_reached_sending() {
         ResultCode::from(ErrorCode::CapabilityDenied)
     );
     bench.durable(&intents[0]);
-    assert!(Bench::sends(&bench.actions.take()).is_empty());
+    assert_eq!(Bench::sends(&bench.actions.take()).len(), 0);
     // An unchanged policy revokes nothing.
     let mut fx = Effects::default();
     bench
         .service
         .apply_policy(&stricter, false, bench.now, &mut fx);
-    assert!(fx.results.is_empty());
+    assert_eq!(fx.results.len(), 0);
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one scenario walked from start to end: its steps share their state"
+)]
 fn forbidden_requests_are_rejected_before_the_worker_sees_them() {
-    let defaults = Config::defaults().unwrap();
-    let mut read_only = defaults.clone();
-    read_only.actions.read_only = true;
-    let mut disabled = defaults.clone();
-    disabled.actions.enabled = false;
-    // SIGKILL is allowed by default (D-71); a configuration that turns it
-    // off still refuses it.
-    let mut no_force = defaults.clone();
-    no_force.actions.allow_force = false;
     struct Case {
         name: &'static str,
         config: Config,
@@ -850,6 +849,15 @@ fn forbidden_requests_are_rejected_before_the_worker_sees_them() {
         protected: Vec<i32>,
         code: ErrorCode,
     }
+    let defaults = Config::defaults().unwrap();
+    let mut read_only = defaults.clone();
+    read_only.actions.read_only = true;
+    let mut disabled = defaults.clone();
+    disabled.actions.enabled = false;
+    // SIGKILL is allowed by default (D-71); a configuration that turns it
+    // off still refuses it.
+    let mut no_force = defaults.clone();
+    no_force.actions.allow_force = false;
     let mut other_ns = target(4242);
     other_ns.pid_namespace = PidNamespace::new("pid:[4026532000]").unwrap();
     let mut other_host = target(4242);
@@ -959,7 +967,7 @@ fn forbidden_requests_are_rejected_before_the_worker_sees_them() {
         },
         Case {
             name: "other_uid",
-            config: defaults.clone(),
+            config: defaults,
             euid: EUID,
             key: target(4242),
             signal: Signal::Sigterm,
@@ -1079,7 +1087,7 @@ fn audit_trouble_fails_closed() {
     let actions = CapturingDispatch::new();
     let mut fresh = ProcessService::new(
         ProcessPorts {
-            audit: Box::new(audit.clone()),
+            audit: Box::new(audit),
             actions: Box::new(actions.clone()),
         },
         identity(EUID),
@@ -1093,7 +1101,7 @@ fn audit_trouble_fails_closed() {
         PrepareRequest {
             request_id: Uuid::new_v4(),
             session_id: &session,
-            target: key.clone(),
+            target: key,
             signal: Signal::Sigterm,
             payload_sha256: "x".into(),
             row: None,
@@ -1127,7 +1135,7 @@ fn intent_write_failure_never_sends() {
     assert!(result.message.contains("commit_uncertain"));
     assert_eq!(bench.state_of(prepare_id), ActionState::Rejected);
     let ops = bench.actions.take();
-    assert!(Bench::sends(&ops).is_empty());
+    assert_eq!(Bench::sends(&ops).len(), 0);
     assert!(ops.iter().any(|op| matches!(op, ActionOp::Release { .. })));
     assert!(bench.unavailable_reason().is_some());
 }
@@ -1163,7 +1171,7 @@ fn a_refused_intent_is_audited_as_an_attempt_not_as_an_outcome_of_a_missing_inte
     assert_eq!(attempts.len(), 1, "{ops:?}");
     assert_eq!(attempts[0].request_id, confirm_id);
     assert_eq!(attempts[0].result_code, ErrorCode::PersistFailed.as_str());
-    assert!(Bench::sends(&bench.actions.take()).is_empty());
+    assert_eq!(Bench::sends(&bench.actions.take()).len(), 0);
 }
 
 #[test]
@@ -1298,7 +1306,7 @@ fn unknown_outcomes_from_recovery_are_surfaced_and_never_resent() {
         previous_status: "intent_committed".into(),
     };
     bench.audit_completion(AuditCompletion::Recovered {
-        result: Ok(vec![recovered.clone()]),
+        result: Ok(vec![recovered]),
     });
     assert_eq!(bench.service.unknown_outcomes(), 1);
     let view = bench.service.view_for(&bench.session, bench.now.boot_ns);
@@ -1307,7 +1315,7 @@ fn unknown_outcomes_from_recovery_are_surfaced_and_never_resent() {
         bench.advance_ms(1_000);
         bench.tick();
     }
-    assert!(Bench::sends(&bench.actions.take()).is_empty());
+    assert_eq!(Bench::sends(&bench.actions.take()).len(), 0);
     // New actions still work but show the earlier unknown outcome warning.
     let (_, _token) = bench.prepared(Signal::Sigterm);
     let view = bench.service.view_for(&bench.session, bench.now.boot_ns);
@@ -1327,7 +1335,7 @@ fn failed_recovery_blocks_actions_and_is_retried() {
     let mut service = ProcessService::new(
         ProcessPorts {
             audit: Box::new(audit.clone()),
-            actions: Box::new(actions.clone()),
+            actions: Box::new(actions),
         },
         identity(EUID),
         &Config::defaults().unwrap(),
@@ -1377,7 +1385,7 @@ fn confirmations_are_bound_to_their_session() {
     let mut fx = Effects::default();
     let request_id = Uuid::new_v4();
     bench.service.confirm(
-        TokenCommand {
+        &TokenCommand {
             request_id,
             session_id: &intruder,
             token: &token,
@@ -1397,7 +1405,7 @@ fn confirmations_are_bound_to_their_session() {
     );
     let mut fx = Effects::default();
     bench.service.cancel(
-        TokenCommand {
+        &TokenCommand {
             request_id: Uuid::new_v4(),
             session_id: &intruder,
             token: &token,
@@ -1435,7 +1443,7 @@ fn session_closing_before_the_receipt_prevents_the_send() {
         result_for(&fx, confirm_id).code,
         ResultCode::from(ErrorCode::Cancelled)
     );
-    assert!(Bench::sends(&bench.actions.take()).is_empty());
+    assert_eq!(Bench::sends(&bench.actions.take()).len(), 0);
 }
 
 #[test]
@@ -1529,7 +1537,7 @@ fn busy_action_worker_at_send_time_means_not_sent() {
     bench.actions.set_busy(false);
     bench.tick();
     let ops = bench.actions.take();
-    assert!(Bench::sends(&ops).is_empty());
+    assert_eq!(Bench::sends(&ops).len(), 0);
     assert!(
         ops.iter().any(|op| matches!(op, ActionOp::Release { .. })),
         "release retried"
@@ -1632,7 +1640,7 @@ fn the_audit_expiry_waits_for_recovery_and_a_free_worker() {
         &open,
         &mut fx,
     );
-    assert!(expiries(&audit).is_empty());
+    assert_eq!(expiries(&audit).len(), 0);
     audit.set_busy(false);
     now.boot_ns += SECOND;
     service.tick(now, &mut fx);

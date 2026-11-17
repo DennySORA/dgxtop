@@ -75,12 +75,14 @@ fn disposition_of(outcome: &Outcome, source: &str) -> CandidateDisposition {
         .candidates
         .iter()
         .find(|candidate| candidate.source_id.as_str() == source)
-        .map(|candidate| candidate.disposition.clone())
-        .unwrap_or_else(|| panic!("{source} missing from the explanation"))
+        .map_or_else(
+            || panic!("{source} missing from the explanation"),
+            |candidate| candidate.disposition.clone(),
+        )
 }
 
 fn value(outcome: &Outcome) -> Option<f64> {
-    outcome.canonical.value.map(|value| value.to_f64_lossy())
+    outcome.canonical.value.map(Scalar::to_f64_lossy)
 }
 
 fn assert_valid(outcome: &Outcome) {
@@ -468,8 +470,11 @@ fn an_unchanged_reading_is_only_a_suspect_diagnostic_never_fake_data() {
     assert!(
         suspicions(reading.value).contains(&reasons::VALUE_UNCHANGED_SINCE_LAST_READ.to_owned())
     );
-    assert!(suspicions(Some(Scalar::from_f64(67_000.0).unwrap())).is_empty());
-    assert!(suspicions(None).is_empty());
+    assert_eq!(
+        suspicions(Some(Scalar::from_f64(67_000.0).unwrap())),
+        [] as [String; 0]
+    );
+    assert_eq!(suspicions(None), [] as [String; 0]);
 }
 
 #[test]
@@ -499,10 +504,7 @@ fn true_zero_is_a_value_not_a_missing_sentinel() {
         NOW,
     );
     assert_valid(&outcome);
-    assert_eq!(
-        outcome.canonical.value.and_then(|value| value.as_u64()),
-        Some(0)
-    );
+    assert_eq!(outcome.canonical.value.and_then(Scalar::as_u64), Some(0));
 }
 
 #[test]
@@ -552,7 +554,7 @@ fn failed_reads_and_stale_values_are_never_zero() {
     assert_eq!(
         outcome.explanation.candidates[0]
             .value
-            .map(|value| value.to_f64_lossy()),
+            .map(Scalar::to_f64_lossy),
         Some(68.0)
     );
 }

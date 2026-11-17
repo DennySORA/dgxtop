@@ -1,5 +1,5 @@
 //! Where a GPU sits (D-54): the CPUs and NUMA nodes nearest it, and the
-//! PCIe path and direct peer (P2P) access to each other GPU, and the
+//! `PCIe` path and direct peer (P2P) access to each other GPU, and the
 //! NVLink-C2C links to the CPU (D-56), read once per
 //! generation like the other static facts. A fact the driver cannot answer
 //! stays unknown; only a lost library session aborts.

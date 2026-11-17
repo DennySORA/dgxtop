@@ -1,10 +1,11 @@
-//! Procfs adapter (`procfs`): read groups `cpu` (`/proc/stat`,
-//! `/proc/loadavg`, cpufreq), `memory` (`/proc/meminfo`, `/proc/vmstat`),
-//! `disk` (`/proc/diskstats`) and `process` (`/proc/<pid>`), each with the
-//! pressure averages of its resource (`/proc/pressure/*`, D-135). It only
-//! reads files under `/proc` and `/sys` (resolved under the configured
-//! root), returns native units with provenance and never substitutes 0 for
-//! a missing value.
+//! Procfs adapter (`procfs`).
+//!
+//! Read groups `cpu` (`/proc/stat`, `/proc/loadavg`, cpufreq), `memory`
+//! (`/proc/meminfo`, `/proc/vmstat`), `disk` (`/proc/diskstats`) and
+//! `process` (`/proc/<pid>`), each with the pressure averages of its
+//! resource (`/proc/pressure/*`, D-135). It only reads files under `/proc`
+//! and `/sys` (resolved under the configured root), returns native units
+//! with provenance and never substitutes 0 for a missing value.
 //!
 //! The submodules `catalog`, `mechanics` and `records` are shared with the
 //! network and filesystem adapters.
@@ -51,7 +52,7 @@ use self::process::{MAX_SCANNED_PROCESSES, ProcessMemo, ProcessScan};
 use crate::common::{RecordFactory, SystemFiles, read_status_of};
 use crate::registry::{AdapterOptions, compile_time_adapter_id, kernel_file_manifest};
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 pub use self::catalog::CatalogStats;
 pub use self::host::HostConstants;
 pub use self::probe::ProcfsProcessProbe;
@@ -63,11 +64,13 @@ const IMPLEMENTATION: &str = "ProcfsAdapter";
 const MINIMUM_SAMPLE_MS: u32 = 100;
 
 /// Static manifest with default options.
+#[must_use]
 pub fn manifest() -> AdapterManifest {
     manifest_with(&AdapterOptions::default())
 }
 
-/// Manifest for `options` (source limit = min(max_sources, 2048)).
+/// Manifest for `options` (source limit = `min(max_sources`, 2048)).
+#[must_use]
 pub fn manifest_with(options: &AdapterOptions) -> AdapterManifest {
     kernel_file_manifest(adapters::PROCFS, IMPLEMENTATION, MINIMUM_SAMPLE_MS, options)
 }
@@ -89,6 +92,14 @@ pub struct ProcfsAdapter {
     pagers: GroupPagers,
     process_memo: ProcessMemo,
     shut_down: bool,
+}
+
+impl std::fmt::Debug for ProcfsAdapter {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProcfsAdapter")
+            .finish_non_exhaustive()
+    }
 }
 
 impl ProcfsAdapter {
@@ -143,7 +154,8 @@ impl ProcfsAdapter {
     }
 
     /// Size of the catalog bookkeeping (boundedness tests).
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
     pub fn catalog_stats(&self) -> CatalogStats {
         self.book.stats()
     }

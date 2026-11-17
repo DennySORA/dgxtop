@@ -31,7 +31,7 @@ fn other_fields_changed(previous: &HostStatus, current: &HostStatus) -> bool {
     comparable != *current
 }
 
-fn success_is_due(previous: Option<u64>, current: Option<u64>) -> bool {
+const fn success_is_due(previous: Option<u64>, current: Option<u64>) -> bool {
     match (previous, current) {
         (None, Some(_)) => true,
         (Some(sent), Some(latest)) => latest.saturating_sub(sent) >= SUCCESS_REFRESH_NS,

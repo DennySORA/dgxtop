@@ -22,10 +22,9 @@ pub(crate) enum Field<T> {
 }
 
 fn u64_field(token: Option<&str>) -> Field<u64> {
-    match token {
-        None => Field::Absent,
-        Some(text) => text.parse::<u64>().map_or(Field::Invalid, Field::Value),
-    }
+    token.map_or(Field::Absent, |text| {
+        text.parse::<u64>().map_or(Field::Invalid, Field::Value)
+    })
 }
 
 /// `cpu` (aggregate) or `cpuN` (logical CPU N from the label).
@@ -72,7 +71,7 @@ pub(crate) const STAT_COLUMNS: [StatColumn; 8] = [
 ];
 
 impl StatColumn {
-    fn position(self) -> usize {
+    const fn position(self) -> usize {
         match self {
             Self::User => 0,
             Self::Nice => 1,
@@ -85,7 +84,7 @@ impl StatColumn {
         }
     }
 
-    pub(crate) fn channel(self) -> &'static str {
+    pub(crate) const fn channel(self) -> &'static str {
         match self {
             Self::User => "user",
             Self::Nice => "nice",
@@ -98,7 +97,7 @@ impl StatColumn {
         }
     }
 
-    pub(crate) fn metric_id(self) -> &'static str {
+    pub(crate) const fn metric_id(self) -> &'static str {
         match self {
             Self::User => ids::CPU_TIME_USER,
             Self::Nice => ids::CPU_TIME_NICE,
@@ -120,7 +119,7 @@ pub(crate) struct CpuTimes {
 }
 
 impl CpuTimes {
-    pub(crate) fn column(&self, column: StatColumn) -> Field<u64> {
+    pub(crate) const fn column(&self, column: StatColumn) -> Field<u64> {
         self.columns[column.position()]
     }
 }
@@ -156,24 +155,23 @@ pub(crate) struct LoadAverage {
 }
 
 fn load_field(token: Option<&str>) -> Field<f64> {
-    match token {
-        None => Field::Absent,
-        Some(text) => match text.parse::<f64>() {
-            Ok(value) if value.is_finite() && value >= 0.0 => Field::Value(value),
-            _ => Field::Invalid,
-        },
-    }
+    token.map_or(Field::Absent, |text| match text.parse::<f64>() {
+        Ok(value) if value.is_finite() && value >= 0.0 => Field::Value(value),
+        _ => Field::Invalid,
+    })
 }
 
 pub(crate) fn parse_loadavg(text: &str) -> LoadAverage {
     let tokens: Vec<&str> = text.split_whitespace().collect();
-    let (running, total) = match tokens.get(3) {
-        None => (Field::Absent, Field::Absent),
-        Some(tasks) => match tasks.split_once('/') {
-            Some((running, total)) => (u64_field(Some(running)), u64_field(Some(total))),
-            None => (Field::Invalid, Field::Invalid),
-        },
-    };
+    let (running, total) =
+        tokens
+            .get(3)
+            .map_or((Field::Absent, Field::Absent), |tasks| {
+                match tasks.split_once('/') {
+                    Some((running, total)) => (u64_field(Some(running)), u64_field(Some(total))),
+                    None => (Field::Invalid, Field::Invalid),
+                }
+            });
     LoadAverage {
         one: load_field(tokens.first().copied()),
         five: load_field(tokens.get(1).copied()),
@@ -204,7 +202,7 @@ pub(crate) const MEM_FIELDS: [MemField; 6] = [
 ];
 
 impl MemField {
-    pub(crate) fn kernel_name(self) -> &'static str {
+    pub(crate) const fn kernel_name(self) -> &'static str {
         match self {
             Self::Total => "MemTotal",
             Self::Available => "MemAvailable",
@@ -215,7 +213,7 @@ impl MemField {
         }
     }
 
-    pub(crate) fn metric_id(self) -> &'static str {
+    pub(crate) const fn metric_id(self) -> &'static str {
         match self {
             Self::Total => ids::MEMORY_TOTAL,
             Self::Available => ids::MEMORY_AVAILABLE,
@@ -284,7 +282,7 @@ pub(crate) const VMSTAT_FIELDS: [VmStatField; 3] = [
 ];
 
 impl VmStatField {
-    pub(crate) fn kernel_name(self) -> &'static str {
+    pub(crate) const fn kernel_name(self) -> &'static str {
         match self {
             Self::SwapIn => "pswpin",
             Self::SwapOut => "pswpout",
@@ -292,7 +290,7 @@ impl VmStatField {
         }
     }
 
-    pub(crate) fn metric_id(self) -> &'static str {
+    pub(crate) const fn metric_id(self) -> &'static str {
         match self {
             Self::SwapIn => ids::MEMORY_SWAP_IN_BYTES,
             Self::SwapOut => ids::MEMORY_SWAP_OUT_BYTES,
@@ -301,11 +299,11 @@ impl VmStatField {
     }
 
     /// Whether the kernel counts pages, which are emitted as bytes.
-    pub(crate) fn counts_pages(self) -> bool {
+    pub(crate) const fn counts_pages(self) -> bool {
         matches!(self, Self::SwapIn | Self::SwapOut)
     }
 
-    pub(crate) fn native_unit(self) -> &'static str {
+    pub(crate) const fn native_unit(self) -> &'static str {
         if self.counts_pages() {
             native::BYTES
         } else {
@@ -341,10 +339,9 @@ pub(crate) fn parse_vmstat(text: &str) -> VmStat {
         let Some(field) = tokens.next().and_then(VmStatField::from_kernel_name) else {
             continue;
         };
-        let value = match tokens.next() {
-            Some(text) => u64_field(Some(text)),
-            None => Field::Invalid,
-        };
+        let value = tokens
+            .next()
+            .map_or(Field::Invalid, |text| u64_field(Some(text)));
         stat.values.entry(field).or_insert(value);
     }
     stat
@@ -365,7 +362,7 @@ pub(crate) struct Pressure {
 }
 
 impl Pressure {
-    fn line(&self, kind: PressureKind) -> Option<&PressureLine> {
+    const fn line(&self, kind: PressureKind) -> Option<&PressureLine> {
         match kind {
             PressureKind::Some => self.some.as_ref(),
             PressureKind::Full => self.full.as_ref(),
@@ -373,7 +370,7 @@ impl Pressure {
     }
 
     /// Whether the kernel wrote the `kind` line.
-    pub(crate) fn has(&self, kind: PressureKind) -> bool {
+    pub(crate) const fn has(&self, kind: PressureKind) -> bool {
         self.line(kind).is_some()
     }
 
@@ -390,13 +387,10 @@ impl Pressure {
 
 /// A share of time: a finite percentage from 0 to 100.
 fn percent_field(token: Option<&str>) -> Field<f64> {
-    match token {
-        None => Field::Absent,
-        Some(text) => match text.parse::<f64>() {
-            Ok(value) if (0.0..=100.0).contains(&value) => Field::Value(value),
-            _ => Field::Invalid,
-        },
-    }
+    token.map_or(Field::Absent, |text| match text.parse::<f64>() {
+        Ok(value) if (0.0..=100.0).contains(&value) => Field::Value(value),
+        _ => Field::Invalid,
+    })
 }
 
 /// `some avg10=0.00 avg60=0.00 avg300=0.00 total=0` lines; the first of a
@@ -447,7 +441,7 @@ pub(crate) const DISK_FIELDS: [DiskField; 6] = [
 ];
 
 impl DiskField {
-    fn position(self) -> usize {
+    const fn position(self) -> usize {
         match self {
             Self::ReadsCompleted => 0,
             Self::SectorsRead => 1,
@@ -459,7 +453,7 @@ impl DiskField {
     }
 
     /// Token index after `major minor name` in the modern (≥ 11 field) format.
-    fn modern_index(self) -> usize {
+    const fn modern_index(self) -> usize {
         match self {
             Self::ReadsCompleted => 0,
             Self::SectorsRead => 2,
@@ -471,7 +465,7 @@ impl DiskField {
     }
 
     /// Token index in the legacy 4-field partition format (no times).
-    fn legacy_index(self) -> Option<usize> {
+    const fn legacy_index(self) -> Option<usize> {
         match self {
             Self::ReadsCompleted => Some(0),
             Self::SectorsRead => Some(1),
@@ -481,7 +475,7 @@ impl DiskField {
         }
     }
 
-    pub(crate) fn channel(self) -> &'static str {
+    pub(crate) const fn channel(self) -> &'static str {
         match self {
             Self::ReadsCompleted => "reads_completed",
             Self::SectorsRead => "sectors_read",
@@ -492,7 +486,7 @@ impl DiskField {
         }
     }
 
-    pub(crate) fn metric_id(self) -> &'static str {
+    pub(crate) const fn metric_id(self) -> &'static str {
         match self {
             Self::ReadsCompleted => ids::DISK_READS_COMPLETED,
             Self::SectorsRead => ids::DISK_SECTORS_READ,
@@ -503,7 +497,7 @@ impl DiskField {
         }
     }
 
-    pub(crate) fn native_unit(self) -> &'static str {
+    pub(crate) const fn native_unit(self) -> &'static str {
         match self {
             Self::ReadsCompleted | Self::WritesCompleted => native::COUNT,
             Self::SectorsRead | Self::SectorsWritten => native::SECTORS_512,
@@ -527,7 +521,7 @@ pub(crate) struct DiskLine {
 }
 
 impl DiskLine {
-    pub(crate) fn field(&self, field: DiskField) -> Field<u64> {
+    pub(crate) const fn field(&self, field: DiskField) -> Field<u64> {
         self.fields[field.position()]
     }
 }
@@ -558,10 +552,9 @@ fn disk_field(stats: &[&str], field: DiskField) -> Field<u64> {
         return u64_field(stats.get(field.modern_index()).copied());
     }
     if stats.len() == LEGACY_DISK_STATS {
-        return match field.legacy_index() {
-            Some(index) => u64_field(stats.get(index).copied()),
-            None => Field::Absent,
-        };
+        return field
+            .legacy_index()
+            .map_or(Field::Absent, |index| u64_field(stats.get(index).copied()));
     }
     Field::Invalid
 }
@@ -612,9 +605,9 @@ pub(crate) fn parse_pid_stat(text: &str) -> Option<PidStat> {
     if close < open {
         return None;
     }
-    let pid = text[..open].trim().parse::<i32>().ok()?;
-    let comm = text[open + 1..close].to_owned();
-    let rest: Vec<&str> = text[close + 1..].split_whitespace().collect();
+    let pid = text.get(..open)?.trim().parse::<i32>().ok()?;
+    let comm = text.get(open + 1..close)?.to_owned();
+    let rest: Vec<&str> = text.get(close + 1..)?.split_whitespace().collect();
     let Field::Value(start_time_ticks) = u64_field(rest.get(STAT_START_TIME).copied()) else {
         return None;
     };
@@ -657,6 +650,7 @@ pub(crate) fn parse_cpu_model(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     const STAT: &str = "cpu  90223 16578 91354 40229674 6032 0 154 0 0 0\n\
 cpu0 4304 373 5966 1251895 203 0 0 0 0 0\n\
@@ -870,17 +864,17 @@ ctxt 18225208\n";
     /// `/proc/cpuinfo` of an arm64 host: one block per logical CPU with its
     /// implementer and part, as GB10's kernel writes them.
     fn arm_cpuinfo(parts: &[&str]) -> String {
-        parts
-            .iter()
-            .enumerate()
-            .map(|(cpu, part)| {
-                format!(
-                    "processor\t: {cpu}\nBogoMIPS\t: 2000.00\nFeatures\t: fp asimd\n\
-                     CPU implementer\t: 0x41\nCPU architecture: 8\nCPU variant\t: 0x0\n\
-                     CPU part\t: {part}\nCPU revision\t: 1\n\n"
-                )
-            })
-            .collect()
+        let mut text = String::new();
+        for (cpu, part) in parts.iter().enumerate() {
+            write!(
+                text,
+                "processor\t: {cpu}\nBogoMIPS\t: 2000.00\nFeatures\t: fp asimd\n\
+                 CPU implementer\t: 0x41\nCPU architecture: 8\nCPU variant\t: 0x0\n\
+                 CPU part\t: {part}\nCPU revision\t: 1\n\n"
+            )
+            .unwrap();
+        }
+        text
     }
 
     /// x86 names its model; an arm64 kernel writes no `model name`, so its

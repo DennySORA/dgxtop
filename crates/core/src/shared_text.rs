@@ -1,8 +1,10 @@
 //! Immutable text for high-volume record fields (provenance driver, device
-//! path and channel). Thousands of observations per second carry and clone
-//! these values: clones share one allocation, and decoding shares repeated
-//! values through a bounded per-thread cache. The JSON form is a plain
-//! string; length rules stay with the owning type's `validate`.
+//! path and channel).
+//!
+//! Thousands of observations per second carry and clone these values:
+//! clones share one allocation, and decoding shares repeated values
+//! through a bounded per-thread cache. The JSON form is a plain string;
+//! length rules stay with the owning type's `validate`.
 
 use std::borrow::Borrow;
 use std::cell::RefCell;
@@ -25,6 +27,7 @@ impl SharedText {
         Self(Arc::from(value.as_ref()))
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }

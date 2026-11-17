@@ -39,7 +39,7 @@ impl RetainedAllocations {
     }
 
     #[cfg(test)]
-    pub(crate) fn live(&self) -> usize {
+    pub(crate) const fn live(&self) -> usize {
         self.tracked.len()
     }
 }

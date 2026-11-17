@@ -1,8 +1,9 @@
 //! Configuration repository: CAS, atomic commit protocol under injected
 //! failures (AT08, AT36), load safety and legacy import (AT18).
 
-// Test helpers panic on setup failures; the lints target production code.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -41,7 +42,7 @@ impl TempDir {
 
 impl Drop for TempDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        std::fs::remove_dir_all(&self.0).unwrap_or_default();
     }
 }
 
@@ -114,7 +115,7 @@ fn cas_success_increments_revision_with_private_modes() {
         reloaded.origin,
         LoadOrigin::File {
             path: receipt.path.clone(),
-            sha256: receipt.sha256.clone()
+            sha256: receipt.sha256
         }
     );
     let status = repository.status();
@@ -133,7 +134,7 @@ fn cas_success_increments_revision_with_private_modes() {
 fn stale_revision_conflicts() {
     let dir = TempDir::new("stale");
     let (mut repository, current) = committed(&dir, real());
-    let mut stale = current.clone();
+    let mut stale = current;
     stale.revision = 1;
     assert_eq!(
         repository.compare_and_swap(1, &stale),
@@ -510,7 +511,7 @@ fn legacy_dry_run_maps_everything_and_writes_nothing() {
             .iter()
             .any(|mapping| mapping.status == LegacyMappingStatus::Unsupported)
     );
-    assert!(!report.warnings.is_empty());
+    assert_ne!(report.warnings, [] as [String; 0]);
     assert!(!dir.config_path().exists());
     assert!(!dir.path().join("dgxtop").exists());
     assert_eq!(std::fs::read(&legacy).unwrap(), legacy_before);
@@ -584,7 +585,10 @@ fn failed_legacy_publish_leaves_no_v2_file() {
         other => panic!("unexpected {other:?}"),
     }
     assert!(!dir.config_path().exists());
-    assert!(directory_entries(dir.config_path().parent().unwrap()).is_empty());
+    assert_eq!(
+        directory_entries(dir.config_path().parent().unwrap()),
+        [] as [String; 0]
+    );
     // Once the failure is gone the import succeeds exactly once.
     assert_eq!(
         repository
@@ -595,8 +599,7 @@ fn failed_legacy_publish_leaves_no_v2_file() {
         2
     );
     fs.arm(Failpoint::DirectorySyncAfterRename, Trigger::Once);
-    let second =
-        FileConfigRepository::new(dir.path().join("other").join("config.json"), fs.clone());
+    let second = FileConfigRepository::new(dir.path().join("other").join("config.json"), fs);
     match second.import_legacy(&legacy, true) {
         Err(LegacyImportError::Persist(PersistError::Uncertain { on_disk, .. })) => {
             assert_eq!(on_disk.unwrap().revision, 2);

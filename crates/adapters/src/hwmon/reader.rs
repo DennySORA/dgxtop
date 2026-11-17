@@ -58,7 +58,7 @@ pub(crate) struct ReadSpec {
 
 impl ReadSpec {
     /// Spec reading only a value file.
-    pub(crate) fn value(value_path: String, format: ValueFormat) -> Self {
+    pub(crate) const fn value(value_path: String, format: ValueFormat) -> Self {
         Self {
             value_path,
             format,
@@ -145,7 +145,7 @@ pub(crate) fn decode(text: &str, format: ValueFormat) -> Result<Scalar, ReadFail
             let exact = exact_i64_to_f64(raw)
                 .ok_or_else(|| ReadFailure::new(ReadStatus::Error, reasons::VALUE_OUT_OF_RANGE))?;
             Scalar::from_f64(exact)
-                .map_err(|_| ReadFailure::new(ReadStatus::Error, reasons::VALUE_OUT_OF_RANGE))
+                .map_err(|_cause| ReadFailure::new(ReadStatus::Error, reasons::VALUE_OUT_OF_RANGE))
         }
         ValueFormat::UnsignedCounter => parse_u64(text)
             .map(Scalar::from_u64)

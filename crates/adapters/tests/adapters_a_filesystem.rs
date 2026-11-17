@@ -1,5 +1,10 @@
 //! Filesystem adapter against fake mountinfo and a fake statvfs probe.
 
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
+
+#[expect(dead_code, reason = "each suite uses its part of the shared helpers")]
 #[path = "fixtures/adapters_a/support.rs"]
 mod support;
 
@@ -27,7 +32,7 @@ const MOUNTINFO: &str = "\
 84 69 259:5 /sub /srv/bind rw - ext4 /dev/nvme0n1p5 rw
 ";
 
-fn figures(blocks: u64, free: u64, available: u64) -> CapacityFigures {
+const fn figures(blocks: u64, free: u64, available: u64) -> CapacityFigures {
     CapacityFigures {
         blocks,
         blocks_free: free,
@@ -134,7 +139,7 @@ fn discovery_lists_disk_mounts_and_flags_network_mounts() {
         .capabilities
         .iter()
         .find(|capability| {
-            capability.entity_id.as_ref().map(|id| id.to_string()) == Some(entity_of(81))
+            capability.entity_id.as_ref().map(ToString::to_string) == Some(entity_of(81))
         })
         .unwrap();
     assert_eq!(skipped.support, Support::Unsupported);
@@ -276,7 +281,11 @@ fn unmounted_filesystem_only_removes_itself() {
     assert_eq!(gone.reason_codes, vec!["MOUNT_REMOVED".to_owned()]);
     let pages = parent.sync(&mut adapter, ADAPTER);
     let last = pages.last().unwrap();
-    let removed: Vec<&str> = last.removed_entities.iter().map(|id| id.as_str()).collect();
+    let removed: Vec<&str> = last
+        .removed_entities
+        .iter()
+        .map(dgxtop_core::identity::EntityId::as_str)
+        .collect();
     assert_eq!(removed, vec![entity_of(83).as_str()]);
     assert_eq!(last.removed_sources.len(), 3);
     assert_eq!(parent.sources.len(), 9);
@@ -287,7 +296,10 @@ fn unreadable_mountinfo_keeps_the_catalog_and_fails_reads_without_values() {
     let (tree, _clock, probe, mut adapter, mut parent) = setup("fs-unreadable");
     tree.remove("/proc/self/mountinfo");
     let pages = parent.sync(&mut adapter, ADAPTER);
-    assert!(pages.last().unwrap().removed_entities.is_empty());
+    assert_eq!(
+        pages.last().unwrap().removed_entities,
+        [] as [dgxtop_core::identity::EntityId; 0]
+    );
     assert!(
         pages[0]
             .error_code

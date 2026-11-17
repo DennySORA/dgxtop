@@ -38,11 +38,12 @@ pub struct BuildProvenance {
 }
 
 impl BuildProvenance {
+    #[must_use]
     pub fn from_build(build: &BuildInfo) -> Self {
-        let (sha, dirty) = match build.commit.strip_suffix("-dirty") {
-            Some(sha) => (sha, true),
-            None => (build.commit, false),
-        };
+        let (sha, dirty) = build
+            .commit
+            .strip_suffix("-dirty")
+            .map_or((build.commit, false), |sha| (sha, true));
         let valid = sha.len() == 40
             && sha
                 .bytes()
@@ -59,6 +60,7 @@ impl BuildProvenance {
     }
 
     /// Commit for the report's `source_commit` (null id when unknown).
+    #[must_use]
     pub fn report_commit(&self) -> String {
         self.commit
             .clone()
@@ -66,13 +68,14 @@ impl BuildProvenance {
     }
 
     /// The measured code is exactly one known commit.
-    pub fn identifies_source(&self) -> bool {
+    #[must_use]
+    pub const fn identifies_source(&self) -> bool {
         self.commit.is_some() && !self.dirty
     }
 }
 
 /// Facts recorded beside the schema's environment block.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EnvironmentDetails {
     pub build: BuildProvenance,
     pub cpu_frequency_governor: Option<String>,
@@ -82,6 +85,7 @@ pub struct EnvironmentDetails {
 }
 
 /// `model name` (x86) or the ARM implementer/part pair from `/proc/cpuinfo`.
+#[must_use]
 pub fn cpu_model_from_cpuinfo(cpuinfo: &str) -> Option<String> {
     let field = |name: &str| {
         cpuinfo.lines().find_map(|line| {
@@ -99,6 +103,7 @@ pub fn cpu_model_from_cpuinfo(cpuinfo: &str) -> Option<String> {
 }
 
 /// Number of `processor` entries in `/proc/cpuinfo`.
+#[must_use]
 pub fn logical_cpus_from_cpuinfo(cpuinfo: &str) -> usize {
     cpuinfo
         .lines()
@@ -110,6 +115,7 @@ pub fn logical_cpus_from_cpuinfo(cpuinfo: &str) -> usize {
 }
 
 /// `MemTotal` of `/proc/meminfo` in MiB (2^20 bytes).
+#[must_use]
 pub fn mem_total_mib_from_meminfo(meminfo: &str) -> Option<u64> {
     let kib: u64 = meminfo
         .lines()
@@ -150,10 +156,13 @@ fn unescape_mount(field: &str) -> String {
         .replace("\\134", "\\")
 }
 
-/// Kernel module version from `/proc/driver/nvidia/version`. The wording
-/// around the number differs between the proprietary and the open module
-/// ("... Kernel Module  580.82.07" vs "... Kernel Module for x86_64
-/// 595.104.02"), so the first dotted number after "Kernel Module" is taken.
+/// Kernel module version from `/proc/driver/nvidia/version`.
+///
+/// The wording around the number differs between the proprietary and the
+/// open module ("... Kernel Module  580.82.07" vs "... Kernel Module for
+/// `x86_64` 595.104.02"), so the first dotted number after "Kernel Module"
+/// is taken.
+#[must_use]
 pub fn nvidia_driver_from_version(text: &str) -> Option<String> {
     let line = text
         .lines()
@@ -173,6 +182,7 @@ fn is_dotted_number(token: &str) -> bool {
 }
 
 /// Truncates to at most `max_chars` characters (schema string limits).
+#[must_use]
 pub fn truncate_chars(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
 }
@@ -197,6 +207,11 @@ fn sqlite_runtime() -> String {
 
 /// Probes the host. `terminal` and `background_load` describe how the bench
 /// drove the workload; the probe appends the measured load average.
+///
+/// # Errors
+///
+/// Returns an `EnvironmentError` when the architecture is not one the benchmark
+/// supports.
 pub fn probe(
     target_dir: &Path,
     build: &BuildInfo,
@@ -329,7 +344,7 @@ mod tests {
         let target = std::env::temp_dir();
         let (environment, details) =
             probe(&target, &BuildInfo::current(), "headless test", "unit test").unwrap();
-        assert!(!environment.cpu.is_empty());
+        assert_ne!(environment.cpu, "");
         assert!(environment.logical_cpus >= 1);
         assert!(environment.ram_mib >= 1);
         assert!(environment.os_kernel.starts_with("Linux "));

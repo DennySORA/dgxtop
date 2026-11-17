@@ -10,7 +10,7 @@
 //! zones (a device whose `device` is a `thermal_zoneN`, such as `acpitz`) is
 //! skipped: the thermal adapter reads those sensors (D-81).
 //!
-//! A drive's own temperature (NVMe `Composite`, `drivetemp`) is emitted as
+//! A drive's own temperature (`NVMe` `Composite`, `drivetemp`) is emitted as
 //! `disk.temperature` on each disk its device link proves it measures, in
 //! read group `disk`, which feeds the disk collector (D-92, [`drives`]).
 //!
@@ -42,6 +42,7 @@ use crate::common::SystemFiles;
 use crate::registry::AdapterOptions;
 
 /// Static manifest of the hwmon adapter.
+#[must_use]
 pub fn manifest() -> AdapterManifest {
     sysfs::live_manifest(naming::adapters::HWMON, "HwmonAdapter")
 }
@@ -51,13 +52,21 @@ pub struct HwmonAdapter {
     inner: SysfsAdapter<HwmonScanner>,
 }
 
+impl std::fmt::Debug for HwmonAdapter {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HwmonAdapter")
+            .finish_non_exhaustive()
+    }
+}
+
 impl HwmonAdapter {
     /// `files` is rooted at `/` in production and at a fake tree in tests.
     pub fn new(
         clock: Arc<dyn TimeProvider>,
         host_id: HostId,
         files: Arc<dyn SystemFiles>,
-        options: AdapterOptions,
+        options: &AdapterOptions,
     ) -> Self {
         Self {
             inner: SysfsAdapter::new(
@@ -65,13 +74,14 @@ impl HwmonAdapter {
                 clock,
                 host_id,
                 files,
-                &options,
+                options,
                 HwmonScanner::new(),
             ),
         }
     }
 
     /// Number of currently catalogued sources.
+    #[must_use]
     pub fn source_count(&self) -> usize {
         self.inner.source_count()
     }

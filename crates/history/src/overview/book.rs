@@ -93,7 +93,7 @@ impl TierEntry {
     /// its sizes and waiting minutes have room for, and the strings.
     fn bytes(&self, series: &SeriesInEveryBoot) -> usize {
         let buckets = self.tiers.allocated_buckets() + self.pending.capacity();
-        size_of::<(SeriesInEveryBoot, TierEntry)>()
+        size_of::<(SeriesInEveryBoot, Self)>()
             + series_bytes(series)
             + self.key.as_ref().map_or(0, key_bytes)
             + buckets * size_of::<OverviewBucket>()
@@ -132,11 +132,11 @@ pub(crate) struct TierBook {
 }
 
 impl TierBook {
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self::with_budget(CACHE_BUDGET_BYTES)
     }
 
-    pub(crate) fn with_budget(budget_bytes: usize) -> Self {
+    pub(crate) const fn with_budget(budget_bytes: usize) -> Self {
         Self {
             shift_ns: 0,
             entries: BTreeMap::new(),
@@ -152,13 +152,13 @@ impl TierBook {
 
     /// Buckets follow the local clock `shift_ns` east of UTC. Set before
     /// any minute is fed.
-    pub(crate) fn set_shift(&mut self, shift_ns: i64) {
+    pub(crate) const fn set_shift(&mut self, shift_ns: i64) {
         self.shift_ns = shift_ns;
     }
 
     /// From now on series wait for the store's startup load and closed
     /// buckets are collected for it.
-    pub(crate) fn keep_on_disk(&mut self) {
+    pub(crate) const fn keep_on_disk(&mut self) {
         self.waiting = true;
         self.keeps_rows = true;
     }
@@ -173,13 +173,13 @@ impl TierBook {
         std::mem::take(&mut self.unsent)
     }
 
-    pub(crate) fn has_unsent(&self) -> bool {
+    pub(crate) const fn has_unsent(&self) -> bool {
         !self.unsent.is_empty()
     }
 
     /// What the collected rows cost in memory.
     #[cfg(test)]
-    pub(crate) fn unsent_bytes(&self) -> usize {
+    pub(crate) const fn unsent_bytes(&self) -> usize {
         self.unsent_bytes
     }
 
@@ -434,13 +434,13 @@ impl TierBook {
         window: (i64, i64),
         extra: &[OverviewBucket],
     ) -> OverviewBars {
-        let bars = match self.entries.get(series) {
-            Some(entry) => {
+        let bars = self.entries.get(series).map_or_else(
+            || bars_in(&TieredSeries::new(self.shift_ns), tier, window, extra),
+            |entry| {
                 let waiting = entry.pending.iter().chain(self.after_fed(entry, extra));
                 bars_in(&entry.tiers, tier, window, waiting)
-            }
-            None => bars_in(&TieredSeries::new(self.shift_ns), tier, window, extra),
-        };
+            },
+        );
         OverviewBars {
             whole: whole_of(&bars, window),
             bars,
@@ -468,14 +468,16 @@ impl TierBook {
                     end.saturating_sub(i64::try_from(*span).unwrap_or(i64::MAX)),
                     end,
                 );
-                match entry {
-                    Some(entry) => merged_between(
-                        &entry.tiers,
-                        window,
-                        entry.pending.iter().chain(self.after_fed(entry, extra)),
-                    ),
-                    None => merged_between(&empty, window, extra),
-                }
+                entry.map_or_else(
+                    || merged_between(&empty, window, extra),
+                    |entry| {
+                        merged_between(
+                            &entry.tiers,
+                            window,
+                            entry.pending.iter().chain(self.after_fed(entry, extra)),
+                        )
+                    },
+                )
             })
             .collect()
     }

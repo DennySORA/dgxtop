@@ -1,7 +1,8 @@
 //! Compile-time registry of the live telemetry adapters for the composition
 //! root: the construction options shared by every adapter, the static
-//! manifests and construction by id. There is no dynamic loading: an id that
-//! is not compiled in is rejected.
+//! manifests and construction by id.
+//!
+//! There is no dynamic loading: an id that is not compiled in is rejected.
 
 use std::sync::Arc;
 
@@ -44,11 +45,13 @@ impl Default for AdapterOptions {
 
 impl AdapterOptions {
     /// Source limit announced in the manifest and enforced by discovery.
+    #[must_use]
     pub fn source_limit(&self) -> u32 {
         self.max_sources.clamp(1, MAX_SOURCE_LIMIT)
     }
 
     /// Page size clamped to the protocol limit.
+    #[must_use]
     pub fn effective_page_size(&self) -> usize {
         self.page_size.clamp(1, MAX_CATALOG_PAGE)
     }
@@ -64,6 +67,7 @@ pub enum RegistryError {
 }
 
 /// Static manifest of one of the seven live adapters (default options).
+#[must_use]
 pub fn live_manifest(adapter_id: &str) -> Option<AdapterManifest> {
     match adapter_id {
         adapters::PROCFS => Some(crate::procfs::manifest()),
@@ -78,6 +82,11 @@ pub fn live_manifest(adapter_id: &str) -> Option<AdapterManifest> {
 }
 
 /// Builds one live adapter reading the real host (`/`).
+///
+/// # Errors
+///
+/// Returns a `RegistryError` when the module is already registered, declares
+/// another API version or has an invalid manifest, or the registry is full.
 pub fn build_live_adapter(
     adapter_id: &str,
     clock: Arc<dyn TimeProvider>,
@@ -90,13 +99,13 @@ pub fn build_live_adapter(
             clock, host_id, files, options,
         )),
         adapters::HWMON => Box::new(crate::hwmon::HwmonAdapter::new(
-            clock, host_id, files, options,
+            clock, host_id, files, &options,
         )),
         adapters::THERMAL => Box::new(crate::thermal::ThermalAdapter::new(
-            clock, host_id, files, options,
+            clock, host_id, files, &options,
         )),
         adapters::POWERCAP => Box::new(crate::powercap::PowercapAdapter::new(
-            clock, host_id, files, options,
+            clock, host_id, files, &options,
         )),
         adapters::NVML => Box::new(crate::nvml::NvmlAdapter::new(clock, host_id)),
         adapters::NETWORK => Box::new(crate::network::NetworkAdapter::new(

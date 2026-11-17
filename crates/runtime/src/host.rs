@@ -70,6 +70,7 @@ pub enum HostExit {
 
 impl HostExit {
     /// Process exit code (sysexits-style) for a child host.
+    #[must_use]
     pub const fn exit_code(&self) -> i32 {
         match self {
             Self::ShutdownRequested | Self::InputClosed => 0,
@@ -242,12 +243,12 @@ impl HostSession<'_> {
                 Ok(reply) => reply,
                 Err(exit) => {
                     let failed = failed_catalog(&discover, self.options.generation, ADAPTER_PANIC);
-                    let _ = self.send(output, &failed);
+                    self.send(output, &failed).unwrap_or_default();
                     return Outcome::Stop(exit);
                 }
             }
         };
-        self.send_catalog(output, reply, &discover)
+        self.send_catalog(output, &reply, &discover)
     }
 
     fn call_discover(&mut self, discover: &DiscoverRequest) -> Result<CatalogReply, HostExit> {
@@ -274,7 +275,7 @@ impl HostSession<'_> {
     fn send_catalog(
         &mut self,
         output: &mut dyn Write,
-        reply: CatalogReply,
+        reply: &CatalogReply,
         discover: &DiscoverRequest,
     ) -> Outcome {
         match self.send(output, &reply) {
@@ -300,7 +301,7 @@ impl HostSession<'_> {
             Ok(batch) => batch,
             Err(panic) => {
                 let failed = failed_batch(&plan, self.clock.now_boot_ns(), ADAPTER_PANIC);
-                let _ = self.send(output, &failed);
+                self.send(output, &failed).unwrap_or_default();
                 return Outcome::Stop(HostExit::AdapterPanicked(panic_text(panic.as_ref())));
             }
         };
@@ -329,7 +330,7 @@ impl HostSession<'_> {
         }
     }
 
-    fn continue_or_stop<T: Serialize>(&mut self, output: &mut dyn Write, reply: &T) -> Outcome {
+    fn continue_or_stop<T: Serialize>(&self, output: &mut dyn Write, reply: &T) -> Outcome {
         match self.send(output, reply) {
             Ok(()) => Outcome::Continue,
             Err(exit) => Outcome::Stop(exit),
@@ -338,7 +339,7 @@ impl HostSession<'_> {
 
     /// Encodes and writes one frame. An oversized reply is reported as a
     /// protocol violation so the caller can substitute a small failure reply.
-    fn send<T: Serialize>(&mut self, output: &mut dyn Write, message: &T) -> Result<(), HostExit> {
+    fn send<T: Serialize>(&self, output: &mut dyn Write, message: &T) -> Result<(), HostExit> {
         let frame = encode_frame(message, self.options.limits.max_frame_bytes())
             .map_err(|error| HostExit::ProtocolViolation(error.to_string()))?;
         output
@@ -372,7 +373,7 @@ fn discover_request(request: &IpcRequest) -> Result<DiscoverRequest, String> {
     // The IPC request has no previous_generation field; discover requests
     // carry it in `cycle_id`, which has no meaning for discovery.
     let previous_generation = u32::try_from(request.cycle_id)
-        .map_err(|_| "discover cycle_id (previous generation) exceeds u32".to_owned())?;
+        .map_err(|_cause| "discover cycle_id (previous generation) exceeds u32".to_owned())?;
     Ok(DiscoverRequest {
         request_id: request.request_id,
         adapter_id: request.adapter_id.clone(),
@@ -404,6 +405,7 @@ fn read_plan(request: &IpcRequest) -> ReadPlan {
 }
 
 /// A failed batch for `plan` with no records (never an empty success).
+#[must_use]
 pub fn failed_batch(plan: &ReadPlan, now_boot_ns: u64, error_code: &str) -> ObservationBatch {
     ObservationBatch {
         protocol_version: IPC_PROTOCOL_VERSION,
@@ -479,15 +481,20 @@ impl<'a> DiagnosticLines<'a> {
         line.truncate(dgxtop_core::text::truncate_utf8(&line, MAX_DIAGNOSTIC_LINE_BYTES).len());
         line.push('\n');
         // Diagnostics are best effort: a closed stderr must not stop the host.
-        let _ = self.sink.write_all(line.as_bytes());
-        let _ = self.sink.flush();
+        self.sink.write_all(line.as_bytes()).unwrap_or_default();
+        self.sink.flush().unwrap_or_default();
     }
 }
 
 /// Reads the per-incarnation nonce from [`HOST_NONCE_ENV`].
+///
+/// # Errors
+///
+/// Returns an `InfraError` when the system underneath fails: the filesystem, a
+/// pipe, the database or a driver, or when it does not answer in time.
 pub fn host_nonce_from_env() -> Result<String, InfraError> {
     let nonce = std::env::var(HOST_NONCE_ENV)
-        .map_err(|_| InfraError::Protocol(format!("{HOST_NONCE_ENV} is not set")))?;
+        .map_err(|_cause| InfraError::Protocol(format!("{HOST_NONCE_ENV} is not set")))?;
     validate_nonce(&nonce)?;
     Ok(nonce)
 }
@@ -653,10 +660,9 @@ pub(crate) mod test_adapter {
             self.calls.last_epoch.store(plan.epoch, Ordering::SeqCst);
             *self.calls.last_slots.lock().unwrap() = plan.source_slots.clone();
             match self.behavior {
-                ReadBehavior::Healthy => {}
                 ReadBehavior::Slow(delay) => std::thread::sleep(delay),
                 ReadBehavior::SlowOnce(delay) if count == 1 => std::thread::sleep(delay),
-                ReadBehavior::SlowOnce(_) => {}
+                ReadBehavior::Healthy | ReadBehavior::SlowOnce(_) => {}
                 ReadBehavior::WrongRequest => {
                     let mut batch = batch_for(plan, f64::from(count));
                     batch.request_id = uuid::Uuid::new_v4();
@@ -721,7 +727,7 @@ mod tests {
         calls: Arc<Calls>,
     }
 
-    fn run(input: Vec<u8>, behavior: ReadBehavior, clock_ns: u64) -> Run {
+    fn run(input: &[u8], behavior: ReadBehavior, clock_ns: u64) -> Run {
         let calls = Arc::new(Calls::default());
         let adapter = FakeAdapter::new("fake", Isolation::PersistentProcess, behavior)
             .with_calls(Arc::clone(&calls));
@@ -736,7 +742,7 @@ mod tests {
             Box::new(adapter),
             options,
             FakeClock::new(clock_ns),
-            input.as_slice(),
+            input,
             &mut output,
             &mut diagnostics,
         );
@@ -761,7 +767,7 @@ mod tests {
         let read = request(IpcRequestKind::Read, 2, 1_000);
         let shutdown = request(IpcRequestKind::Shutdown, 2, 1_000);
         let result = run(
-            frames_of(&[discover.clone(), read.clone(), shutdown.clone()]),
+            &frames_of(&[discover.clone(), read.clone(), shutdown.clone()]),
             ReadBehavior::Healthy,
             100,
         );
@@ -784,20 +790,20 @@ mod tests {
         let ack = decode_shutdown_ack(&result.frames[3], &limits).unwrap();
         assert_eq!(ack.request_id, shutdown.request_id);
         assert_eq!(result.calls.shutdowns.load(Ordering::SeqCst), 1);
-        assert!(result.diagnostics.is_empty());
+        assert_eq!(result.diagnostics.len(), 0);
     }
 
     #[test]
     fn expired_deadline_fails_without_calling_the_driver() {
         let read = request(IpcRequestKind::Read, 2, 50);
         let discover = request(IpcRequestKind::Discover, 2, 50);
-        let result = run(frames_of(&[read, discover]), ReadBehavior::Healthy, 100);
+        let result = run(&frames_of(&[read, discover]), ReadBehavior::Healthy, 100);
         assert_eq!(result.exit, HostExit::InputClosed);
         let limits = IpcLimits::default();
         let batch = decode_batch(&result.frames[1], &limits).unwrap();
         assert_eq!(batch.status, BatchStatus::Failed);
         assert_eq!(batch.error_code.as_deref(), Some(DEADLINE_EXPIRED));
-        assert!(batch.records.is_empty());
+        assert_eq!(batch.records.len(), 0);
         let catalog = decode_catalog(&result.frames[2], &limits).unwrap();
         assert!(!catalog.delta.complete);
         assert_eq!(catalog.delta.error_code.as_deref(), Some(DEADLINE_EXPIRED));
@@ -812,7 +818,7 @@ mod tests {
         let mut discover = request(IpcRequestKind::Discover, 2, 1_000);
         discover.read_group = read_group(&paged_group(DISCOVER_READ_GROUP, 3));
         discover.cycle_id = 9;
-        let result = run(frames_of(&[discover]), ReadBehavior::Healthy, 0);
+        let result = run(&frames_of(&[discover]), ReadBehavior::Healthy, 0);
         assert_eq!(result.exit, HostExit::InputClosed);
         assert_eq!(result.calls.last_page.load(Ordering::SeqCst), 3);
         assert_eq!(
@@ -821,14 +827,14 @@ mod tests {
         );
         let mut wrong_group = request(IpcRequestKind::Discover, 2, 1_000);
         wrong_group.read_group = read_group("fast");
-        let result = run(frames_of(&[wrong_group]), ReadBehavior::Healthy, 0);
+        let result = run(&frames_of(&[wrong_group]), ReadBehavior::Healthy, 0);
         assert!(matches!(result.exit, HostExit::ProtocolViolation(_)));
     }
 
     #[test]
     fn wrong_generation_or_adapter_is_a_protocol_violation() {
         let stale = request(IpcRequestKind::Read, 1, 1_000);
-        let result = run(frames_of(&[stale]), ReadBehavior::Healthy, 0);
+        let result = run(&frames_of(&[stale]), ReadBehavior::Healthy, 0);
         assert!(matches!(result.exit, HostExit::ProtocolViolation(_)));
         assert_eq!(result.exit.exit_code(), 65);
         assert_eq!(result.frames.len(), 1, "only the hello was written");
@@ -836,7 +842,7 @@ mod tests {
         assert_eq!(result.calls.reads.load(Ordering::SeqCst), 0);
         let mut foreign = request(IpcRequestKind::Read, 2, 1_000);
         foreign.adapter_id = adapter_id("nvml");
-        let result = run(frames_of(&[foreign]), ReadBehavior::Healthy, 0);
+        let result = run(&frames_of(&[foreign]), ReadBehavior::Healthy, 0);
         assert!(matches!(result.exit, HostExit::ProtocolViolation(_)));
     }
 
@@ -844,17 +850,17 @@ mod tests {
     fn malformed_truncated_and_oversized_input_end_the_host() {
         let mut garbage = 7u32.to_be_bytes().to_vec();
         garbage.extend_from_slice(b"{\"a\":}x");
-        let result = run(garbage, ReadBehavior::Healthy, 0);
+        let result = run(&garbage, ReadBehavior::Healthy, 0);
         assert!(matches!(result.exit, HostExit::ProtocolViolation(_)));
         assert!(result.diagnostics.starts_with("MALFORMED"));
 
         let full = frames_of(&[request(IpcRequestKind::Read, 2, 1_000)]);
-        let result = run(full[..full.len() - 3].to_vec(), ReadBehavior::Healthy, 0);
+        let result = run(&full[..full.len() - 3], ReadBehavior::Healthy, 0);
         assert!(matches!(result.exit, HostExit::ProtocolViolation(_)));
         assert!(result.diagnostics.starts_with("TRUNCATED_FRAME"));
 
         let oversized = u32::MAX.to_be_bytes().to_vec();
-        let result = run(oversized, ReadBehavior::Healthy, 0);
+        let result = run(&oversized, ReadBehavior::Healthy, 0);
         assert!(result.diagnostics.starts_with("FRAME_TOO_LARGE"));
         assert_eq!(result.calls.shutdowns.load(Ordering::SeqCst), 1);
     }
@@ -863,7 +869,7 @@ mod tests {
     fn contract_violating_adapter_output_becomes_a_failed_batch() {
         let read = request(IpcRequestKind::Read, 2, 1_000);
         let result = run(
-            frames_of(std::slice::from_ref(&read)),
+            &frames_of(std::slice::from_ref(&read)),
             ReadBehavior::WrongRequest,
             0,
         );
@@ -882,7 +888,7 @@ mod tests {
     fn too_many_slots_in_a_request_are_rejected() {
         let mut read = request(IpcRequestKind::Read, 2, 1_000);
         read.source_slots = (0..=u32::try_from(MAX_RECORDS_PER_BATCH).unwrap()).collect();
-        let result = run(frames_of(&[read]), ReadBehavior::Healthy, 0);
+        let result = run(&frames_of(&[read]), ReadBehavior::Healthy, 0);
         assert!(matches!(result.exit, HostExit::ProtocolViolation(_)));
     }
 
@@ -890,7 +896,7 @@ mod tests {
     fn adapter_panic_sends_a_failed_reply_and_exits() {
         let read = request(IpcRequestKind::Read, 2, 1_000);
         let result = run(
-            frames_of(std::slice::from_ref(&read)),
+            &frames_of(std::slice::from_ref(&read)),
             ReadBehavior::Panic,
             0,
         );

@@ -80,7 +80,7 @@ struct Inner {
 }
 
 impl Inner {
-    fn new(book: TierBook) -> Self {
+    const fn new(book: TierBook) -> Self {
         Self {
             book,
             link: None,
@@ -97,6 +97,7 @@ impl Default for OverviewTiers {
 }
 
 impl OverviewTiers {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner::new(TierBook::new()))),
@@ -118,6 +119,10 @@ impl OverviewTiers {
     /// compresses the archive's minutes from before `run_start_utc_ns` of
     /// `host_id`'s series. Live minutes wait until each series' earlier
     /// history is in. The store's issues are logged to `logger`.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the lock is held for the whole step: what follows borrows the book and the link from it"
+    )]
     pub fn attach_store(
         &self,
         port: Box<dyn Dispatch<HistoryTierJob>>,
@@ -159,6 +164,10 @@ impl OverviewTiers {
 
     /// Runs `step` under the lock while a store is kept, then lets what
     /// the budget asks go and hands the store what is due.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the lock is held for the whole step: what follows borrows the book and the link from it"
+    )]
     fn with_link(&self, step: impl FnOnce(&mut TierBook, &mut StoreLink)) {
         let mut inner = self.lock();
         let Inner { book, link, .. } = &mut *inner;
@@ -197,24 +206,31 @@ impl OverviewTiers {
 
     /// Finalized minutes, into the sizes; their closed buckets go to the
     /// store.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the lock is held for the whole step: what follows borrows the book and the link from it"
+    )]
     pub(crate) fn feed(&self, minutes: Vec<TierMinute>) {
         let mut inner = self.lock();
         let Inner { book, link, .. } = &mut *inner;
         for minute in minutes {
             book.feed(minute);
         }
-        match link.as_mut() {
-            Some(link) => settle(book, link),
-            None => {
-                book.keep_within_budget();
-                drop(book.take_unsent());
-            }
+        if let Some(link) = link.as_mut() {
+            settle(book, link);
+        } else {
+            book.keep_within_budget();
+            drop(book.take_unsent());
         }
     }
 
     /// The deletions the archive may make now: every series the cache let
     /// go, and the minutes the sizes hold (at most every ten minutes, only
     /// while everything they would lose is written).
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the lock is held for the whole step: what follows borrows the book and the link from it"
+    )]
     pub(crate) fn take_prunes(&self, now_boot_ns: u64) -> Vec<ArchivePrune> {
         let mut inner = self.lock();
         let Inner { book, link, .. } = &mut *inner;

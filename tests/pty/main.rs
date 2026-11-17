@@ -3,12 +3,11 @@
 //! directories) and checks keyboard handling, terminal restoration and
 //! non-blocking output under a stalled reader (AT11, AT12, AT26, AT39).
 
-// Test helpers may unwrap; pre_exec needs unsafe for setsid/TIOCSCTTY.
-#![allow(clippy::unwrap_used, clippy::expect_used, unsafe_code)]
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
@@ -31,8 +30,7 @@ impl Sandbox {
     fn new(label: &str) -> Self {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_nanos())
-            .unwrap_or_default();
+            .map_or_default(|elapsed| elapsed.as_nanos());
         let root = std::env::temp_dir().join(format!(
             "dgxtop-pty-{label}-{}-{unique}",
             std::process::id()
@@ -57,7 +55,7 @@ impl Sandbox {
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
+        std::fs::remove_dir_all(&self.root).unwrap_or_default();
     }
 }
 
@@ -86,25 +84,17 @@ impl PtySession {
         let flags = OFlag::from_bits_truncate(fcntl(&master, FcntlArg::F_GETFL).unwrap());
         fcntl(&master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK)).unwrap();
         let sandbox = Sandbox::new(label);
-        let mut command = Command::new(BINARY);
-        command.args(arguments);
+        // `setsid --ctty` makes the child a session leader with the PTY as
+        // its controlling terminal and then becomes the binary itself: the
+        // child leads no process group, so it does not fork and `child` is
+        // dgxtop's own process.
+        let mut command = Command::new("setsid");
+        command.arg("--ctty").arg(BINARY).args(arguments);
         sandbox.apply(&mut command);
         command
             .stdin(Stdio::from(slave.try_clone().unwrap()))
             .stdout(Stdio::from(slave.try_clone().unwrap()))
             .stderr(Stdio::from(slave));
-        // SAFETY: only async-signal-safe calls (setsid, ioctl) run between fork and exec.
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setsid() < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
         let child = command.spawn().unwrap();
         Self {
             child,
@@ -116,7 +106,7 @@ impl PtySession {
 
     /// Reads everything currently available (non-blocking).
     fn drain(&mut self) {
-        let mut buffer = [0u8; 65536];
+        let mut buffer = vec![0u8; 65536];
         loop {
             match self.master.read(&mut buffer) {
                 Ok(0) => return,
@@ -149,16 +139,14 @@ impl PtySession {
         self.master.flush().unwrap();
     }
 
-    fn resize(&mut self, columns: u16, rows: u16) {
-        let size = libc::winsize {
+    fn resize(&self, columns: u16, rows: u16) {
+        let size = rustix::termios::Winsize {
             ws_row: rows,
             ws_col: columns,
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
-        // SAFETY: TIOCSWINSZ reads one winsize struct from a valid pointer.
-        let result = unsafe { libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ, &size) };
-        assert_eq!(result, 0);
+        rustix::termios::tcsetwinsize(&self.master, size).unwrap();
     }
 
     /// Waits for exit while draining output; `None` on timeout.
@@ -180,8 +168,8 @@ impl Drop for PtySession {
     fn drop(&mut self) {
         if self.child.try_wait().ok().flatten().is_none() {
             // Only our own disposable child is ever signalled.
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+            self.child.kill().unwrap_or_default();
+            self.child.wait().unwrap_or_default();
         }
     }
 }
@@ -337,9 +325,7 @@ fn hangup_of_the_terminal_ends_the_process() {
     assert!(session.wait_for_text("Overview", STARTUP));
     // Replace the master with /dev/null so the PTY master closes (EIO on the slave side).
     let null = std::fs::File::open("/dev/null").unwrap();
-    // SAFETY: duplicating a valid descriptor into a fresh owned file.
-    let replacement = unsafe { std::fs::File::from_raw_fd(libc::dup(null.as_raw_fd())) };
-    drop(std::mem::replace(&mut session.master, replacement));
+    drop(std::mem::replace(&mut session.master, null));
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut exited = false;
     while Instant::now() < deadline {

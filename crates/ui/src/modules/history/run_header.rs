@@ -59,10 +59,10 @@ fn owner_field(detail: Option<&RunDetailView>) -> (&'static str, Option<String>)
     let Some(detail) = detail else {
         return ("uid", None);
     };
-    match &detail.user {
-        Some(name) => ("user", Some(clean(name))),
-        None => ("uid", detail.info.uid.map(|uid| uid.to_string())),
-    }
+    detail.user.as_ref().map_or_else(
+        || ("uid", detail.info.uid.map(|uid| uid.to_string())),
+        |name| ("user", Some(clean(name))),
+    )
 }
 
 /// `■ python │ PID 4242 │ user alice │ nice 0 │ GPU 0 · GB10 │ running`; the
@@ -248,8 +248,10 @@ fn wrapped(text: &str, room: usize) -> Vec<String> {
             break;
         }
         let taken = take_width(rest, room).max(rest.chars().next().map_or(0, char::len_utf8));
-        rows.push(rest[..taken].to_owned());
-        rest = &rest[taken..];
+        // `taken` ends a whole character, so the split is always there.
+        let (row, after) = rest.split_at_checked(taken).unwrap_or((rest, ""));
+        rows.push(row.to_owned());
+        rest = after;
     }
     rows
 }
@@ -353,7 +355,7 @@ mod tests {
         }
         header_lines(&run, Some(detail), 8 * 3600, width, &context)
             .iter()
-            .map(|line| line.to_string())
+            .map(ToString::to_string)
             .collect()
     }
 
@@ -447,7 +449,7 @@ mod tests {
         );
         let value_x: Vec<usize> = header[1..]
             .iter()
-            .map(|row| row[2..].find("  ").unwrap())
+            .map(|row| row.get(2..).unwrap().find("  ").unwrap())
             .collect();
         assert!(
             header[1..].iter().all(|row| row.chars().count() <= 56),

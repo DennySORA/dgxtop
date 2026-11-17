@@ -203,7 +203,7 @@ mod tests {
         tombstones.bury(sources.clone(), Vec::new());
         tombstones.bury(vec![sources[2999].clone()], Vec::new());
         assert_eq!(tombstones.sources().len(), MAX_SOURCE_TOMBSTONES);
-        let live: BTreeSet<SourceId> = [sources[2999].clone()].into_iter().collect();
+        let live: BTreeSet<SourceId> = std::iter::once(sources[2999].clone()).collect();
         tombstones.revive(&live, &BTreeSet::new());
         assert!(!tombstones.sources().contains(&sources[2999]));
         assert_eq!(tombstones.sources().len(), MAX_SOURCE_TOMBSTONES - 1);

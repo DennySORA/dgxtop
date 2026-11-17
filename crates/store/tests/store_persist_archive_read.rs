@@ -3,8 +3,9 @@
 //! for the history's startup compression; units that never mix; a missing,
 //! unready or refused file; and the prunes the compression asks for.
 
-// Test helpers panic on setup failures; the lints target production code.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -15,6 +16,7 @@ use dgxtop_core::history::HistoryMethod;
 use dgxtop_core::history::SeriesInEveryBoot;
 use dgxtop_core::identity::{BootId, HostId, MetricKey};
 use dgxtop_core::metric::CanonicalUnit;
+use dgxtop_core::num::ToF64Lossy;
 use dgxtop_core::ports::{
     ArchiveJournal, ArchiveReader, ArchiveSink, ArchivedBucket, ArchivedSegment,
 };
@@ -48,7 +50,7 @@ impl TempDir {
 
 impl Drop for TempDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        std::fs::remove_dir_all(&self.0).unwrap_or_default();
     }
 }
 
@@ -151,8 +153,7 @@ fn segment(run: &Run<'_>) -> ArchivedSegment {
 /// uncovered minute when `value` is `None`.
 fn bucket(run: &Run<'_>, offset: u64, value: Option<f64>) -> ArchivedBucket {
     let covered = if value.is_some() { MINUTE } else { 0 };
-    #[allow(clippy::cast_precision_loss)]
-    let weighted = value.map(|value| value * covered as f64);
+    let weighted = value.map(|value| value * covered.to_f64_lossy());
     ArchivedBucket {
         segment_id: run.segment_id.to_owned(),
         start_boot_ns: run.start_boot + offset,
@@ -195,14 +196,20 @@ fn a_missing_or_unready_archive_holds_no_minutes() {
     let key = temperature_in("boot-a");
     let mut reader = SqliteArchiveReader::new(&dir.database());
     let read = minutes_of(&key, 10 * MINUTE);
-    assert!(reader.archived_minutes(&read).unwrap().minutes.is_empty());
+    assert_eq!(
+        reader.archived_minutes(&read).unwrap().minutes,
+        [] as [dgxtop_core::overview_history::OverviewBucket; 0]
+    );
     assert!(
         !dir.database().exists(),
         "the reader never creates the file"
     );
     // A file the writer has not given its schema yet.
     rusqlite::Connection::open(dir.database()).unwrap();
-    assert!(reader.archived_minutes(&read).unwrap().minutes.is_empty());
+    assert_eq!(
+        reader.archived_minutes(&read).unwrap().minutes,
+        [] as [dgxtop_core::overview_history::OverviewBucket; 0]
+    );
 }
 
 #[test]

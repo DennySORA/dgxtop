@@ -2,7 +2,7 @@
 //!
 //! The table is bounded to the adapters of the setup. It drives scheduling
 //! (generation and dispatchability), the header, the Settings data sources
-//! block (D-91) and the protected-pid list of the ProcessService (managed
+//! block (D-91) and the protected-pid list of the `ProcessService` (managed
 //! hosts may never be signalled by a user action).
 
 use std::collections::BTreeMap;
@@ -80,7 +80,7 @@ impl HostTable {
         mut status: HostStatus,
     ) -> Result<HostUpdate, HostStatusRejection> {
         let adapter_id = AdapterId::new(status.adapter_id.as_str())
-            .map_err(|_| HostStatusRejection::UnknownAdapter)?;
+            .map_err(|_cause| HostStatusRejection::UnknownAdapter)?;
         let entry = self
             .hosts
             .get_mut(&adapter_id)
@@ -157,7 +157,7 @@ mod tests {
     fn placeholders_until_reported_then_updates() {
         let mut table = HostTable::new(&[manifest("procfs", 100), manifest("nvml", 1000)]);
         assert_eq!(table.statuses().len(), 2);
-        assert!(table.protected_pids().is_empty());
+        assert_eq!(table.protected_pids().len(), 0);
         let update = table
             .apply(status("nvml", HostState::Healthy, 1, Some(4242)))
             .unwrap();

@@ -11,6 +11,7 @@ use std::sync::{Arc, LazyLock};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
+use crate::num::ToF64Lossy;
 use crate::quality::RawKind;
 
 /// Errors for scalar construction and unit conversion.
@@ -48,7 +49,12 @@ pub enum ScalarView {
 
 impl Scalar {
     /// Accepts only finite values; NaN and infinities are rejected.
-    pub fn from_f64(value: f64) -> Result<Self, ValueError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ValueError` when the number is not finite or overflows, or
+    /// the unit is unknown.
+    pub const fn from_f64(value: f64) -> Result<Self, ValueError> {
         if value.is_finite() {
             Ok(Self(ScalarRepr::F64(value)))
         } else {
@@ -56,10 +62,12 @@ impl Scalar {
         }
     }
 
+    #[must_use]
     pub const fn from_u64(value: u64) -> Self {
         Self(ScalarRepr::U64(value))
     }
 
+    #[must_use]
     pub const fn view(self) -> ScalarView {
         match self.0 {
             ScalarRepr::F64(value) => ScalarView::F64(value),
@@ -68,6 +76,7 @@ impl Scalar {
     }
 
     /// Exact `u64` if this scalar is one.
+    #[must_use]
     pub const fn as_u64(self) -> Option<u64> {
         match self.0 {
             ScalarRepr::U64(value) => Some(value),
@@ -77,7 +86,11 @@ impl Scalar {
 
     /// Numeric value as `f64`; `u64` above 2^53 loses precision, so callers use
     /// this only for display or for gauges, never for counter deltas.
-    #[allow(clippy::cast_precision_loss)]
+    #[must_use]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "const, so not through `ToF64Lossy`: a gauge or a displayed value (the docs above)"
+    )]
     pub const fn to_f64_lossy(self) -> f64 {
         match self.0 {
             ScalarRepr::F64(value) => value,
@@ -133,6 +146,7 @@ mod scalar_wire {
     use serde::{Deserialize, Deserializer};
 
     use super::Scalar;
+    use crate::num::ToF64Lossy;
     use crate::wire::{DecimalError, parse_decimal_u64};
 
     const FIELDS: &[&str] = &["type", "value"];
@@ -212,14 +226,12 @@ mod scalar_wire {
         }
 
         // JSON integers of an f64 value: the schema types them as numbers.
-        #[allow(clippy::cast_precision_loss)]
         fn visit_u64<E: de::Error>(self, value: u64) -> Result<Raw, E> {
-            Ok(Raw::Number(value as f64))
+            Ok(Raw::Number(value.to_f64_lossy()))
         }
 
-        #[allow(clippy::cast_precision_loss)]
         fn visit_i64<E: de::Error>(self, value: i64) -> Result<Raw, E> {
-            Ok(Raw::Number(value as f64))
+            Ok(Raw::Number(value.to_f64_lossy()))
         }
 
         fn visit_str<E: de::Error>(self, value: &str) -> Result<Raw, E> {
@@ -299,6 +311,7 @@ pub enum CanonicalUnit {
 }
 
 impl CanonicalUnit {
+    #[must_use]
     pub const fn symbol(self) -> &'static str {
         match self {
             Self::DegC => "°C",
@@ -338,13 +351,13 @@ impl fmt::Display for CanonicalUnit {
 pub struct NativeUnit(Arc<str>);
 
 impl Serialize for NativeUnit {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.0)
     }
 }
 
 impl<'de> Deserialize<'de> for NativeUnit {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         deserializer.deserialize_str(crate::identity::IdentityVisitor(
             Self::decoded,
             std::marker::PhantomData,
@@ -360,12 +373,17 @@ fn validate_native_unit(value: &str) -> Result<(), ValueError> {
 }
 
 impl NativeUnit {
+    /// # Errors
+    ///
+    /// Returns a `ValueError` when the number is not finite or overflows, or
+    /// the unit is unknown.
     pub fn new(value: impl Into<String>) -> Result<Self, ValueError> {
         let value = value.into();
         validate_native_unit(&value)?;
         Ok(Self(Arc::from(value)))
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -615,6 +633,7 @@ const CONVERSIONS: &[Conversion] = &[
 
 /// Looks up the explicit conversion from `native` to `canonical`.
 /// Unknown or unverified units (e.g. `KB_unverified_per_second`) return `None`.
+#[must_use]
 pub fn conversion_for(native: &str, canonical: CanonicalUnit) -> Option<&'static Conversion> {
     CONVERSIONS
         .iter()
@@ -624,26 +643,35 @@ pub fn conversion_for(native: &str, canonical: CanonicalUnit) -> Option<&'static
 impl Conversion {
     /// Applies the conversion. `u64` input with an integral factor stays exact
     /// (checked); everything else becomes a finite `f64`.
-    #[allow(clippy::cast_precision_loss)]
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ValueError` when the number is not finite or overflows, or
+    /// the unit is unknown.
     pub fn apply(&self, value: Scalar) -> Result<Scalar, ValueError> {
         match value.view() {
             ScalarView::U64(raw) if self.divide == 1 => raw
                 .checked_mul(self.multiply)
                 .map(Scalar::from_u64)
                 .ok_or(ValueError::Overflow),
-            ScalarView::U64(raw) => {
-                Scalar::from_f64(raw as f64 * self.multiply as f64 / self.divide as f64)
-            }
+            ScalarView::U64(raw) => Scalar::from_f64(
+                raw.to_f64_lossy() * self.multiply.to_f64_lossy() / self.divide.to_f64_lossy(),
+            ),
             ScalarView::F64(raw) => {
-                Scalar::from_f64(raw * self.multiply as f64 / self.divide as f64)
+                Scalar::from_f64(raw * self.multiply.to_f64_lossy() / self.divide.to_f64_lossy())
             }
         }
     }
 
     /// Converts an exact native delta (already computed in `u64`) to canonical.
-    #[allow(clippy::cast_precision_loss)]
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ValueError` when the number is not finite or overflows, or
+    /// the unit is unknown.
     pub fn apply_delta(&self, delta: u64) -> Result<f64, ValueError> {
-        let value = delta as f64 * self.multiply as f64 / self.divide as f64;
+        let value =
+            delta.to_f64_lossy() * self.multiply.to_f64_lossy() / self.divide.to_f64_lossy();
         if value.is_finite() {
             Ok(value)
         } else {
@@ -653,6 +681,11 @@ impl Conversion {
 }
 
 /// Normalizes a native value; unknown units are rejected rather than guessed.
+///
+/// # Errors
+///
+/// Returns a `ValueError` when the number is not finite or overflows, or the
+/// unit is unknown.
 pub fn normalize(
     value: Scalar,
     native_unit: &str,
@@ -746,9 +779,10 @@ pub mod ids {
 
     // Host (derived across domains)
     /// What the CPU packages and every GPU draw together (D-106): derived by
-    /// the CPU collector, only while each of them reports. Not the power
-    /// at the wall socket: fans, drives, memory and the supply's loss are
-    /// not in it.
+    /// the CPU collector, only while each of them reports.
+    ///
+    /// Not the power at the wall socket: fans, drives, memory and the
+    /// supply's loss are not in it.
     pub const HOST_POWER_TOTAL: &str = "host.power.total";
 
     // Memory
@@ -846,7 +880,7 @@ pub mod ids {
     pub const GPU_ENCODER_SESSIONS: &str = "gpu.encoder.sessions";
     pub const GPU_ENCODER_FPS: &str = "gpu.encoder.fps";
     pub const GPU_ENCODER_LATENCY: &str = "gpu.encoder.latency";
-    /// PCIe link-level retransmissions since the GPU was reset.
+    /// `PCIe` link-level retransmissions since the GPU was reset.
     pub const GPU_PCIE_REPLAYS: &str = "gpu.pcie.replays";
     /// Time the clocks were held back since the driver loaded; scope names
     /// the cause (`power`, `thermal`, `sync_boost`, `board_limit`,
@@ -859,7 +893,7 @@ pub mod ids {
     pub const DISK_READ_IOPS: &str = "disk.read.iops";
     pub const DISK_WRITE_IOPS: &str = "disk.write.iops";
     pub const DISK_AWAIT: &str = "disk.await";
-    /// A drive's own temperature (NVMe `Composite`, SATA/SAS `drivetemp`)
+    /// A drive's own temperature (`NVMe` `Composite`, SATA/SAS `drivetemp`)
     /// on each block device of the drive, scope `device` (D-92).
     pub const DISK_TEMPERATURE: &str = "disk.temperature";
     // Disk (raw counters from /proc/diskstats)

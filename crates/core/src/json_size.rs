@@ -56,7 +56,7 @@ struct Bound {
 }
 
 impl Bound {
-    fn add(&mut self, bytes: usize) {
+    const fn add(&mut self, bytes: usize) {
         self.total = self.total.saturating_add(bytes);
     }
 
@@ -88,7 +88,7 @@ fn quoted_len(text: &str) -> usize {
 }
 
 /// What `serde_json` writes for one byte of a string.
-fn escaped_len(byte: u8) -> usize {
+const fn escaped_len(byte: u8) -> usize {
     match byte {
         b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 2,
         0..=0x1f => MAX_ESCAPE_TEXT,
@@ -108,7 +108,7 @@ fn signed_len(value: i128) -> usize {
     unsigned_len(value.unsigned_abs()) + usize::from(value < 0)
 }
 
-fn float_len(finite: bool) -> usize {
+const fn float_len(finite: bool) -> usize {
     if finite { MAX_FLOAT_TEXT } else { NULL_TEXT }
 }
 
@@ -408,9 +408,8 @@ struct KeyBound<'a> {
 
 impl KeyBound<'_> {
     /// A scalar of `text` bytes written inside quotes.
-    fn quoted(self, text: usize) -> Result<(), Unrepresentable> {
+    const fn quoted(self, text: usize) {
         self.bound.add(text.saturating_add(2));
-        Ok(())
     }
 }
 
@@ -426,7 +425,8 @@ impl ser::Serializer for KeyBound<'_> {
     type SerializeStructVariant = Impossible<(), Unrepresentable>;
 
     fn serialize_bool(self, value: bool) -> Result<(), Unrepresentable> {
-        self.quoted(if value { 4 } else { 5 })
+        self.quoted(if value { 4 } else { 5 });
+        Ok(())
     }
 
     fn serialize_i8(self, value: i8) -> Result<(), Unrepresentable> {
@@ -446,7 +446,8 @@ impl ser::Serializer for KeyBound<'_> {
     }
 
     fn serialize_i128(self, value: i128) -> Result<(), Unrepresentable> {
-        self.quoted(signed_len(value))
+        self.quoted(signed_len(value));
+        Ok(())
     }
 
     fn serialize_u8(self, value: u8) -> Result<(), Unrepresentable> {
@@ -466,12 +467,14 @@ impl ser::Serializer for KeyBound<'_> {
     }
 
     fn serialize_u128(self, value: u128) -> Result<(), Unrepresentable> {
-        self.quoted(unsigned_len(value))
+        self.quoted(unsigned_len(value));
+        Ok(())
     }
 
     fn serialize_f32(self, value: f32) -> Result<(), Unrepresentable> {
         if value.is_finite() {
-            self.quoted(MAX_FLOAT_TEXT)
+            self.quoted(MAX_FLOAT_TEXT);
+            Ok(())
         } else {
             Err(Unrepresentable)
         }
@@ -479,7 +482,8 @@ impl ser::Serializer for KeyBound<'_> {
 
     fn serialize_f64(self, value: f64) -> Result<(), Unrepresentable> {
         if value.is_finite() {
-            self.quoted(MAX_FLOAT_TEXT)
+            self.quoted(MAX_FLOAT_TEXT);
+            Ok(())
         } else {
             Err(Unrepresentable)
         }

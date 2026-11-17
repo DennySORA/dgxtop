@@ -21,7 +21,7 @@ pub struct NullTransport {
 }
 
 impl NullTransport {
-    pub fn new(written: Arc<AtomicU64>) -> Self {
+    pub const fn new(written: Arc<AtomicU64>) -> Self {
         Self { written }
     }
 }
@@ -53,7 +53,7 @@ pub struct IdleGate {
 }
 
 impl IdleGate {
-    pub fn new(sleeps: bool, waited_ns: Arc<AtomicU64>) -> Self {
+    pub const fn new(sleeps: bool, waited_ns: Arc<AtomicU64>) -> Self {
         Self { sleeps, waited_ns }
     }
 
@@ -85,7 +85,7 @@ pub struct ManualLoopClock {
 }
 
 impl ManualLoopClock {
-    pub fn new(now_ns: Arc<AtomicU64>) -> Self {
+    pub const fn new(now_ns: Arc<AtomicU64>) -> Self {
         Self { now_ns }
     }
 }
@@ -103,6 +103,7 @@ pub struct TerminalIsolation {
 }
 
 /// Points this process's stdin at a fresh pseudo-terminal nobody writes to.
+///
 /// crossterm reads stdin when it is a tty (and `/dev/tty` otherwise), so the
 /// terminal runner's input reader stays silent and never touches the real
 /// terminal; only this bench process is affected.

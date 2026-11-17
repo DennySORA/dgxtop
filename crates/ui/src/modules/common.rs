@@ -40,7 +40,7 @@ pub(crate) struct ManifestSpec {
 }
 
 pub(crate) fn build_manifest(
-    spec: ManifestSpec,
+    spec: &ManifestSpec,
 ) -> Result<DisplayModuleManifest, ModuleBuildError> {
     let manifest = DisplayModuleManifest {
         module_id: ModuleId::new(spec.id)?,
@@ -127,11 +127,11 @@ pub(crate) struct RowCursor {
 }
 
 impl RowCursor {
-    pub fn new(area: Rect) -> Self {
+    pub const fn new(area: Rect) -> Self {
         Self { area, used: 0 }
     }
 
-    pub fn remaining(&self) -> u16 {
+    pub const fn remaining(&self) -> u16 {
         self.area.height.saturating_sub(self.used)
     }
 
@@ -343,12 +343,12 @@ pub(crate) fn power_icon(context: &DisplayContext) -> Span<'static> {
 
 /// Whether a line lists `cell`: not when the device does not support it or
 /// reports nothing for it (D-56); a read that failed still shows its state.
-pub(crate) fn reported(cell: &MetricCell) -> bool {
+pub(crate) const fn reported(cell: &MetricCell) -> bool {
     cell.value.is_some() || !matches!(cell.state, CellState::Unsupported | CellState::Unavailable)
 }
 
 /// Whether `cell` holds a current value to show.
-pub(crate) fn has_value(cell: &MetricCell) -> bool {
+pub(crate) const fn has_value(cell: &MetricCell) -> bool {
     cell.state.has_value() && cell.value.is_some()
 }
 
@@ -485,10 +485,10 @@ pub(crate) fn pressure_labels(
         ("full", pressure.full.as_ref()),
     ];
     for (kind, averages) in kinds {
-        if let Some(averages) = averages {
+        if let Some([over_ten_seconds, ..]) = averages {
             output.label(cell_label(
                 &format!("{resource} pressure {kind} over 10 s"),
-                &averages[0],
+                over_ten_seconds,
                 context,
             ));
         }
@@ -693,13 +693,14 @@ pub(crate) fn render_chart_with_parts(
         );
         return;
     }
-    let sparkline = match whole {
-        Some(color) => GapSparkline::new(points, Style::new().fg(color)),
-        None => GapSparkline::new(points, Style::new()).level_colors(&context.theme),
-    }
-    .max(max)
-    .parts(parts)
-    .raise_low_columns();
+    let sparkline = whole
+        .map_or_else(
+            || GapSparkline::new(points, Style::new()).level_colors(&context.theme),
+            |color| GapSparkline::new(points, Style::new().fg(color)),
+        )
+        .max(max)
+        .parts(parts)
+        .raise_low_columns();
     frame.render_widget(sparkline, area);
 }
 
@@ -915,7 +916,7 @@ pub(crate) const RATE_ROWS: u16 = 2;
 
 /// Rows a table panel gives its rate histories: both once the table keeps
 /// its header and one row, else none; the table takes the rest.
-pub(crate) fn rate_rows(inner_height: u16) -> u16 {
+pub(crate) const fn rate_rows(inner_height: u16) -> u16 {
     if inner_height >= 2 + RATE_ROWS {
         RATE_ROWS
     } else {
@@ -1123,7 +1124,7 @@ enum Spacing {
 
 impl Spacing {
     /// The gap before `spec` when a column comes before it.
-    fn before(self, spec: &ColumnSpec) -> u16 {
+    const fn before(self, spec: &ColumnSpec) -> u16 {
         match self {
             Self::Separator if !spec.attached => SEPARATED_SPACING,
             _ => COLUMN_SPACING,
@@ -1463,7 +1464,7 @@ mod tests {
     fn a_temperature_is_written_in_its_level_color() {
         let context = display_context();
         let theme = &context.theme;
-        let hot = ok(83.0, dgxtop_core::metric::CanonicalUnit::DegC);
+        let hot = ok(83.0, CanonicalUnit::DegC);
         let spans = temperature_spans(&hot, CellDetail::GLANCE, &context);
         assert_eq!(spans[0].content, "83°C");
         assert_eq!(spans[0].style.fg, Some(theme.temperature_color(83.0)));
@@ -1472,17 +1473,13 @@ mod tests {
             Some(theme.gauge_high),
             "red only at 100 °C"
         );
-        let stale =
-            crate::test_fixtures::stale(dgxtop_core::metric::CanonicalUnit::DegC, 83.0, 9_000);
+        let stale = crate::test_fixtures::stale(CanonicalUnit::DegC, 83.0, 9_000);
         let spans = temperature_spans(&stale, CellDetail::GLANCE, &context);
         assert_eq!(
             spans[0].style,
             theme.tone_style(crate::format::CellTone::Stale)
         );
-        let gone = missing(
-            dgxtop_core::metric::CanonicalUnit::DegC,
-            CellState::ReadFailed,
-        );
+        let gone = missing(CanonicalUnit::DegC, CellState::ReadFailed);
         let spans = labeled_temperature("temp", &gone, CellDetail::GLANCE, &context);
         assert_eq!(
             spans[1].style,
@@ -1506,10 +1503,7 @@ mod tests {
         let full_only = pressure_view([0.0, 0.0, 0.0], Some([0.0, 0.3, 0.0]));
         assert!(telling_pressure(Some(&full_only)).is_some());
         let mut unread = pressure_view([0.0, 0.0, 0.0], None);
-        unread.some[1] = MetricCell::missing(
-            dgxtop_core::metric::CanonicalUnit::Percent,
-            CellState::ReadFailed,
-        );
+        unread.some[1] = MetricCell::missing(CanonicalUnit::Percent, CellState::ReadFailed);
         assert!(
             telling_pressure(Some(&unread)).is_some(),
             "a failed read says so"
@@ -1833,7 +1827,7 @@ mod tests {
         assert_eq!(text(5, &forms), "─────", "no room for any note");
         let last = page_divider_forms((1, 2), &[], "panel");
         assert!(text(60, &last).ends_with("─ page 2 of 2 (j/k/↑/↓ page) "));
-        assert!(page_divider_forms((0, 1), &next, "panel").is_empty());
+        assert_eq!(page_divider_forms((0, 1), &next, "panel").len(), 0);
         assert_eq!(text(8, &[]), "────────");
         // In a bordered panel the divider replaces the borders' `│`.
         let mut buffer = Buffer::empty(Rect::new(0, 0, 12, 3));

@@ -39,11 +39,23 @@ pub struct BootClock {
 
 impl BootClock {
     /// Reads the kernel boot id and proves the boot clock is readable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     pub fn new() -> Result<Self, InfraError> {
         Self::with_root(Path::new("/"))
     }
 
     /// Same as [`BootClock::new`] with `/proc` resolved under `root` (tests).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `InfraError` when the system underneath fails: the
+    /// filesystem, a pipe, the database or a driver, or when it does not answer
+    /// in time.
     pub fn with_root(root: &Path) -> Result<Self, InfraError> {
         let text = read_identity_file(&root.join(BOOT_ID_PATH), "clock.boot_id")?;
         let boot_id = BootId::new(text.trim())
@@ -62,23 +74,21 @@ impl TimeProvider for BootClock {
     }
 
     fn now_boot_ns(&self) -> u64 {
-        match read_boottime_ns() {
-            Ok(now) => {
+        read_boottime_ns().map_or_else(
+            |_| self.last_boot_ns.load(Ordering::Acquire),
+            |now| {
                 let previous = self.last_boot_ns.fetch_max(now, Ordering::AcqRel);
                 previous.max(now)
-            }
-            // Readability was proven at construction; a transient failure must
-            // never make time run backwards, so the last observation repeats.
-            Err(_) => self.last_boot_ns.load(Ordering::Acquire),
-        }
+            },
+        )
     }
 
     fn now_utc_ns(&self) -> i128 {
         match SystemTime::now().duration_since(UNIX_EPOCH) {
             Ok(elapsed) => i128::try_from(elapsed.as_nanos()).unwrap_or(i128::MAX),
-            Err(before) => i128::try_from(before.duration().as_nanos())
-                .map(|nanos| -nanos)
-                .unwrap_or(i128::MIN),
+            Err(before) => {
+                i128::try_from(before.duration().as_nanos()).map_or(i128::MIN, |nanos| -nanos)
+            }
         }
     }
 }
@@ -86,9 +96,10 @@ impl TimeProvider for BootClock {
 fn read_boottime_ns() -> Result<u64, InfraError> {
     let now = clock_gettime(ClockId::CLOCK_BOOTTIME)
         .map_err(|errno| InfraError::Unavailable(format!("CLOCK_BOOTTIME unavailable: {errno}")))?;
-    let seconds = u64::try_from(now.tv_sec())
-        .map_err(|_| InfraError::Unavailable("CLOCK_BOOTTIME returned negative seconds".into()))?;
-    let nanos = u64::try_from(now.tv_nsec()).map_err(|_| {
+    let seconds = u64::try_from(now.tv_sec()).map_err(|_cause| {
+        InfraError::Unavailable("CLOCK_BOOTTIME returned negative seconds".into())
+    })?;
+    let nanos = u64::try_from(now.tv_nsec()).map_err(|_cause| {
         InfraError::Unavailable("CLOCK_BOOTTIME returned negative nanoseconds".into())
     })?;
     seconds
@@ -99,7 +110,14 @@ fn read_boottime_ns() -> Result<u64, InfraError> {
 
 /// Stable host identity: `host-` + the first 16 hex digits of SHA-256 over
 /// `/etc/machine-id`, falling back to `/var/lib/dbus/machine-id` and finally
-/// the kernel host name. The raw value never leaves this function.
+/// the kernel host name.
+///
+/// The raw value never leaves this function.
+///
+/// # Errors
+///
+/// Returns an `InfraError` when the system underneath fails: the filesystem, a
+/// pipe, the database or a driver, or when it does not answer in time.
 pub fn host_identity(root: &Path) -> Result<HostId, InfraError> {
     let material = MACHINE_ID_PATHS
         .iter()
@@ -121,21 +139,41 @@ fn non_empty_identity(path: &Path) -> Option<String> {
 }
 
 /// Kernel host name (`/proc/sys/kernel/hostname`), sanitized for display.
+///
+/// # Errors
+///
+/// Returns an `InfraError` when the system underneath fails: the filesystem, a
+/// pipe, the database or a driver, or when it does not answer in time.
 pub fn host_name() -> Result<String, InfraError> {
     host_name_at(Path::new("/"))
 }
 
 /// [`host_name`] with `/proc` resolved under `root`.
+///
+/// # Errors
+///
+/// Returns an `InfraError` when the system underneath fails: the filesystem, a
+/// pipe, the database or a driver, or when it does not answer in time.
 pub fn host_name_at(root: &Path) -> Result<String, InfraError> {
     read_display_text(&root.join(HOSTNAME_PATH), "clock.hostname")
 }
 
 /// Kernel release (`/proc/sys/kernel/osrelease`), sanitized for display.
+///
+/// # Errors
+///
+/// Returns an `InfraError` when the system underneath fails: the filesystem, a
+/// pipe, the database or a driver, or when it does not answer in time.
 pub fn kernel_release() -> Result<String, InfraError> {
     kernel_release_at(Path::new("/"))
 }
 
 /// [`kernel_release`] with `/proc` resolved under `root`.
+///
+/// # Errors
+///
+/// Returns an `InfraError` when the system underneath fails: the filesystem, a
+/// pipe, the database or a driver, or when it does not answer in time.
 pub fn kernel_release_at(root: &Path) -> Result<String, InfraError> {
     read_display_text(&root.join(OSRELEASE_PATH), "clock.osrelease")
 }
@@ -150,11 +188,21 @@ fn read_display_text(path: &Path, operation: &'static str) -> Result<String, Inf
 }
 
 /// PID namespace of `pid` from `readlink /proc/<pid>/ns/pid` (`pid:[N]`).
+///
+/// # Errors
+///
+/// Returns an `InfraError` when the system underneath fails: the filesystem, a
+/// pipe, the database or a driver, or when it does not answer in time.
 pub fn pid_namespace_of(pid: i32) -> Result<PidNamespace, InfraError> {
     pid_namespace_at(Path::new("/"), pid)
 }
 
 /// [`pid_namespace_of`] with `/proc` resolved under `root`.
+///
+/// # Errors
+///
+/// Returns an `InfraError` when the system underneath fails: the filesystem, a
+/// pipe, the database or a driver, or when it does not answer in time.
 pub fn pid_namespace_at(root: &Path, pid: i32) -> Result<PidNamespace, InfraError> {
     if pid <= 0 {
         return Err(InfraError::Unavailable(format!(
@@ -178,12 +226,14 @@ pub fn pid_namespace_at(root: &Path, pid: i32) -> Result<PidNamespace, InfraErro
 }
 
 /// Effective uid of this process (caller context for action authorization).
+#[must_use]
 pub fn current_euid() -> u32 {
     nix::unistd::geteuid().as_raw()
 }
 
 /// The uid of the user who started this process with sudo: the `SUDO_UID`
 /// sudo sets, when it is a uid. Only a root session acts on it (D-127).
+#[must_use]
 pub fn sudo_uid() -> Option<u32> {
     parse_uid(&std::env::var("SUDO_UID").ok()?)
 }
@@ -241,14 +291,14 @@ mod tests {
 
     impl Drop for TempRoot {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            fs::remove_dir_all(&self.0).unwrap_or_default();
         }
     }
 
     #[test]
     fn boot_clock_is_monotonic_and_has_a_boot_id() {
         let clock = BootClock::new().unwrap();
-        assert!(!clock.boot_id().as_str().is_empty());
+        assert_ne!(clock.boot_id().as_str().len(), 0);
         let expected = fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap();
         assert_eq!(clock.boot_id().as_str(), expected.trim());
         let mut previous = clock.now_boot_ns();
@@ -293,13 +343,13 @@ mod tests {
         let from_hostname = host_identity(&root.0).unwrap();
         assert_eq!(
             from_hostname.as_str(),
-            format!("host-{}", &sha256_hex(b"node-7")[..16])
+            format!("host-{}", sha256_hex(b"node-7").get(..16).unwrap())
         );
         root.write("var/lib/dbus/machine-id", "dbus-id\n");
         let from_dbus = host_identity(&root.0).unwrap();
         assert_eq!(
             from_dbus.as_str(),
-            format!("host-{}", &sha256_hex(b"dbus-id")[..16])
+            format!("host-{}", sha256_hex(b"dbus-id").get(..16).unwrap())
         );
         // An empty /etc/machine-id is skipped, not hashed.
         root.write("etc/machine-id", "\n");
@@ -315,8 +365,8 @@ mod tests {
         assert_eq!(kernel_release_at(&root.0).unwrap(), "6.12.0-test");
         root.write(OSRELEASE_PATH, "\n");
         assert!(kernel_release_at(&root.0).is_err());
-        assert!(!host_name().unwrap().is_empty());
-        assert!(!kernel_release().unwrap().is_empty());
+        assert_ne!(host_name().unwrap().len(), 0);
+        assert_ne!(kernel_release().unwrap().len(), 0);
     }
 
     #[test]

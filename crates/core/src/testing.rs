@@ -1,6 +1,12 @@
 //! Deterministic test doubles shared by every crate's unit tests
-//! (`dgxtop-core` feature `test-support`). Nothing here touches real drivers,
+//! (`dgxtop-core` feature `testing`). Nothing here touches real drivers,
 //! files or the network.
+
+#![expect(
+    clippy::panic,
+    clippy::missing_panics_doc,
+    reason = "test support: a fixture that cannot be built must fail its test at once, and any helper here may"
+)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
@@ -30,10 +36,11 @@ use crate::process_model::{MemoryPart, ProcessHistoryModel, ProcessTableSample};
 use crate::process_probe::{ProbeReading, ProbeState};
 use crate::quality::{Freshness, Quality, ReadStatus, SampleKind, SelectionState};
 
-/// UTC on a whole minute (2026-09-21T14:14:00Z), in nanoseconds. Boot 0
-/// paired with it puts the history's minutes, which are cut on whole UTC
-/// minutes (D-82), on whole minutes of the boot clock; tests and the
-/// synthetic history preload count with that.
+/// UTC on a whole minute (2026-09-21T14:14:00Z), in nanoseconds.
+///
+/// Boot 0 paired with it puts the history's minutes, which are cut on
+/// whole UTC minutes (D-82), on whole minutes of the boot clock; tests
+/// and the synthetic history preload count with that.
 pub const UTC_ON_A_WHOLE_MINUTE_NS: i128 = 1_790_000_040_000_000_000;
 
 /// Manually advanced clock. UTC can be stepped independently of boot time.
@@ -45,6 +52,7 @@ pub struct FakeClock {
 }
 
 impl FakeClock {
+    #[must_use]
     pub fn new(boot_ns: u64) -> Arc<Self> {
         Arc::new(Self {
             boot_id: Mutex::new(boot_id("fake-boot")),
@@ -123,6 +131,7 @@ impl<J> Default for CapturingDispatch<J> {
 }
 
 impl<J> CapturingDispatch<J> {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -132,6 +141,7 @@ impl<J> CapturingDispatch<J> {
     }
 
     /// Jobs refused while busy.
+    #[must_use]
     pub fn refused(&self) -> usize {
         self.refused.load(Ordering::SeqCst)
     }
@@ -148,6 +158,7 @@ impl<J> CapturingDispatch<J> {
             .len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -222,6 +233,7 @@ pub struct StaticProcessHistory {
 pub type PartsAsked = (BTreeSet<EntityId>, (u64, u64), usize);
 
 impl StaticProcessHistory {
+    #[must_use]
     pub fn new(model: ProcessHistoryModel) -> Arc<Self> {
         let history = Self::default();
         history.publish(model);
@@ -271,6 +283,7 @@ impl ProcessMemoryReader for StaticProcessHistory {
 
 /// The key of process `pid` on host `host-test`, boot `boot-test`, started
 /// at tick 7.
+#[must_use]
 pub fn test_process_key(pid: i64) -> ProcessKey {
     ProcessKey {
         host_id: host_id("host-test"),
@@ -284,6 +297,7 @@ pub fn test_process_key(pid: i64) -> ProcessKey {
 
 /// Process `pid` holding the bytes of `held` on each of its GPUs (`None`:
 /// a GPU it uses without a known figure).
+#[must_use]
 pub fn gpu_process(pid: i64, name: &str, held: &[(&str, Option<u64>)]) -> ProcessRow {
     ProcessRow {
         key: test_process_key(pid),
@@ -313,6 +327,7 @@ pub fn gpu_process(pid: i64, name: &str, held: &[(&str, Option<u64>)]) -> Proces
 }
 
 /// The process table of collection `cycle`, read at `read_ns`.
+#[must_use]
 pub fn process_table(cycle: u64, read_ns: u64, rows: Vec<ProcessRow>) -> ProcessTable {
     ProcessTable {
         rows,
@@ -322,27 +337,33 @@ pub fn process_table(cycle: u64, read_ns: u64, rows: Vec<ProcessRow>) -> Process
     }
 }
 
+#[must_use]
 pub fn host_id(value: &str) -> HostId {
     HostId::new(value).unwrap_or_else(|error| panic!("test host id: {error}"))
 }
 
+#[must_use]
 pub fn boot_id(value: &str) -> BootId {
     BootId::new(value).unwrap_or_else(|error| panic!("test boot id: {error}"))
 }
 
+#[must_use]
 pub fn source_id(value: &str) -> SourceId {
     SourceId::new(value).unwrap_or_else(|error| panic!("test source id: {error}"))
 }
 
+#[must_use]
 pub fn adapter_id(value: &str) -> AdapterId {
     AdapterId::new(value).unwrap_or_else(|error| panic!("test adapter id: {error}"))
 }
 
+#[must_use]
 pub fn read_group(value: &str) -> ReadGroup {
     ReadGroup::new(value).unwrap_or_else(|error| panic!("test read group: {error}"))
 }
 
-/// MetricKey on host `test-host`, boot `fake-boot`.
+/// `MetricKey` on host `test-host`, boot `fake-boot`.
+#[must_use]
 pub fn metric_key(entity: &str, metric: &str, scope: &str) -> MetricKey {
     MetricKey::new(
         host_id("test-host"),
@@ -360,6 +381,7 @@ pub struct ObservationBuilder {
 }
 
 impl ObservationBuilder {
+    #[must_use]
     pub fn new(key: MetricKey, adapter: &str, source: &str) -> Self {
         Self {
             observation: Observation {
@@ -394,6 +416,7 @@ impl ObservationBuilder {
         }
     }
 
+    #[must_use]
     pub fn f64(mut self, value: f64) -> Self {
         self.observation.value =
             Some(Scalar::from_f64(value).unwrap_or_else(|error| panic!("{error}")));
@@ -401,24 +424,28 @@ impl ObservationBuilder {
         self
     }
 
-    pub fn u64(mut self, value: u64) -> Self {
+    #[must_use]
+    pub const fn u64(mut self, value: u64) -> Self {
         self.observation.value = Some(Scalar::from_u64(value));
         self.observation.read_status = ReadStatus::Ok;
         self
     }
 
-    pub fn failed(mut self, status: ReadStatus) -> Self {
+    #[must_use]
+    pub const fn failed(mut self, status: ReadStatus) -> Self {
         self.observation.read_status = status;
         self.observation.value = None;
         self
     }
 
+    #[must_use]
     pub fn unit(mut self, unit: &str) -> Self {
         self.observation.native_unit =
             NativeUnit::new(unit).unwrap_or_else(|error| panic!("{error}"));
         self
     }
 
+    #[must_use]
     pub fn origin(mut self, origin: &str) -> Self {
         self.observation.provenance.origin_id =
             Some(OriginId::new(origin).unwrap_or_else(|error| panic!("{error}")));
@@ -426,48 +453,57 @@ impl ObservationBuilder {
         self
     }
 
-    pub fn quality(mut self, quality: Quality) -> Self {
+    #[must_use]
+    pub const fn quality(mut self, quality: Quality) -> Self {
         self.observation.quality = quality;
         self
     }
 
-    pub fn kind(mut self, kind: SampleKind) -> Self {
+    #[must_use]
+    pub const fn kind(mut self, kind: SampleKind) -> Self {
         self.observation.sample_kind = kind;
         self
     }
 
-    pub fn generation(mut self, generation: u32) -> Self {
+    #[must_use]
+    pub const fn generation(mut self, generation: u32) -> Self {
         self.observation.provenance.generation = generation;
         self
     }
 
-    pub fn cycle(mut self, cycle: u64) -> Self {
+    #[must_use]
+    pub const fn cycle(mut self, cycle: u64) -> Self {
         self.observation.cycle_id = cycle;
         self
     }
 
-    pub fn read_at(mut self, finished_boot_ns: u64) -> Self {
+    #[must_use]
+    pub const fn read_at(mut self, finished_boot_ns: u64) -> Self {
         self.observation.read_started_boot_ns = finished_boot_ns.saturating_sub(1_000_000);
         self.observation.read_finished_boot_ns = finished_boot_ns;
         self
     }
 
-    pub fn device_time(mut self, boot_ns: u64) -> Self {
+    #[must_use]
+    pub const fn device_time(mut self, boot_ns: u64) -> Self {
         self.observation.device_sample_boot_ns = Some(boot_ns);
         self
     }
 
+    #[must_use]
     pub fn reason(mut self, code: &str) -> Self {
         self.observation.reason_codes.push(code.to_owned());
         self
     }
 
+    #[must_use]
     pub fn build(self) -> Observation {
         self.observation
     }
 }
 
 /// Wraps observations into a batch consistent with their cycle/adapter.
+#[must_use]
 pub fn batch_of(
     adapter: &str,
     group: &str,
@@ -503,6 +539,7 @@ pub fn batch_of(
 
 /// A committed sample of `key` read at `read_ns`: selected with `value`,
 /// or unavailable without one.
+#[must_use]
 pub fn snapshot_entry(key: &MetricKey, value: Option<f64>, read_ns: u64) -> SnapshotEntry {
     let selection_state = if value.is_some() {
         SelectionState::Selected
@@ -540,11 +577,13 @@ pub fn snapshot_entry(key: &MetricKey, value: Option<f64>, read_ns: u64) -> Snap
 }
 
 /// The entity id `value` (a test's own spelling, so a bad one panics).
+#[must_use]
 pub fn entity_id(value: &str) -> EntityId {
     EntityId::new(value).unwrap_or_else(|error| panic!("test entity: {error}"))
 }
 
 /// A catalog entity of `kind` with `attributes`.
+#[must_use]
 pub fn entity_record(
     id: &str,
     kind: EntityKind,
@@ -570,6 +609,7 @@ pub fn entity_record(
 }
 
 /// A catalog holding `entities`.
+#[must_use]
 pub fn catalog_of(entities: Vec<EntityRecord>) -> CatalogSnapshot {
     CatalogSnapshot {
         entities: entities
@@ -582,6 +622,7 @@ pub fn catalog_of(entities: Vec<EntityRecord>) -> CatalogSnapshot {
 
 /// `table` handed to the history as the Manager does, in a snapshot of its
 /// own beside `catalog`.
+#[must_use]
 pub fn table_sample(
     table: ProcessTable,
     catalog: CatalogSnapshot,
@@ -598,6 +639,7 @@ pub fn table_sample(
 }
 
 /// A snapshot of `revision` holding the given `(collector, entry)` samples.
+#[must_use]
 pub fn snapshot_of(revision: u64, entries: Vec<(&str, SnapshotEntry)>) -> ImmutableSnapshot {
     let mut domains: BTreeMap<CollectorId, DomainSnapshot> = BTreeMap::new();
     for (collector, entry) in entries {

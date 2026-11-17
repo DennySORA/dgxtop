@@ -109,7 +109,7 @@ impl SessionShared {
         }
     }
 
-    pub(crate) fn id(&self) -> &SessionId {
+    pub(crate) const fn id(&self) -> &SessionId {
         &self.id
     }
 
@@ -240,14 +240,14 @@ impl CommandInbox {
     fn enqueue(&self, envelope: CommandEnvelope, encoded_len: u64) -> Result<(), CommandRejection> {
         let request_id = envelope.request_id;
         if !self.outstanding.try_reserve() {
-            return Err(self.reject(request_id, ErrorCode::Busy, "command queue full"));
+            return Err(rejection(request_id, ErrorCode::Busy, "command queue full"));
         }
         let permit = match self.ledger.try_reserve(Partition::Reserve, encoded_len) {
             Ok(permit) => permit,
             Err(error) => {
                 self.outstanding.release();
                 let message = format!("command reserve exhausted: {error}");
-                return Err(self.reject(request_id, ErrorCode::Busy, &message));
+                return Err(rejection(request_id, ErrorCode::Busy, &message));
             }
         };
         let queued = QueuedCommand {
@@ -258,7 +258,11 @@ impl CommandInbox {
         if *closed {
             drop(closed);
             self.outstanding.release();
-            return Err(self.reject(request_id, ErrorCode::Unavailable, "manager stopped"));
+            return Err(rejection(
+                request_id,
+                ErrorCode::Unavailable,
+                "manager stopped",
+            ));
         }
         let sent = self.sender.try_send(queued);
         drop(closed);
@@ -266,21 +270,26 @@ impl CommandInbox {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => {
                 self.outstanding.release();
-                Err(self.reject(request_id, ErrorCode::Busy, "command queue full"))
+                Err(rejection(request_id, ErrorCode::Busy, "command queue full"))
             }
             Err(TrySendError::Disconnected(_)) => {
                 self.outstanding.release();
-                Err(self.reject(request_id, ErrorCode::Unavailable, "manager stopped"))
+                Err(rejection(
+                    request_id,
+                    ErrorCode::Unavailable,
+                    "manager stopped",
+                ))
             }
         }
     }
+}
 
-    fn reject(&self, request_id: Uuid, code: ErrorCode, message: &str) -> CommandRejection {
-        CommandRejection {
-            request_id,
-            code,
-            message: sanitize_message(message),
-        }
+/// The refusal of the request `request_id`.
+fn rejection(request_id: Uuid, code: ErrorCode, message: &str) -> CommandRejection {
+    CommandRejection {
+        request_id,
+        code,
+        message: sanitize_message(message),
     }
 }
 
@@ -316,14 +325,15 @@ impl SessionHandle {
             _liveness: liveness,
         }
     }
+}
 
-    fn syntax_rejection(&self, request_id: Uuid, error: &CommandSyntaxError) -> CommandRejection {
-        let code = match error {
-            CommandSyntaxError::TooLarge(_) => ErrorCode::CapacityExceeded,
-            _ => ErrorCode::ValidationFailed,
-        };
-        self.inbox.reject(request_id, code, &error.to_string())
-    }
+/// The refusal of a request that cannot be read.
+fn syntax_rejection(request_id: Uuid, error: &CommandSyntaxError) -> CommandRejection {
+    let code = match error {
+        CommandSyntaxError::TooLarge(_) => ErrorCode::CapacityExceeded,
+        _ => ErrorCode::ValidationFailed,
+    };
+    rejection(request_id, code, &error.to_string())
 }
 
 impl fmt::Debug for SessionHandle {
@@ -331,7 +341,7 @@ impl fmt::Debug for SessionHandle {
         formatter
             .debug_struct("SessionHandle")
             .field("session_id", &self.shared.id)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -343,22 +353,22 @@ impl SessionPort for SessionHandle {
     fn submit(&self, command: CommandEnvelope) -> Result<(), CommandRejection> {
         let request_id = command.request_id;
         if command.session_id != self.shared.id {
-            return Err(self.inbox.reject(
+            return Err(rejection(
                 request_id,
                 ErrorCode::CapabilityDenied,
                 "session_id does not match this session handle",
             ));
         }
         if let Err(error) = command.validate_syntax() {
-            return Err(self.syntax_rejection(request_id, &error));
+            return Err(syntax_rejection(request_id, &error));
         }
         let encoded_len = command.encoded_len();
         if encoded_len > self.inbox.command_byte_cap {
             let error = CommandSyntaxError::TooLarge(self.inbox.command_byte_cap);
-            return Err(self.syntax_rejection(request_id, &error));
+            return Err(syntax_rejection(request_id, &error));
         }
         if matches!(command.body, CommandBody::Shutdown { .. }) {
-            return Err(self.inbox.reject(
+            return Err(rejection(
                 request_id,
                 ErrorCode::Unsupported,
                 "Shutdown is not a queued command; quit through request_shutdown",

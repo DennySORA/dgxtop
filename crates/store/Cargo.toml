@@ -10,7 +10,7 @@ publish = false
 
 [features]
 # Test aids: reading audit records back and the fail-point file system.
-test-support = []
+testing = []
 
 [dependencies]
 dgxtop-core.workspace = true
@@ -23,9 +23,9 @@ thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-dgxtop-core = { workspace = true, features = ["test-support"] }
+dgxtop-core = { workspace = true, features = ["testing"] }
 # The crate's own integration tests use its test aids.
-dgxtop-store = { path = ".", features = ["test-support"] }
+dgxtop-store = { path = ".", features = ["testing"] }
 
 [lints]
 workspace = true

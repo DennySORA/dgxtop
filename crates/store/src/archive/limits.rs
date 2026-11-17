@@ -64,6 +64,7 @@ impl ArchiveLimits {
     /// Limits from `store.archive_limit_mib`; WAL thresholds shrink with
     /// small budgets (at most a quarter is WAL). The age rows are kept is
     /// the history's (`store.archive_retention_days`, D-96).
+    #[must_use]
     pub fn from_config(config: &Config) -> Self {
         let defaults = Self::default();
         let limit_bytes = u64::from(config.store.archive_limit_mib).saturating_mul(MIB);
@@ -76,6 +77,10 @@ impl ArchiveLimits {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an `ArchiveOpenError` when the limits or the path are invalid; a
+    /// database problem opens an archive that reports its status instead.
     pub fn validate(&self) -> Result<(), ArchiveOpenError> {
         let invalid = |message: &str| Err(ArchiveOpenError::InvalidLimits(message.to_owned()));
         if self.batch_rows == 0 || self.batch_bytes == 0 {
@@ -99,11 +104,12 @@ impl ArchiveLimits {
         Ok(())
     }
 
-    pub fn busy_deadline(&self) -> Duration {
+    #[must_use]
+    pub const fn busy_deadline(&self) -> Duration {
         Duration::from_millis(self.busy_deadline_ms)
     }
 
-    pub(crate) fn capacity_policy(&self) -> CapacityPolicy {
+    pub(crate) const fn capacity_policy(&self) -> CapacityPolicy {
         CapacityPolicy {
             limit_bytes: self.limit_bytes,
             reserve_bytes: 0,

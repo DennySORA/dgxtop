@@ -3,7 +3,7 @@
 //!
 //! Per block device scope (`device` and `partition` are separate scopes and
 //! never summed): bytes/s = Δsectors × 512 / dt (intervals in bytes), IOPS =
-//! Δcompleted / dt (intervals in counts), await = (Δread_ms + Δwrite_ms) /
+//! Δcompleted / dt (intervals in counts), await = (`Δread_ms` + `Δwrite_ms`) /
 //! (Δreads + Δwrites), unavailable when nothing completed. A drive's
 //! temperature (hwmon `disk` group, D-92) passes through arbitration per
 //! disk. Filesystems: used = total − free, use% = used / (used +
@@ -24,6 +24,7 @@ use crate::shared::counter_inputs::{self, Step};
 use crate::shared::formulas::{self, Difference, Selections};
 use crate::shared::reasons;
 use crate::shared::values::{self, Evidence};
+use dgxtop_core::num::ToF64Lossy;
 
 /// Raw diskstats counter, the canonical unit of its delta and the rate it feeds.
 const COUNTERS: [(&str, CanonicalUnit, Option<&str>); 6] = [
@@ -105,6 +106,10 @@ pub struct DiskCollector {
 }
 
 impl DiskCollector {
+    /// # Errors
+    ///
+    /// Returns an `IdentityError` when the value breaks the rules of its kind:
+    /// its length, a control character or its syntax.
     pub fn new() -> Result<Self, IdentityError> {
         Ok(Self {
             id: CollectorId::new(naming::collectors::DISK)?,
@@ -243,8 +248,7 @@ fn await_value(
         return values::unavailable(context, key, &evidence, &[reasons::STALE], Freshness::Stale);
     }
     let busy_ms = u128::from(read_ms) + u128::from(write_ms);
-    #[allow(clippy::cast_precision_loss)]
-    let average = busy_ms as f64 / completed as f64;
+    let average = busy_ms.to_f64_lossy() / completed.to_f64_lossy();
     match Scalar::from_f64(average) {
         Ok(value) => values::derived(context, key, value, &evidence, &[]),
         Err(_) => values::unavailable(
@@ -326,7 +330,8 @@ fn use_percent(total: Scalar, free: Scalar, available: Scalar) -> Result<Scalar,
     if capacity <= 0.0 {
         return Err(reasons::ZERO_CAPACITY);
     }
-    Scalar::from_f64(used.to_f64_lossy() / capacity * 100.0).map_err(|_| reasons::VALUE_OVERFLOW)
+    Scalar::from_f64(used.to_f64_lossy() / capacity * 100.0)
+        .map_err(|_cause| reasons::VALUE_OVERFLOW)
 }
 
 #[cfg(test)]
@@ -598,7 +603,7 @@ mod tests {
         assert_eq!(
             value_of(&batch, &key(ids::FS_USED))
                 .and_then(|value| value.value)
-                .and_then(|value| value.as_u64()),
+                .and_then(Scalar::as_u64),
             Some(700)
         );
         assert_close(

@@ -1,6 +1,10 @@
 //! The Manager and the history's process actor (D-79): what it hands the
 //! actor, and what it waits for.
 
+// A test-only crate: its helpers may unwrap and panic, so a broken fixture
+// fails loudly (`allow-*-in-tests` reaches the whole crate).
+#![cfg(test)]
+
 use dgxtop_core::ports::ProcessHistoryInput;
 use dgxtop_core::process_model::{ProcessHistoryModel, RunRequest, WriteProgress};
 use dgxtop_core::testing::{gpu_process, process_table};
@@ -9,7 +13,7 @@ use dgxtop_core::tiers::BarSize;
 use super::*;
 
 fn harness() -> Harness {
-    ready_harness(HarnessOptions {
+    ready_harness(&HarnessOptions {
         process_history: true,
         ..HarnessOptions::default()
     })
@@ -155,7 +159,7 @@ fn a_deletion_of_runs_is_handed_to_the_process_actor() {
         ResultCode::Error(ErrorCode::Busy),
         "{result:?}"
     );
-    let mut without = ready_harness(HarnessOptions::default());
+    let mut without = ready_harness(&HarnessOptions::default());
     let off = without
         .submit(CommandBody::DeleteRuns {
             runs: vec![target(9)],

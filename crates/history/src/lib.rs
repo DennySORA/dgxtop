@@ -90,6 +90,7 @@ impl History {
     /// Builds an empty history on the shared ledger. `archive_enabled`
     /// makes it queue finished minute buckets, bridges and gaps for
     /// [`dgxtop_core::ports::HistoryIngest::take_archive_journal`].
+    #[must_use]
     pub fn new(
         store: &StoreConfig,
         sampling: &SamplingConfig,
@@ -112,6 +113,7 @@ impl History {
     }
 
     /// Splits the history into its recorder and its reader.
+    #[must_use]
     pub fn into_parts(self) -> (HistoryRecorder, HistoryIndex) {
         (self.recorder, self.index)
     }

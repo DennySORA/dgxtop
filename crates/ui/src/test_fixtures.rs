@@ -38,9 +38,9 @@ pub(crate) fn display_context() -> crate::registry::DisplayContext {
         scroll: 0,
         tab: 0,
         offset: 0,
-        marked: std::sync::Arc::default(),
+        marked: Arc::default(),
         picked: None,
-        folded: std::sync::Arc::default(),
+        folded: Arc::default(),
     }
 }
 
@@ -296,7 +296,7 @@ fn gpu_card(index: u32) -> GpuCard {
     }
 }
 
-/// What the GPU view shows beyond the card: a Blackwell GeForce with its
+/// What the GPU view shows beyond the card: a Blackwell `GeForce` with its
 /// toolkit, or the unified GB10, whose bus and BAR1 the driver does not
 /// report.
 fn gpu_details(unified: bool) -> GpuDetails {
@@ -564,6 +564,10 @@ pub(crate) fn processes_view(count: usize, window_start: u32, total_rows: u32) -
 /// One hour of minute buckets ending at `HISTORY_END`: the CPU has a gap
 /// from minute 40 to 44 and a spike to 95 % inside minute 30, whose mean
 /// stays at 20 %.
+#[expect(
+    clippy::too_many_lines,
+    reason = "a fixture: one literal of every chart"
+)]
 pub(crate) fn history_view() -> HistoryView {
     const MINUTE: u64 = 60 * 1_000_000_000;
     let start = HISTORY_END - 60 * MINUTE;
@@ -926,6 +930,7 @@ pub(crate) const RUNS_UTC: i64 = 1_791_072_000_000_000_000;
 /// Two runs, the newest first: `ComfyUI/main` (pid 42), killed by dgxtop
 /// after 30 min and opened with its charts, and `acme_llm.train` (pid 41),
 /// running for 2 h in color 0.
+#[expect(clippy::too_many_lines, reason = "a fixture: one literal of every run")]
 pub(crate) fn process_history_view() -> dgxtop_core::view::ProcessHistoryView {
     use dgxtop_core::action::Signal;
     use dgxtop_core::process_history::{EndCause, RunDetails, RunEnd, RunInfo, RunMetric};

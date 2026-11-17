@@ -55,7 +55,7 @@ pub(crate) fn rank(assessed: &[Assessed<'_, '_>]) -> Ranking {
     Ranking { order, alias_of }
 }
 
-fn order_key<'e>(entry: &'e Assessed<'_, '_>) -> (u8, u16, Reverse<u64>, &'e SourceId) {
+const fn order_key<'e>(entry: &'e Assessed<'_, '_>) -> (u8, u16, Reverse<u64>, &'e SourceId) {
     let observation = entry.candidate.observation;
     (
         observation.quality.rank(),
