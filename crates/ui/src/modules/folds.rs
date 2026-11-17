@@ -1,8 +1,10 @@
 //! The panels a key folds (D-114): the key each names on its title, and
 //! the one row a folded panel keeps, `▸ Disk I/O ───── (i unfold)`, which a
 //! click unfolds too. A key may also fold some of a panel's strips away
-//! (D-144): the panel stays and names that key beside its own. The keymap
-//! binds the same keys (its tests check them).
+//! (D-144): the panel stays and names that key beside its own. A key folds
+//! the panel of the place shown (D-148): `t` the whole machine's
+//! temperature on the Overview History and the GPU's on the GPU History.
+//! The keymap binds the same keys (its tests check them).
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -14,6 +16,14 @@ use crate::registry::{DisplayContext, DisplayModuleManifest, controls};
 use dgxtop_core::identity::EntityId;
 use dgxtop_core::view::ViewModel;
 
+/// Where a foldable panel shows, and so where its key folds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FoldPlace {
+    Overview,
+    OverviewHistory,
+    GpuHistory,
+}
+
 /// One foldable panel, or the strips of a panel a key folds away.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Fold {
@@ -23,6 +33,7 @@ pub(crate) struct Fold {
     /// What the key is named for on the panel's title: `fold` for a
     /// panel, what they show for strips.
     pub(crate) names: &'static str,
+    pub(crate) place: FoldPlace,
 }
 
 /// What a key that folds a whole panel is named for.
@@ -30,37 +41,49 @@ const FOLDS_PANEL: &str = "fold";
 /// The memory panel's stall pressure strips (D-144).
 pub(crate) const MEMORY_PRESSURE_STRIPS: &str = "history.memory_pressure";
 
-/// A panel `key` folds away.
-const fn panel(panel: &'static str, key: char) -> Fold {
+/// A panel of `place` that `key` folds away.
+const fn panel(panel: &'static str, key: char, place: FoldPlace) -> Fold {
     Fold {
         panel,
         key,
         names: FOLDS_PANEL,
+        place,
     }
 }
 
 /// Every foldable panel, in the order of `view::FOLDABLE_PANELS`.
-pub(crate) const FOLDS: [Fold; 11] = [
-    panel("disk", 'i'),
-    panel("network", 'n'),
-    panel("history.cpu", 'c'),
-    panel("history.memory", 'm'),
+pub(crate) const FOLDS: [Fold; 13] = [
+    panel("disk", 'i', FoldPlace::Overview),
+    panel("network", 'n', FoldPlace::Overview),
+    panel("history.cpu", 'c', FoldPlace::OverviewHistory),
+    panel("history.memory", 'm', FoldPlace::OverviewHistory),
     Fold {
         panel: MEMORY_PRESSURE_STRIPS,
         key: 's',
         names: "pressure",
+        place: FoldPlace::OverviewHistory,
     },
-    panel("history.gpu_utilization", 'u'),
-    panel("history.gpu_memory", 'v'),
-    panel("history.gpu_temperature", 't'),
-    panel("history.power", 'p'),
-    panel("history.disk", 'i'),
-    panel("history.network", 'n'),
+    panel("history.host_temperature", 't', FoldPlace::OverviewHistory),
+    panel("history.host_power", 'p', FoldPlace::OverviewHistory),
+    panel("history.disk", 'i', FoldPlace::OverviewHistory),
+    panel("history.network", 'n', FoldPlace::OverviewHistory),
+    panel("history.gpu_utilization", 'u', FoldPlace::GpuHistory),
+    panel("history.gpu_memory", 'v', FoldPlace::GpuHistory),
+    panel("history.gpu_thermal", 't', FoldPlace::GpuHistory),
+    panel("history.gpu_power", 'p', FoldPlace::GpuHistory),
 ];
 
 /// The fold of `panel`.
 pub(crate) fn fold_of(panel: &str) -> Option<Fold> {
     FOLDS.iter().copied().find(|fold| fold.panel == panel)
+}
+
+/// The panel `key` folds in `place`.
+pub(crate) fn fold_at(place: FoldPlace, key: char) -> Option<Fold> {
+    FOLDS
+        .iter()
+        .copied()
+        .find(|fold| fold.place == place && fold.key == key)
 }
 
 /// `i fold`: the keys a foldable panel names at the right of its title;
@@ -132,7 +155,23 @@ mod tests {
     fn every_foldable_panel_has_its_key_and_name_in_order() {
         let panels: Vec<&str> = FOLDS.iter().map(|fold| fold.panel).collect();
         assert_eq!(panels, FOLDABLE_PANELS);
-        assert_eq!(fold_keys("history.power"), "p fold");
+        assert_eq!(fold_keys("history.host_power"), "p fold");
+        // A key folds the panel of the place shown (D-148).
+        let at = |place, key| fold_at(place, key).map(|fold| fold.panel);
+        assert_eq!(
+            at(FoldPlace::OverviewHistory, 't'),
+            Some("history.host_temperature")
+        );
+        assert_eq!(at(FoldPlace::GpuHistory, 't'), Some("history.gpu_thermal"));
+        assert_eq!(at(FoldPlace::Overview, 'i'), Some("disk"));
+        assert_eq!(at(FoldPlace::OverviewHistory, 'i'), Some("history.disk"));
+        assert_eq!(at(FoldPlace::GpuHistory, 'c'), None);
+        for (index, fold) in FOLDS.iter().enumerate() {
+            let twice = FOLDS[..index]
+                .iter()
+                .any(|other| other.place == fold.place && other.key == fold.key);
+            assert!(!twice, "{fold:?} shares its key in its place");
+        }
         assert_eq!(fold_keys(MEMORY_PRESSURE_STRIPS), "s pressure");
         assert_eq!(fold_keys("processes"), "");
         let context = crate::test_fixtures::display_context();

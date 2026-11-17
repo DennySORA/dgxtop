@@ -626,6 +626,14 @@ pub enum HistoryChartKind {
     /// GPUs' (D-137).
     CpuTemperature,
     SocTemperature,
+    /// The temperature of the drive the disk charts are of, in the whole
+    /// machine's temperature panel (D-148).
+    DiskTemperature,
+    /// The share of time a GPU's memory was read or written, charted under
+    /// its utilization, and its first fan's speed, under its temperature
+    /// (D-148).
+    GpuMemoryActivity,
+    GpuFanSpeed,
 }
 
 impl HistoryChartKind {
@@ -680,29 +688,35 @@ pub struct HistoryPart {
 /// The panels a frontend may fold away (D-114), saved in `viewer.folded`:
 /// the Overview's disk I/O and network modules, then the Overview
 /// History's panels, the memory panel's stall pressure strips among them
-/// (D-144): folded, they leave the memory panel its `used` strip.
-pub const FOLDABLE_PANELS: [&str; 11] = [
+/// (D-144): folded, they leave the memory panel its `used` strip; then the
+/// GPU History's panels (D-148).
+pub const FOLDABLE_PANELS: [&str; 13] = [
     "disk",
     "network",
     "history.cpu",
     "history.memory",
     "history.memory_pressure",
-    "history.gpu_utilization",
-    "history.gpu_memory",
-    "history.gpu_temperature",
-    "history.power",
+    "history.host_temperature",
+    "history.host_power",
     "history.disk",
     "history.network",
+    "history.gpu_utilization",
+    "history.gpu_memory",
+    "history.gpu_thermal",
+    "history.gpu_power",
 ];
 
-/// The panels folded until the user says otherwise (D-146): the Overview
-/// History opens on what is watched most, the memory panel's stall
-/// pressure strips, the temperature and the power a key away.
-pub const DEFAULT_FOLDED_PANELS: [&str; 3] = [
-    "history.memory_pressure",
-    "history.gpu_temperature",
-    "history.power",
-];
+/// Folds of panels that are gone (D-148): the temperature and the power
+/// panel that held the host's strips over the shown GPU's. Each became a
+/// panel of the Overview History and one of the GPU History, so a saved
+/// configuration may still name them; they are read and dropped, folding
+/// nothing.
+pub const RETIRED_FOLDS: [&str; 2] = ["history.gpu_temperature", "history.power"];
+
+/// The panels folded until the user says otherwise (D-146, D-148): the
+/// memory panel's stall pressure strips, flat lines on a host with memory
+/// to spare, a key away.
+pub const DEFAULT_FOLDED_PANELS: [&str; 1] = ["history.memory_pressure"];
 
 /// Whether `panels` are distinct foldable panels (D-114).
 pub fn are_foldable(panels: &[String]) -> bool {

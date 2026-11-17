@@ -1512,7 +1512,7 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         Canonical,
         Gauge,
         Gpu,
-        false,
+        true,
         "Fan"
     ),
     descriptor!(
@@ -1881,7 +1881,7 @@ pub const METRIC_CATALOG: &[MetricDescriptor] = &[
         Canonical,
         Gauge,
         Disk,
-        false,
+        true,
         "Drive temperature"
     ),
     descriptor!(

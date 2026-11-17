@@ -58,8 +58,10 @@ pub enum KeyAction {
     HistoryExpandCommand,
     /// Copies the opened run's command line to the clipboard (D-76).
     HistoryCopyCommand,
-    /// Folds or unfolds a panel (D-114): one of `view::FOLDABLE_PANELS`.
-    Fold(&'static str),
+    /// Folds or unfolds the panel this key names in the place shown
+    /// (D-114, D-148; `modules::folds`): `t` the whole machine's
+    /// temperature on the Overview History, the GPU's on the GPU History.
+    Fold(char),
     /// Unfolds every panel of the view (D-114).
     UnfoldAll,
     DismissNotices,
@@ -215,9 +217,10 @@ pub static KEYMAP: &[KeyBinding] = &[
     binding("Shift-Tab", "previous view", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::key(KeyCode::BackTab)], KeyAction::PreviousView),
     binding("1", "Overview (GPUs, system, GPU processes)", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('1')], KeyAction::ShowTab(Tab::Overview)),
     binding("2", "GPU detail", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('2')], KeyAction::ShowTab(Tab::Gpu)),
-    binding("3", "Overview History", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('3')], KeyAction::ShowTab(Tab::OverviewHistory)),
-    binding("4", "Process History", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('4')], KeyAction::ShowTab(Tab::ProcessHistory)),
-    binding("5/F2", "Settings", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('5'), KeyPattern::key(KeyCode::F(2))], KeyAction::ShowTab(Tab::Settings)),
+    binding("3", "Overview History (the whole machine)", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('3')], KeyAction::ShowTab(Tab::OverviewHistory)),
+    binding("4", "GPU History (one GPU)", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('4')], KeyAction::ShowTab(Tab::GpuHistory)),
+    binding("5", "Process History", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('5')], KeyAction::ShowTab(Tab::ProcessHistory)),
+    binding("6/F2", "Settings", None, ModeSet::NORMAL, ViewScope::All, &[KeyPattern::char('6'), KeyPattern::key(KeyCode::F(2))], KeyAction::ShowTab(Tab::Settings)),
     binding("j/↓", "select next", None, ModeSet::NORMAL, ViewScope::Only(LIST_VIEWS), &[KeyPattern::char('j'), KeyPattern::key(KeyCode::Down)], KeyAction::MoveDown),
     binding("k/↑", "select previous", None, ModeSet::NORMAL, ViewScope::Only(LIST_VIEWS), &[KeyPattern::char('k'), KeyPattern::key(KeyCode::Up)], KeyAction::MoveUp),
     binding("PgDn/Ctrl-D", "page down", None, ModeSet::NORMAL, ViewScope::Only(LIST_VIEWS), &[KeyPattern::key(KeyCode::PageDown), KeyPattern::ctrl('d')], KeyAction::PageDown),
@@ -234,8 +237,8 @@ pub static KEYMAP: &[KeyBinding] = &[
     binding("G/End/>", "last page of the GPU's sections", None, ModeSet::NORMAL, ViewScope::Only(GPU_VIEWS), &[KeyPattern::char('G'), KeyPattern::key(KeyCode::End), KeyPattern::char('>')], KeyAction::Last),
     binding("c", "show / hide the CPU sensors and per-core bars", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char('c')], KeyAction::ToggleCpuDetail),
     binding("z", "show the GPU processes alone on the whole Overview / everything again (Esc or another view too)", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char('z')], KeyAction::ZoomProcesses),
-    binding("i", "fold / unfold the disk I/O panel, so the processes get its rows (kept after a restart)", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char('i')], KeyAction::Fold("disk")),
-    binding("n", "fold / unfold the network panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char('n')], KeyAction::Fold("network")),
+    binding("i", "fold / unfold the disk I/O panel, so the processes get its rows (kept after a restart)", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char('i')], KeyAction::Fold('i')),
+    binding("n", "fold / unfold the network panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char('n')], KeyAction::Fold('n')),
     binding("o", "unfold every panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview, ViewKind::History]), &[KeyPattern::char('o')], KeyAction::UnfoldAll),
     binding("[/]", "scroll the GPU processes of the memory panel up / down", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char('[')], KeyAction::ScrollMemoryUp),
     binding("]", "scroll the GPU processes of the memory panel down", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::Overview]), &[KeyPattern::char(']')], KeyAction::ScrollMemoryDown),
@@ -245,25 +248,25 @@ pub static KEYMAP: &[KeyBinding] = &[
     binding("r", "reverse sort order", None, ModeSet::NORMAL, ViewScope::Only(PROCESS_VIEWS), &[KeyPattern::char('r')], KeyAction::ToggleOrder),
     binding("K", "terminate the visible selected process (SIGTERM, asks to confirm)", None, ModeSet::NORMAL, ViewScope::Only(PROCESS_VIEWS), &[KeyPattern::char('K')], KeyAction::Terminate),
     binding("F9", "force kill the visible selected process (SIGKILL, asks to confirm)", None, ModeSet::NORMAL, ViewScope::Only(PROCESS_VIEWS), &[KeyPattern::key(KeyCode::F(9))], KeyAction::Kill),
-    binding("j/↓", "next run in the Process History's list; the next page of an opened run's charts; the next GPU in the Overview History", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('j'), KeyPattern::key(KeyCode::Down)], KeyAction::HistoryDown),
-    binding("k/↑", "previous run; the previous page of an opened run; the previous GPU", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('k'), KeyPattern::key(KeyCode::Up)], KeyAction::HistoryUp),
-    binding("PgDn/Ctrl-D, PgUp/Ctrl-U", "scroll the Overview History's panels a band down / up, when they do not all fit; the next / previous page of an opened run's charts", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::key(KeyCode::PageDown), KeyPattern::ctrl('d')], KeyAction::PageDown),
-    binding("PgUp/Ctrl-U", "scroll the Overview History's panels a band up; the previous page of an opened run", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::key(KeyCode::PageUp), KeyPattern::ctrl('u')], KeyAction::PageUp),
+    binding("j/↓", "next run in the Process History's list; the next page of an opened run's charts; the next GPU in the GPU History; the Overview History's panels a band down, when they do not all fit", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('j'), KeyPattern::key(KeyCode::Down)], KeyAction::HistoryDown),
+    binding("k/↑", "previous run; the previous page of an opened run; the previous GPU; the Overview History's panels a band up", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('k'), KeyPattern::key(KeyCode::Up)], KeyAction::HistoryUp),
+    binding("PgDn/Ctrl-D, PgUp/Ctrl-U", "scroll the Overview History's or the GPU History's panels a band down / up, when they do not all fit; the next / previous page of an opened run's charts", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::key(KeyCode::PageDown), KeyPattern::ctrl('d')], KeyAction::PageDown),
+    binding("PgUp/Ctrl-U", "scroll the Overview History's or the GPU History's panels a band up; the previous page of an opened run", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::key(KeyCode::PageUp), KeyPattern::ctrl('u')], KeyAction::PageUp),
     binding("g/Home/<", "back to the top of the list: the running runs, then the newest; an opened run's first page; the first panels", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('g'), KeyPattern::key(KeyCode::Home), KeyPattern::char('<')], KeyAction::HistoryFirst),
     binding("G/End/>", "to the end of the list: the oldest ended run; an opened run's last page; the last panels", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('G'), KeyPattern::key(KeyCode::End), KeyPattern::char('>')], KeyAction::HistoryLast),
     binding("Space", "mark / unmark the run under the cursor and go to the next", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char(' ')], KeyAction::HistoryMark),
     binding("a", "mark every ended run, the ones beyond the list too / unmark all", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('a')], KeyAction::HistoryMarkAll),
     binding("d/Del", "delete the marked runs, else the run under the cursor (asks to confirm; running runs stay)", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('d'), KeyPattern::key(KeyCode::Delete)], KeyAction::HistoryDelete),
     binding("Enter", "open / close the selected run", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::key(KeyCode::Enter)], KeyAction::HistoryOpen),
-    binding("c/m/u/v", "fold / unfold the Overview History's CPU, memory, GPU utilization or GPU memory panel, so the others get its rows (kept after a restart)", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('c')], KeyAction::Fold("history.cpu")),
-    binding("m", "fold / unfold the Overview History's memory panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('m')], KeyAction::Fold("history.memory")),
-    binding("s", "show / hide the stall pressure strips of the Overview History's memory panel (kept after a restart)", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('s')], KeyAction::Fold("history.memory_pressure")),
-    binding("u", "fold / unfold the Overview History's GPU utilization panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('u')], KeyAction::Fold("history.gpu_utilization")),
-    binding("v", "fold / unfold the Overview History's GPU memory panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('v')], KeyAction::Fold("history.gpu_memory")),
-    binding("t/p/i/n", "fold / unfold the Overview History's GPU temperature, power, disk or network panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('t')], KeyAction::Fold("history.gpu_temperature")),
-    binding("p", "fold / unfold the Overview History's power panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('p')], KeyAction::Fold("history.power")),
-    binding("i", "fold / unfold the Overview History's disk panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('i')], KeyAction::Fold("history.disk")),
-    binding("n", "fold / unfold the Overview History's network panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('n')], KeyAction::Fold("history.network")),
+    binding("c/m/t/p/i/n", "fold / unfold the Overview History's CPU, memory, temperature, power, disk or network panel, so the others get its rows (kept after a restart)", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('c')], KeyAction::Fold('c')),
+    binding("m", "fold / unfold the Overview History's memory panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('m')], KeyAction::Fold('m')),
+    binding("s", "show / hide the stall pressure strips of the Overview History's memory panel (kept after a restart)", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('s')], KeyAction::Fold('s')),
+    binding("u/v/t/p", "fold / unfold the GPU History's utilization, memory, temperature or power panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('u')], KeyAction::Fold('u')),
+    binding("v", "fold / unfold the GPU History's memory panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('v')], KeyAction::Fold('v')),
+    binding("t", "fold / unfold the temperature panel of the page shown: the whole machine's on the Overview History, the GPU's on the GPU History", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('t')], KeyAction::Fold('t')),
+    binding("p", "fold / unfold the power panel of the page shown", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('p')], KeyAction::Fold('p')),
+    binding("i", "fold / unfold the Overview History's disk panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('i')], KeyAction::Fold('i')),
+    binding("n", "fold / unfold the Overview History's network panel", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('n')], KeyAction::Fold('n')),
     binding("e", "show the whole command line of the opened run / one line", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('e')], KeyAction::HistoryExpandCommand),
     binding("y", "copy the opened run's command line (OSC 52)", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::char('y')], KeyAction::HistoryCopyCommand),
     binding("→/l/w", "next bar size of the history charts (1m … 24h)", None, ModeSet::NORMAL, ViewScope::Only(&[ViewKind::History]), &[KeyPattern::key(KeyCode::Right), KeyPattern::char('l'), KeyPattern::char('w')], KeyAction::NextHistoryBarSize),
@@ -595,22 +598,56 @@ mod tests {
     }
 
     /// The fold keys the panels show (D-114) are the ones the keymap
-    /// binds, in the view of each panel.
+    /// binds, in the view of each panel; the controller picks the panel
+    /// of the place shown (D-148).
     #[test]
     fn the_fold_keys_shown_are_the_keys_bound() {
-        for fold in crate::modules::folds::FOLDS {
-            let view = if fold.panel.starts_with("history.") {
-                ViewKind::History
-            } else {
-                ViewKind::Overview
+        use crate::modules::folds::{FOLDS, FoldPlace};
+        for fold in FOLDS {
+            let view = match fold.place {
+                FoldPlace::Overview => ViewKind::Overview,
+                FoldPlace::OverviewHistory | FoldPlace::GpuHistory => ViewKind::History,
             };
             let event = key(KeyCode::Char(fold.key), KeyModifiers::NONE);
             assert_eq!(
                 resolve(&event, ModeKind::Normal, view),
-                Some(KeyAction::Fold(fold.panel)),
+                Some(KeyAction::Fold(fold.key)),
                 "{fold:?}"
             );
         }
+    }
+
+    /// The digits open the tabs in their order (D-148): the three history
+    /// tabs side by side, Settings last and on F2 too.
+    #[test]
+    fn the_digits_open_the_tabs_in_order() {
+        for (index, tab) in crate::views::OFFERED_TABS.into_iter().enumerate() {
+            let digit = char::from_digit(u32::try_from(index).unwrap() + 1, 10).unwrap();
+            let event = key(KeyCode::Char(digit), KeyModifiers::NONE);
+            for view in [ViewKind::Overview, ViewKind::History, ViewKind::Settings] {
+                assert_eq!(
+                    resolve(&event, ModeKind::Normal, view),
+                    Some(KeyAction::ShowTab(tab)),
+                    "{digit} in {view:?}"
+                );
+            }
+        }
+        assert_eq!(
+            resolve(
+                &key(KeyCode::F(2), KeyModifiers::NONE),
+                ModeKind::Normal,
+                ViewKind::Overview
+            ),
+            Some(KeyAction::ShowTab(Tab::Settings))
+        );
+        assert_eq!(
+            resolve(
+                &key(KeyCode::Char('7'), KeyModifiers::NONE),
+                ModeKind::Normal,
+                ViewKind::Overview
+            ),
+            None
+        );
     }
 
     #[test]

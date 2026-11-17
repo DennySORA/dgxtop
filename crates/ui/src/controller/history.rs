@@ -1,6 +1,6 @@
-//! The history views' keys beyond the run cursor: on the Overview History
-//! the GPU its GPU panels show (D-107; its bands scroll with
-//! [`super::paging`]); on the Process History the marks and the deletion of
+//! The history views' keys beyond the run cursor: on the GPU History the
+//! GPU its panels show (D-107, D-148; its bands and the Overview History's
+//! scroll with [`super::paging`]); on the Process History the marks and the deletion of
 //! runs (D-108), which asks to confirm before anything is sent. `a` marks
 //! every ended run the filter keeps, the ones beyond the projected rows too
 //! (D-128), until a mark changes one by one.
@@ -21,15 +21,15 @@ use crate::format::counted;
 use crate::modules::{HISTORY_MODULE_ID, history_gpus};
 
 impl Controller {
-    /// `↑`/`↓` on the Overview History: the GPU its GPU panels show;
-    /// nothing on a host of one GPU. A choice of what the view already
-    /// holds, so nothing is sent to the Manager.
+    /// `↑`/`↓` on the GPU History: the GPU its panels show; nothing on a
+    /// host of one GPU. A choice of what the view already holds, so
+    /// nothing is sent to the Manager.
     pub(super) fn navigate_history_gpu(
         &mut self,
         movement: Movement,
         context: &ControllerContext<'_>,
     ) {
-        if self.history_page() != 0 {
+        if self.history_page() != crate::views::GPU_HISTORY_PAGE {
             return;
         }
         let Some(history) = context
@@ -56,8 +56,8 @@ impl Controller {
         }
     }
 
-    /// Shows `gpu` in the Overview History's GPU panels (a key or its
-    /// picker's chip).
+    /// Shows `gpu` in the GPU History's panels (a key or its picker's
+    /// chip).
     pub(super) fn pick_history_gpu(&mut self, gpu: EntityId) {
         let Ok(history) = ModuleId::new(HISTORY_MODULE_ID) else {
             return;
@@ -133,7 +133,7 @@ impl Controller {
     /// asked, nor while a signal waits for its own confirmation.
     pub(super) fn ask_delete(&mut self, context: &ControllerContext<'_>) {
         let page = self.history_page();
-        if page == 0 || !self.confirmation.is_idle() {
+        if crate::views::is_chart_page(page) || !self.confirmation.is_idle() {
             return;
         }
         if let Some(deletion) = &self.deletion {

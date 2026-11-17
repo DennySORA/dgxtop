@@ -50,6 +50,7 @@ use paging::PageStep;
 use requests::{PendingRequests, RequestKind};
 use session::SessionDrafts;
 
+use crate::modules::folds::{FoldPlace, fold_at, fold_of};
 use crate::modules::{
     CPU_MODULE_ID, GPU_MODULE_ID, HISTORY_MODULE_ID, MEMORY_MODULE_ID, PROCESSES_MODULE_ID,
 };
@@ -148,7 +149,7 @@ pub struct Controller {
     /// The filter under which `a` marked every ended run, listed or not
     /// (D-128); `None` once the marks change one by one.
     marked_every: Option<String>,
-    /// The entity picked in each module: the Overview History's GPU (D-107).
+    /// The entity picked in each module: the GPU History's GPU (D-107).
     picks: BTreeMap<ModuleId, EntityId>,
     /// The deletion of Process History runs being sent (D-108).
     deletion: Option<deletion::RunDeletion>,
@@ -470,8 +471,10 @@ impl Controller {
                     self.scroll_module(memory, action == KeyAction::ScrollMemoryDown);
                 }
             }
-            // The Overview History: ↑/↓ pick the GPU, g/G scroll (D-107).
-            KeyAction::HistoryDown | KeyAction::HistoryUp if self.history_page() == 0 => {
+            // The GPU History: ↑/↓ pick the GPU (D-107, D-148).
+            KeyAction::HistoryDown | KeyAction::HistoryUp
+                if self.history_page() == views::GPU_HISTORY_PAGE =>
+            {
                 let movement = if action == KeyAction::HistoryDown {
                     Movement::Down(1)
                 } else {
@@ -479,18 +482,16 @@ impl Controller {
                 };
                 self.navigate_history_gpu(movement, context);
             }
-            KeyAction::HistoryFirst | KeyAction::HistoryLast if self.history_page() == 0 => {
-                if let Some(step) = PageStep::of_history_key(action) {
-                    self.scroll_page(HISTORY_MODULE_ID, step, context);
-                }
-            }
-            // An opened run: ↑/↓ turn its charts' pages and g/G go to the
-            // first and the last; it never switches to another run (D-116).
+            // Every page but the list scrolls: the Overview History has no
+            // GPU to pick, so ↑/↓ scroll its panels as PgUp/PgDn do
+            // (D-148), and g/G go to the first and the last panels of both
+            // chart pages (D-107); an opened run's ↑/↓ and g/G turn its
+            // charts' pages and never switch to another run (D-116).
             KeyAction::HistoryDown
             | KeyAction::HistoryUp
             | KeyAction::HistoryFirst
             | KeyAction::HistoryLast
-                if self.history_page() == views::RUN_PAGE =>
+                if self.history_page() != views::PROCESS_LIST_PAGE =>
             {
                 if let Some(step) = PageStep::of_history_key(action) {
                     self.scroll_page(HISTORY_MODULE_ID, step, context);
@@ -514,7 +515,7 @@ impl Controller {
                 }
             }
             KeyAction::HistoryCopyCommand => self.copy_command(context),
-            KeyAction::Fold(panel) => self.toggle_fold(panel, context, sink),
+            KeyAction::Fold(key) => self.toggle_fold(key, context, sink),
             KeyAction::UnfoldAll => self.unfold_all(context, sink),
             KeyAction::FilterApply => self.finish_filter(true, context),
             KeyAction::FilterClear => self.finish_filter(false, context),
@@ -581,8 +582,9 @@ impl Controller {
         }
         let page = self.history_page();
         match tab {
-            views::Tab::OverviewHistory => self.set_history_page(0),
-            views::Tab::ProcessHistory if page == 0 => {
+            views::Tab::OverviewHistory => self.set_history_page(views::OVERVIEW_HISTORY_PAGE),
+            views::Tab::GpuHistory => self.set_history_page(views::GPU_HISTORY_PAGE),
+            views::Tab::ProcessHistory if views::is_chart_page(page) => {
                 self.set_history_page(views::PROCESS_LIST_PAGE);
             }
             _ => {}
@@ -592,8 +594,8 @@ impl Controller {
     }
 
     /// Shows the history module's `page`; another page starts at its top
-    /// (the module's offset scrolls the Overview History and turns a run's
-    /// pages, D-107, D-112).
+    /// (the module's offset scrolls the Overview History and the GPU
+    /// History and turns a run's pages, D-107, D-112).
     fn set_history_page(&mut self, page: u8) {
         let Ok(history) = ModuleId::new(HISTORY_MODULE_ID) else {
             return;
@@ -613,7 +615,8 @@ impl Controller {
         }
     }
 
-    /// The history module's page (0 the overview history).
+    /// The history module's page (`views::OVERVIEW_HISTORY_PAGE` until a
+    /// tab or a key shows another).
     fn history_page(&self) -> u8 {
         ModuleId::new(HISTORY_MODULE_ID)
             .ok()
@@ -641,8 +644,9 @@ impl Controller {
                 self.scroll_page(GPU_MODULE_ID, PageStep::of(movement), context);
             }
             ViewKind::Settings => self.navigate_modules(movement, context),
-            // PgUp/PgDn scroll the Overview History's bands (D-107) and
-            // turn an opened run's pages (D-112, D-116).
+            // PgUp/PgDn scroll the bands of the Overview History and the
+            // GPU History (D-107) and turn an opened run's pages (D-112,
+            // D-116).
             ViewKind::History if self.history_page() != views::PROCESS_LIST_PAGE => {
                 self.scroll_page(HISTORY_MODULE_ID, PageStep::of(movement), context);
             }
@@ -762,7 +766,7 @@ impl Controller {
     fn start_filter(&mut self, context: &ControllerContext<'_>) {
         match current_view(context) {
             ViewKind::Overview => {}
-            ViewKind::History if self.history_page() != 0 => {
+            ViewKind::History if !views::is_chart_page(self.history_page()) => {
                 self.set_history_page(views::PROCESS_LIST_PAGE);
             }
             _ => return,
@@ -904,7 +908,7 @@ impl Controller {
             return;
         };
         let tab = self.history_page();
-        if tab == 0 {
+        if views::is_chart_page(tab) {
             return;
         }
         let Some(runs) = context
@@ -1285,33 +1289,44 @@ impl Controller {
         }
     }
 
-    /// Folds or unfolds `panel` (D-114): an Overview History panel on that
-    /// page only.
+    /// Where the panels a key folds show now (D-148): the Overview, the
+    /// Overview History or the GPU History; nowhere else.
+    fn fold_place(&self, context: &ControllerContext<'_>) -> Option<FoldPlace> {
+        match (current_view(context), self.history_page()) {
+            (ViewKind::Overview, _) => Some(FoldPlace::Overview),
+            (ViewKind::History, views::OVERVIEW_HISTORY_PAGE) => Some(FoldPlace::OverviewHistory),
+            (ViewKind::History, views::GPU_HISTORY_PAGE) => Some(FoldPlace::GpuHistory),
+            _ => None,
+        }
+    }
+
+    /// Folds or unfolds the panel `key` names in the place shown (D-114,
+    /// D-148): never a panel of another page.
     fn toggle_fold<S: CommandSink + ?Sized>(
         &mut self,
-        panel: &'static str,
+        key: char,
         context: &ControllerContext<'_>,
         sink: &S,
     ) {
-        let history = panel.starts_with("history.");
-        if history && (current_view(context) != ViewKind::History || self.history_page() != 0) {
+        let Some(fold) = self
+            .fold_place(context)
+            .and_then(|place| fold_at(place, key))
+        else {
             return;
-        }
-        self.folds.toggle(panel);
+        };
+        self.folds.toggle(fold.panel);
         self.bump();
         self.save_folds(context, sink);
     }
 
-    /// `o`: unfolds every panel of the view (D-114).
+    /// `o`: unfolds every panel of the place shown (D-114, D-148).
     fn unfold_all<S: CommandSink + ?Sized>(&mut self, context: &ControllerContext<'_>, sink: &S) {
-        let history = match current_view(context) {
-            ViewKind::Overview => false,
-            ViewKind::History if self.history_page() == 0 => true,
-            _ => return,
+        let Some(place) = self.fold_place(context) else {
+            return;
         };
         if self
             .folds
-            .unfold(|panel| panel.starts_with("history.") == history)
+            .unfold(|panel| fold_of(panel).is_some_and(|fold| fold.place == place))
         {
             self.bump();
             self.save_folds(context, sink);

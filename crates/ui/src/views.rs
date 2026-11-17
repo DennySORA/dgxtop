@@ -5,9 +5,9 @@
 //! stay in the command contract but are removed: no tab shows them and the
 //! Manager refuses them (D-91).
 //!
-//! The view kinds are fixed by the command contract, so the two history
-//! tabs are one view, `History`, on two pages of its module: the overview's
-//! resources and the GPU processes (D-75).
+//! The view kinds are fixed by the command contract, so the three history
+//! tabs are one view, `History`, on pages of its module: the whole
+//! machine's resources, one GPU's (D-148) and the GPU processes (D-75).
 
 use dgxtop_core::commands::ViewKind;
 
@@ -17,30 +17,43 @@ pub enum Tab {
     Overview,
     Gpu,
     OverviewHistory,
+    GpuHistory,
     ProcessHistory,
     Settings,
 }
 
-/// Offered tabs in order; the digit keys 1–5 follow this order.
-pub const OFFERED_TABS: [Tab; 5] = [
+/// Offered tabs in order; the digit keys 1–6 follow this order.
+pub const OFFERED_TABS: [Tab; 6] = [
     Tab::Overview,
     Tab::Gpu,
     Tab::OverviewHistory,
+    Tab::GpuHistory,
     Tab::ProcessHistory,
     Tab::Settings,
 ];
 
+/// Page of the history module charting the whole machine: the Overview
+/// History, the module's first page.
+pub const OVERVIEW_HISTORY_PAGE: u8 = 0;
 /// Page of the history module the process history opens on (the list).
 pub const PROCESS_LIST_PAGE: u8 = 1;
 /// Page of the history module showing the opened run.
 pub const RUN_PAGE: u8 = 2;
+/// Page of the history module charting one GPU: the GPU History (D-148).
+pub const GPU_HISTORY_PAGE: u8 = 3;
+
+/// Whether `page` of the history module charts the history's series (the
+/// Overview History and the GPU History) rather than GPU process runs.
+pub const fn is_chart_page(page: u8) -> bool {
+    matches!(page, OVERVIEW_HISTORY_PAGE | GPU_HISTORY_PAGE)
+}
 
 impl Tab {
     pub const fn view(self) -> ViewKind {
         match self {
             Self::Overview => ViewKind::Overview,
             Self::Gpu => ViewKind::GpuDetail,
-            Self::OverviewHistory | Self::ProcessHistory => ViewKind::History,
+            Self::OverviewHistory | Self::GpuHistory | Self::ProcessHistory => ViewKind::History,
             Self::Settings => ViewKind::Settings,
         }
     }
@@ -50,6 +63,7 @@ impl Tab {
             Self::Overview => "Overview",
             Self::Gpu => "GPU",
             Self::OverviewHistory => "Overview History",
+            Self::GpuHistory => "GPU History",
             Self::ProcessHistory => "Process History",
             Self::Settings => "Settings",
         }
@@ -61,6 +75,7 @@ impl Tab {
             Self::Overview => "tab.overview",
             Self::Gpu => "tab.gpu_detail",
             Self::OverviewHistory => "tab.history",
+            Self::GpuHistory => "tab.gpu_history",
             Self::ProcessHistory => "tab.process_history",
             Self::Settings => "tab.settings",
         }
@@ -78,7 +93,8 @@ impl Tab {
         match view {
             ViewKind::Overview => Some(Self::Overview),
             ViewKind::GpuDetail => Some(Self::Gpu),
-            ViewKind::History if page == 0 => Some(Self::OverviewHistory),
+            ViewKind::History if page == OVERVIEW_HISTORY_PAGE => Some(Self::OverviewHistory),
+            ViewKind::History if page == GPU_HISTORY_PAGE => Some(Self::GpuHistory),
             ViewKind::History => Some(Self::ProcessHistory),
             ViewKind::Settings => Some(Self::Settings),
             ViewKind::Processes | ViewKind::Sources | ViewKind::Actions => None,
@@ -118,17 +134,26 @@ mod tests {
         assert_eq!(Tab::of(ViewKind::Processes, 0), None);
         assert_eq!(Tab::of(ViewKind::Actions, 0), None);
         assert_eq!(Tab::Overview.number(), 1);
-        assert_eq!(Tab::Settings.number(), 5);
+        assert_eq!(Tab::Settings.number(), 6);
     }
 
-    /// The two history tabs are one view on two pages (D-75).
+    /// The three history tabs are one view on pages of its module (D-75,
+    /// D-148): the whole machine, one GPU, then the runs and an opened run.
     #[test]
     fn the_history_tabs_are_pages_of_one_view() {
         assert_eq!(Tab::of(ViewKind::History, 0), Some(Tab::OverviewHistory));
         assert_eq!(Tab::of(ViewKind::History, 1), Some(Tab::ProcessHistory));
         assert_eq!(Tab::of(ViewKind::History, 2), Some(Tab::ProcessHistory));
+        assert_eq!(
+            Tab::of(ViewKind::History, GPU_HISTORY_PAGE),
+            Some(Tab::GpuHistory)
+        );
+        assert!(is_chart_page(OVERVIEW_HISTORY_PAGE) && is_chart_page(GPU_HISTORY_PAGE));
+        assert!(!is_chart_page(PROCESS_LIST_PAGE) && !is_chart_page(RUN_PAGE));
         assert_eq!(Tab::ProcessHistory.view(), ViewKind::History);
-        assert_eq!(next_tab(Some(Tab::OverviewHistory)), Tab::ProcessHistory);
+        assert_eq!(Tab::GpuHistory.view(), ViewKind::History);
+        assert_eq!(next_tab(Some(Tab::OverviewHistory)), Tab::GpuHistory);
+        assert_eq!(next_tab(Some(Tab::GpuHistory)), Tab::ProcessHistory);
         assert_eq!(previous_tab(Some(Tab::Overview)), Tab::Settings);
         assert_eq!(next_tab(None), Tab::Overview);
         for tab in OFFERED_TABS {

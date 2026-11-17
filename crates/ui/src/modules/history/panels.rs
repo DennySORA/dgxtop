@@ -1,16 +1,24 @@
-//! What the history view draws (D-50): panels in the overview's order, each
-//! a title over one strip per series, all on the window's time axis. The
-//! CPU and the memory (one strip each, against 100 % and the RAM total),
-//! the memory's also with its stall pressure, `some` and `full`, where the
+//! What the history's chart pages draw (D-50, D-148): panels, each a title
+//! over one strip per series, all on the window's time axis.
+//!
+//! The Overview History is the whole machine ([`Page::Overview`]): the CPU
+//! and the memory (one strip each, against 100 % and the RAM total), the
+//! memory's also with its stall pressure, `some` and `full`, where the
 //! kernel reports it (D-135), unless a key of their own folded those two
-//! strips away (D-144); the GPUs' utilization, memory in use,
-//! temperature and power (each against its own scale), for one GPU at a
-//! time on a host of several (D-107), the power panel also leading with
-//! the host's total and each CPU package's power once the CPU's is read
-//! (D-106), the temperature panel with each CPU package's and the SoC's
-//! temperature (D-137); the disk's read and
-//! write and the interface's receive and transmit rates (two strips on one
-//! scale, the tallest column of the pair, so their heights compare).
+//! strips away (D-144); every temperature the machine reports, each CPU
+//! package's, the SoC's (D-137), each GPU's and the charted drive's; the
+//! power, the host's total and each CPU package's once the CPU's is read
+//! (D-106), else each GPU's; the disk's read and write and the interface's
+//! receive and transmit rates (two strips on one scale, the tallest column
+//! of the pair, so their heights compare).
+//!
+//! The GPU History is one GPU ([`Page::Gpu`]), the one picked on a host of
+//! several (D-107): its utilization, with the share of time its memory was
+//! read or written under it, its memory in use, its temperature, with its
+//! fan's speed under it, and its power, each against its own scale. A
+//! companion strip that stayed at zero over the whole window (a fan that
+//! never turned, GB10's memory activity) is left out: no chart stands
+//! empty.
 
 use std::collections::BTreeSet;
 
@@ -191,31 +199,12 @@ impl Panel<'_> {
     }
 }
 
-/// The GPU panels: their series and titles; the power panel's title
-/// while only the GPUs' power is read.
-const GPU_PANELS: [(HistoryChartKind, &str, &str); 4] = [
-    (
-        HistoryChartKind::GpuUtilization,
-        "GPU utilization",
-        "history.gpu_utilization",
-    ),
-    (
-        HistoryChartKind::GpuMemory,
-        "GPU memory",
-        "history.gpu_memory",
-    ),
-    (
-        HistoryChartKind::GpuTemperature,
-        "GPU temperature",
-        "history.gpu_temperature",
-    ),
-    (HistoryChartKind::GpuPower, "GPU power", "history.power"),
-];
-/// The power panel's title once the host's power leads it (D-106).
-const POWER_TITLE: &str = "Power";
-/// The temperature panel's title once the CPU's or the SoC's leads it
-/// (D-137).
-const TEMPERATURE_TITLE: &str = "Temperature";
+/// The whole machine's temperature and power panels (D-148): their
+/// titles and fold ids.
+const TEMPERATURE_PANEL: (&str, &str) = ("Temperature", "history.host_temperature");
+const POWER_PANEL: (&str, &str) = ("Power", "history.host_power");
+/// The power panel of a machine that reads its GPUs' draw alone.
+const GPU_POWER_TITLES: (&str, &str) = ("Power · GPU", "Power · GPUs");
 /// The top of a pressure strip's scale at least (D-135): its peak, but a
 /// stall of a hundredth of a percent must not fill the strip.
 const MIN_PRESSURE_SCALE: f64 = 1.0;
@@ -297,16 +286,36 @@ const fn is_gpu(kind: HistoryChartKind) -> bool {
     matches!(
         kind,
         HistoryChartKind::GpuUtilization
+            | HistoryChartKind::GpuMemoryActivity
             | HistoryChartKind::GpuMemory
             | HistoryChartKind::GpuTemperature
+            | HistoryChartKind::GpuFanSpeed
             | HistoryChartKind::GpuPower
     )
 }
 
-/// The panels of `history`, in display order, the GPU panels of `gpu`
-/// alone when one is given; a series the view does not carry has no
-/// strip, and a panel without strips is left out.
-pub(super) fn panels<'a>(history: &'a HistoryView, gpu: Option<&EntityId>) -> Vec<Panel<'a>> {
+/// The page of panels a history tab shows (D-148).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Page<'a> {
+    /// The whole machine: the Overview History.
+    Overview,
+    /// One GPU, the GPU History: the one given on a host of several, the
+    /// only one otherwise.
+    Gpu(Option<&'a EntityId>),
+}
+
+/// The panels of `page`, in display order; a series the view does not
+/// carry has no strip, and a panel without strips is left out.
+pub(super) fn panels<'a>(history: &'a HistoryView, page: Page<'_>) -> Vec<Panel<'a>> {
+    match page {
+        Page::Overview => machine_panels(history),
+        Page::Gpu(gpu) => gpu_panels(history, gpu),
+    }
+}
+
+/// The Overview History's panels: what is the same whichever GPU is
+/// looked at (D-148).
+fn machine_panels(history: &HistoryView) -> Vec<Panel<'_>> {
     let series = Series::of_chart;
     let first = |kind| history.charts.iter().find(|chart| chart.kind == kind);
     let mut panels = Vec::new();
@@ -318,40 +327,109 @@ pub(super) fn panels<'a>(history: &'a HistoryView, gpu: Option<&EntityId>) -> Ve
     if let Some(memory) = first(HistoryChartKind::MemoryUsed) {
         panels.push(memory_panel(history, memory).folding("history.memory"));
     }
-    for (kind, title, fold) in GPU_PANELS {
-        // The host's own strips lead the panel and rename it (D-106, D-137).
-        let (mut strips, host_title) = match kind {
-            HistoryChartKind::GpuPower => (host_power_strips(history), POWER_TITLE),
-            HistoryChartKind::GpuTemperature => {
-                (host_temperature_strips(history), TEMPERATURE_TITLE)
-            }
-            _ => (Vec::new(), title),
-        };
-        let title = if strips.is_empty() { title } else { host_title };
-        strips.extend(
-            history
-                .charts
-                .iter()
-                .filter(|chart| chart.kind == kind)
-                .filter(|chart| gpu.is_none_or(|gpu| chart.series.entity_id == *gpu))
-                .map(gpu_strip),
-        );
-        if !strips.is_empty() {
-            panels.push(Panel {
-                title: title.to_owned(),
-                title_parts: Vec::new(),
-                strips,
-                fold: Some(fold),
-                strips_fold: None,
-            });
-        }
-    }
+    panels.extend(group(
+        TEMPERATURE_PANEL,
+        machine_temperature_strips(history),
+    ));
+    panels.extend(machine_power_panel(history));
     for (pair, title, fold) in RATE_PANELS {
         if let Some(panel) = rate_panel(history, pair, title).map(|panel| panel.folding(fold)) {
             panels.push(panel);
         }
     }
     panels
+}
+
+/// The GPU History's panels of `gpu`, the first GPU charted when none is
+/// given: everything on the page is that GPU's (D-148).
+fn gpu_panels<'a>(history: &'a HistoryView, gpu: Option<&EntityId>) -> Vec<Panel<'a>> {
+    let of_gpu = |kind| {
+        history
+            .charts
+            .iter()
+            .filter(|chart| chart.kind == kind)
+            .find(|chart| gpu.is_none_or(|gpu| chart.series.entity_id == *gpu))
+    };
+    let pairs = [
+        (
+            ("GPU utilization", HistoryChartKind::GpuUtilization, "util"),
+            Some(("memory busy", HistoryChartKind::GpuMemoryActivity, "busy")),
+            "history.gpu_utilization",
+        ),
+        (
+            ("GPU memory", HistoryChartKind::GpuMemory, ""),
+            None,
+            "history.gpu_memory",
+        ),
+        (
+            ("GPU temperature", HistoryChartKind::GpuTemperature, "temp"),
+            Some(("fan", HistoryChartKind::GpuFanSpeed, "fan")),
+            "history.gpu_thermal",
+        ),
+        (
+            ("GPU power", HistoryChartKind::GpuPower, ""),
+            None,
+            "history.gpu_power",
+        ),
+    ];
+    pairs
+        .into_iter()
+        .filter_map(|((title, kind, label), companion, fold)| {
+            let chart = of_gpu(kind)?;
+            let companion = companion
+                .and_then(|(name, kind, label)| Some((name, of_gpu(kind)?, label)))
+                .filter(|(_, chart, _)| has_moved(chart));
+            Some(with_companion((title, chart, label), companion).folding(fold))
+        })
+        .collect()
+}
+
+/// A GPU's panel: `chart` alone under `title`, its strip named by its GPU
+/// for whoever reads the page aloud, or over the `companion` charted with
+/// it, each under its label in the GPU's color (D-123), the title naming
+/// both (`GPU temperature and fan`).
+fn with_companion<'a>(
+    (title, chart, label): (&str, &'a HistoryChartView, &str),
+    companion: Option<(&str, &'a HistoryChartView, &str)>,
+) -> Panel<'a> {
+    let (title, strips) = match companion {
+        None => (title.to_owned(), vec![gpu_strip(chart)]),
+        Some((name, other, other_label)) => {
+            let labeled = |label: &str, chart: &'a HistoryChartView| Strip {
+                label: label.to_owned(),
+                ..gpu_strip(chart)
+            };
+            (
+                format!("{title} and {name}"),
+                vec![labeled(label, chart), labeled(other_label, other)],
+            )
+        }
+    };
+    Panel {
+        title,
+        title_parts: Vec::new(),
+        strips,
+        fold: None,
+        strips_fold: None,
+    }
+}
+
+/// Whether `chart` ever left zero in the window: a companion strip that
+/// did not is left out (module docs).
+fn has_moved(chart: &HistoryChartView) -> bool {
+    chart.peak.is_some_and(|peak| peak > 0.0)
+}
+
+/// A panel of the whole machine: `strips` under `title`, folded by `fold`;
+/// none without strips.
+fn group<'a>((title, fold): (&str, &'static str), strips: Vec<Strip<'a>>) -> Option<Panel<'a>> {
+    (!strips.is_empty()).then(|| Panel {
+        title: title.to_owned(),
+        title_parts: Vec::new(),
+        strips,
+        fold: Some(fold),
+        strips_fold: None,
+    })
 }
 
 /// The memory panel: the RAM in use against the RAM total, alone until the
@@ -429,54 +507,78 @@ fn gpu_strip(chart: &HistoryChartView) -> Strip<'_> {
     }
 }
 
-/// The host's total power (`total`) and each CPU package's (`CPU`, or
-/// `CPU 0`, `CPU 1` on a host of several), which lead the power panel once
-/// the CPU's power is read (D-106); none before.
-fn host_power_strips(history: &HistoryView) -> Vec<Strip<'_>> {
+/// The strips of every chart of `kind`, each a GPU's.
+fn gpu_strips(history: &HistoryView, kind: HistoryChartKind) -> impl Iterator<Item = Strip<'_>> {
+    history
+        .charts
+        .iter()
+        .filter(move |chart| chart.kind == kind)
+        .map(gpu_strip)
+}
+
+/// The strips of the CPU packages charted as `kind`: `CPU`, or `CPU 0`,
+/// `CPU 1` on a host of several.
+fn package_strips(history: &HistoryView, kind: HistoryChartKind) -> Vec<Strip<'_>> {
     let packages: Vec<&HistoryChartView> = history
         .charts
         .iter()
-        .filter(|chart| chart.kind == HistoryChartKind::CpuPower)
+        .filter(|chart| chart.kind == kind)
         .collect();
+    let alone = packages.len() == 1;
+    packages
+        .into_iter()
+        .map(|chart| {
+            let label = if alone {
+                "CPU".to_owned()
+            } else {
+                clean(&chart.subject)
+            };
+            level_strip(label, chart)
+        })
+        .collect()
+}
+
+/// What the machine draws (D-106, D-148): the host's total (`total`) and
+/// each CPU package's power once the CPU's is read. A machine that reports
+/// neither shows each GPU's draw, the only power it reads, and the title
+/// says so (`Power · GPU`): a GPU's draw is not the machine's, and a lone
+/// strip has no label to say whose it is. With a total the GPUs' are its
+/// parts, charted on the GPU History.
+fn machine_power_panel(history: &HistoryView) -> Option<Panel<'_>> {
     let total = history
         .charts
         .iter()
         .filter(|chart| chart.kind == HistoryChartKind::TotalPower)
         .map(|chart| level_strip("total".to_owned(), chart));
-    let cpus = packages.iter().map(|chart| {
-        let label = if packages.len() == 1 {
-            "CPU".to_owned()
-        } else {
-            clean(&chart.subject)
-        };
-        level_strip(label, chart)
-    });
-    total.chain(cpus).collect()
+    let host: Vec<Strip<'_>> = total
+        .chain(package_strips(history, HistoryChartKind::CpuPower))
+        .collect();
+    if !host.is_empty() {
+        return group(POWER_PANEL, host);
+    }
+    let gpus: Vec<Strip<'_>> = gpu_strips(history, HistoryChartKind::GpuPower).collect();
+    let (one, several) = GPU_POWER_TITLES;
+    let title = if gpus.len() == 1 { one } else { several };
+    group((title, POWER_PANEL.1), gpus)
 }
 
-/// Each CPU package's temperature (`CPU`, or `CPU 0`, `CPU 1` on a host of
-/// several) and the SoC's (`SoC`), which lead the temperature panel where
-/// they are read (D-137); none elsewhere.
-fn host_temperature_strips(history: &HistoryView) -> Vec<Strip<'_>> {
-    let packages: Vec<&HistoryChartView> = history
-        .charts
-        .iter()
-        .filter(|chart| chart.kind == HistoryChartKind::CpuTemperature)
-        .collect();
-    let cpus = packages.iter().map(|chart| {
-        let label = if packages.len() == 1 {
-            "CPU".to_owned()
-        } else {
-            clean(&chart.subject)
-        };
-        level_strip(label, chart)
-    });
-    let soc = history
-        .charts
-        .iter()
-        .filter(|chart| chart.kind == HistoryChartKind::SocTemperature)
-        .map(|chart| level_strip("SoC".to_owned(), chart));
-    cpus.chain(soc).collect()
+/// Every temperature the machine reports (D-137, D-148): each CPU
+/// package's, the SoC's (`SoC`), each GPU's in its color and the charted
+/// drive's (`disk`), all against the same 100 °C.
+fn machine_temperature_strips(history: &HistoryView) -> Vec<Strip<'_>> {
+    let of = |kind, label: &'static str| {
+        history
+            .charts
+            .iter()
+            .filter(move |chart| chart.kind == kind)
+            .map(move |chart| level_strip(label.to_owned(), chart))
+    };
+    package_strips(history, HistoryChartKind::CpuTemperature)
+        .into_iter()
+        .chain(of(HistoryChartKind::SocTemperature, "SoC"))
+        .chain(gpu_strips(history, HistoryChartKind::GpuTemperature))
+        .chain(of(HistoryChartKind::DiskTemperature, "disk"))
+        .collect()
 }
 
 /// The chart's fixed scale; without one (a GPU that reports no power
@@ -568,40 +670,84 @@ mod tests {
             .collect()
     }
 
+    fn strings(labels: &[&str]) -> Vec<String> {
+        labels.iter().map(|label| (*label).to_owned()).collect()
+    }
+
+    fn folds(panels: &[Panel<'_>]) -> Vec<Option<&'static str>> {
+        panels.iter().map(|panel| panel.fold).collect()
+    }
+
+    /// A chart like `template` of another series.
+    fn chart_of(
+        template: &HistoryChartView,
+        kind: HistoryChartKind,
+        subject: &str,
+        unit: CanonicalUnit,
+        (scale_max, peak): (Option<f64>, f64),
+    ) -> HistoryChartView {
+        HistoryChartView {
+            kind,
+            subject: subject.to_owned(),
+            unit,
+            scale_max,
+            peak: Some(peak),
+            mean: Some(peak / 4.0),
+            ..template.clone()
+        }
+    }
+
+    /// A chart of `gpu` (0 or 1) like the fixture's of `like`.
+    fn gpu_chart(
+        history: &HistoryView,
+        (like, kind): (HistoryChartKind, HistoryChartKind),
+        gpu: usize,
+        unit: CanonicalUnit,
+        peak: f64,
+    ) -> HistoryChartView {
+        let template = history
+            .charts
+            .iter()
+            .filter(|chart| chart.kind == like)
+            .nth(gpu)
+            .unwrap();
+        chart_of(template, kind, &template.subject, unit, (Some(100.0), peak))
+    }
+
+    /// The Overview History holds what is the same whichever GPU is looked
+    /// at (D-148): the CPU, the memory, the machine's temperatures and
+    /// power, the disk and the network, and no panel of one GPU.
     #[test]
-    fn panels_follow_the_overview_with_a_strip_per_gpu() {
+    fn the_overview_history_is_the_whole_machine() {
         let history = history_view();
-        let panels = panels(&history, None);
-        let strings = |labels: &[&str]| -> Vec<String> {
-            labels.iter().map(|label| (*label).to_owned()).collect()
-        };
+        let panels = panels(&history, Page::Overview);
         let gpus = strings(&["GPU 0", "GPU 1"]);
         assert_eq!(
             layout(&panels),
             vec![
                 ("CPU utilization".to_owned(), strings(&[""])),
                 ("Memory used · 64.0 GiB".to_owned(), strings(&[""])),
-                ("GPU utilization".to_owned(), gpus.clone()),
-                ("GPU memory".to_owned(), gpus.clone()),
-                ("GPU temperature".to_owned(), gpus.clone()),
-                ("GPU power".to_owned(), gpus),
+                ("Temperature".to_owned(), gpus.clone()),
+                ("Power · GPUs".to_owned(), gpus),
                 ("Disk · nvme0n1".to_owned(), strings(&["read", "write"])),
                 ("Network · enp1s0".to_owned(), strings(&["rx", "tx"])),
             ]
         );
-        // Each GPU strip keeps its own scale (its framebuffer, its limit).
-        let memory = &panels[3];
         assert_eq!(
-            memory
-                .strips
-                .iter()
-                .map(|strip| strip.scale)
-                .collect::<Vec<_>>(),
-            vec![Some(80.0 * 1_073_741_824.0), Some(64.0 * 1_073_741_824.0)]
+            folds(&panels),
+            [
+                "history.cpu",
+                "history.memory",
+                "history.host_temperature",
+                "history.host_power",
+                "history.disk",
+                "history.network"
+            ]
+            .map(Some)
         );
         // A rate pair is scaled when drawn, to its tallest column.
-        let disk = &panels[6];
-        assert!(disk.is_rate() && !panels[5].is_rate());
+        let disk = &panels[4];
+        assert!(disk.is_rate() && !panels[3].is_rate());
         assert!(disk.strips.iter().all(|strip| strip.scale.is_none()));
         assert_eq!(
             disk.strips
@@ -614,11 +760,12 @@ mod tests {
         assert_eq!(gpu_label("nameless"), "nameless");
     }
 
-    /// On a host of several GPUs the GPU panels show one GPU (D-107): the
-    /// one picked while the history charts it, else the first; the other
-    /// panels stay as they are. A host of one GPU has nothing to pick.
+    /// The GPU History is one GPU (D-107, D-148): the one picked while the
+    /// history charts it, else the first, and every strip on the page is
+    /// that GPU's, so switching the GPU changes all of them. A host of one
+    /// GPU has nothing to pick.
     #[test]
-    fn the_gpu_panels_show_the_gpu_picked() {
+    fn the_gpu_history_is_one_gpu() {
         let history = history_view();
         let gpus = history_gpus(&history);
         assert_eq!(
@@ -630,52 +777,187 @@ mod tests {
         assert_eq!(shown_gpu(&history, None), Some(first.clone()));
         assert_eq!(shown_gpu(&history, Some(&second)), Some(second.clone()));
         let gone = EntityId::new("gpu:gone").unwrap();
-        assert_eq!(shown_gpu(&history, Some(&gone)), Some(first));
-        let picked = layout(&panels(&history, Some(&second)));
-        let all = layout(&panels(&history, None));
-        assert_eq!(picked.len(), all.len());
-        for ((title, labels), (_, every)) in picked.iter().zip(&all) {
-            if title.starts_with("GPU") {
-                assert_eq!(labels, &["GPU 1".to_owned()], "{title}");
-            } else {
-                assert_eq!(labels, every, "{title}");
+        assert_eq!(shown_gpu(&history, Some(&gone)), Some(first.clone()));
+        let titles = strings(&[
+            "GPU utilization",
+            "GPU memory",
+            "GPU temperature",
+            "GPU power",
+        ]);
+        let page = |gpu: &EntityId| panels(&history, Page::Gpu(Some(gpu)));
+        for gpu in [&first, &second] {
+            let panels = page(gpu);
+            let shown: Vec<String> = panels.iter().map(|panel| panel.title.clone()).collect();
+            assert_eq!(shown, titles);
+            assert_eq!(
+                folds(&panels),
+                [
+                    "history.gpu_utilization",
+                    "history.gpu_memory",
+                    "history.gpu_thermal",
+                    "history.gpu_power"
+                ]
+                .map(Some)
+            );
+            let label = gpu_label(
+                &history_gpus(&history)
+                    .iter()
+                    .find(|shown| shown.entity_id == *gpu)
+                    .unwrap()
+                    .chip,
+            );
+            for panel in &panels {
+                let strip = &panel.strips[0];
+                assert_eq!((panel.strips.len(), &strip.label), (1, &label));
+                assert_eq!(strip.gpu.as_ref(), Some(&label));
+                let of_this_gpu = history
+                    .charts
+                    .iter()
+                    .filter(|chart| chart.series.entity_id == *gpu)
+                    .any(|chart| std::ptr::eq(chart.points.as_slice(), strip.series.points));
+                assert!(of_this_gpu, "{}: another GPU's series", panel.title);
             }
         }
+        // Each GPU keeps its own scale (its framebuffer, its limit).
+        let memory_scale = |gpu: &EntityId| page(gpu)[1].strips[0].scale;
+        assert_eq!(memory_scale(&first), Some(80.0 * 1_073_741_824.0));
+        assert_eq!(memory_scale(&second), Some(64.0 * 1_073_741_824.0));
+        // No pick: the first GPU's page.
+        assert_eq!(
+            panels(&history, Page::Gpu(None))[1].strips[0].scale,
+            memory_scale(&first)
+        );
         let mut single = history.clone();
         single
             .charts
             .retain(|chart| chart.series.entity_id != second);
         assert_eq!(history_gpus(&single).len(), 1);
         assert_eq!(shown_gpu(&single, Some(&second)), None);
+        assert_eq!(panels(&single, Page::Gpu(None)).len(), 4);
+        // A host without a GPU has no GPU page to draw.
+        single.charts.retain(|chart| !is_gpu(chart.kind));
+        assert!(panels(&single, Page::Gpu(None)).is_empty());
     }
 
-    /// Once the CPU's power is read the power panel leads with the host's
-    /// total and the CPU (D-106), each scaled to its peak, every strip with
-    /// its energy; until then it is the GPUs' power panel. The GPUs' strips
-    /// are in their colors.
+    /// A GPU's memory activity goes under its utilization and its fan under
+    /// its temperature (D-148), each named in the title and against 100 %;
+    /// one that stayed at zero over the window is left out, as is one the
+    /// GPU does not report, so no strip stands empty.
     #[test]
-    fn the_power_panel_leads_with_the_total_and_the_cpu_once_read() {
-        let power_panel = |history: &HistoryView| -> (String, Vec<String>) {
-            let panels = panels(history, None);
+    fn a_gpus_companion_strips_show_once_they_move() {
+        let mut history = history_view();
+        let first = history_gpus(&history)[0].entity_id.clone();
+        let second = history_gpus(&history)[1].entity_id.clone();
+        let activity = gpu_chart(
+            &history,
+            (
+                HistoryChartKind::GpuUtilization,
+                HistoryChartKind::GpuMemoryActivity,
+            ),
+            0,
+            CanonicalUnit::Percent,
+            40.0,
+        );
+        let fan = gpu_chart(
+            &history,
+            (
+                HistoryChartKind::GpuTemperature,
+                HistoryChartKind::GpuFanSpeed,
+            ),
+            0,
+            CanonicalUnit::Percent,
+            0.0,
+        );
+        history.charts.extend([activity, fan]);
+        let shown =
+            |history: &HistoryView, gpu: &EntityId| layout(&panels(history, Page::Gpu(Some(gpu))));
+        let page = shown(&history, &first);
+        assert_eq!(
+            page[0],
+            (
+                "GPU utilization and memory busy".to_owned(),
+                strings(&["util", "busy"])
+            )
+        );
+        assert_eq!(
+            page[2],
+            ("GPU temperature".to_owned(), strings(&["GPU 0"])),
+            "a fan that never turned has no strip"
+        );
+        history
+            .charts
+            .iter_mut()
+            .find(|chart| chart.kind == HistoryChartKind::GpuFanSpeed)
+            .unwrap()
+            .peak = Some(55.0);
+        let page = shown(&history, &first);
+        assert_eq!(
+            page[2],
+            (
+                "GPU temperature and fan".to_owned(),
+                strings(&["temp", "fan"])
+            )
+        );
+        let panels = panels(&history, Page::Gpu(Some(&first)));
+        assert_eq!(panels.len(), 4, "the companions add no panel");
+        assert_eq!(panels[2].fold, Some("history.gpu_thermal"));
+        let scales: Vec<Option<f64>> = panels[2].strips.iter().map(|strip| strip.scale).collect();
+        assert_eq!(scales, [Some(100.0), Some(100.0)]);
+        // Their labels take the GPU's color (D-123).
+        assert!(
+            panels[2]
+                .strips
+                .iter()
+                .all(|strip| strip.gpu.as_deref() == Some("GPU 0"))
+        );
+        // The other GPU reports neither: its panels are the plain ones.
+        assert_eq!(
+            shown(&history, &second)[0],
+            ("GPU utilization".to_owned(), strings(&["GPU 1"]))
+        );
+        // Both count as that GPU's series.
+        assert_eq!(history_gpus(&history).len(), 2);
+    }
+
+    /// The machine's power panel (D-106, D-148): each GPU's draw until the
+    /// CPU's power is read, and its title says so (a lone GPU's strip has
+    /// no label, and its draw is not the machine's); then the host's total
+    /// and the CPU, each scaled to its peak and with its energy, the GPUs'
+    /// draws being the total's parts and staying on the GPU History.
+    #[test]
+    fn the_machines_power_is_its_total_once_read() {
+        let titled = |history: &HistoryView| -> String {
+            let panels = panels(history, Page::Overview);
             let panel = panels
                 .iter()
-                .find(|panel| panel.title.ends_with("power") || panel.title == "Power")
+                .find(|panel| panel.fold == Some("history.host_power"));
+            panel.unwrap().title.clone()
+        };
+        let power_panel = |history: &HistoryView| -> Vec<(String, Option<String>)> {
+            let panels = panels(history, Page::Overview);
+            let panel = panels
+                .iter()
+                .find(|panel| panel.fold == Some("history.host_power"))
                 .unwrap();
-            (
-                panel.title.clone(),
-                panel
-                    .strips
-                    .iter()
-                    .map(|strip| strip.label.clone())
-                    .collect(),
-            )
+            panel
+                .strips
+                .iter()
+                .map(|strip| (strip.label.clone(), strip.gpu.clone()))
+                .collect()
         };
         let mut history = history_view();
-        let gpus = vec!["GPU 0".to_owned(), "GPU 1".to_owned()];
-        assert_eq!(
-            power_panel(&history),
-            ("GPU power".to_owned(), gpus.clone())
-        );
+        // Only a GPU's strip takes a GPU's color (D-123).
+        let gpu = |label: &str| (label.to_owned(), Some(label.to_owned()));
+        assert_eq!(power_panel(&history), [gpu("GPU 0"), gpu("GPU 1")]);
+        assert_eq!(titled(&history), "Power · GPUs");
+        // GB10: one GPU, whose draw is the only power read.
+        let mut one_gpu = history.clone();
+        let second = history_gpus(&history)[1].entity_id.clone();
+        one_gpu
+            .charts
+            .retain(|chart| chart.series.entity_id != second);
+        assert_eq!(power_panel(&one_gpu), [gpu("GPU 0")]);
+        assert_eq!(titled(&one_gpu), "Power · GPU");
         let template = history.charts[0].clone();
         let power = |kind, subject: &str, peak: f64| HistoryChartView {
             kind,
@@ -692,19 +974,12 @@ mod tests {
         history
             .charts
             .push(power(HistoryChartKind::CpuPower, "CPU 0", 45.0));
-        let (title, labels) = power_panel(&history);
-        assert_eq!(title, "Power");
-        assert_eq!(labels[..2], ["total".to_owned(), "CPU".to_owned()]);
-        assert_eq!(labels[2..], gpus[..]);
-        let panels = panels(&history, None);
+        let host = |label: &str| (label.to_owned(), None);
+        assert_eq!(power_panel(&history), [host("total"), host("CPU")]);
+        assert_eq!(titled(&history), "Power");
+        let panels = panels(&history, Page::Overview);
         let panel = panels.iter().find(|panel| panel.title == "Power").unwrap();
-        // Only a GPU's strip takes a GPU's color (D-123).
-        let colored: Vec<Option<&str>> = panel
-            .strips
-            .iter()
-            .map(|strip| strip.gpu.as_deref())
-            .collect();
-        assert_eq!(colored, [None, None, Some("GPU 0"), Some("GPU 1")]);
+        assert_eq!(panel.fold, Some("history.host_power"));
         assert_eq!(panel.strips[0].scale, Some(180.0), "scaled to its peak");
         // 90 W for an hour.
         let energy = panel.strips[0].series.energy.unwrap();
@@ -720,9 +995,13 @@ mod tests {
             .charts
             .push(power(HistoryChartKind::CpuPower, "CPU 1", 40.0));
         assert_eq!(
-            power_panel(&history).1[..3],
-            ["total".to_owned(), "CPU 0".to_owned(), "CPU 1".to_owned()]
+            power_panel(&history),
+            [host("total"), host("CPU 0"), host("CPU 1")]
         );
+        // Each GPU's own draw is on its page either way.
+        let page = super::panels(&history, Page::Gpu(None));
+        assert_eq!(page[3].title, "GPU power");
+        assert!(page[3].strips[0].series.energy.is_some());
     }
 
     /// A power chart's energy is its mean over the time it holds (D-99):
@@ -758,31 +1037,14 @@ mod tests {
             .unwrap();
         power.scale_max = None;
         power.peak = Some(68.2);
-        let panels = panels(&history, None);
-        let strip = panels
-            .iter()
-            .find(|panel| panel.title == "GPU power")
-            .and_then(|panel| panel.strips.first())
-            .unwrap();
-        assert_eq!(strip.scale, Some(68.2));
-    }
-
-    /// A chart like `template` of another series.
-    fn chart_of(
-        template: &HistoryChartView,
-        kind: HistoryChartKind,
-        subject: &str,
-        unit: CanonicalUnit,
-        (scale_max, peak): (Option<f64>, f64),
-    ) -> HistoryChartView {
-        HistoryChartView {
-            kind,
-            subject: subject.to_owned(),
-            unit,
-            scale_max,
-            peak: Some(peak),
-            mean: Some(peak / 4.0),
-            ..template.clone()
+        for page in [Page::Gpu(None), Page::Overview] {
+            let panels = panels(&history, page);
+            let strip = panels
+                .iter()
+                .find(|panel| panel.title.contains("ower"))
+                .and_then(|panel| panel.strips.first())
+                .unwrap();
+            assert_eq!(strip.scale, Some(68.2), "{page:?}");
         }
     }
 
@@ -802,7 +1064,10 @@ mod tests {
         history
             .charts
             .push(pressure(HistoryChartKind::MemoryPressureFull, 0.02));
-        let panels = panels(&history, None);
+        fn machine(history: &HistoryView) -> Vec<Panel<'_>> {
+            panels(history, Page::Overview)
+        }
+        let panels = machine(&history);
         let memory = &panels[1];
         assert_eq!(memory.title, "Memory used and pressure · 64.0 GiB");
         assert_eq!(memory.fold, Some("history.memory"));
@@ -824,7 +1089,7 @@ mod tests {
         // the panel of a kernel without PSI, which still names that key.
         let folded =
             |ids: &[&str]| -> BTreeSet<String> { ids.iter().map(|id| (*id).to_owned()).collect() };
-        let alone = super::panels(&history, None)
+        let alone = machine(&history)
             .swap_remove(1)
             .with_strips_folded(&folded(&[MEMORY_PRESSURE_STRIPS]));
         assert_eq!(alone.title, "Memory used · 64.0 GiB");
@@ -839,38 +1104,38 @@ mod tests {
             alone.strips_fold.as_ref().map(|fold| fold.id),
             Some(MEMORY_PRESSURE_STRIPS)
         );
-        // Another panel's fold leaves it whole, and no other panel has
-        // strips to fold.
-        let whole = super::panels(&history, None)
+        // Another panel's fold leaves it whole, and no other panel of
+        // either page has strips to fold.
+        let whole = machine(&history)
             .swap_remove(1)
             .with_strips_folded(&folded(&["history.cpu", "history.memory"]));
         assert_eq!(whole.strips.len(), 3);
-        assert_eq!(
-            super::panels(&history, None)
+        let with_strips_fold = |page| {
+            super::panels(&history, page)
                 .iter()
                 .filter(|panel| panel.strips_fold.is_some())
-                .count(),
-            1
-        );
+                .count()
+        };
+        assert_eq!(with_strips_fold(Page::Overview), 1);
+        assert_eq!(with_strips_fold(Page::Gpu(None)), 0);
         // Only `some` reported: its strip alone follows the RAM in use.
         history
             .charts
             .retain(|chart| chart.kind != HistoryChartKind::MemoryPressureFull);
-        let panels = super::panels(&history, None);
-        assert_eq!(panels[1].strips.len(), 2);
+        assert_eq!(machine(&history)[1].strips.len(), 2);
         // A kernel without PSI has nothing to fold.
         history
             .charts
             .retain(|chart| chart.kind != HistoryChartKind::MemoryPressureSome);
-        assert!(super::panels(&history, None)[1].strips_fold.is_none());
+        assert!(machine(&history)[1].strips_fold.is_none());
     }
 
-    /// Where the CPU's and the SoC's temperature are read they lead the
-    /// temperature panel, which then is `Temperature` (D-137): `CPU` (or
-    /// each package by its number) and `SoC`, against 100 °C like a GPU's,
-    /// then the GPUs in their colors. A host without a GPU keeps the panel.
+    /// The whole machine's temperatures are one panel of the Overview
+    /// History (D-137, D-148): `CPU` (or each package by its number), the
+    /// `SoC`, each GPU in its color and the charted drive, all against
+    /// 100 °C. A host without a GPU keeps the panel.
     #[test]
-    fn the_temperature_panel_leads_with_the_cpu_and_the_soc() {
+    fn the_machines_temperatures_are_one_panel() {
         let mut history = history_view();
         let template = history.charts[1].clone();
         let celsius = |kind, subject: &str, peak: f64| {
@@ -882,59 +1147,47 @@ mod tests {
                 (Some(100.0), peak),
             )
         };
-        history
-            .charts
-            .push(celsius(HistoryChartKind::CpuTemperature, "CPU 0", 88.0));
-        history
-            .charts
-            .push(celsius(HistoryChartKind::SocTemperature, "", 93.0));
-        let temperature = |history: &HistoryView| -> (String, Vec<String>) {
-            let panels = panels(history, None);
+        history.charts.extend([
+            celsius(HistoryChartKind::DiskTemperature, "nvme0n1", 52.0),
+            celsius(HistoryChartKind::CpuTemperature, "CPU 0", 88.0),
+            celsius(HistoryChartKind::SocTemperature, "", 93.0),
+        ]);
+        let temperature = |history: &HistoryView| -> Vec<String> {
+            let panels = panels(history, Page::Overview);
             let panel = panels
                 .iter()
-                .find(|panel| panel.title.ends_with("emperature"))
+                .find(|panel| panel.title == "Temperature")
                 .unwrap();
-            (
-                panel.title.clone(),
-                panel
-                    .strips
-                    .iter()
-                    .map(|strip| strip.label.clone())
-                    .collect(),
-            )
+            panel
+                .strips
+                .iter()
+                .map(|strip| strip.label.clone())
+                .collect()
         };
-        let (title, labels) = temperature(&history);
-        assert_eq!(title, "Temperature");
-        assert_eq!(labels, ["CPU", "SoC", "GPU 0", "GPU 1"]);
-        let panels = panels(&history, None);
+        assert_eq!(
+            temperature(&history),
+            ["CPU", "SoC", "GPU 0", "GPU 1", "disk"]
+        );
+        let panels = panels(&history, Page::Overview);
         let panel = panels
             .iter()
             .find(|panel| panel.title == "Temperature")
             .unwrap();
-        assert_eq!(panel.fold, Some("history.gpu_temperature"));
-        assert_eq!(panel.strips[0].scale, Some(100.0));
+        assert_eq!(panel.fold, Some("history.host_temperature"));
+        assert!(panel.strips.iter().all(|strip| strip.scale == Some(100.0)));
         let colored: Vec<Option<&str>> = panel
             .strips
             .iter()
             .map(|strip| strip.gpu.as_deref())
             .collect();
-        assert_eq!(colored, [None, None, Some("GPU 0"), Some("GPU 1")]);
+        assert_eq!(colored, [None, None, Some("GPU 0"), Some("GPU 1"), None]);
         // Several packages are named apart.
         history
             .charts
             .push(celsius(HistoryChartKind::CpuTemperature, "CPU 1", 80.0));
-        assert_eq!(
-            temperature(&history).1[..3],
-            ["CPU 0".to_owned(), "CPU 1".to_owned(), "SoC".to_owned()]
-        );
-        // Without a GPU the CPU's and the SoC's temperature keep the panel.
+        assert_eq!(temperature(&history)[..3], ["CPU 0", "CPU 1", "SoC"]);
+        // Without a GPU the host's own temperatures keep the panel.
         history.charts.retain(|chart| !is_gpu(chart.kind));
-        assert_eq!(
-            temperature(&history),
-            (
-                "Temperature".to_owned(),
-                vec!["CPU 0".to_owned(), "CPU 1".to_owned(), "SoC".to_owned()]
-            )
-        );
+        assert_eq!(temperature(&history), ["CPU 0", "CPU 1", "SoC", "disk"]);
     }
 }

@@ -373,29 +373,83 @@ fn panel_row(rendered: &Rendered, title: &str) -> usize {
     row_index(rendered, &format!("{title} ─"))
 }
 
-/// At the owner's 213×41 the Overview History of two GPUs shows every
-/// panel of the GPU picked, with nothing left to scroll to (D-107).
+/// The history view's state on its GPU History page (D-148).
+fn gpu_history() -> UiState {
+    let mut ui = UiState::default();
+    ui.tabs.insert(
+        ModuleId::new(crate::modules::HISTORY_MODULE_ID).unwrap(),
+        crate::views::GPU_HISTORY_PAGE,
+    );
+    ui
+}
+
+/// The history model drawn on its GPU History page.
+fn render_gpu_history(model: &ViewModel, size: (u16, u16)) -> Rendered {
+    render_with(&Viewer::builtin(), Some(model), &gpu_history(), size)
+}
+
+/// At the owner's 213×41, and at 136×38 where the panels stand one below
+/// the other, each history tab of two GPUs shows every one of its panels
+/// with nothing left to scroll to (D-107, D-148): the Overview History the
+/// whole machine and no GPU's own panel, the GPU History the GPU picked
+/// and nothing of the machine, so switching the GPU repeats no chart.
 #[test]
-fn the_overview_history_fits_a_213_by_41_terminal() {
-    let rendered = render(&history_model(), (213, 41));
-    let text = rendered.text();
-    for title in [
+fn each_history_tab_fits_the_owners_terminals() {
+    const MACHINE: [&str; 6] = [
         "CPU utilization",
         "Memory used · 64.0 GiB",
+        "Temperature",
+        "Power · GPUs",
+        "Disk · nvme0n1",
+        "Network · enp1s0",
+    ];
+    const GPU: [&str; 4] = [
         "GPU utilization",
         "GPU memory",
         "GPU temperature",
         "GPU power",
-        "Disk · nvme0n1",
-        "Network · enp1s0",
-    ] {
-        panel_row(&rendered, title);
+    ];
+    for size in [(213, 41), (136, 38)] {
+        let machine = render(&history_model(), size);
+        let text = machine.text();
+        for title in MACHINE {
+            panel_row(&machine, title);
+        }
+        for title in GPU {
+            assert!(
+                !text.contains(&format!("{title} ─")),
+                "{size:?} {title}: {text}"
+            );
+        }
+        assert!(machine.rows[1].contains("Overview History"), "{text}");
+        assert!(!text.contains("[GPU 0 · GB10]"), "no GPU to pick: {text}");
+        assert!(!text.contains("below") && !text.contains("above"), "{text}");
+        assert_eq!(machine.report.hit_map.count(controls::HISTORY_GPU), 0);
+        let gpu = render_gpu_history(&history_model(), size);
+        let text = gpu.text();
+        for title in GPU {
+            panel_row(&gpu, title);
+        }
+        for title in MACHINE {
+            assert!(
+                !text.contains(&format!("{title} ─")),
+                "{size:?} {title}: {text}"
+            );
+        }
+        assert!(gpu.rows[1].contains("GPU History"), "{text}");
+        assert!(
+            text.contains("[GPU 0 · GB10]") && text.contains(" GPU 1 · GB10 "),
+            "{text}"
+        );
+        assert!(!text.contains("below") && !text.contains("above"), "{text}");
+        assert_eq!(gpu.report.hit_map.count(controls::HISTORY_GPU), 2);
     }
+    // The tab bar names the three history tabs in their order.
+    let header = &render(&history_model(), (213, 41)).rows[0];
     assert!(
-        text.contains("[GPU 0 · GB10]") && text.contains(" GPU 1 · GB10 "),
-        "{text}"
+        header.contains(" 3 Overview History   4 GPU History   5 Process History   6 Settings "),
+        "{header}"
     );
-    assert!(!text.contains("below") && !text.contains("above"), "{text}");
 }
 
 #[test]
@@ -458,22 +512,35 @@ fn history_says_when_it_loads_fails_is_partly_recorded_or_has_no_series() {
     // is no data.
     model.modules.history = Some(Arc::new(history.clone()));
     let short = render(&model, (100, 10));
-    let divider = short.row_with("7 panels below").expect("a divider");
+    let divider = short.row_with("5 panels below").expect("a divider");
     assert!(
         divider.starts_with('├') && divider.ends_with('┤'),
         "{}",
         short.text()
     );
+    // The Overview History has no GPU to pick: its arrows scroll (D-148).
     assert!(
-        divider.ends_with("─ 7 panels below (PgUp/PgDn/^U/^D scroll) ┤"),
+        divider.ends_with("─ 5 panels below (j/k/↑/↓ scroll) ┤"),
         "{}",
         short.text()
     );
     assert!(!short.contains("no series"), "{}", short.text());
+    let short = render_gpu_history(&model, (100, 10));
+    let divider = short
+        .row_with("panels below")
+        .unwrap_or_else(|| panic!("a divider: {}", short.text()));
+    assert!(
+        divider.ends_with("─ 3 panels below (PgUp/PgDn/^U/^D scroll) ┤"),
+        "{}",
+        short.text()
+    );
     history.charts.clear();
     model.modules.history = Some(Arc::new(history));
     let empty = render(&model, (100, 30));
     assert!(empty.contains("no series to chart yet"), "{}", empty.text());
+    // A host without a GPU: its GPU History says so.
+    let no_gpu = render_gpu_history(&model, (100, 30));
+    assert!(no_gpu.contains("no GPU to chart"), "{}", no_gpu.text());
 }
 
 #[test]
@@ -806,14 +873,36 @@ fn folded_panels_keep_a_row_and_give_the_others_the_rest() {
     for (title, keys) in [
         ("CPU utilization", "(c fold)"),
         ("Memory used", "(m fold)"),
-        ("GPU utilization", "(u fold)"),
-        ("GPU memory", "(v fold)"),
-        ("GPU temperature", "(t fold)"),
-        ("GPU power", "(p fold)"),
+        ("Temperature ─", "(t fold)"),
+        ("Power · GPUs ─", "(p fold)"),
     ] {
         let row = &folded.rows[row_index(&folded, title)];
         assert!(row.contains(keys), "{title}: {row}");
     }
+    // The GPU History's panels fold on their own page (D-148): the
+    // temperature folded there leaves the whole machine's open.
+    let ui = UiState {
+        folded: folding(&["history.gpu_thermal", "history.gpu_power"]).folded,
+        ..gpu_history()
+    };
+    let gpu = render_with(&Viewer::builtin(), Some(&history), &ui, (213, 41));
+    let text = gpu.text();
+    let row = &gpu.rows[row_index(&gpu, "▸ GPU temperature")];
+    assert!(
+        row.contains("(t unfold)") && row.contains("▸ GPU power") && row.contains("(p unfold)"),
+        "{text}"
+    );
+    for (title, keys) in [("GPU utilization", "(u fold)"), ("GPU memory", "(v fold)")] {
+        let row = &gpu.rows[row_index(&gpu, title)];
+        assert!(row.contains(keys), "{title}: {row}");
+    }
+    let machine = render_with(
+        &Viewer::builtin(),
+        Some(&history),
+        &folding(&["history.gpu_thermal"]),
+        (213, 41),
+    );
+    assert!(machine.rows[row_index(&machine, "Temperature ─")].contains("(t fold)"));
 }
 
 /// The Overview History's memory panel names the key that folds its stall

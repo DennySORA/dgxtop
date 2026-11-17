@@ -25,10 +25,10 @@ use crate::tiers::Tier;
 
 const NANOS_PER_SECOND_F64: f64 = 1e9;
 
-/// The metrics the Overview History charts or summarizes (D-46, D-48,
-/// D-50, D-106, D-135, D-137): the only series the history keeps in every
-/// bar size.
-pub const OVERVIEW_METRICS: [&str; 17] = [
+/// The metrics the Overview History and the GPU History chart or summarize
+/// (D-46, D-48, D-50, D-106, D-135, D-137, D-148): the only series the
+/// history keeps in every bar size.
+pub const OVERVIEW_METRICS: [&str; 20] = [
     ids::CPU_UTILIZATION_TOTAL,
     ids::MEMORY_USED,
     ids::MEMORY_PRESSURE_SOME_AVG10,
@@ -38,10 +38,13 @@ pub const OVERVIEW_METRICS: [&str; 17] = [
     ids::HOST_POWER_TOTAL,
     ids::CPU_POWER_PACKAGE,
     ids::GPU_UTILIZATION_COMPUTE,
+    ids::GPU_UTILIZATION_MEMORY_BUSY,
     ids::GPU_MEMORY_FB_USED,
     ids::GPU_MEMORY_PROCESS_ALLOCATED,
     ids::GPU_TEMPERATURE,
+    ids::GPU_FAN_SPEED,
     ids::GPU_POWER_DRAW,
+    ids::DISK_TEMPERATURE,
     ids::DISK_READ_BPS,
     ids::DISK_WRITE_BPS,
     ids::NET_RX_BPS,

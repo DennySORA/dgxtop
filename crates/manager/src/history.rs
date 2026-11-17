@@ -56,9 +56,9 @@ const RESULT_GRACE_NS: u64 = 100 * NANOS_PER_MILLI;
 /// merges them into its columns).
 pub(crate) const MIN_DISPLAY_POINTS: u32 = 60;
 /// Charts one session queries; the presentation picks at most this many:
-/// the host's fourteen (D-50, D-106, D-135, D-137) and four for each of
-/// eight GPUs.
-pub(crate) const MAX_CHARTS: usize = 46;
+/// the host's fifteen (D-50, D-106, D-135, D-137, D-148) and six for each
+/// of eight GPUs.
+pub(crate) const MAX_CHARTS: usize = 63;
 /// Bar size of the charts when the session gives none.
 const DEFAULT_BAR: BarSize = BarSize::OneMinute;
 /// Days of power the GPU view reads, a bar each (D-118); the history keeps

@@ -4,9 +4,10 @@
 //! the memory's stall pressure against its peak (D-135), the host's total
 //! power and each CPU package's power against their peaks (D-106), each
 //! CPU package's and the SoC's temperature against 100 °C (D-137), each
-//! GPU's utilization, memory in use, temperature and power
-//! against their scales ([`gpu_series`]), and the read/write and
-//! receive/transmit rates of one disk and one interface. The disk (the
+//! GPU's utilization, memory activity, memory in use, temperature, first
+//! fan's speed and power against their scales ([`gpu_series`], D-148), and
+//! the read/write and receive/transmit rates of one disk and one
+//! interface, with that disk's temperature (D-148). The disk (the
 //! whole disk the Disk panel charts, D-124) and the interface are the
 //! busiest when the view opens and stay while they report, so the charts
 //! never jump between devices. A memory chart names the GPUs whose tracked processes' parts it
@@ -35,13 +36,17 @@ use crate::history::{ChartRequest, HistoryChartSpec, HistoryPicks, MAX_CHARTS};
 const CPU_PACKAGE_CHARTS: usize = 2;
 /// Charts besides the GPUs: CPU, memory and its two stall pressures, the
 /// total power, the SoC's temperature, two rates each of a disk and an
-/// interface, and the CPU packages' power and temperature; the GPUs get
-/// the rest of [`MAX_CHARTS`].
-const HOST_CHARTS: usize = 10 + 2 * CPU_PACKAGE_CHARTS;
+/// interface, that disk's temperature, and the CPU packages' power and
+/// temperature; the GPUs get the rest of [`MAX_CHARTS`].
+const HOST_CHARTS: usize = 11 + 2 * CPU_PACKAGE_CHARTS;
 const PERCENT_SCALE: f64 = 100.0;
 
-/// Series of one GPU: utilization, memory, temperature, power.
-const SERIES_PER_GPU: usize = 4;
+/// Series of one GPU: utilization, memory activity, memory, temperature,
+/// fan speed, power.
+const SERIES_PER_GPU: usize = 6;
+/// The scope of a GPU's first fan, the one charted (D-148): the fans of a
+/// card follow one curve.
+const FIRST_FAN_SCOPE: &str = "fan:0";
 
 /// The series for a session's request: the history view's charts, or the
 /// GPU view's power.
@@ -136,6 +141,7 @@ fn dashboard(
         entity::SCOPE_DEVICE,
         busiest_disk,
     );
+    charts.add_disk_temperature();
     let busiest_interface = || {
         ranked_interfaces(reader)
             .into_iter()
@@ -170,14 +176,16 @@ pub(crate) fn ram_total(reader: &MetricReader<'_>) -> Option<f64> {
         .value_f64()
 }
 
-/// A GPU's series with their scales (D-50): utilization against 100 %, the
+/// One series of a GPU: its chart, metric, scope and the top of its scale.
+type GpuSeries = (HistoryChartKind, &'static str, &'static str, Option<f64>);
+
+/// A GPU's series with their scales (D-50, D-148): utilization and the
+/// share of time its memory was read or written against 100 %, the
 /// memory in use against the framebuffer (on unified memory, what its
-/// processes hold against the RAM), the temperature against a fixed 100 °C
-/// and the power against its enforced limit.
-fn gpu_series(
-    reader: &MetricReader<'_>,
-    gpu: &GpuIdentity<'_>,
-) -> [(HistoryChartKind, &'static str, Option<f64>); SERIES_PER_GPU] {
+/// processes hold against the RAM), the temperature against a fixed
+/// 100 °C, its first fan's speed against 100 % and the power against its
+/// enforced limit.
+fn gpu_series(reader: &MetricReader<'_>, gpu: &GpuIdentity<'_>) -> [GpuSeries; SERIES_PER_GPU] {
     let entity_id = gpu.entity_id.as_str();
     let gpu_cell = |metric: &str| {
         reader
@@ -190,21 +198,37 @@ fn gpu_series(
         ids::GPU_MEMORY_FB_USED
     };
     let memory = (memory, gpu_memory_scale(reader, gpu));
+    let scope = entity::SCOPE_GPU;
     [
         (
             HistoryChartKind::GpuUtilization,
             ids::GPU_UTILIZATION_COMPUTE,
+            scope,
             Some(PERCENT_SCALE),
         ),
-        (HistoryChartKind::GpuMemory, memory.0, memory.1),
+        (
+            HistoryChartKind::GpuMemoryActivity,
+            ids::GPU_UTILIZATION_MEMORY_BUSY,
+            scope,
+            Some(PERCENT_SCALE),
+        ),
+        (HistoryChartKind::GpuMemory, memory.0, scope, memory.1),
         (
             HistoryChartKind::GpuTemperature,
             ids::GPU_TEMPERATURE,
+            scope,
             Some(TEMPERATURE_SCALE_C),
+        ),
+        (
+            HistoryChartKind::GpuFanSpeed,
+            ids::GPU_FAN_SPEED,
+            FIRST_FAN_SCOPE,
+            Some(PERCENT_SCALE),
         ),
         (
             HistoryChartKind::GpuPower,
             ids::GPU_POWER_DRAW,
+            scope,
             gpu_cell(ids::GPU_POWER_LIMIT),
         ),
     ]
@@ -317,14 +341,34 @@ impl Charts<'_, '_> {
     /// Adds the series of `gpu` it reports ([`gpu_series`]).
     fn add_gpu(&mut self, gpu: &GpuIdentity<'_>) {
         let subject = gpu_subject(gpu);
-        for (kind, metric, scale_max) in gpu_series(self.reader, gpu) {
+        for (kind, metric, scope, scale_max) in gpu_series(self.reader, gpu) {
             self.add(
                 kind,
                 &subject,
-                (metric, gpu.entity_id.as_str(), entity::SCOPE_GPU),
+                (metric, gpu.entity_id.as_str(), scope),
                 scale_max,
             );
         }
+    }
+
+    /// Adds the temperature of the drive whose rates are charted, where it
+    /// reports one (D-148), against the 100 °C every temperature is drawn
+    /// against: the whole machine's temperatures then name the drive too.
+    fn add_disk_temperature(&mut self) {
+        let Some((entity_id, name)) = self
+            .specs
+            .iter()
+            .find(|spec| spec.kind == HistoryChartKind::DiskRead)
+            .map(|spec| (spec.key.entity_id.to_string(), spec.subject.clone()))
+        else {
+            return;
+        };
+        self.add(
+            HistoryChartKind::DiskTemperature,
+            &name,
+            (ids::DISK_TEMPERATURE, &entity_id, entity::SCOPE_DEVICE),
+            Some(TEMPERATURE_SCALE_C),
+        );
     }
 
     /// Adds the chart of `(metric, entity, preferred scope)` when reported.
@@ -548,12 +592,15 @@ mod tests {
             ids::CPU_TEMPERATURE_PACKAGE,
             ids::SOC_TEMPERATURE,
             ids::GPU_UTILIZATION_COMPUTE,
+            ids::GPU_UTILIZATION_MEMORY_BUSY,
             ids::GPU_MEMORY_FB_USED,
             ids::GPU_MEMORY_PROCESS_ALLOCATED,
             ids::GPU_TEMPERATURE,
+            ids::GPU_FAN_SPEED,
             ids::GPU_POWER_DRAW,
             ids::HOST_POWER_TOTAL,
             ids::CPU_POWER_PACKAGE,
+            ids::DISK_TEMPERATURE,
             ids::DISK_READ_BPS,
             ids::DISK_WRITE_BPS,
             ids::NET_RX_BPS,
@@ -571,8 +618,18 @@ mod tests {
             sample(ids::CPU_POWER_PACKAGE, "cpu.package.0", "package:0").f64(25.0),
         );
         pressure_and_temperatures(&mut fixture);
+        fixture.add(
+            "disk",
+            sample(ids::DISK_TEMPERATURE, "blockdev:259:0", "device").f64(41.0),
+        );
+        for (metric, scope) in [
+            (ids::GPU_UTILIZATION_MEMORY_BUSY, "gpu"),
+            (ids::GPU_FAN_SPEED, "fan:0"),
+        ] {
+            fixture.add("gpu", sample(metric, GPU_A, scope).f64(30.0));
+        }
         let picked = pick(&fixture, &[]);
-        assert_eq!(picked.charts.len(), 11, "{:?}", kinds(&picked.charts));
+        assert_eq!(picked.charts.len(), 14, "{:?}", kinds(&picked.charts));
         for spec in &picked.charts {
             assert!(
                 is_overview_metric(spec.key.metric_id.as_str()),
@@ -739,8 +796,45 @@ mod tests {
         assert_eq!(pick(&Fixture::new(), &[]), HistoryPicks::default());
     }
 
+    /// The drive whose rates are charted adds its temperature against
+    /// 100 °C (D-148), under the same name; a drive without a sensor, and
+    /// another drive's sensor, add none.
     #[test]
-    fn each_gpu_charts_its_four_series_against_their_scales() {
+    fn the_charted_drives_temperature_follows_its_rates() {
+        let mut fixture = host();
+        disk(&mut fixture, "blockdev:259:0", "nvme0n1", 100.0);
+        disk(&mut fixture, "blockdev:8:0", "sda", 1.0);
+        fixture.add(
+            "disk",
+            sample(ids::DISK_TEMPERATURE, "blockdev:8:0", "device").f64(33.0),
+        );
+        let without = charts(&fixture, &[]);
+        assert!(
+            !kinds(&without).contains(&HistoryChartKind::DiskTemperature),
+            "only the charted drive's: {:?}",
+            kinds(&without)
+        );
+        fixture.add(
+            "disk",
+            sample(ids::DISK_TEMPERATURE, "blockdev:259:0", "device").f64(41.0),
+        );
+        let charts = charts(&fixture, &[]);
+        let temperature = charts
+            .iter()
+            .find(|chart| chart.kind == HistoryChartKind::DiskTemperature)
+            .unwrap();
+        assert_eq!(temperature.subject, "nvme0n1");
+        assert_eq!(temperature.key.entity_id.as_str(), "blockdev:259:0");
+        assert_eq!(temperature.scale_max, Some(100.0));
+        let rates = charts
+            .iter()
+            .position(|chart| chart.kind == HistoryChartKind::DiskWrite)
+            .unwrap();
+        assert_eq!(charts[rates + 1].kind, HistoryChartKind::DiskTemperature);
+    }
+
+    #[test]
+    fn each_gpu_charts_its_series_against_their_scales() {
         let mut fixture = host();
         fixture.add_entity(entity_record(
             GPU_B,
@@ -750,6 +844,7 @@ mod tests {
         ));
         for (metric, value) in [
             ("gpu.utilization.compute", 20.0),
+            ("gpu.utilization.memory_busy", 12.0),
             ("gpu.memory.framebuffer.used", 1e9),
             ("gpu.memory.framebuffer.total", 24e9),
             ("gpu.temperature", 41.0),
@@ -757,6 +852,10 @@ mod tests {
             ("gpu.power.limit", 72.0),
         ] {
             fixture.add("gpu", sample(metric, GPU_B, "gpu").f64(value));
+        }
+        // A card of two fans: the first is the one charted (D-148).
+        for (scope, speed) in [("fan:1", 47.0), ("fan:0", 45.0)] {
+            fixture.add("gpu", sample("gpu.fan.speed", GPU_B, scope).f64(speed));
         }
         let charts = charts(&fixture, &[]);
         let gpu_b: Vec<(HistoryChartKind, Option<f64>)> = charts
@@ -768,11 +867,18 @@ mod tests {
             gpu_b,
             vec![
                 (HistoryChartKind::GpuUtilization, Some(100.0)),
+                (HistoryChartKind::GpuMemoryActivity, Some(100.0)),
                 (HistoryChartKind::GpuMemory, Some(24e9)),
                 (HistoryChartKind::GpuTemperature, Some(100.0)),
+                (HistoryChartKind::GpuFanSpeed, Some(100.0)),
                 (HistoryChartKind::GpuPower, Some(72.0)),
             ]
         );
+        let fan = charts
+            .iter()
+            .find(|chart| chart.kind == HistoryChartKind::GpuFanSpeed)
+            .unwrap();
+        assert_eq!(fan.key.scope.as_str(), "fan:0");
         // GPU A reports utilization only: one chart, before GPU B's.
         assert_eq!(
             charts

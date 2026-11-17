@@ -282,6 +282,18 @@ fn default_folded() -> Vec<String> {
         .collect()
 }
 
+/// The saved folds without the ones of panels that are gone
+/// (`view::RETIRED_FOLDS`, D-148): a configuration an earlier dgxtop saved
+/// still reads, and the next save writes it without them.
+fn folded_without_retired<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut panels = Vec::<String>::deserialize(deserializer)?;
+    panels.retain(|panel| !crate::view::RETIRED_FOLDS.contains(&panel.as_str()));
+    Ok(panels)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ViewerConfig {
@@ -292,8 +304,12 @@ pub struct ViewerConfig {
     pub network_max_visible: u32,
     /// The panels folded away (D-114). A file without it has the default
     /// ones folded (`view::DEFAULT_FOLDED_PANELS`, D-146); an empty list
-    /// says none is, so it is always written.
-    #[serde(default = "default_folded")]
+    /// says none is, so it is always written. Folds of panels that are
+    /// gone are dropped as it is read (D-148).
+    #[serde(
+        default = "default_folded",
+        deserialize_with = "folded_without_retired"
+    )]
     pub folded: Vec<String>,
     /// Retired (D-105): level colors run from green at 0 % to red at
     /// 100 % (D-104), so no fill turns them red early.
@@ -1306,12 +1322,13 @@ mod tests {
         assert_eq!(original, reencoded);
     }
 
-    /// `viewer.folded` (D-114, D-146): the defaults fold the Overview
-    /// History's pressure strips, temperature and power; a file without
-    /// the list has those folded, and an empty list, which says none is,
-    /// is written and read back as none. It holds distinct foldable panels.
+    /// `viewer.folded` (D-114, D-146, D-148): the defaults fold the memory
+    /// panel's pressure strips; a file without the list has those folded,
+    /// and an empty list, which says none is, is written and read back as
+    /// none. It holds distinct foldable panels, and the folds of panels
+    /// that are gone are dropped as it is read.
     #[test]
-    fn folds_default_to_three_history_panels_and_none_is_kept() {
+    fn folds_default_to_the_pressure_strips_and_none_is_kept() {
         let mut config = defaults();
         assert_eq!(config.viewer.folded, crate::view::DEFAULT_FOLDED_PANELS);
         let mut without: serde_json::Value = serde_json::from_str(REFERENCE_CONFIG_JSON).unwrap();
@@ -1322,7 +1339,17 @@ mod tests {
         let none = config.to_pretty_json().unwrap();
         assert!(none.contains("\"folded\": []"), "{none}");
         assert!(Config::from_json(&none).unwrap().viewer.folded.is_empty());
-        config.viewer.folded = vec!["network".into(), "history.power".into()];
+        // What v2.6.0 saved: its temperature and power panels are gone.
+        let mut earlier: serde_json::Value = serde_json::from_str(REFERENCE_CONFIG_JSON).unwrap();
+        earlier["viewer"]["folded"] = serde_json::json!([
+            "history.memory_pressure",
+            "history.gpu_temperature",
+            "history.power"
+        ]);
+        let read = Config::from_json(&earlier.to_string()).unwrap();
+        assert_eq!(read.viewer.folded, ["history.memory_pressure"]);
+        assert_eq!(read.validate(), Ok(()));
+        config.viewer.folded = vec!["network".into(), "history.host_power".into()];
         let text = config.to_pretty_json().unwrap();
         assert_eq!(Config::from_json(&text).unwrap(), config);
         assert!(config.validate().is_ok());

@@ -70,11 +70,14 @@ of the whole machine.
   stopped from dgxtop, most likely the OOM killer, or still running. Open a run for its full
   command line, working folder and charts of its CPU, memory, GPU, threads, open files, disk and
   network. Delete the runs you no longer need, marked one by one or all at once.
-- **Overview History.** CPU, memory and its stall pressure, each GPU's utilization, memory,
-  temperature and power, the CPU's and the SoC's temperature, disks and network as bars of 1 minute to 24 hours on the local clock, with now, average and maximum on
-  every chart and the energy on the power charts. With several GPUs the GPU charts show one GPU at
-  a time. Where the CPU's power can be read, the power charts start with the total of the CPU and
-  the GPUs and the CPU's own, each with its energy.
+- **Overview History and GPU History.** Two tabs of bars of 1 minute to 24 hours on the local
+  clock, with now, average and maximum on every chart and the energy on the power charts. The
+  Overview History is the whole machine: CPU, memory and its stall pressure, every temperature it
+  reports (CPU, SoC, each GPU, the drive), its power, the disk and the network. The GPU History is
+  one GPU: its utilization and memory activity, memory, temperature and fan, and power; with
+  several GPUs you pick the one shown, and every chart on the page changes with it. Where the
+  CPU's power can be read, the machine's power is the total of the CPU and the GPUs and the CPU's
+  own, each with its energy.
 - **Full GPU details.** One GPU at a time:
   - performance state, throttle reasons and how long it was throttled, clocks;
   - memory and the memory bus, PCIe link and traffic, NVLink-C2C;
@@ -144,16 +147,29 @@ page and its keys, and `↑` / `↓` turn them.
 
 <sub>GB10 with unified memory and NVLink-C2C (top); RTX 5080 with VRAM and PCIe Gen5 (bottom). Serial numbers and UUIDs are masked.</sub>
 
-### Overview History
+### Overview History and GPU History
 
-The machine's resources as bars of 1 minute to 24 hours (`←` / `→`, or `w` / `W`), with now,
-average and maximum on every chart. With several GPUs, `↑` / `↓` pick the GPU the GPU charts show;
-when the charts do not all fit, a line under the bar sizes says how many are above and below, and
-`PgUp` / `PgDn` scroll them. To give the charts you watch more room,
-fold the others to their title row, first on the page, with the key each panel names on its title: `c` CPU, `m` memory, `u` GPU
-utilization, `v` GPU memory, `t` temperature, `p` power, `i` disk, `n` network; `o` unfolds them all,
-and folds stay after a restart. `s` hides the memory panel's two pressure strips, `some` and
-`full`, and leaves the RAM in use; `s` again, or `o`, brings them back.
+The history's charts are two tabs, both as bars of 1 minute to 24 hours (`←` / `→`, or `w` / `W`),
+with now, average and maximum on every chart.
+
+**Overview History** (`3`) is the whole machine, whatever GPU you look at: the CPU, the memory,
+every temperature the machine reports (each CPU package, the SoC, each GPU and the drive), its
+power (the total and the CPU's where they can be read, each GPU's otherwise), the disk and the
+network.
+
+**GPU History** (`4`) is one GPU: its utilization, with the share of time its memory was read or
+written under it, its memory, its temperature, with its fan's speed under it, and its power. With
+several GPUs, `↑` / `↓` or a click on its name pick the GPU, and every chart on the page is that
+GPU's. A fan that never turned, or a memory activity that stayed at zero, has no chart.
+
+When a tab's charts do not all fit, a line under the bar sizes says how many are above and below;
+`PgUp` / `PgDn` scroll them, and on the Overview History `↑` / `↓` do too. To give the charts you
+watch more room, fold the others to their title row, first on the page, with the key each panel
+names on its title: on the Overview History `c` CPU, `m` memory, `t` temperature, `p` power, `i`
+disk, `n` network; on the GPU History `u` utilization, `v` memory, `t` temperature, `p` power. `o`
+unfolds the tab's panels, and folds stay after a restart. `s` hides the memory panel's two
+pressure strips, `some` and `full`, and leaves the RAM in use; `s` again, or `o`, brings them
+back.
 
 <img src="docs/images/screenshots/workstation-overview-history.png" alt="Overview History of a two-GPU workstation in 1-minute bars: CPU, memory, GPU utilization, GPU memory, GPU temperature, GPU power with energy, disk and network, and a table of each GPU's average and peak" width="100%">
 
@@ -320,7 +336,7 @@ keyboard without arrow keys, `h` / `j` / `k` / `l` stand in for `←` / `↓` / 
 
 | Key | Action |
 |---|---|
-| `1`–`5`, `Tab`, `Shift-Tab` | Overview, GPU, Overview History, Process History, Settings |
+| `1`–`6`, `Tab`, `Shift-Tab` | Overview, GPU, Overview History, GPU History, Process History, Settings (`F2` too) |
 | `q`, `Ctrl-C` | Quit (`q` is text while typing a filter; `Ctrl-C` always quits) |
 | `+` / `-` | Faster / slower sampling |
 | `j`/`k`, arrows, `PgUp`/`PgDn` (`Ctrl-U`/`Ctrl-D`), `Home`/`End` (`<`/`>`) | Move the selection in the Overview and Settings |
@@ -334,10 +350,11 @@ keyboard without arrow keys, `h` / `j` / `k` / `l` stand in for `←` / `↓` / 
 | `K` / `F9` | Stop the selected process with SIGTERM / SIGKILL (asks for confirmation; `y` typed before the question shows counts) |
 | `y`/`Enter`, `n`/`Esc` | Confirm / cancel a pending process action or deletion |
 | `h`/`l`, `←`/`→` | Previous / next GPU in the GPU view; previous / next bar size in the history views (also `W` / `w`) |
-| `k`/`j`, `↑`/`↓` | Previous / next page in the GPU view and of an opened run's charts; previous / next run in the Process History list; previous / next GPU in the Overview History's GPU charts |
-| `PgUp`/`PgDn`, `Ctrl-U`/`Ctrl-D` | Previous / next page in the GPU view and of an opened run's charts; scroll the Overview History's charts when they do not all fit |
-| `g`/`Home`/`<`, `G`/`End`/`>` | Top / end of the Process History list; first / last page of an opened run's charts and in the GPU view; first / last charts in Overview History |
-| `c`/`m`/`u`/`v`/`t`/`p`/`i`/`n`, `o` | Fold an Overview History panel to its title row (CPU, memory, GPU utilization, GPU memory, temperature, power, disk, network), or unfold them all (kept after a restart) |
+| `k`/`j`, `↑`/`↓` | Previous / next page in the GPU view and of an opened run's charts; previous / next run in the Process History list; previous / next GPU in the GPU History; scroll the Overview History's charts when they do not all fit |
+| `PgUp`/`PgDn`, `Ctrl-U`/`Ctrl-D` | Previous / next page in the GPU view and of an opened run's charts; scroll the Overview History's or the GPU History's charts when they do not all fit |
+| `g`/`Home`/`<`, `G`/`End`/`>` | Top / end of the Process History list; first / last page of an opened run's charts and in the GPU view; first / last charts in the Overview History and the GPU History |
+| `c`/`m`/`t`/`p`/`i`/`n`, `o` | Fold an Overview History panel to its title row (CPU, memory, temperature, power, disk, network), or unfold them all (kept after a restart) |
+| `u`/`v`/`t`/`p`, `o` | Fold a GPU History panel to its title row (utilization, memory, temperature, power), or unfold them all (kept after a restart) |
 | `s` | Hide / show the pressure strips (`some`, `full`) of the Overview History's memory panel (kept after a restart) |
 | `Enter` | Open or close the selected run in Process History |
 | `e` / `y` | Show the whole command line of the opened run / copy it (OSC 52) |

@@ -1,18 +1,24 @@
-//! History module (D-46, D-48, D-50): the overview's resources over a
-//! longer span, laid out like a monitoring dashboard ([`layout`]):
+//! History module (D-46, D-48, D-50, D-148): the overview's resources over
+//! a longer span, laid out like a monitoring dashboard ([`layout`]), on
+//! two pages of charts, each its own tab: the Overview History, the whole
+//! machine, and the GPU History, one GPU. Whatever is the same whichever
+//! GPU is looked at is on the first, so switching the GPU changes every
+//! chart of the second.
 //!
 //! - the bar-size row: the bar sizes `←`/`→` (and `w`/`W`) step through
-//!   (D-78), on a host of several GPUs the GPU the GPU panels show, `↑`/`↓`
-//!   (D-107), and how much of the charts' span is recorded (history starts
-//!   with dgxtop);
+//!   (D-78), on the GPU History of a host of several GPUs the GPU its
+//!   panels show, `↑`/`↓` (D-107), and how much of the charts' span is
+//!   recorded (history starts with dgxtop);
 //! - while the panels do not all fit, a divider joined to the panel's
 //!   borders (D-116) that says at its right the panels above and below the
-//!   ones shown and the keys scrolling to them, `PgUp`/`PgDn`;
+//!   ones shown and the keys scrolling to them;
 //! - the panels ([`panels`]) in bands, two side by side on a wide terminal:
-//!   the CPU and the memory, the GPU's utilization and memory, its
-//!   temperature and power, the disk and the network. Each panel is a title
-//!   over its strips ([`strip`]): a gutter with the scale, one block column
-//!   a bar, a legend with the value now, the mean and the peak;
+//!   on the Overview History the CPU and the memory, the machine's
+//!   temperatures and its power, the disk and the network; on the GPU
+//!   History the GPU's utilization and memory, its temperature and power.
+//!   Each panel is a title over its strips ([`strip`]): a gutter with the
+//!   scale, one block column a bar, a legend with the value now, the mean
+//!   and the peak;
 //! - the time axis under each column of panels ([`axis`]).
 //!
 //! The GPUs' 1 h to 24 h table of D-48 is gone (D-107): the charts and
@@ -38,7 +44,7 @@ use ratatui::text::{Line, Span};
 
 use self::axis::{Tick, clock_ticks, render_axis};
 use self::layout::{AXIS_ROWS, BAR_ROWS, HistoryLayout, plan_folded};
-use self::panels::{HistoryGpu, Panel, Strip, panels, shown_gpu};
+use self::panels::{HistoryGpu, Page, Panel, Strip, panels, shown_gpu};
 use self::runs::render_runs;
 use self::strip::{Window, plot_width, render_strip, strip_text, tallest_column};
 use super::ModuleBuildError;
@@ -52,9 +58,10 @@ use crate::num::saturate_u16;
 use crate::registry::{
     DisplayContext, DisplayModule, DisplayModuleManifest, RenderOutput, Slot, controls,
 };
+use crate::views::{GPU_HISTORY_PAGE, OVERVIEW_HISTORY_PAGE, PROCESS_LIST_PAGE, is_chart_page};
 
-/// Module id of the History view, whose pages are the Overview History and
-/// Process History tabs (D-75).
+/// Module id of the History view, whose pages are the Overview History,
+/// GPU History and Process History tabs (D-75, D-148).
 pub const HISTORY_MODULE_ID: &str = "history";
 
 /// Share of the window below which the bar says how much is recorded.
@@ -105,15 +112,16 @@ impl DisplayModule for HistoryModule {
             format!("Process History · /{filter}")
         };
         let (title, keys): (&str, &[&str]) = match context.tab {
-            0 if several_gpus => ("Overview History", BAR_SIZE_AND_GPU_KEYS),
-            0 => ("Overview History", BAR_SIZE_KEYS),
-            1 => (&list_title, PROCESS_LIST_KEYS),
+            OVERVIEW_HISTORY_PAGE => ("Overview History", BAR_SIZE_KEYS),
+            GPU_HISTORY_PAGE if several_gpus => ("GPU History", BAR_SIZE_AND_GPU_KEYS),
+            GPU_HISTORY_PAGE => ("GPU History", BAR_SIZE_KEYS),
+            PROCESS_LIST_PAGE => (&list_title, PROCESS_LIST_KEYS),
             // The keys turning a run's pages are on its divider (D-116).
             _ => ("Process History · run", PROCESS_DETAIL_KEYS),
         };
         let keys = fitting_keys(area.width, title, keys);
         let inner = panel_with_keys(frame, area, title, keys, context);
-        if context.tab > 0 {
+        if !is_chart_page(context.tab) {
             match model.modules.process_history.as_deref() {
                 Some(runs) => render_runs(
                     frame,
@@ -145,10 +153,15 @@ impl DisplayModule for HistoryModule {
             return output.finish();
         };
         let gpu = shown_gpu(history, context.picked.as_ref());
+        let page = if context.tab == GPU_HISTORY_PAGE {
+            Page::Gpu(gpu.as_ref())
+        } else {
+            Page::Overview
+        };
         render_history(
             frame,
             inner,
-            (history, gpu.as_ref()),
+            (history, page),
             (&self.manifest, model),
             context,
             &mut output,
@@ -157,20 +170,19 @@ impl DisplayModule for HistoryModule {
     }
 }
 
-/// The bar-size row, a divider while the panels scroll, the panels from
-/// the band scrolled to, and the axis (module docs); the GPU panels of
-/// `gpu` alone when one is given.
+/// The bar-size row, a divider while the panels scroll, the panels of
+/// `page` from the band scrolled to, and the axis (module docs).
 fn render_history(
     frame: &mut Frame<'_>,
     inner: Rect,
-    (history, gpu): (&HistoryView, Option<&EntityId>),
+    (history, page): (&HistoryView, Page<'_>),
     (manifest, model): (&DisplayModuleManifest, &ViewModel),
     context: &DisplayContext,
     output: &mut Output,
 ) {
     // Folded panels keep their title row, first, and give the others
     // their rows; the others pair up as if they were not there (D-114).
-    let (folded, open): (Vec<Panel<'_>>, Vec<Panel<'_>>) = panels(history, gpu)
+    let (folded, open): (Vec<Panel<'_>>, Vec<Panel<'_>>) = panels(history, page)
         .into_iter()
         .map(|panel| panel.with_strips_folded(&context.folded))
         .partition(|panel| is_folded(panel, context));
@@ -192,9 +204,16 @@ fn render_history(
     }
     let mut rows = RowCursor::new(inner);
     if let Some(row) = rows.next_row() {
-        let picker = GpuPicker {
-            gpus: history_gpus(history),
-            shown: gpu,
+        // Only the GPU History has a GPU to pick (D-148).
+        let picker = match page {
+            Page::Gpu(shown) => GpuPicker {
+                gpus: history_gpus(history),
+                shown,
+            },
+            Page::Overview => GpuPicker {
+                gpus: Vec::new(),
+                shown: None,
+            },
         };
         render_bar_size_row(frame, row, (history, &picker), context);
         publish_picker(output, (manifest, model), (row, context), &picker);
@@ -216,17 +235,16 @@ fn render_history(
     }
     if panels.is_empty() {
         if let Some(body) = rows.rest() {
-            message(
-                frame,
-                body,
-                "no series to chart yet",
-                context.theme.muted_style(),
-            );
+            let nothing = match page {
+                Page::Overview => "no series to chart yet",
+                Page::Gpu(_) => "no GPU to chart",
+            };
+            message(frame, body, nothing, context.theme.muted_style());
         }
         return;
     }
     if scrolls && let Some(row) = rows.next_row() {
-        let forms = scroll_forms(layout.panels_above, layout.panels_below);
+        let forms = scroll_forms(layout.panels_above, layout.panels_below, scroll_keys(page));
         draw_divider(frame.buffer_mut(), row, &forms, context);
     }
     let window = Window {
@@ -504,15 +522,26 @@ fn render_axes(
     }
 }
 
-/// The keys scrolling the Overview History's panels (D-107; `^U`/`^D`
-/// stand in for PgUp/PgDn, D-111), the fullest first.
-const SCROLL_KEYS: [&str; 2] = ["PgUp/PgDn/^U/^D scroll", "^U/^D scroll"];
+/// The keys scrolling the GPU History's panels (D-107; `^U`/`^D` stand in
+/// for PgUp/PgDn, D-111), the fullest first: its `↑`/`↓` pick the GPU.
+const PAGE_SCROLL_KEYS: [&str; 2] = ["PgUp/PgDn/^U/^D scroll", "^U/^D scroll"];
+/// The keys scrolling the Overview History's panels (D-148): with no GPU
+/// to pick its `↑`/`↓` scroll too, as PgUp/PgDn still do.
+const ARROW_SCROLL_KEYS: [&str; 2] = ["j/k/↑/↓ scroll", "j/k scroll"];
 
-/// What the Overview History's divider says while its panels scroll
-/// (D-116): the panels above and below the ones shown, both ways told even
-/// in the short form, with the keys scrolling to them; nothing while every
-/// panel shows.
-fn scroll_forms(above: usize, below: usize) -> Vec<DividerForm> {
+/// The keys the divider of `page` names for scrolling its panels.
+const fn scroll_keys(page: Page<'_>) -> [&'static str; 2] {
+    match page {
+        Page::Overview => ARROW_SCROLL_KEYS,
+        Page::Gpu(_) => PAGE_SCROLL_KEYS,
+    }
+}
+
+/// What a chart page's divider says while its panels scroll (D-116): the
+/// panels above and below the ones shown, both ways told even in the short
+/// form, with the `keys` scrolling to them; nothing while every panel
+/// shows.
+fn scroll_forms(above: usize, below: usize, keys: [&'static str; 2]) -> Vec<DividerForm> {
     let panels = |count: usize| counted(count, "panel");
     let (long, short) = match (above, below) {
         (0, 0) => return Vec::new(),
@@ -524,19 +553,19 @@ fn scroll_forms(above: usize, below: usize) -> Vec<DividerForm> {
         ),
     };
     vec![
-        (long.clone(), SCROLL_KEYS[0]),
-        (long, SCROLL_KEYS[1]),
-        (short.clone(), SCROLL_KEYS[1]),
+        (long.clone(), keys[0]),
+        (long, keys[1]),
+        (short.clone(), keys[1]),
         (short, ""),
     ]
 }
 
-/// The keys acting on the view, at the right of its title (D-70), the
+/// The keys acting on a chart page, at the right of its title (D-70), the
 /// fullest that fits first: the letters stand in for the arrows on a
 /// keyboard without them (D-111).
 const BAR_SIZE_KEYS: &[&str] = &["h/l/←/→ bar size", "h/l bar size"];
-/// The same on a host of several GPUs (D-107). Each panel names its own
-/// fold key (D-114).
+/// The GPU History's on a host of several GPUs (D-107). Each panel names
+/// its own fold key (D-114).
 const BAR_SIZE_AND_GPU_KEYS: &[&str] = &[
     "h/l/←/→ bar size · j/k/↑/↓ GPU",
     "h/l bar size · j/k GPU",
@@ -570,7 +599,7 @@ fn render_bar_size_row(
     let theme = &context.theme;
     let current = clean(&history.window_label);
     let mut spans = Vec::new();
-    // The Overview History's bar sizes (D-78): every size but `auto`.
+    // The chart pages' bar sizes (D-78): every size but `auto`.
     for size in BarSize::fixed().map(BarSize::token) {
         let style = if size == current {
             theme.selected_row_style()
@@ -762,9 +791,16 @@ mod tests {
         let mut context = crate::test_fixtures::display_context();
         let theme = context.theme;
         let (first, second) = (theme.gpu_color(0), theme.gpu_color(1));
-        let overview = draw(&context);
-        assert_eq!(colors_of(&overview, "[GPU 0 · GB10]"), vec![first]);
-        assert_eq!(colors_of(&overview, " GPU 1 · GB10 "), vec![second]);
+        context.tab = GPU_HISTORY_PAGE;
+        let gpu_page = draw(&context);
+        assert_eq!(colors_of(&gpu_page, "[GPU 0 · GB10]"), vec![first]);
+        assert_eq!(colors_of(&gpu_page, " GPU 1 · GB10 "), vec![second]);
+        // The whole machine's temperature and power strips of each GPU.
+        context.tab = OVERVIEW_HISTORY_PAGE;
+        let machine = draw(&context);
+        assert_eq!(colors_of(&machine, " GPU 0┤"), vec![first, first]);
+        assert_eq!(colors_of(&machine, " GPU 1┤"), vec![second, second]);
+        assert!(colors_of(&machine, "[GPU 0 · GB10]").is_empty());
         context.tab = 1;
         let list = draw(&context);
         // The ended run on GPU 0, the training on GPU 0 and GPU 1.
@@ -1301,21 +1337,22 @@ mod tests {
         assert!(!paged[0].contains("next") && !paged[0].contains("page"));
     }
 
-    /// The Overview History of a host of two GPUs: the bar-size row's
-    /// picker marks the GPU the GPU panels show, each chip a target, and
-    /// the axis row tells the controller the bands above and below
-    /// (D-107).
+    /// The GPU History of a host of two GPUs: the bar-size row's picker
+    /// marks the GPU its panels show, each chip a target, and the axis row
+    /// tells the controller the bands above and below (D-107, D-148).
     #[test]
-    fn the_overview_history_shows_the_gpu_picked_from_the_band_scrolled_to() {
+    fn the_gpu_history_shows_the_gpu_picked_from_the_band_scrolled_to() {
         let history = history_view();
         let gpus = history_gpus(&history);
         let mut context = crate::test_fixtures::display_context();
+        context.tab = GPU_HISTORY_PAGE;
         context.picked = Some(gpus[1].entity_id.clone());
         context.offset = 1;
         let mut model =
             crate::test_fixtures::view_model(dgxtop_core::commands::ViewKind::History, 1);
         model.modules.history = Some(std::sync::Arc::new(history));
-        let (width, height) = (100, 16);
+        // Rows for two of the GPU's four panels.
+        let (width, height) = (100, 10);
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
         let mut output = None;
@@ -1344,7 +1381,15 @@ mod tests {
             rows[2].ends_with(" below (PgUp/PgDn/^U/^D scroll) ┤"),
             "{text}"
         );
-        assert!(!text.contains("CPU utilization"), "scrolled past: {text}");
+        assert!(!text.contains("GPU utilization"), "scrolled past: {text}");
+        assert!(
+            text.contains("GPU memory ─") && text.contains("GPU temperature ─"),
+            "{text}"
+        );
+        // Nothing of the whole machine is on a GPU's page (D-148).
+        for machine in ["CPU utilization", "Memory used", "Disk", "Network"] {
+            assert!(!text.contains(machine), "{machine}: {text}");
+        }
         let output = output.unwrap();
         let count = |control: &str| {
             output
@@ -1496,15 +1541,18 @@ mod tests {
 
     const SECOND: u64 = 1_000_000_000;
 
-    /// While the Overview History's panels scroll its divider says what is
-    /// above and below the ones shown, both ways even in its short form,
-    /// with the keys scrolling (D-107, D-116); nothing while all show.
+    /// While a chart page's panels scroll its divider says what is above
+    /// and below the ones shown, both ways even in its short form, with
+    /// the keys scrolling (D-107, D-116): PgUp/PgDn on the GPU History,
+    /// whose ↑/↓ pick the GPU, the arrows on the Overview History (D-148);
+    /// nothing while all show.
     #[test]
     fn the_scroll_divider_tells_both_ways() {
-        assert!(scroll_forms(0, 0).is_empty());
+        let gpu = scroll_keys(Page::Gpu(None));
+        assert!(scroll_forms(0, 0, gpu).is_empty());
         let below = |text: &str, keys| (text.to_owned(), keys);
         assert_eq!(
-            scroll_forms(0, 1),
+            scroll_forms(0, 1, gpu),
             [
                 below("1 panel below", "PgUp/PgDn/^U/^D scroll"),
                 below("1 panel below", "^U/^D scroll"),
@@ -1512,10 +1560,13 @@ mod tests {
                 below("1 below", ""),
             ]
         );
-        assert_eq!(scroll_forms(2, 0)[0].0, "2 panels above");
-        let both = scroll_forms(1, 2);
+        assert_eq!(scroll_forms(2, 0, gpu)[0].0, "2 panels above");
+        let both = scroll_forms(1, 2, gpu);
         assert_eq!(both[0].0, "1 panel above · 2 panels below");
         assert_eq!(both[3].0, "1 above · 2 below");
+        let machine = scroll_forms(0, 1, scroll_keys(Page::Overview));
+        assert_eq!(machine[0], below("1 panel below", "j/k/↑/↓ scroll"));
+        assert_eq!(machine[2], below("1 below", "j/k scroll"));
     }
 
     #[test]

@@ -474,7 +474,7 @@ fn history_process_pages_navigate_and_select_the_run() {
     };
     harness.keys(&[key('j'), code(KeyCode::Enter)]);
     assert_eq!(state(&harness), (0, 0), "the system page has no cursor");
-    harness.keys(&[key('4'), key('j'), key('j'), key('k'), key('j')]);
+    harness.keys(&[key('5'), key('j'), key('j'), key('k'), key('j')]);
     assert_eq!(
         state(&harness),
         (1, 1),
@@ -510,7 +510,7 @@ fn history_process_pages_navigate_and_select_the_run() {
 #[test]
 fn the_cursor_follows_the_selected_run_when_the_list_moves() {
     let mut harness = Harness::new(ViewKind::History);
-    harness.keys(&[key('4'), key('j')]);
+    harness.keys(&[key('5'), key('j')]);
     let training = test_fixtures::process_history_view().runs[1].key.clone();
     assert_eq!(harness.last_session().2, Some(training.clone()));
     // A newer run arrives at the top: the selected run is third now.
@@ -541,7 +541,7 @@ fn w_steps_the_window_or_an_opened_runs_bar_size() {
     let bars = |harness: &Harness| harness.last_bars();
     harness.keys(&[key('w')]);
     assert_eq!(bars(&harness), (BarSize::FiveMinutes, BarSize::Auto));
-    harness.keys(&[key('4'), code(KeyCode::Enter), key('w')]);
+    harness.keys(&[key('5'), code(KeyCode::Enter), key('w')]);
     assert_eq!(bars(&harness), (BarSize::FiveMinutes, BarSize::OneMinute));
     harness.keys(&[key('W'), key('W')]);
     assert_eq!(
@@ -621,7 +621,7 @@ fn z_shows_the_processes_alone_until_z_esc_or_another_view() {
 fn an_opened_run_expands_and_copies_its_command() {
     let mut harness = Harness::new(ViewKind::History);
     let history = ModuleId::new(crate::modules::HISTORY_MODULE_ID).unwrap();
-    harness.keys(&[key('4'), key('e'), key('y')]);
+    harness.keys(&[key('5'), key('e'), key('y')]);
     assert!(
         harness.controller.take_clipboard().is_none(),
         "the list copies nothing"
@@ -842,12 +842,12 @@ fn tab_clicks_and_keys_switch_views() {
         ViewKind::History,
         "bursts build on the staged view and skip hidden views"
     );
-    // The action record is not a view (D-44): 6 switches nothing, and Tab
+    // The action record is not a view (D-44): 7 switches nothing, and Tab
     // wraps from the last offered tab, Settings, to the overview (D-75).
     let sent = harness.submitted().len();
-    harness.keys(&[key('6')]);
-    assert_eq!(harness.submitted().len(), sent, "6 is not a view key");
-    harness.keys(&[key('5'), code(KeyCode::Tab)]);
+    harness.keys(&[key('7')]);
+    assert_eq!(harness.submitted().len(), sent, "7 is not a view key");
+    harness.keys(&[key('6'), code(KeyCode::Tab)]);
     assert_eq!(harness.last_session().0, ViewKind::Overview, "Tab wraps");
     harness.keys(&[code(KeyCode::F(2))]);
     assert_eq!(harness.last_session().0, ViewKind::Settings);
@@ -1100,13 +1100,27 @@ fn deletions(harness: &Harness) -> Vec<Vec<i32>> {
         .collect()
 }
 
-/// ↑/↓ on the Overview History pick the GPU its GPU panels show, and so
-/// does a click on the picker's chip (D-107). The view holds every GPU's
+/// ↑/↓ on the GPU History pick the GPU its panels show, and so does a
+/// click on the picker's chip (D-107, D-148). The view holds every GPU's
 /// charts, so nothing is sent; on a host of one GPU the keys do nothing,
-/// and on the Process History they move the run cursor.
+/// on the Overview History, the whole machine, they pick none, and on the
+/// Process History they move the run cursor.
 #[test]
-fn up_and_down_pick_the_gpu_the_overview_history_shows() {
+fn up_and_down_pick_the_gpu_the_gpu_history_shows() {
     let mut harness = Harness::new(ViewKind::History);
+    harness.keys(&[code(KeyCode::Down)]);
+    assert_eq!(
+        harness
+            .controller
+            .ui_state(harness.now)
+            .picks
+            .get(&history_module()),
+        None,
+        "the Overview History has no GPU to pick"
+    );
+    // The GPU History's frame draws the picker.
+    harness.keys(&[key('4')]);
+    harness.project(test_fixtures::view_model(ViewKind::History, 6));
     let gpus: Vec<EntityId> =
         crate::modules::history_gpus(harness.model.modules.history.as_deref().unwrap())
             .into_iter()
@@ -1143,7 +1157,7 @@ fn up_and_down_pick_the_gpu_the_overview_history_shows() {
         .rect;
     harness.keys(&[click(chip.x, chip.y)]);
     assert_eq!(picked(&harness), Some(gpus[1].clone()));
-    harness.keys(&[key('4'), code(KeyCode::Up)]);
+    harness.keys(&[key('5'), code(KeyCode::Up)]);
     assert_eq!(
         picked(&harness),
         Some(gpus[1].clone()),
@@ -1165,8 +1179,93 @@ fn up_and_down_pick_the_gpu_the_overview_history_shows() {
         .charts
         .retain(|chart| chart.series.entity_id != gpus[1]);
     let mut single = Harness::with_model(model);
-    single.keys(&[code(KeyCode::Down)]);
+    single.keys(&[key('4'), code(KeyCode::Down)]);
     assert_eq!(picked(&single), None, "one GPU: nothing to pick");
+}
+
+/// `3`, `4` and `5` show the history view's three tabs (D-75, D-148): the
+/// whole machine, one GPU and the runs, each from its top; Tab steps
+/// through them in that order.
+#[test]
+fn the_history_tabs_are_three_pages_of_one_view() {
+    use crate::views::{GPU_HISTORY_PAGE, OVERVIEW_HISTORY_PAGE, PROCESS_LIST_PAGE};
+    let mut harness = Harness::new(ViewKind::History);
+    let page = |harness: &Harness| {
+        harness
+            .controller
+            .ui_state(harness.now)
+            .tabs
+            .get(&history_module())
+            .copied()
+            .unwrap_or(OVERVIEW_HISTORY_PAGE)
+    };
+    assert_eq!(page(&harness), OVERVIEW_HISTORY_PAGE);
+    history_bands(&mut harness, 0, 2);
+    harness.keys(&[code(KeyCode::PageDown), key('4')]);
+    assert_eq!(page(&harness), GPU_HISTORY_PAGE);
+    assert_eq!(
+        history_offset(&harness),
+        0,
+        "another page starts at its top"
+    );
+    harness.keys(&[key('5')]);
+    assert_eq!(page(&harness), PROCESS_LIST_PAGE);
+    harness.keys(&[key('3')]);
+    assert_eq!(page(&harness), OVERVIEW_HISTORY_PAGE);
+    harness.keys(&[code(KeyCode::Tab)]);
+    assert_eq!(page(&harness), GPU_HISTORY_PAGE);
+    harness.keys(&[code(KeyCode::Tab)]);
+    assert_eq!(page(&harness), PROCESS_LIST_PAGE);
+    harness.keys(&[code(KeyCode::BackTab), code(KeyCode::BackTab)]);
+    assert_eq!(page(&harness), OVERVIEW_HISTORY_PAGE);
+    // A GPU's page lists no run: the runs' keys do nothing there.
+    harness.keys(&[key('4'), key('d'), key(' '), key('a'), code(KeyCode::Enter)]);
+    assert_eq!(page(&harness), GPU_HISTORY_PAGE);
+    assert_eq!(harness.controller.mode(), ModeKind::Normal, "nothing asked");
+    assert!(harness.controller.ui_state(harness.now).marked.is_empty());
+    harness.keys(&[key('/')]);
+    assert_eq!(
+        harness.controller.mode(),
+        ModeKind::Normal,
+        "a chart page has nothing to filter"
+    );
+}
+
+/// ↑/↓ scroll the Overview History's panels as PgUp/PgDn do (D-148): it
+/// has no GPU to pick. On the GPU History they pick the GPU and only
+/// PgUp/PgDn scroll.
+#[test]
+fn the_arrows_scroll_the_overview_history() {
+    let mut harness = Harness::new(ViewKind::History);
+    history_bands(&mut harness, 0, 2);
+    harness.keys(&[code(KeyCode::Down)]);
+    assert_eq!(history_offset(&harness), 1);
+    history_bands(&mut harness, 1, 1);
+    harness.keys(&[key('j')]);
+    assert_eq!(history_offset(&harness), 2);
+    history_bands(&mut harness, 2, 0);
+    harness.keys(&[code(KeyCode::Down)]);
+    assert_eq!(history_offset(&harness), 2, "the last band shows");
+    harness.keys(&[key('k'), code(KeyCode::Up)]);
+    assert_eq!(
+        history_offset(&harness),
+        1,
+        "from the bands the frame showed"
+    );
+    harness.keys(&[key('4')]);
+    history_bands(&mut harness, 0, 2);
+    harness.keys(&[code(KeyCode::Down)]);
+    assert_eq!(history_offset(&harness), 0, "↓ picks the GPU there");
+    harness.keys(&[code(KeyCode::PageDown)]);
+    assert_eq!(history_offset(&harness), 1);
+    harness.keys(&[shift('G')]);
+    assert_eq!(history_offset(&harness), 2);
+    assert!(
+        harness
+            .submitted()
+            .iter()
+            .all(|body| matches!(body, CommandBody::UpdateViewSession { .. }))
+    );
 }
 
 /// PgDn/PgUp scroll the Overview History a band at a time and g/G to the
@@ -1224,7 +1323,7 @@ fn the_process_history_goes_to_its_first_and_last_run() {
             ui.scroll.get(&history_module()).copied().unwrap_or(0),
         )
     };
-    harness.keys(&[key('4'), shift('G')]);
+    harness.keys(&[key('5'), shift('G')]);
     assert_eq!(state(&harness), (1, 1));
     assert_eq!(harness.last_session().2.unwrap().pid.get(), 41);
     harness.keys(&[key('g')]);
@@ -1250,7 +1349,7 @@ fn runs_are_marked_one_by_one_or_all_at_once() {
         marked_pids(&harness).is_empty(),
         "the Overview History lists no runs"
     );
-    harness.keys(&[key('4'), key(' ')]);
+    harness.keys(&[key('5'), key(' ')]);
     assert_eq!(marked_pids(&harness), vec![42]);
     assert_eq!(
         harness.last_session().2.unwrap().pid.get(),
@@ -1295,7 +1394,7 @@ fn d_deletes_the_ended_runs_it_asked_about() {
         ModeKind::Normal,
         "no run on the Overview History"
     );
-    harness.keys(&[key('4'), key('d')]);
+    harness.keys(&[key('5'), key('d')]);
     assert_eq!(
         harness.controller.ui_state(harness.now).mode,
         ModeView::ConfirmDelete {
@@ -1356,7 +1455,7 @@ fn d_deletes_the_ended_runs_it_asked_about() {
 #[test]
 fn an_opened_run_is_deleted_alone_and_the_list_comes_back() {
     let mut harness = Harness::new(ViewKind::History);
-    harness.keys(&[key('4'), key('j'), key(' '), key('g'), code(KeyCode::Enter)]);
+    harness.keys(&[key('5'), key('j'), key(' '), key('g'), code(KeyCode::Enter)]);
     assert_eq!(marked_pids(&harness), vec![41]);
     harness.keys(&[key('d')]);
     assert_eq!(
@@ -1420,7 +1519,7 @@ fn a_large_deletion_is_sent_a_bounded_command_at_a_time() {
     runs.opened = None;
     let mut harness = Harness::with_model(model);
     // `a`, then a run unmarked and marked again: marks one by one (D-128).
-    harness.keys(&[key('4'), key('a'), key(' '), key('k'), key(' '), key('d')]);
+    harness.keys(&[key('5'), key('a'), key(' '), key('k'), key(' '), key('d')]);
     assert_eq!(
         harness.controller.ui_state(harness.now).mode,
         ModeView::ConfirmDelete {
@@ -1457,7 +1556,7 @@ fn a_then_d_deletes_every_ended_run_beyond_the_list_too() {
     runs.more_runs = 598;
     runs.opened = None;
     let mut harness = Harness::with_model(model);
-    harness.keys(&[key('4'), key('a'), key('d')]);
+    harness.keys(&[key('5'), key('a'), key('d')]);
     assert_eq!(
         harness.controller.ui_state(harness.now).mode,
         ModeView::ConfirmDelete {
@@ -1518,7 +1617,7 @@ fn a_refused_deletion_stops_and_keeps_the_marks() {
         .collect();
     runs.opened = None;
     let mut harness = Harness::with_model(model);
-    harness.keys(&[key('4'), key('a'), key('d'), key('y')]);
+    harness.keys(&[key('5'), key('a'), key('d'), key('y')]);
     let refused = answer_deletions(&mut harness, false);
     assert_eq!(refused.len(), 1, "nothing more is sent");
     assert_eq!(marked_pids(&harness).len(), 100);
@@ -1552,7 +1651,7 @@ fn a_refused_deletion_stops_and_keeps_the_marks() {
 #[test]
 fn an_unanswered_deletion_stops_with_a_warning() {
     let mut harness = Harness::new(ViewKind::History);
-    harness.keys(&[key('4'), key('d'), key('y')]);
+    harness.keys(&[key('5'), key('d'), key('y')]);
     assert_eq!(deletions(&harness).len(), 1);
     harness.now += Duration::from_secs(61);
     harness.controller.tick(harness.now);
@@ -1583,7 +1682,7 @@ fn a_pending_signal_keeps_the_deletion_question_away() {
     let mut model = test_fixtures::view_model(ViewKind::History, 6);
     model.modules = harness.model.modules.clone();
     harness.project(model);
-    harness.keys(&[key('4'), key('d')]);
+    harness.keys(&[key('5'), key('d')]);
     assert!(
         !matches!(
             harness.controller.ui_state(harness.now).mode,
@@ -1829,7 +1928,7 @@ fn an_opened_run_turns_its_pages_and_never_switches_the_run() {
             .get(&history_module())
             .copied()
     };
-    harness.keys(&[key('4'), code(KeyCode::Enter)]);
+    harness.keys(&[key('5'), code(KeyCode::Enter)]);
     let opened = harness.last_session().2;
     page_frame(&mut harness, history_module(), (0, 2));
     harness.keys(&[code(KeyCode::Down)]);
@@ -1900,7 +1999,7 @@ fn slash_filters_the_process_historys_runs() {
         ModeKind::Normal,
         "no list on the Overview History"
     );
-    harness.keys(&[key('4'), key('j'), code(KeyCode::Enter), key('/')]);
+    harness.keys(&[key('5'), key('j'), code(KeyCode::Enter), key('/')]);
     assert_eq!(harness.controller.mode(), ModeKind::Filter);
     assert_eq!(
         harness
@@ -2007,8 +2106,9 @@ fn overview_panels_fold_at_once_and_are_saved_one_save_at_a_time() {
     assert_eq!(saves.last().unwrap().1, Vec::<String>::new());
 }
 
-/// The saved folds show from the first projection, nothing sent; the
-/// Overview History's panels fold on its first page only (D-114).
+/// The saved folds show from the first projection, nothing sent; a key
+/// folds the panel of the page shown and `o` unfolds that page's panels
+/// (D-114, D-148).
 #[test]
 fn saved_folds_show_at_start_and_history_panels_fold_on_their_page() {
     let mut harness = Harness::new(ViewKind::History);
@@ -2019,11 +2119,32 @@ fn saved_folds_show_at_start_and_history_panels_fold_on_their_page() {
     assert!(fold_saves(&harness).is_empty(), "nothing to save");
     harness.keys(&[key('c'), key('i')]);
     assert_eq!(folded_now(&harness), ["history.cpu"]);
-    harness.keys(&[key('4'), key('m'), key('o')]);
+    harness.keys(&[key('5'), key('m'), key('o')]);
     assert_eq!(
         folded_now(&harness),
         ["history.cpu"],
         "not on the Process History"
+    );
+    harness.keys(&[key('3'), key('o')]);
+    assert!(folded_now(&harness).is_empty());
+    // `t` and `p` fold the temperature and the power of the page shown;
+    // the other page's keys do nothing.
+    harness.keys(&[key('t'), key('u'), key('v')]);
+    assert_eq!(folded_now(&harness), ["history.host_temperature"]);
+    harness.keys(&[key('4'), key('t'), key('p'), key('c'), key('m'), key('s')]);
+    assert_eq!(
+        folded_now(&harness),
+        [
+            "history.gpu_power",
+            "history.gpu_thermal",
+            "history.host_temperature"
+        ]
+    );
+    harness.keys(&[key('o')]);
+    assert_eq!(
+        folded_now(&harness),
+        ["history.host_temperature"],
+        "o unfolds the page shown"
     );
     harness.keys(&[key('3'), key('o')]);
     assert!(folded_now(&harness).is_empty());
