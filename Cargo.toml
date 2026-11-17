@@ -17,7 +17,7 @@ members = [
 [workspace.package]
 version = "2.6.0"
 edition = "2024"
-rust-version = "1.92"
+rust-version = "1.100"
 license = "Apache-2.0"
 repository = "https://github.com/DennySORA/dgxtop"
 
@@ -39,18 +39,18 @@ dgxtop-ui = { path = "crates/ui", version = "2.6.0" }
 # DTO / serialization (allowed in core).
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.154"
-uuid = { version = "1.29.1", features = ["v4", "serde"] }
+uuid = { version = "1.29.2", features = ["v4", "serde"] }
 thiserror = "2.0.21"
 sha2 = "0.11.1"
 
 # Runtime mechanics.
 crossbeam-channel = "0.5.17"
 libc = "0.2.191"
-nix = { version = "0.31.3", features = ["fs", "poll", "process", "signal", "time", "term", "user", "resource"] }
+nix = { version = "0.32.0", features = ["fs", "poll", "process", "signal", "time", "term", "user", "resource"] }
 
 # Drivers and persistence.
 nvml-wrapper = "0.13.0"
-rusqlite = { version = "=0.40.2", features = ["bundled"] }
+rusqlite = { version = "=0.43.0", features = ["bundled"] }
 
 # Terminal UI.
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "underline-color"] }
@@ -62,7 +62,7 @@ clap = { version = "4.6.7", features = ["derive"] }
 
 # Test-only.
 proptest = "1.12.0"
-jsonschema = { version = "0.60.2", default-features = false }
+jsonschema = { version = "0.61.2", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

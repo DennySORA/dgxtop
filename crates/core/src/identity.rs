@@ -189,55 +189,94 @@ fn validate_bounded(
 
 bounded_identity!(
     /// Stable host identity (machine-id derived).
-    HostId, "host_id", 1, 256
+    HostId,
+    "host_id",
+    1,
+    256
 );
 bounded_identity!(
     /// Kernel boot identity (`/proc/sys/kernel/random/boot_id`).
-    BootId, "boot_id", 1, 256
+    BootId,
+    "boot_id",
+    1,
+    256
 );
 bounded_identity!(
     /// Entity identity such as `gpu:GPU-<uuid>` or `cpu.package.0`.
-    EntityId, "entity_id", 1, 256
+    EntityId,
+    "entity_id",
+    1,
+    256
 );
 bounded_identity!(
     /// Scope inside an entity, e.g. `package:0`, `core:3`, `soc`.
-    Scope, "scope", 1, 128
+    Scope,
+    "scope",
+    1,
+    128
 );
 bounded_identity!(
     /// Stable identity of one source incarnation.
-    SourceId, "source_id", 1, 256
+    SourceId,
+    "source_id",
+    1,
+    256
 );
 bounded_identity!(
     /// Registered adapter identity (`procfs`, `hwmon`, `nvml`, ...).
-    AdapterId, "adapter_id", 1, 64
+    AdapterId,
+    "adapter_id",
+    1,
+    64
 );
 bounded_identity!(
     /// Physical origin identity used for alias de-duplication.
-    OriginId, "origin_id", 1, 256
+    OriginId,
+    "origin_id",
+    1,
+    256
 );
 bounded_identity!(
     /// PID namespace identity, e.g. `pid:[4026531836]`.
-    PidNamespace, "pid_namespace", 1, 256
+    PidNamespace,
+    "pid_namespace",
+    1,
+    256
 );
 bounded_identity!(
     /// Routing key of one view session; never an authority grant.
-    SessionId, "session_id", 1, 128
+    SessionId,
+    "session_id",
+    1,
+    128
 );
 bounded_identity!(
     /// Display module identity from the compile-time registry.
-    ModuleId, "module_id", 1, 64
+    ModuleId,
+    "module_id",
+    1,
+    64
 );
 bounded_identity!(
     /// Read group of one adapter (`fast`, `capacity`, `process`, ...).
-    ReadGroup, "read_group", 1, 128
+    ReadGroup,
+    "read_group",
+    1,
+    128
 );
 bounded_identity!(
     /// Versioned source profile identity.
-    ProfileId, "profile_id", 1, 256
+    ProfileId,
+    "profile_id",
+    1,
+    256
 );
 bounded_identity!(
     /// Collector identity (`cpu`, `gpu`, `memory`, `disk`, `network`, `process`).
-    CollectorId, "collector_id", 1, 64
+    CollectorId,
+    "collector_id",
+    1,
+    64
 );
 
 /// Metric identity, e.g. `cpu.temperature.package`.

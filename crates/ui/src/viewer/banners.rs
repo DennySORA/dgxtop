@@ -114,7 +114,7 @@ pub fn collect(
         blocks.push(BannerBlock::single(notice.level, clean(&notice.text)));
     }
     // Stable sort keeps arrival order within a level.
-    blocks.sort_by(|a, b| b.level.cmp(&a.level));
+    blocks.sort_by_key(|block| std::cmp::Reverse(block.level));
     blocks.truncate(MAX_BLOCKS);
     blocks
 }

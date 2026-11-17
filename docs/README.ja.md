@@ -11,7 +11,7 @@ GPU ジョブは開始から終了まで、終わり方も含めて記録しま�
 
 [![Release](https://img.shields.io/github/v/release/DennySORA/dgxtop)](https://github.com/DennySORA/dgxtop/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.92.0-orange.svg)](../rust-toolchain.toml)
+[![Rust](https://img.shields.io/badge/rust-1.100.0-orange.svg)](../rust-toolchain.toml)
 [![CI](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml/badge.svg)](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml)
 
 <img src="images/screenshots/dgx-spark-overview.png" alt="DGX Spark 上の dgxtop の Overview：CPU、システムと色分けされた 2 つの GPU プロセスに分かれたユニファイドメモリ、GB10 GPU、ディスクとネットワークの表、GPU プロセス表" width="100%">
@@ -30,7 +30,7 @@ x86_64 または aarch64 の Linux で、glibc 2.34 以降（Ubuntu 22.04、Debi
 
 インストーラーは CPU に合ったビルドを選び、リリースの `SHA256SUMS` で検証してから `~/.local/bin` にインストールします。以前のバージョンは残り、`./install.sh --rollback` で戻せます。特定のリリースを入れるには、`bash` の後ろに `-s -- --version v2.6.0` を付けます。
 
-Rust 1.92.0（`rust-toolchain.toml` で固定）を使ってソースからビルドすることもできます：
+Rust 1.100.0（`rust-toolchain.toml` で固定）を使ってソースからビルドすることもできます：
 
 ```bash
 git clone https://github.com/DennySORA/dgxtop.git

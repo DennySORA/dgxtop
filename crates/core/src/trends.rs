@@ -97,7 +97,7 @@ impl TrendBook {
             .filter(|(key, bytes)| **bytes > 0 && !beside.processes.contains_key(*key))
             .map(|(key, bytes)| (key, *bytes))
             .collect();
-        newcomers.sort_by(|left, right| right.1.cmp(&left.1));
+        newcomers.sort_by_key(|newcomer| std::cmp::Reverse(newcomer.1));
         let room = MAX_PROCESS_SERIES.saturating_sub(beside.processes.len());
         for (key, bytes) in newcomers.into_iter().take(room) {
             let mut points = Points::new();

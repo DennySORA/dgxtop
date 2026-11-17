@@ -411,11 +411,8 @@ pub(super) fn unpack(start_utc_ns: i64, packed: &[u8]) -> Option<RunBucket> {
         return None;
     }
     let mut bucket = RunBucket::new(start_utc_ns);
-    for (value, chunk) in bucket
-        .values
-        .iter_mut()
-        .zip(packed.chunks_exact(AGGREGATE_BYTES))
-    {
+    let (aggregates, _) = packed.as_chunks::<AGGREGATE_BYTES>();
+    for (value, chunk) in bucket.values.iter_mut().zip(aggregates) {
         let count = u32::from_le_bytes(chunk[0..4].try_into().ok()?);
         let mean = f32::from_le_bytes(chunk[4..8].try_into().ok()?);
         let max = f32::from_le_bytes(chunk[8..12].try_into().ok()?);

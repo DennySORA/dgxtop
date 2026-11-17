@@ -89,7 +89,7 @@ fn version_verbose_lists_build_metadata_and_sqlite_gate() {
     assert!(text.starts_with(&format!("dgxtop {}\n", env!("CARGO_PKG_VERSION"))));
     for marker in [
         "commit: ",
-        "toolchain: rustc 1.92.0",
+        "toolchain: rustc 1.100.0",
         "target: ",
         "profile: ",
         "sqlite: 3.",

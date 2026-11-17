@@ -14,7 +14,7 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
   # Pinned toolchain (rust-toolchain.toml); CI never floats on `stable`.
-  RUST_TOOLCHAIN: "1.92.0"
+  RUST_TOOLCHAIN: "1.100.0"
 
 jobs:
   quality:

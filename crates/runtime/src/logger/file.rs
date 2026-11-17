@@ -89,7 +89,7 @@ impl Counters {
         };
         let admitted = self
             .queued_bytes
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
                 queued.checked_add(cost).filter(|next| *next <= allowance)
             })
             .is_ok();
@@ -100,10 +100,9 @@ impl Counters {
     }
 
     fn release(&self, cost: u64) {
-        let _ = self
-            .queued_bytes
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
-                Some(queued.saturating_sub(cost))
+        self.queued_bytes
+            .update(Ordering::AcqRel, Ordering::Acquire, |queued| {
+                queued.saturating_sub(cost)
             });
     }
 

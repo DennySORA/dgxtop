@@ -101,17 +101,14 @@ impl Shared {
 
     pub(crate) fn request_shutdown(&self, deadline_boot_ns: u64) {
         // The earliest requested deadline wins.
-        let _ = self.shutdown_deadline_boot_ns.fetch_update(
-            Ordering::AcqRel,
-            Ordering::Acquire,
-            |current| {
-                Some(if current == 0 {
+        self.shutdown_deadline_boot_ns
+            .update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                if current == 0 {
                     deadline_boot_ns
                 } else {
                     current.min(deadline_boot_ns)
-                })
-            },
-        );
+                }
+            });
         self.shutdown_requested.store(true, Ordering::Release);
         self.wake();
     }

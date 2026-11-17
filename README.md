@@ -11,7 +11,7 @@ plus a record of every GPU job from start to end, including how it ended.
 
 [![Release](https://img.shields.io/github/v/release/DennySORA/dgxtop)](https://github.com/DennySORA/dgxtop/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.92.0-orange.svg)](rust-toolchain.toml)
+[![Rust](https://img.shields.io/badge/rust-1.100.0-orange.svg)](rust-toolchain.toml)
 [![CI](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml/badge.svg)](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml)
 
 <img src="docs/images/screenshots/dgx-spark-overview.png" alt="dgxtop Overview on a DGX Spark: the CPU, the unified memory split into the system and two GPU processes in their colors, the GB10 GPU, the disk and network tables, and the GPU process table" width="100%">
@@ -34,7 +34,7 @@ The installer picks the build for your CPU, checks it against the release's `SHA
 installs it to `~/.local/bin`. The previous version is kept, and `./install.sh --rollback` brings
 it back. For a specific release, append `-s -- --version v2.6.0` to `bash`.
 
-Or build from source with Rust 1.92.0 (pinned by `rust-toolchain.toml`):
+Or build from source with Rust 1.100.0 (pinned by `rust-toolchain.toml`):
 
 ```bash
 git clone https://github.com/DennySORA/dgxtop.git

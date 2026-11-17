@@ -11,7 +11,7 @@
 
 [![Release](https://img.shields.io/github/v/release/DennySORA/dgxtop)](https://github.com/DennySORA/dgxtop/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.92.0-orange.svg)](../rust-toolchain.toml)
+[![Rust](https://img.shields.io/badge/rust-1.100.0-orange.svg)](../rust-toolchain.toml)
 [![CI](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml/badge.svg)](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml)
 
 <img src="images/screenshots/dgx-spark-overview.png" alt="DGX Spark 上的 dgxtop 總覽：CPU、分成系統與兩個上色 GPU 程序的統一記憶體、GB10 GPU、磁碟與網路表格，以及 GPU 程序表" width="100%">
@@ -30,7 +30,7 @@ curl -fsSL https://raw.githubusercontent.com/DennySORA/dgxtop/main/install.sh | 
 
 安裝程式會依 CPU 選擇對應的版本，以 release 的 `SHA256SUMS` 驗證後安裝到 `~/.local/bin`。舊版本會保留，執行 `./install.sh --rollback` 就能還原。要安裝特定版本，在 `bash` 後面加上 `-s -- --version v2.6.0`。
 
-也可以用 Rust 1.92.0 從原始碼建置（由 `rust-toolchain.toml` 固定）：
+也可以用 Rust 1.100.0 從原始碼建置（由 `rust-toolchain.toml` 固定）：
 
 ```bash
 git clone https://github.com/DennySORA/dgxtop.git

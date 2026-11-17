@@ -51,7 +51,9 @@ const MAX_RECOVERED_REPORTED: usize = 4096;
 
 /// Abort reasons inside an intent transaction.
 enum IntentAbort {
-    Exists(StoredIntent),
+    /// Boxed: the stored intent is large, and the abort travels in every
+    /// step's `Result`.
+    Exists(Box<StoredIntent>),
 }
 
 /// Abort reasons inside an outcome transaction.
@@ -405,7 +407,7 @@ impl AuditRepository for SqliteAuditRepository {
         let deadline = self.deadline();
         let committed = immediate_transaction(self.connection()?, deadline, |transaction| {
             if let Some(existing) = find_intent(transaction, &row.request_id)? {
-                return Err(StepError::Abort(IntentAbort::Exists(existing)));
+                return Err(StepError::Abort(IntentAbort::Exists(Box::new(existing))));
             }
             insert_intent(transaction, &row)?;
             Ok(())

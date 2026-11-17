@@ -203,7 +203,7 @@ impl Tracking {
             }
             accepted.push(process);
         }
-        accepted.sort_by(|left, right| start_order(left.key).cmp(&start_order(right.key)));
+        accepted.sort_by_key(|left| start_order(left.key));
         accepted
     }
 

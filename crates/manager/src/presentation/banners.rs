@@ -106,7 +106,7 @@ fn slowdown_banners(context: &PresentationContext<'_>, banners: &mut Vec<Banner>
 
 /// Highest level first (stable within a level), at most [`MAX_BANNERS`].
 pub(crate) fn order_and_bound(mut banners: Vec<Banner>) -> Vec<Banner> {
-    banners.sort_by(|left, right| right.level.cmp(&left.level));
+    banners.sort_by_key(|banner| std::cmp::Reverse(banner.level));
     banners.truncate(MAX_BANNERS);
     banners
 }

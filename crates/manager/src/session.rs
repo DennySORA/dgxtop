@@ -59,17 +59,16 @@ impl Outstanding {
 
     fn try_reserve(&self) -> bool {
         self.count
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 (current < self.limit).then_some(current + 1)
             })
             .is_ok()
     }
 
     fn release(&self) {
-        let _ = self
-            .count
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                Some(current.saturating_sub(1))
+        self.count
+            .update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.saturating_sub(1)
             });
     }
 
