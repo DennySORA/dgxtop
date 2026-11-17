@@ -14,6 +14,10 @@ plus a record of every GPU job from start to end, including how it ended.
 [![Rust](https://img.shields.io/badge/rust-1.100.0-orange.svg)](rust-toolchain.toml)
 [![CI](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml/badge.svg)](https://github.com/DennySORA/dgxtop/actions/workflows/ci.yml)
 
+<img src="docs/images/dgxtop-demo.gif" alt="dgxtop Overview: Demo GPU 0, memory, disk, network and two GPU processes (torchrun and python3). Recorded with dgxtop --replay and the shipped demo fixture, so the numbers are simulated." width="100%">
+
+<sub>A short run of the Overview, recorded with <code>dgxtop --replay</code> and the shipped demo fixture. The numbers are simulated, not a live GPU.</sub>
+
 <img src="docs/images/screenshots/dgx-spark-overview.png" alt="dgxtop Overview on a DGX Spark: the CPU, the unified memory split into the system and two GPU processes in their colors, the GB10 GPU, the disk and network tables, and the GPU process table" width="100%">
 
 <sub>Overview on a DGX Spark. The GB10 shares memory with the CPU, so the RAM bar shows the system's share and each GPU process's share in its own color.</sub>
